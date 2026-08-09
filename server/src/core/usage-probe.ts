@@ -58,7 +58,9 @@ function pct(n: unknown): number | null {
  * `limits[]` alone (the old behaviour) silently dropped the 5h meter for those
  * accounts. We therefore MERGE both sources, deduping by label with `limits[]`
  * authoritative (it carries is_active/severity), so the 5h AND weekly meters
- * both surface whenever the account exposes them anywhere. Window keys are not
+ * both surface whenever the account exposes them anywhere. The weekly cap is
+ * reported under several synonymous kinds (weekly, weekly_all, seven_day) — all
+ * collapse to the one `7d` label so the same window never shows twice. Window keys are not
  * hard-coded — ANY `*_hour`/`seven_day*` style key with a utilization is picked
  * up, because the payload keeps growing variants (seven_day_opus,
  * seven_day_oauth_apps, …). Also appends the extra-usage credit spend (monthly
@@ -79,7 +81,7 @@ function isWindowKey(key: string): boolean {
 export function normalizeClaudeUsage(raw: any): BrainUsageWindow[] {
   const label = (kind: string) =>
     kind === 'session' || kind === 'five_hour' ? '5h'
-      : kind === 'weekly' || kind === 'seven_day' ? '7d'
+      : kind === 'weekly' || kind === 'weekly_all' || kind === 'seven_day' ? '7d'
       : kind.replace(/^seven_day_/, '7d-');
   const byLabel = new Map<string, BrainUsageWindow>();  // first writer wins → limits[] authoritative
   const add = (lbl: string, p: number | null, resetsAt: unknown) => {

@@ -31,6 +31,20 @@ test('claude: maps weekly kinds and skips inactive limits', () => {
   assert.equal(w[0].usedPct, 12.3);
 });
 
+test('claude: weekly_all is the same weekly cap as weekly/7d and does not duplicate', () => {
+  // The usage payload lists BOTH `weekly` and `weekly_all` for the same weekly
+  // window; they must collapse to a single 7d meter (first writer wins), not
+  // surface a redundant raw `weekly_all` row.
+  const w = normalizeClaudeUsage({
+    limits: [
+      { kind: 'session', percent: 8, resets_at: 'A', is_active: true },
+      { kind: 'weekly', percent: 55, resets_at: 'B', is_active: true },
+      { kind: 'weekly_all', percent: 55, resets_at: 'B', is_active: true }
+    ]
+  });
+  assert.deepEqual(w.map(x => x.label), ['5h', '7d']);
+});
+
 test('claude: merges 5h from top-level five_hour when limits[] carries only weekly', () => {
   // A plan with weekly caps: limits[] lists ONLY the weekly limit; the 5h
   // session lives solely at the top-level five_hour. Both meters must surface,
