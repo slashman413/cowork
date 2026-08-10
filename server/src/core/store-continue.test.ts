@@ -162,3 +162,75 @@ test('continueTask rejects an unknown brain id (surfaces as a 400 upstream)', as
   await store.completeTask({ taskId: orig.id, result: 'ok', internal: true });
   assert.throws(() => store.continueTask(orig.id, 'ghost-brain'), /Unknown brain/, 'unknown brain is refused');
 });
+
+// --- Continue dialog extra steer: { prompt } and { inputs } ---------------
+
+test('continueTask appends an operator prompt as its own "Additional instructions" section', async () => {
+  const { store } = makeStore();
+  const orig = store.createTask({
+    title: 'Draft', description: 'Original brief.', from: { platform: 'p', agent: 'a' }
+  } as any);
+  await store.completeTask({ taskId: orig.id, result: 'ok', internal: true });
+
+  const next = store.continueTask(orig.id, undefined, { prompt: '  Now add unit tests.  ' })!;
+  assert.ok(next.description!.includes('Original brief.'), 'carries over the prior brief');
+  assert.match(next.description!, /## Additional instructions for this continuation/, 'adds a dedicated section');
+  assert.match(next.description!, /Now add unit tests\./, 'includes the operator prompt (trimmed)');
+  assert.ok(!next.description!.includes('  Now add unit tests.  '), 'prompt is trimmed of surrounding whitespace');
+});
+
+test('continueTask with no/blank prompt omits the Additional-instructions section (back-compat)', async () => {
+  const { store } = makeStore();
+  const orig = store.createTask({ title: 'Draft', description: 'brief', from: { platform: 'p', agent: 'a' } } as any);
+  await store.completeTask({ taskId: orig.id, result: 'ok', internal: true });
+
+  assert.ok(!store.continueTask(orig.id)!.description!.includes('Additional instructions'),
+    'no opts → no section');
+  const orig2 = store.createTask({ title: 'Draft2', description: 'brief', from: { platform: 'p', agent: 'a' } } as any);
+  await store.completeTask({ taskId: orig2.id, result: 'ok', internal: true });
+  assert.ok(!store.continueTask(orig2.id, undefined, { prompt: '   ' })!.description!.includes('Additional instructions'),
+    'whitespace-only prompt → no section');
+});
+
+test('continueTask folds extra staged uploads in alongside the prior run\'s outputs', async () => {
+  const { store, root } = makeStore();
+  const orig = store.createTask({ title: 'Draft', from: { platform: 'p', agent: 'a' } } as any);
+  seedArtifacts(root, orig.id, { 'design.md': '# design' });
+  await store.completeTask({ taskId: orig.id, result: 'done', internal: true });
+
+  // Operator attaches two extra reference files in the Continue dialog; the UI
+  // stages them via POST /api/uploads → stageUpload, then passes back the tokens.
+  const a = store.stageUpload('spec.pdf', Buffer.from('SPEC'));
+  const b = store.stageUpload('notes.txt', Buffer.from('NOTES'));
+
+  const next = store.continueTask(orig.id, undefined, { inputs: [
+    { token: a.token, name: a.name }, { token: b.token, name: b.name }
+  ] })!;
+
+  // Prior outputs AND the extras all land in inputs/<newId>/ and on context.inputFiles.
+  const onDisk = store.listInputs(next.id).sort();
+  assert.deepEqual(onDisk, ['design.md', 'notes.txt', 'previous-result.md', 'spec.pdf'],
+    'seeded outputs + extras coexist in the inputs dir');
+  assert.deepEqual((next.context?.inputFiles as string[]).slice().sort(),
+    ['design.md', 'notes.txt', 'previous-result.md', 'spec.pdf'],
+    'context.inputFiles is the union, no duplicates');
+  const sp = store.inputFilePath(next.id, 'spec.pdf');
+  assert.ok(sp && fs.readFileSync(sp, 'utf8') === 'SPEC', 'extra upload copied verbatim');
+});
+
+test('continueTask accepts prompt + inputs + brain together (the full dialog payload)', async () => {
+  const { store } = makeStore({ 'remote-sonnet': {} });
+  const orig = store.createTask({
+    title: 'Draft', description: 'brief', from: { platform: 'p', agent: 'a' },
+    context: { ranBrain: 'remote-opus' }
+  } as any);
+  await store.completeTask({ taskId: orig.id, result: 'ok', internal: true });
+
+  const f = store.stageUpload('extra.md', Buffer.from('X'));
+  const next = store.continueTask(orig.id, 'remote-sonnet',
+    { prompt: 'Refine it.', inputs: [{ token: f.token, name: f.name }] })!;
+
+  assert.equal(next.context?.brain, 'remote-sonnet', 'brain override applied');
+  assert.match(next.description!, /Refine it\./, 'prompt applied');
+  assert.ok((next.context?.inputFiles as string[]).includes('extra.md'), 'extra input applied');
+});

@@ -131,7 +131,12 @@ export function createApiRouter(store: Store, eventBus: EventBus): Router {
       // Optional { brain }: '' → route via the agent's chain, '<id>' → pin that
       // brain to claim the follow-up, absent → same brain as the original (default).
       const brain = typeof req.body?.brain === 'string' ? req.body.brain : undefined;
-      const task = store.continueTask(req.params.id, brain);
+      // Optional extra steer from the Continue dialog: a { prompt } appended to
+      // the follow-up's brief, and { inputs } ([{token,name}] staged uploads)
+      // attached alongside the prior run's outputs.
+      const prompt = typeof req.body?.prompt === 'string' ? req.body.prompt : undefined;
+      const inputs = Array.isArray(req.body?.inputs) ? req.body.inputs : undefined;
+      const task = store.continueTask(req.params.id, brain, { prompt, inputs });
       if (!task) return res.status(400).json({ error: 'Task not found or not in a continuable (finished-success) state' });
       res.status(201).json(task);
     } catch (e: any) {

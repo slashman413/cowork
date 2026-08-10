@@ -552,8 +552,21 @@ export class Store {
    * {@link rerunTask} instead. Inputs are materialized BEFORE the task is written
    * or emitted (mirrors createTask), so it is never claimable without them.
    * Returns null when the task is gone or not in a continuable state.
+   *
+   * `opts` carries the extra steer the operator adds in the Continue dialog:
+   *   - `prompt`  additional instructions appended to the follow-up's brief, so
+   *               the operator can redirect the next run instead of merely
+   *               replaying the same task with fresh inputs.
+   *   - `inputs`  extra staged uploads (from POST /api/uploads) materialized into
+   *               the SAME inputs/<newId>/ dir alongside the seeded outputs and
+   *               unioned onto context.inputFiles — reference material for the
+   *               continuation, on equal footing with the prior run's outputs.
    */
-  public continueTask(taskId: string, brainOverride?: string): Task | null {
+  public continueTask(
+    taskId: string,
+    brainOverride?: string,
+    opts: { prompt?: string; inputs?: Array<{ token?: string; name?: string }> } = {}
+  ): Task | null {
     const prev = this.getTask(taskId);
     if (!prev) return null;
     const isFailed = prev.failed === true
@@ -578,12 +591,16 @@ export class Store {
     if (targetBrain) ctx.brain = targetBrain;   // else: no pin → chain routes it
 
     const title = /^continue\b/i.test(prev.title || '') ? prev.title : `Continue: ${prev.title || 'task'}`;
+    // Operator's added steer for THIS continuation — surfaced as its own section
+    // so the brain treats it as the current directive over the carried-over brief.
+    const extraPrompt = typeof opts.prompt === 'string' ? opts.prompt.trim() : '';
     const description = [
       prev.description || '',
       '',
       '---',
       `This task CONTINUES a previous run ("${prev.title || prev.id}") that finished successfully.`,
-      'Its result and every output file it produced are attached as input files (under inputs/, mirrored on context.inputFiles) — read them first, then carry the work forward from where it left off.'
+      'Its result and every output file it produced are attached as input files (under inputs/, mirrored on context.inputFiles) — read them first, then carry the work forward from where it left off.',
+      ...(extraPrompt ? ['', '## Additional instructions for this continuation', extraPrompt] : [])
     ].join('\n');
 
     const task: Task = {
@@ -600,9 +617,15 @@ export class Store {
       ...(Array.isArray(prev.tags) ? { tags: [...prev.tags] } : {})
     };
 
-    // Seed inputs from the prior run's outputs BEFORE the task is visible/pending.
+    // Seed inputs from the prior run's outputs BEFORE the task is visible/pending,
+    // then fold in any extra files the operator attached in the Continue dialog.
+    // Both land in inputs/<newId>/ and collide-suffix independently; the union
+    // keeps context.inputFiles a faithful listing of that dir.
     const seeded = this.seedContinuationInputs(id, prev);
-    if (seeded.length) ctx.inputFiles = seeded;
+    const extra = Array.isArray(opts.inputs) && opts.inputs.length
+      ? this.materializeInputs(id, opts.inputs) : [];
+    const inputFiles = [...new Set([...seeded, ...extra])];
+    if (inputFiles.length) ctx.inputFiles = inputFiles;
 
     const taskPath = path.join(this.config.paths.inbox, `${id}.json`);
     fs.writeFileSync(taskPath, JSON.stringify(task, null, 2));

@@ -384,31 +384,76 @@ class App {
    * Confirm a continue/re-run AND let the user choose which brain claims the
    * task. Renders the shared #modal-container with a brain <select> (populated
    * from /api/brains, "Auto" = route via the agent's chain). Resolves to
-   * { brain } — '' meaning Auto — or null if the user cancels. `defaultBrain`
-   * pre-selects the brain the task would otherwise use.
+   * { brain, prompt, files } — brain '' meaning Auto — or null if the user
+   * cancels. `defaultBrain` pre-selects the brain the task would otherwise use.
+   *
+   * With `withInputs: true` the dialog also offers an extra-prompt textarea and
+   * a file-attach control (mirrors the New task composer): `prompt` is the typed
+   * steer and `files` the staged File[] the caller uploads on confirm. Callers
+   * that omit `withInputs` (e.g. re-run) get the same `{ brain }` as before —
+   * `prompt` is '' and `files` is empty, so reading only `.brain` is safe.
    */
-  async pickBrain({ title, body, defaultBrain = '', confirmLabel = 'Confirm', confirmColor = '#22C55E' }) {
+  async pickBrain({ title, body, defaultBrain = '', confirmLabel = 'Confirm', confirmColor = '#22C55E', withInputs = false }) {
     const container = document.getElementById('modal-container');
     const content = document.getElementById('modal-content');
     if (!container || !content) {   // no modal markup → degrade to a plain confirm
-      return window.confirm(`${title}\n\n${body.replace(/<[^>]+>/g, '')}`) ? { brain: defaultBrain } : null;
+      return window.confirm(`${title}\n\n${body.replace(/<[^>]+>/g, '')}`) ? { brain: defaultBrain, prompt: '', files: [] } : null;
     }
     let brains = {};
     try { brains = await this.api.get('/brains'); } catch { /* registry unreachable → Auto only */ }
     const ids = Object.keys(brains).sort();
     const opts = [`<option value="">🧠 Auto — route via the agent's brain chain</option>`]
       .concat(ids.map(b => `<option value="${esc(b)}"${b === defaultBrain ? ' selected' : ''}>${esc(b)}</option>`)).join('');
+    const fieldStyle = 'width:100%; padding:9px 10px; background:var(--bg-tertiary); border:1px solid var(--border-color); border-radius:8px; color:inherit; font:inherit; font-size:0.9rem';
+    const labelStyle = 'display:block; font-size:0.72rem; text-transform:uppercase; letter-spacing:.04em; color:var(--text-muted); margin-bottom:6px';
+    // Optional extra-steer block — appended to the follow-up's brief and inputs.
+    const inputsBlock = withInputs ? `
+      <label style="${labelStyle}">Additional prompt <span style="text-transform:none; letter-spacing:0">(optional — extra instructions for this continuation)</span></label>
+      <textarea id="brain-prompt" rows="4" style="${fieldStyle}; margin-bottom:16px; resize:vertical" placeholder="e.g. Now add unit tests and a migration guide."></textarea>
+      <label style="${labelStyle}">Extra input files <span style="text-transform:none; letter-spacing:0">(optional — attached alongside the prior run's outputs)</span></label>
+      <div id="brain-attachments" style="display:none; flex-wrap:wrap; gap:6px; margin-bottom:8px"></div>
+      <input type="file" id="brain-files" multiple style="display:none">
+      <button class="btn" id="brain-attach" type="button" style="font-size:0.8rem; margin:0 0 20px; display:inline-flex; align-items:center; gap:6px"><i data-lucide="paperclip" style="width:14px;height:14px"></i> Attach files</button>` : '';
     content.innerHTML = `
       <h3 style="margin:0 0 8px; font-size:1.05rem">${esc(title)}</h3>
       <p style="font-size:0.85rem; color:var(--text-secondary); margin:0 0 16px; line-height:1.5">${body}</p>
-      <label style="display:block; font-size:0.72rem; text-transform:uppercase; letter-spacing:.04em; color:var(--text-muted); margin-bottom:6px">Brain to claim this task</label>
-      <select id="brain-pick" style="width:100%; padding:9px 10px; background:var(--bg-tertiary); border:1px solid var(--border-color); border-radius:8px; color:inherit; font-size:0.9rem; margin-bottom:20px">${opts}</select>
+      <label style="${labelStyle}">Brain to claim this task</label>
+      <select id="brain-pick" style="${fieldStyle}; margin-bottom:${withInputs ? '16px' : '20px'}">${opts}</select>
+      ${inputsBlock}
       <div style="display:flex; gap:8px; justify-content:flex-end">
         <button class="btn" id="brain-cancel" style="font-size:0.85rem">Cancel</button>
         <button class="btn" id="brain-ok" style="font-size:0.85rem; color:${confirmColor}; border-color:${confirmColor}66">${esc(confirmLabel)}</button>
       </div>`;
     container.classList.remove('hidden');
+    if (withInputs) createIcons();
     content.querySelector('#brain-pick').focus();
+
+    // Files stage client-side and upload only on confirm (mirrors createTaskModal),
+    // so a cancelled dialog leaves no orphaned uploads.
+    const staged = [];
+    if (withInputs) {
+      const attBox = content.querySelector('#brain-attachments');
+      const fileEl = content.querySelector('#brain-files');
+      const renderStaged = () => {
+        if (!staged.length) { attBox.style.display = 'none'; attBox.innerHTML = ''; return; }
+        attBox.style.display = 'flex';
+        attBox.innerHTML = staged.map((f, i) => `
+          <span style="display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border-radius:999px;border:1px solid var(--bg-tertiary);background:var(--bg-secondary);font-size:0.74rem">
+            <i data-lucide="file" style="width:12px;height:12px"></i>
+            <span style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(f.name)}</span>
+            <span style="color:var(--text-muted)">${fmtBytes(f.size)}</span>
+            <span data-bp-rm="${i}" title="Remove" style="cursor:pointer;opacity:.6;font-weight:600">×</span>
+          </span>`).join('');
+        attBox.querySelectorAll('[data-bp-rm]').forEach(el => el.addEventListener('click', () => {
+          staged.splice(Number(el.dataset.bpRm), 1);
+          renderStaged();
+        }));
+        createIcons();
+      };
+      content.querySelector('#brain-attach').onclick = () => fileEl.click();
+      fileEl.onchange = () => { staged.push(...Array.from(fileEl.files || [])); fileEl.value = ''; renderStaged(); };
+    }
+
     return new Promise(resolve => {
       const close = (val) => {
         container.classList.add('hidden');
@@ -418,7 +463,11 @@ class App {
       };
       const onKey = (ev) => { if (ev.key === 'Escape') close(null); };
       document.addEventListener('keydown', onKey);
-      content.querySelector('#brain-ok').onclick = () => close({ brain: content.querySelector('#brain-pick').value });
+      content.querySelector('#brain-ok').onclick = () => close({
+        brain: content.querySelector('#brain-pick').value,
+        prompt: withInputs ? content.querySelector('#brain-prompt').value.trim() : '',
+        files: staged.slice()
+      });
       content.querySelector('#brain-cancel').onclick = () => close(null);
       container.querySelector('.modal-backdrop').onclick = () => close(null);
     });
@@ -1504,16 +1553,24 @@ class App {
         const title = b.closest('[data-task]')?.dataset.title || id.slice(0, 8);
         const choice = await this.pickBrain({
           title: 'Continue this task',
-          body: `A follow-up to <strong>${esc(title)}</strong> is created with this run's output files and result attached as inputs. Choose which brain should claim it — <em>Auto</em> routes via the agent's brain chain.`,
+          body: `A follow-up to <strong>${esc(title)}</strong> is created with this run's output files and result attached as inputs. Add an optional prompt or extra files to steer it, then choose which brain claims it — <em>Auto</em> routes via the agent's brain chain.`,
           defaultBrain: b.dataset.brain || '',
           confirmLabel: '▸ Continue',
-          confirmColor: '#22C55E'
+          confirmColor: '#22C55E',
+          withInputs: true
         });
         if (!choice) return;
         b.disabled = true;
         try {
-          await this.api.post(`/inbox/${encodeURIComponent(id)}/continue`, { brain: choice.brain });
-          this.toast('continuing', choice.brain ? `Follow-up queued — pinned to ${choice.brain}.` : 'Follow-up queued — auto-routed via the brain chain.');
+          // Upload the staged extras first so the follow-up carries them as inputs.
+          const inputs = choice.files?.length ? await this.uploadInputFiles(choice.files) : [];
+          const body = { brain: choice.brain };
+          if (choice.prompt) body.prompt = choice.prompt;
+          if (inputs.length) body.inputs = inputs;
+          await this.api.post(`/inbox/${encodeURIComponent(id)}/continue`, body);
+          const extras = [choice.prompt ? 'prompt' : null, inputs.length ? `${inputs.length} file(s)` : null].filter(Boolean).join(' + ');
+          const routeNote = choice.brain ? `pinned to ${choice.brain}` : 'auto-routed via the brain chain';
+          this.toast('continuing', `Follow-up queued — ${routeNote}${extras ? ` · added ${extras}` : ''}.`);
           this.renderInbox();
         } catch (err) { this.toast('error', err.message); b.disabled = false; }
       }));
