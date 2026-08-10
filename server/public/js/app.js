@@ -1785,7 +1785,12 @@ class App {
       ? badge('adaptive · orchestrator-driven', '#0EA5E9')
       : badge('DAG · static', '#7C3AED');
 
-    const tplCards = defs.length ? defs.map(def => {
+    // Pin the workflow-builder to the top — it's the entry point authors reach for
+    // most, so it should lead the list regardless of load order.
+    const orderedDefs = [...defs].sort((a, b) =>
+      (a.id === 'workflow-builder' ? -1 : 0) - (b.id === 'workflow-builder' ? -1 : 0));
+
+    const tplCards = orderedDefs.length ? orderedDefs.map(def => {
       const orchestrated = def.mode === 'orchestrated';
       const nodes = def.steps.map(s => ({
         key: s.key, label: s.title || s.key, dependsOn: s.dependsOn || [],
@@ -1795,20 +1800,24 @@ class App {
       const graph = orchestrated
         ? `<div style="font-size:0.72rem;color:var(--text-muted);margin:6px 0 4px">Step library — the orchestrator picks from these at runtime (order not fixed):</div>${this._stepLibraryHtml(nodes)}`
         : `<div class="wf-dag">${this._dagHtml(nodes)}</div>`;
-      return `<div class="card wf-card" data-wf="${esc(def.id)}" style="margin-bottom:var(--space-lg)">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
-          <div><strong>${esc(def.name || def.id)}</strong> ${badge(def.id, '#7C3AED')} ${modeBadge(def.mode)}</div>
+      // Collapsed by default: the header is a clickable title row; the details,
+      // graph and param inputs live in .wf-body and reveal on click.
+      return `<div class="card wf-card wf-collapsed" data-wf="${esc(def.id)}" style="margin-bottom:var(--space-lg)">
+        <div class="wf-head" style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;cursor:pointer">
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap"><i data-lucide="chevron-right" class="wf-chevron" style="width:16px;height:16px;flex-shrink:0"></i><strong>${esc(def.name || def.id)}</strong> ${badge(def.id, '#7C3AED')} ${modeBadge(def.mode)}</div>
           <span style="font-size:0.75rem;color:var(--text-muted)">${def.steps.length} steps</span>
         </div>
-        ${def.description ? `<p style="font-size:0.83rem;color:var(--text-secondary);margin:6px 0">${esc(def.description)}</p>` : ''}
-        ${orchestrated && def.goal ? `<p style="font-size:0.8rem;margin:6px 0"><span style="color:var(--text-muted)">🎯 Goal:</span> ${esc(def.goal)}</p>` : ''}
-        ${graph}
-        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:12px">
-          ${params || '<span style="font-size:0.78rem;color:var(--text-muted)">no params</span>'}
-          <button class="btn wf-dry" style="font-size:0.78rem;margin-left:auto">Dry run</button>
-          <button class="btn btn-primary wf-run" style="font-size:0.78rem">Run ▶</button>
+        <div class="wf-body" style="display:none">
+          ${def.description ? `<p style="font-size:0.83rem;color:var(--text-secondary);margin:6px 0">${esc(def.description)}</p>` : ''}
+          ${orchestrated && def.goal ? `<p style="font-size:0.8rem;margin:6px 0"><span style="color:var(--text-muted)">🎯 Goal:</span> ${esc(def.goal)}</p>` : ''}
+          ${graph}
+          <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:12px">
+            ${params || '<span style="font-size:0.78rem;color:var(--text-muted)">no params</span>'}
+            <button class="btn wf-dry" style="font-size:0.78rem;margin-left:auto">Dry run</button>
+            <button class="btn btn-primary wf-run" style="font-size:0.78rem">Run ▶</button>
+          </div>
+          <div class="wf-dry-out" style="display:none;margin-top:10px"></div>
         </div>
-        <div class="wf-dry-out" style="display:none;margin-top:10px"></div>
       </div>`;
     }).join('') : `<div class="empty-state"><div class="empty-state-icon"><i data-lucide="workflow"></i></div><h3>No workflow templates</h3><p>Drop a <code>workflows/*.json</code> template on the server to see it here.</p></div>`;
 
@@ -1854,6 +1863,13 @@ class App {
 
     this.contentEl.querySelectorAll('.wf-card').forEach(card => {
       const id = card.dataset.wf;
+      // Toggle the collapsed body when the title row is clicked. The chevron
+      // rotation + body visibility are driven by the .wf-collapsed class.
+      card.querySelector('.wf-head')?.addEventListener('click', () => {
+        const collapsed = card.classList.toggle('wf-collapsed');
+        const body = card.querySelector('.wf-body');
+        if (body) body.style.display = collapsed ? 'none' : 'block';
+      });
       const readParams = () => { const p = {}; card.querySelectorAll('[data-param]').forEach(i => { p[i.dataset.param] = i.value.trim(); }); return p; };
       card.querySelector('.wf-run')?.addEventListener('click', async () => {
         try {

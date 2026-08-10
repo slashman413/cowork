@@ -952,6 +952,10 @@ a { color: inherit; text-decoration: none; }
 .wf-node-sub[style*="italic"] { white-space: normal; }
 /* Live "orchestrator deciding…" node while an adaptive run picks its next step. */
 .wf-deciding { animation: pulse 1.4s ease-in-out infinite; }
+/* Collapsible workflow template cards: the chevron rotates down when expanded. */
+.wf-head:hover .wf-chevron { color: var(--text-secondary); }
+.wf-chevron { color: var(--text-muted); transition: transform 0.15s ease; }
+.wf-card:not(.wf-collapsed) .wf-chevron { transform: rotate(90deg); }
 
 /* ===== Gemini-Style Chat UI ===== */
 .chat-messages-area {
