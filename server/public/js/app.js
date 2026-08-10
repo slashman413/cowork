@@ -426,17 +426,24 @@ class App {
 
   /**
    * "＋ New task" modal — create and dispatch a task from the Inbox without the
-   * Chat detour. Same POST /inbox contract as Chat; brain pinning mirrors
-   * pickBrain ('' = auto-route via the agent's brain chain).
+   * Chat detour. Same POST /inbox contract as Chat: an agent pick from the
+   * roster stamps context.agent (the dispatcher runs that persona on its
+   * division's brain chain), attached files upload to task inputs the brain
+   * reads, and brain pinning mirrors pickBrain ('' = auto-route via the chain).
    */
   async createTaskModal() {
     const container = document.getElementById('modal-container');
     const content = document.getElementById('modal-content');
     if (!container || !content) return;
     let brains = {};
+    let divisions = {};
+    // Both feeds are optional — a missing registry/roster degrades to Auto.
     try { brains = await this.api.get('/brains'); } catch { /* registry unreachable → Auto only */ }
+    try { divisions = await this.api.get('/roster-divisions'); } catch { /* roster unreachable → no agent picker options */ }
     const opts = [`<option value="">🧠 Auto — route via the agent's brain chain</option>`]
       .concat(Object.keys(brains).sort().map(b => `<option value="${esc(b)}">${esc(b)}</option>`)).join('');
+    const divOpts = [`<option value="">🤖 Auto — let the router pick the agent</option>`]
+      .concat(Object.entries(divisions).sort().map(([d, i]) => `<option value="${esc(d)}">${esc(i.label || d)} (${i.agents.length})</option>`)).join('');
     const fieldStyle = 'width:100%; padding:9px 10px; background:var(--bg-tertiary); border:1px solid var(--border-color); border-radius:8px; color:inherit; font:inherit; font-size:0.9rem';
     const labelStyle = 'display:block; font-size:0.72rem; text-transform:uppercase; letter-spacing:.04em; color:var(--text-muted); margin:0 0 6px';
     content.innerHTML = `
@@ -446,6 +453,11 @@ class App {
       <input id="nt-title" style="${fieldStyle}; margin-bottom:12px" placeholder="Short imperative title…">
       <label style="${labelStyle}">Brief (markdown)</label>
       <textarea id="nt-desc" rows="6" style="${fieldStyle}; margin-bottom:12px; resize:vertical" placeholder="What should the agent do? Include acceptance criteria."></textarea>
+      <label style="${labelStyle}">Agent <span style="text-transform:none; letter-spacing:0">(optional — pick a division, then the roster agent that studies the files & does the work)</span></label>
+      <div style="display:flex; gap:8px; margin-bottom:12px">
+        <select id="nt-div" style="${fieldStyle}; flex:1">${divOpts}</select>
+        <select id="nt-agent" style="${fieldStyle}; flex:1" disabled><option value="">— none —</option></select>
+      </div>
       <label style="${labelStyle}">Priority</label>
       <select id="nt-priority" style="${fieldStyle}; margin-bottom:12px">
         <option value="normal" selected>normal</option><option value="low">low</option>
@@ -454,12 +466,17 @@ class App {
       <label style="${labelStyle}">Run at <span style="text-transform:none; letter-spacing:0">(optional — leave empty to run now)</span></label>
       <input id="nt-when" type="datetime-local" style="${fieldStyle}; margin-bottom:12px">
       <label style="${labelStyle}">Brain to claim this task</label>
-      <select id="nt-brain" style="${fieldStyle}; margin-bottom:20px">${opts}</select>
+      <select id="nt-brain" style="${fieldStyle}; margin-bottom:12px">${opts}</select>
+      <label style="${labelStyle}">Input files <span style="text-transform:none; letter-spacing:0">(optional — attached for the agent/brain to study)</span></label>
+      <div id="nt-attachments" style="display:none; flex-wrap:wrap; gap:6px; margin-bottom:8px"></div>
+      <input type="file" id="nt-files" multiple style="display:none">
+      <button class="btn" id="nt-attach" type="button" style="font-size:0.8rem; margin:0 0 20px; display:inline-flex; align-items:center; gap:6px"><i data-lucide="paperclip" style="width:14px;height:14px"></i> Attach files</button>
       <div style="display:flex; gap:8px; justify-content:flex-end">
         <button class="btn" id="nt-cancel" style="font-size:0.85rem">Cancel</button>
         <button class="btn" id="nt-ok" style="font-size:0.85rem; color:#22C55E; border-color:#22C55E66">＋ Create task</button>
       </div>`;
     container.classList.remove('hidden');
+    createIcons();
     content.querySelector('#nt-title').focus();
     const close = () => {
       container.classList.add('hidden');
@@ -470,30 +487,81 @@ class App {
     document.addEventListener('keydown', onKey);
     content.querySelector('#nt-cancel').onclick = close;
     container.querySelector('.modal-backdrop').onclick = close;
+
+    // Division → agent: the agent list is scoped to the chosen division, matching
+    // the two-stage roster picker in Chat. Empty division = auto-route.
+    const divEl = content.querySelector('#nt-div');
+    const agentEl = content.querySelector('#nt-agent');
+    divEl.onchange = () => {
+      const info = divEl.value ? divisions[divEl.value] : null;
+      const agentOpts = info ? info.agents.slice().sort((a, b) => a.name.localeCompare(b.name))
+        .map(a => `<option value="${esc(a.slug)}">${esc(a.name)}</option>`).join('') : '';
+      agentEl.innerHTML = `<option value="">— any agent in this division —</option>${agentOpts}`;
+      agentEl.disabled = !info;
+    };
+
+    // Files are staged client-side and uploaded on Create (mirrors the Chat
+    // composer), so a cancelled modal leaves no orphaned uploads.
+    const staged = [];
+    const attBox = content.querySelector('#nt-attachments');
+    const fileEl = content.querySelector('#nt-files');
+    const renderStaged = () => {
+      if (!staged.length) { attBox.style.display = 'none'; attBox.innerHTML = ''; return; }
+      attBox.style.display = 'flex';
+      attBox.innerHTML = staged.map((f, i) => `
+        <span style="display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border-radius:999px;border:1px solid var(--bg-tertiary);background:var(--bg-secondary);font-size:0.74rem">
+          <i data-lucide="file" style="width:12px;height:12px"></i>
+          <span style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(f.name)}</span>
+          <span style="color:var(--text-muted)">${fmtBytes(f.size)}</span>
+          <span data-nt-rm="${i}" title="Remove" style="cursor:pointer;opacity:.6;font-weight:600">×</span>
+        </span>`).join('');
+      attBox.querySelectorAll('[data-nt-rm]').forEach(el => el.addEventListener('click', () => {
+        staged.splice(Number(el.dataset.ntRm), 1);
+        renderStaged();
+      }));
+      createIcons();
+    };
+    content.querySelector('#nt-attach').onclick = () => fileEl.click();
+    fileEl.onchange = () => { staged.push(...Array.from(fileEl.files || [])); fileEl.value = ''; renderStaged(); };
+
     content.querySelector('#nt-ok').onclick = async () => {
       const title = content.querySelector('#nt-title').value.trim();
       const description = content.querySelector('#nt-desc').value.trim();
       if (!title) { content.querySelector('#nt-title').style.borderColor = '#EF4444'; return; }
       if (!description) { content.querySelector('#nt-desc').style.borderColor = '#EF4444'; return; }
       const brain = content.querySelector('#nt-brain').value;
+      const division = divEl.value;
+      const agent = agentEl.value;
       // datetime-local gives a LOCAL wall-clock string; toISOString converts it
       // to the UTC instant the server schedules on. Empty = run now (default).
       const when = content.querySelector('#nt-when').value;
-      const body = {
-        title, description,
-        from: { platform: 'dashboard', agent: 'operator' },
-        priority: content.querySelector('#nt-priority').value,
-        context: brain ? { brain } : {},
-        ...(when ? { scheduledAt: new Date(when).toISOString() } : {})
-      };
-      content.querySelector('#nt-ok').disabled = true;
+      // Context mirrors Chat: a named agent wins (dispatcher derives its division
+      // + persona); otherwise a bare division scopes the router. Brain pins on top.
+      const context = {};
+      if (brain) context.brain = brain;
+      if (agent) context.agent = agent; else if (division) context.division = division;
+      const okBtn = content.querySelector('#nt-ok');
+      okBtn.disabled = true;
       try {
+        // Upload staged files first so the created task carries them as inputs.
+        const inputs = staged.length ? await this.uploadInputFiles(staged) : [];
+        const body = {
+          title, description,
+          from: { platform: 'dashboard', agent: 'operator' },
+          priority: content.querySelector('#nt-priority').value,
+          context,
+          ...(inputs.length ? { inputs } : {}),
+          ...(when ? { scheduledAt: new Date(when).toISOString() } : {})
+        };
         await this.api.post('/inbox', body);
         close();
-        this.toast('task created', `${when ? `Scheduled for ${new Date(when).toLocaleString()}` : 'Queued'} — ${brain ? `pinned to ${brain}.` : 'auto-routed via the brain chain.'}`);
+        const target = agent ? `agent ${agent}` : division ? `${divisions[division]?.label || division} division` : null;
+        const routeNote = brain ? `pinned to ${brain}` : target ? `routed to ${target}` : 'auto-routed via the brain chain';
+        const fileNote = inputs.length ? ` · ${inputs.length} file(s) attached` : '';
+        this.toast('task created', `${when ? `Scheduled for ${new Date(when).toLocaleString()}` : 'Queued'} — ${routeNote}${fileNote}.`);
         if (this.currentView === 'inbox') this.renderInbox();
       } catch (err) {
-        content.querySelector('#nt-ok').disabled = false;
+        okBtn.disabled = false;
         this.toast('error', err.message);
       }
     };
