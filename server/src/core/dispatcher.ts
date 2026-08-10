@@ -138,12 +138,16 @@ export class Dispatcher {
     return !!this.specialAgents()[name];
   }
 
-  /** Resolve the brain fallback chain for an agent. Special agents carry their
-   *  own chain; roster agents use their division's override or the global
-   *  default chain. */
+  /** Resolve the brain fallback chain for an agent. Precedence:
+   *   special agent      → its own agents[name].brains
+   *   roster agent       → its own agentChains[slug] override, else its
+   *                        division's override, else the global default chain. */
   private chainFor(agent: string, division?: string): string[] {
     const orch = this.config.orchestration;
     if (this.isSpecial(agent)) return orch.agents[agent].brains || [];
+    // A roster agent's own override wins over its division and the global default.
+    const own = orch.agentChains && orch.agentChains[agent];
+    if (own && own.length) return own;
     const div = division || '';
     return (orch.divisionChains && orch.divisionChains[div]) || orch.defaultChain || [];
   }

@@ -123,6 +123,7 @@ export function loadConfig(): Config {
       brains: loadedConfig.orchestration?.brains || {},
       defaultChain: loadedConfig.orchestration?.defaultChain || [],
       divisionChains: loadedConfig.orchestration?.divisionChains || {},
+      agentChains: loadedConfig.orchestration?.agentChains || {},
       remoteGraceMs: loadedConfig.orchestration?.remoteGraceMs ?? 60000,
       classifier: {
         ...defaultConfig.orchestration.classifier!,
@@ -164,6 +165,7 @@ export function persistRegistries(config: Config): void {
   disk.orchestration.brains = config.orchestration.brains;
   disk.orchestration.defaultChain = config.orchestration.defaultChain;
   disk.orchestration.divisionChains = config.orchestration.divisionChains;
+  disk.orchestration.agentChains = config.orchestration.agentChains;
   fs.writeFileSync(configPath, JSON.stringify(disk, null, 2));
 }
 
@@ -188,6 +190,16 @@ export function removeBrainCascade(config: Config, id: string): number {
     const before = chain.length;
     const next = chain.filter(b => b !== id);
     if (next.length !== before) { orch.divisionChains![div] = next; scrubbed++; }
+  }
+  // And every per-roster-agent override.
+  for (const [agent, chain] of Object.entries(orch.agentChains || {})) {
+    const before = chain.length;
+    const next = chain.filter(b => b !== id);
+    if (next.length !== before) {
+      if (next.length) orch.agentChains![agent] = next;
+      else delete orch.agentChains![agent];   // emptied → fall back to division/default
+      scrubbed++;
+    }
   }
   persistRegistries(config);
   return scrubbed;

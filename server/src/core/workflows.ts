@@ -68,6 +68,33 @@ export class Workflows {
   }
 
   /**
+   * Author a NEW workflow template to disk (workflows/<id>.json) at runtime, so
+   * pipelines can be created from the dashboard / an agent / the workflow-builder
+   * workflow — not only hand-committed. The id is sanitized into a safe filename
+   * (kebab-case, no path traversal), the def is validated exactly as list() would,
+   * and an existing template is NOT clobbered unless opts.overwrite. Returns the
+   * stored definition so the caller can immediately run it.
+   */
+  create(def: WorkflowDef, opts: { overwrite?: boolean } = {}): WorkflowDef {
+    if (!def || typeof def !== 'object') throw new Error('workflow definition (object) is required');
+    const id = String(def.id || '').trim().toLowerCase();
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(id)) {
+      throw new Error('id must be kebab-case: lowercase letters, digits and hyphens, starting alphanumeric');
+    }
+    const stored: WorkflowDef = { ...def, id };
+    const errors = this.validate(stored);
+    if (errors.length) throw new Error(errors.join('; '));
+    const dir = this.dir();
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, `${id}.json`);
+    const existed = fs.existsSync(file);
+    if (existed && !opts.overwrite) throw new Error(`workflow "${id}" already exists — set overwrite to replace it`);
+    fs.writeFileSync(file, JSON.stringify(stored, null, 2));
+    console.log(`Workflows: ${existed ? 'updated' : 'created'} template "${id}"`);
+    return stored;
+  }
+
+  /**
    * The templates on disk that FAILED to load, with the reason — the mirror of
    * list(). Without this an author who drops malformed JSON just sees it vanish;
    * the dashboard renders these so the fix is one glance away.

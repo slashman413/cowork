@@ -125,10 +125,11 @@ async function main() {
     });
   });
 
-  // ── Brain fallback chains (global default + per-division overrides) ─────────
+  // ── Brain fallback chains (global default + per-division + per-agent) ───────
   app.get('/api/chains', (_req, res) => res.json({
     defaultChain: config.orchestration.defaultChain || [],
-    divisionChains: config.orchestration.divisionChains || {}
+    divisionChains: config.orchestration.divisionChains || {},
+    agentChains: config.orchestration.agentChains || {}
   }));
 
   const validChain = (brains: any): string[] => {
@@ -153,6 +154,18 @@ async function main() {
       else delete config.orchestration.divisionChains[req.params.division];   // empty = use default
       persistRegistries(config);
       res.json({ ok: true, division: req.params.division, brains });
+    } catch (e: any) { res.status(400).json({ error: e.message }); }
+  });
+  // Per-roster-agent override. Empty brains[] clears it (agent falls back to its
+  // division's chain, then the global default).
+  app.put('/api/chains/agent/:agent', (req, res) => {
+    try {
+      config.orchestration.agentChains = config.orchestration.agentChains || {};
+      const brains = validChain(req.body?.brains);
+      if (brains.length) config.orchestration.agentChains[req.params.agent] = brains;
+      else delete config.orchestration.agentChains[req.params.agent];
+      persistRegistries(config);
+      res.json({ ok: true, agent: req.params.agent, brains });
     } catch (e: any) { res.status(400).json({ error: e.message }); }
   });
 

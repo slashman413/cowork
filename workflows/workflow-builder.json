@@ -1,0 +1,27 @@
+{
+  "id": "workflow-builder",
+  "name": "Workflow Builder (design → author → register)",
+  "description": "A meta-workflow that builds new workflows. Give it a goal and a new workflow id; it designs the pipeline, authors a schema-valid template, then registers it via the Cowork API so it is immediately runnable — no hand-editing of workflows/*.json.",
+  "params": ["goal", "workflow_id"],
+  "steps": [
+    {
+      "key": "design",
+      "title": "Design the \"{{workflow_id}}\" pipeline",
+      "description": "Design a reusable Cowork workflow that accomplishes this goal:\n\n{{goal}}\n\nDecompose it into the smallest set of concrete steps. For each step decide: a unique kebab-case key, a title, a standalone description (the brief the executing agent will see), which earlier steps it dependsOn (the DAG edges), and — when it clearly belongs to one function — a division (engineering, marketing, operations, design, finance, product, etc.) or a specific agent. Identify the run-time params that vary per run and reference them as {{param}} placeholders. Decide whether the pipeline is a static `dag` (fixed graph, default) or `orchestrated` (a library of candidate steps the orchestrator picks among toward a goal). Output the design as markdown: the mode, the param list, and a numbered step table (key, title, dependsOn, division/agent).",
+      "division": "engineering"
+    },
+    {
+      "key": "author",
+      "title": "Author the \"{{workflow_id}}\" template JSON",
+      "description": "Turn the approved design into a single valid Cowork workflow definition JSON and save it to the artifacts dir as `workflow.json`. It MUST conform to this schema:\n\n{\n  \"id\": \"{{workflow_id}}\",            // kebab-case; this is the template's stable id\n  \"name\": \"<human label>\",\n  \"description\": \"<one-liner>\",\n  \"mode\": \"dag\" | \"orchestrated\",   // omit for dag\n  \"goal\": \"<orchestrated mode only>\",\n  \"params\": [\"<name>\", ...],          // referenced as {{name}} in titles/descriptions\n  \"steps\": [\n    { \"key\": \"<unique kebab-case>\", \"title\": \"...\", \"description\": \"...\",\n      \"division\": \"<optional>\", \"agent\": \"<optional>\", \"brain\": \"<optional>\",\n      \"priority\": \"low|normal|high|urgent\", \"dependsOn\": [\"<earlier step key>\"] }\n  ]\n}\n\nRules the validator enforces: every step needs a unique string `key`; every `dependsOn` entry must reference an existing step key; the graph must be acyclic (no step may transitively depend on itself). Write ONLY the JSON object to workflow.json (no prose, no markdown fences) so it can be registered as-is.",
+      "division": "engineering",
+      "dependsOn": ["design"]
+    },
+    {
+      "key": "register",
+      "title": "Register + verify the \"{{workflow_id}}\" workflow",
+      "description": "Register the authored template with the Cowork server so it becomes runnable. POST the contents of workflow.json to the Cowork API:\n\n  curl -sS -X POST http://127.0.0.1:6868/api/workflows \\\n    -H 'Content-Type: application/json' \\\n    -d @workflow.json\n\nA 201 with { ok: true, workflow: {...} } means it validated and was written to workflows/{{workflow_id}}.json. If you get \"already exists\", re-POST with the body wrapped as {\"def\": <the json>, \"overwrite\": true}. Then verify it loads and expands correctly with a dry run:\n\n  curl -sS -X POST http://127.0.0.1:6868/api/workflows/{{workflow_id}}/run \\\n    -H 'Content-Type: application/json' -d '{\"dryRun\": true, \"params\": {}}'\n\n(fill the params object with sample values for the template's params). Report the registration response and the resolved dry-run step list. If the host running this step cannot reach the Cowork API, say so plainly and leave workflow.json as the deliverable for a host that can register it — do not fake a success.",
+      "dependsOn": ["author"]
+    }
+  ]
+}

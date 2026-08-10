@@ -1950,8 +1950,25 @@ class App {
         ${chainRow(a.brains, 'agent:' + n)}
       </div>`).join('');
 
+    // One roster agent's row: an explicit per-agent chain override wins over the
+    // division chain and the global default. With no override the agent inherits
+    // (shown muted) and offers a one-click "+ override with…" starter.
+    const agentRow = (a) => {
+      const own = chains.agentChains?.[a.slug];
+      const inherits = (chains.divisionChains?.[a.division] && 'division chain') || 'default chain';
+      return `<div style="padding:6px 0;border-top:1px solid var(--bg-tertiary)">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+          <span style="font-size:0.82rem">${a.emoji ? esc(a.emoji) + ' ' : ''}${esc(a.name || a.slug)}</span>
+          <span style="font-size:0.7rem;color:var(--text-muted)">${own ? 'own chain' : 'inherits ' + inherits}</span>
+        </div>
+        ${own ? chainRow(own, 'roster:' + a.slug) + `<a data-reset-agent="${esc(a.slug)}" style="cursor:pointer;font-size:0.72rem;color:var(--text-muted)">↺ reset to inherited</a>`
+          : `<select data-add="roster:${esc(a.slug)}" style="margin-top:4px;padding:4px;background:var(--bg-tertiary);border:1px solid var(--bg-tertiary);border-radius:8px;color:inherit;font-size:0.78rem"><option value="">+ override with…</option>${opts}</select>`}
+      </div>`;
+    };
+
     const divCards = Object.entries(divisions).sort().map(([d, info]) => {
       const override = chains.divisionChains?.[d];
+      const agentList = (info.agents || []).map(a => agentRow({ ...a, division: d })).join('');
       return `<div class="card" style="margin-bottom:var(--space-md)">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
           <strong>${esc(info.label || d)}</strong>
@@ -1960,6 +1977,9 @@ class App {
         ${override ? chainRow(override, 'div:' + d) + `<a data-reset="${esc(d)}" style="cursor:pointer;font-size:0.72rem;color:var(--text-muted)">↺ reset to default</a>`
           : `<div style="margin:4px 0;font-size:0.8rem;color:var(--text-muted)">${(chains.defaultChain || []).join(' → ') || '(no default)'}</div>
              <select data-add="div:${esc(d)}" style="padding:4px;background:var(--bg-tertiary);border:1px solid var(--bg-tertiary);border-radius:8px;color:inherit;font-size:0.78rem"><option value="">+ override with…</option>${opts}</select>`}
+        <details style="margin-top:8px"><summary style="cursor:pointer;font-size:0.75rem;color:var(--text-muted)">Per-agent overrides (${info.agents.length})</summary>
+          ${agentList || '<div style="font-size:0.78rem;color:var(--text-muted);padding:6px 0">no agents</div>'}
+        </details>
       </div>`;
     }).join('');
 
@@ -1970,10 +1990,13 @@ class App {
 
     const save = async (ctx, arr) => {
       if (ctx.startsWith('agent:')) { const n = ctx.slice(6); await this.api.put(`/agents-config/${encodeURIComponent(n)}`, { description: special[n].description, brains: arr }); }
+      else if (ctx.startsWith('roster:')) { const s = ctx.slice(7); await this.api.put(`/chains/agent/${encodeURIComponent(s)}`, { brains: arr }); }
       else { const dv = ctx.slice(4); await this.api.put(`/chains/division/${encodeURIComponent(dv)}`, { brains: arr }); }
       await this.renderTeam();
     };
-    const chainOf = (ctx) => ctx.startsWith('agent:') ? (special[ctx.slice(6)].brains || []).slice() : (chains.divisionChains?.[ctx.slice(4)] || []).slice();
+    const chainOf = (ctx) => ctx.startsWith('agent:') ? (special[ctx.slice(6)].brains || []).slice()
+      : ctx.startsWith('roster:') ? (chains.agentChains?.[ctx.slice(7)] || []).slice()
+      : (chains.divisionChains?.[ctx.slice(4)] || []).slice();
 
     // Drag to reorder / ✕ to remove — identical to the Brains default chain.
     this.contentEl.querySelectorAll('.chain-row').forEach(row =>
@@ -1985,6 +2008,7 @@ class App {
       save(ctx, arr);
     }));
     this.contentEl.querySelectorAll('[data-reset]').forEach(a => a.addEventListener('click', () => save('div:' + a.dataset.reset, [])));
+    this.contentEl.querySelectorAll('[data-reset-agent]').forEach(a => a.addEventListener('click', () => save('roster:' + a.dataset.resetAgent, [])));
   }
 
   // ── Brains (model × platform × location registry) ──────────────────────

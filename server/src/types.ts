@@ -168,6 +168,10 @@ export interface OrchestrationConfig {
   defaultChain?: string[];
   /** Per-division overrides of the default chain (division id -> brain ids). */
   divisionChains?: Record<string, string[]>;
+  /** Per-roster-agent overrides of the chain (agent slug -> brain ids). Highest
+   *  precedence for a roster agent: an agent with its own chain here ignores its
+   *  division override and the global default. Editable live from the Agents view. */
+  agentChains?: Record<string, string[]>;
   /** Special (non-roster) executor agents: orchestrator (router/decomposer),
    *  video (LTX pipeline), generalist (fallback). Each has its own brain chain. */
   agents: Record<string, AgentConfig>;

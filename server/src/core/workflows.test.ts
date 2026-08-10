@@ -313,3 +313,53 @@ test('getRun / listRuns render an orchestrated run with mode, goal, and history'
   assert.equal(matches.length, 1);
   assert.equal(matches[0].mode, 'orchestrated');
 });
+
+// ── create(): author a new template to disk at runtime ─────────────────────
+
+test('create() validates + persists a new template that is then loadable + runnable', () => {
+  const { wf, dir } = makeWorkflows();
+  const def: WorkflowDef = {
+    id: 'built',
+    name: 'Built at runtime',
+    params: ['topic'],
+    steps: [
+      { key: 'a', title: 'Research {{topic}}' },
+      { key: 'b', title: 'Draft {{topic}}', dependsOn: ['a'] }
+    ]
+  };
+  const stored = wf.create(def);
+  assert.equal(stored.id, 'built');
+  assert.ok(fs.existsSync(path.join(dir, 'built.json')));
+  // Immediately visible through the normal load path and runnable.
+  assert.equal(wf.get('built')?.name, 'Built at runtime');
+  const run = wf.run('built', { topic: 'edge AI' }, { dryRun: true });
+  assert.deepEqual(run.steps.map(s => s.key), ['a', 'b']);
+});
+
+test('create() rejects a structurally invalid template (unknown dependsOn)', () => {
+  const { wf } = makeWorkflows();
+  assert.throws(() => wf.create({ id: 'bad', steps: [{ key: 'a', dependsOn: ['ghost'] }] }),
+    /unknown step "ghost"/);
+});
+
+test('create() rejects a cyclic template', () => {
+  const { wf } = makeWorkflows();
+  assert.throws(() => wf.create({ id: 'cyclic', steps: [
+    { key: 'a', dependsOn: ['b'] }, { key: 'b', dependsOn: ['a'] }
+  ] }), /cycle/);
+});
+
+test('create() enforces a safe kebab-case id (no path traversal)', () => {
+  const { wf } = makeWorkflows();
+  assert.throws(() => wf.create({ id: '../escape', steps: [{ key: 'a' }] }), /kebab-case/);
+  assert.throws(() => wf.create({ id: 'Has Spaces', steps: [{ key: 'a' }] }), /kebab-case/);
+});
+
+test('create() refuses to clobber unless overwrite is set', () => {
+  const { wf } = makeWorkflows();
+  wf.create({ id: 'dup', steps: [{ key: 'a', title: 'v1' }] });
+  assert.throws(() => wf.create({ id: 'dup', steps: [{ key: 'a', title: 'v2' }] }), /already exists/);
+  const updated = wf.create({ id: 'dup', steps: [{ key: 'a', title: 'v2' }] }, { overwrite: true });
+  assert.equal(updated.steps[0].title, 'v2');
+  assert.equal(wf.get('dup')?.steps[0].title, 'v2');
+});
