@@ -1074,11 +1074,16 @@ class App {
     this.renderChatRecent();
   }
 
-  /** The 5-newest recent-sessions strip shown above the brain/agent select row.
+  /** The recent-sessions list shown above the brain/agent select row. Takes the
+   *  5 most-recent sessions and lays them out vertically, sorted by time with the
+   *  OLDEST at the top and the LATEST at the bottom of the list.
    *  Always emits the #chat-recent container (hidden when empty) so it can be
    *  refreshed in place. Every interpolated value is esc()'d (no raw HTML). */
   chatRecentBar() {
-    const recent = this.chatSessions.slice(0, 5);
+    // chatSessions is kept newest-first; take the 5 newest, then order them
+    // ascending by updatedAt so the display reads oldest (top) → latest (bottom).
+    const recent = this.chatSessions.slice(0, 5)
+      .sort((a, b) => new Date(a.updatedAt || 0) - new Date(b.updatedAt || 0));
     const inner = recent.map(s => {
       const active = s.id === this.chatSessionId;
       const target = s.sel?.agent || s.sel?.brain || (s.sel?.division ? 'division:' + s.sel.division : 'auto');
@@ -1089,8 +1094,8 @@ class App {
         <span data-chat-del="${esc(s.id)}" title="Delete" style="opacity:.55;padding:0 2px;font-weight:600">×</span>
       </span>`;
     }).join('');
-    return `<div id="chat-recent" style="display:${recent.length ? 'flex' : 'none'};gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
-      <span style="font-size:0.7rem;color:var(--text-muted);margin-right:2px">Recent</span>${inner}
+    return `<div id="chat-recent" style="display:${recent.length ? 'flex' : 'none'};flex-direction:column;gap:6px;align-items:stretch;margin-bottom:8px">
+      <span style="font-size:0.7rem;color:var(--text-muted)">Recent</span>${inner}
     </div>`;
   }
 
