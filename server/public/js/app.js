@@ -58,8 +58,11 @@ function usageMeters(brainIds, usage) {
   const blocks = [...byExec.entries()].map(([exec, { u, names }]) => {
     const stale = Date.now() - new Date(u.at).getTime() > 1800000;
     return `<div class="usage-brain">
-      <div class="usage-brain-head">${badge(exec, '#7C3AED')} <span class="usage-names">${names.map(esc).join(' · ')}</span>
-        <span class="usage-at"${stale ? ' style="color:#EAB308"' : ''} title="${esc(new Date(u.at).toLocaleString())}">measured ${timeAgo(u.at)}</span></div>
+      <div class="usage-brain-head">
+        ${badge(exec, '#7C3AED')}
+        <span class="usage-at"${stale ? ' style="color:#EAB308"' : ''} title="${esc(new Date(u.at).toLocaleString())}">measured ${timeAgo(u.at)}</span>
+      </div>
+      <div class="conn-local-names">${names.slice().sort().map(n => `<div>${esc(n)}</div>`).join('')}</div>
       ${usageExecBody(exec, u)}
     </div>`;
   }).join('');
@@ -978,7 +981,7 @@ class App {
   async renderConnectionsInner() {
     const { clients, counters, usage = {}, localBrains = [] } = await this.api.get('/connections');
     const clientCards = clients.map(a => `
-      <div class="card agent-card">
+      <div class="card agent-card conn-local-card">
         <div class="agent-header">
           <span class="agent-title">${esc(a.agentName)}</span>
           ${badge(a.live ? 'live' : 'stale', a.live ? '#22C55E' : '#94A3B8')}
@@ -1002,7 +1005,7 @@ class App {
       <div class="conn-section-label">Local brains <span>· run by the dispatcher on this host</span></div>
       <div class="conn-local-stack">${localCards.join('')}</div>` : '';
 
-    const clientsHtml = clientCards.length ? `<div class="grid-3">${clientCards.join('')}</div>`
+    const clientsHtml = clientCards.length ? `<div class="conn-local-stack">${clientCards.join('')}</div>`
       : `<div class="empty-state"><div class="empty-state-icon"><i data-lucide="plug"></i></div><h3>No live MCP clients</h3><p>External clients appear here when they register + heartbeat.</p></div>`;
     const cardsHtml = `${localHtml}${localHtml && clientCards.length ? `<div class="conn-section-label" style="margin-top:var(--space-lg)">MCP clients <span>· external agents that register + heartbeat</span></div>` : ''}${clientsHtml}`;
 
