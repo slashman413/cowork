@@ -86,6 +86,28 @@ export interface BrainUsageWindow {
   usedPct: number;
   /** ISO timestamp when this window resets, when known. */
   resetsAt?: string;
+  /**
+   * Percent of the window REMAINING (0–100), when the source reports remaining
+   * rather than used (Antigravity's quota RPC). Carried alongside `usedPct` so
+   * the UI can show "X% remaining" without re-deriving it. Absent for
+   * used-based execs (claude/codex).
+   */
+  remainingPct?: number;
+  /**
+   * The model-group this window belongs to. Antigravity buckets its quota by
+   * model family — e.g. "Gemini Models" vs "Claude and GPT Models" — so the
+   * same window label ('5h'/'7d') appears once per group. Absent for
+   * single-account execs (claude/codex), whose windows are ungrouped.
+   */
+  group?: string;
+  /** Member model display names for `group` ("Models within this group: …"). */
+  groupModels?: string[];
+  /**
+   * When set, this window is not currently metered (e.g. the 5-hour limit no
+   * longer applies once the weekly cap is hit). The UI shows this note in place
+   * of a progress bar.
+   */
+  disabledNote?: string;
 }
 
 /**

@@ -342,13 +342,22 @@ async function probeAgyUsage() {
   const token = await agyAccessToken();
   if (!token) return null;
   const num = (...vs) => { for (const v of vs) { if (v == null) continue; const n = +v; if (Number.isFinite(n)) return n; } return null; };
+  const dur = (v) => { if (v == null) return null; if (typeof v === 'number') return Number.isFinite(v) ? v : null; const m = String(v).match(/^(\d+(?:\.\d+)?)s?$/); return m ? +m[1] : null; };
   const agyLabel = (b, g) => {
-    const mins = num(b?.windowMinutes, g?.windowMinutes);
-    const secs = num(b?.windowSeconds, b?.windowDurationSeconds, g?.windowSeconds);
+    const mins = num(b?.windowMinutes, b?.minutesPerBucket, g?.windowMinutes, g?.minutesPerBucket);
+    const secs = num(b?.windowSeconds, b?.windowDurationSeconds, dur(b?.movingWindowSize ?? b?.slidingWindow ?? b?.window), dur(g?.movingWindowSize ?? g?.slidingWindow), g?.windowSeconds);
     const m = mins ?? (secs != null ? secs / 60 : null);
     if (m != null && m > 0) return m === 10080 ? '7d' : m === 300 ? '5h' : (m >= 1440 ? `${Math.round(m / 1440)}d` : `${Math.round(m / 60)}h`);
-    const name = String(b?.displayName || b?.quotaId || b?.name || g?.displayName || g?.quotaId || '').trim();
+    const name = String(b?.displayName || b?.bucketName || b?.quotaId || b?.name || g?.displayName || g?.quotaId || '').trim();
     return name ? name.slice(0, 12) : 'quota';
+  };
+  const groupInfo = (g) => {
+    const name = String(g?.groupName || g?.groupDescription || g?.displayName || g?.tierDisplayName || g?.quotaId || '').trim() || null;
+    const raw = g?.modelDisplayNames || g?.models || g?.modelNames || g?.modelIds || g?.allowedModels || [];
+    const models = (Array.isArray(raw) ? raw : [])
+      .map((m) => typeof m === 'string' ? m : String(m?.displayName || m?.modelDisplayName || m?.name || m?.modelId || '').trim())
+      .filter((s) => s.length > 0);
+    return { name, models };
   };
   try {
     const res = await fetch('https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary', {
@@ -365,12 +374,23 @@ async function probeAgyUsage() {
     for (const b of arr(raw?.quotaSummaryBuckets || raw?.buckets, null)) pairs.push([b, raw]);
     const windows = [];
     for (const [b, g] of pairs) {
-      const remaining = num(b?.remaining, b?.remainingPercent, b?.percentRemaining, b?.bucketInfo?.remaining, b?.quotaInfo?.remaining);
-      if (remaining == null) continue;
-      const used = clampPct(100 - remaining);
-      if (used == null) continue;
+      const frac = num(b?.remainingFraction, b?.bucketInfo?.remainingFraction, b?.quotaInfo?.remainingFraction);
+      const rawPct = num(b?.remaining, b?.remainingPercent, b?.percentRemaining, b?.bucketInfo?.remaining, b?.quotaInfo?.remaining);
+      const remaining = frac != null ? clampPct(frac * 100) : (rawPct != null ? clampPct(rawPct) : null);
+      const disabled = b?.disabled === true || b?.enabled === false || b?.isEnabled === false;
+      const disabledNote = disabled ? String(b?.disabledReason || b?.disabledMessage || b?.message || 'Disabled — this limit does not currently apply.') : null;
+      if (remaining == null && !disabledNote) continue;
       const resetsAt = b?.resetTime || b?.resetsAt || b?.bucketInfo?.resetTime || g?.resetTime || null;
-      windows.push({ label: agyLabel(b, g), usedPct: used, ...(resetsAt ? { resetsAt } : {}) });
+      const { name, models } = groupInfo(g);
+      windows.push({
+        label: agyLabel(b, g),
+        usedPct: remaining != null ? clampPct(100 - remaining) : 100,
+        ...(resetsAt ? { resetsAt } : {}),
+        ...(remaining != null ? { remainingPct: remaining } : {}),
+        ...(disabledNote ? { disabledNote } : {}),
+        ...(name ? { group: name } : {}),
+        ...(models.length ? { groupModels: models } : {})
+      });
     }
     return windows.length ? windows : null;
   } catch { return null; }

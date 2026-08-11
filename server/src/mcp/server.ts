@@ -163,8 +163,12 @@ function buildServer(config: Config, store: Store, eventBus: EventBus): McpServe
         windows: z.array(z.object({
           label: z.string(),
           usedPct: z.number(),
-          resetsAt: z.string().optional()
-        })).max(8)
+          resetsAt: z.string().optional(),
+          remainingPct: z.number().optional(),
+          group: z.string().optional(),
+          groupModels: z.array(z.string()).optional(),
+          disabledNote: z.string().optional()
+        })).max(12)
       })).optional()
     },
     async (args) => {
@@ -185,7 +189,11 @@ function buildServer(config: Config, store: Store, eventBus: EventBus): McpServe
               windows: u.windows.map(w => ({
                 label: w.label.slice(0, 16),
                 usedPct: Math.max(0, Math.min(100, w.usedPct)),
-                resetsAt: w.resetsAt
+                resetsAt: w.resetsAt,
+                ...(w.remainingPct != null ? { remainingPct: Math.max(0, Math.min(100, w.remainingPct)) } : {}),
+                ...(w.group ? { group: w.group.slice(0, 48) } : {}),
+                ...(w.groupModels?.length ? { groupModels: w.groupModels.slice(0, 12).map(m => m.slice(0, 48)) } : {}),
+                ...(w.disabledNote ? { disabledNote: w.disabledNote.slice(0, 200) } : {})
               }))
             });
           }

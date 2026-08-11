@@ -25,6 +25,16 @@ function timeUntil(iso) {
   return `${Math.floor(s / 86400)}d ${Math.floor((s % 86400) / 3600)}h`;
 }
 
+// "Refreshes in 45h 13m" style — hours never roll into days (matches how the
+// Antigravity quota panel counts down, e.g. 102h rather than "4d 6h").
+function resetsInHM(iso) {
+  if (!iso) return '';
+  const s = Math.floor((new Date(iso).getTime() - Date.now()) / 1000);
+  if (s <= 0) return 'now';
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
 // "remote-ai-code-gen-cc-fable" → "cc-fable"; "local-cc-opus" → "cc-opus".
 // Falls back to the raw id when no exec marker is present.
 function shortBrain(id) {
@@ -45,30 +55,133 @@ function usageMeters(brainIds, usage) {
     byExec.get(u.exec).names.push(shortBrain(id));
   }
   if (!byExec.size) return '';
-  // Friendly names for the known rate-limit windows (falls back to the raw
-  // label for future variants like 7d-opus).
-  const WINDOW_NAMES = { '5h': '5-hour', '7d': 'weekly', credits: 'credits' };
   const blocks = [...byExec.entries()].map(([exec, { u, names }]) => {
     const stale = Date.now() - new Date(u.at).getTime() > 1800000;
-    const rows = u.windows.map(w => {
-      const p = Math.round(w.usedPct);
-      const color = p >= 80 ? '#EF4444' : p >= 50 ? '#EAB308' : '#22C55E';
-      const long = WINDOW_NAMES[w.label] || (w.label.startsWith('7d-') ? `weekly ${w.label.slice(3)}` : w.label);
-      const reset = w.resetsAt ? `resets in ${timeUntil(w.resetsAt)}` : 'reset time unknown';
-      return `<div class="usage-row" title="${esc(long)} · ${w.resetsAt ? `resets ${new Date(w.resetsAt).toLocaleString()}` : 'reset time unknown'}">
-        <span class="usage-window">${esc(w.label)}</span>
-        <div class="usage-track"><div class="usage-fill" style="width:${p}%;background:${color}"></div></div>
-        <span class="usage-pct" style="color:${color}">${p}<span class="usage-pct-sign">%</span></span>
-        <span class="usage-reset">${esc(reset)}</span>
-      </div>`;
-    }).join('');
     return `<div class="usage-brain">
       <div class="usage-brain-head">${badge(exec, '#7C3AED')} <span class="usage-names">${names.map(esc).join(' · ')}</span>
         <span class="usage-at"${stale ? ' style="color:#EAB308"' : ''} title="${esc(new Date(u.at).toLocaleString())}">measured ${timeAgo(u.at)}</span></div>
-      ${rows}
+      ${usageExecBody(exec, u)}
     </div>`;
   }).join('');
   return `<div class="usage-panel">${blocks}</div>`;
+}
+
+// Human titles for the local-host exec cards.
+const EXEC_TITLES = { agy: 'Antigravity', claude: 'Claude Code', codex: 'Codex', hermes: 'Hermes', ollama: 'Ollama' };
+
+// One full-width card per LOCAL metered exec (claude / codex / antigravity),
+// stacked vertically. Brains sharing one account produce one snapshot, so they
+// collapse to a single card listing all their brain names. Cards have flexible
+// height so the grouped Antigravity quota renders in full.
+function localBrainCards(localBrains, usage) {
+  const byExec = new Map();
+  for (const id of localBrains || []) {
+    const u = usage?.[id];
+    if (!u?.windows?.length) continue;
+    if (!byExec.has(u.exec)) byExec.set(u.exec, { u, names: [] });
+    byExec.get(u.exec).names.push(shortBrain(id));
+  }
+  // Antigravity first (it's the richest card), then the rest alphabetically.
+  const order = e => (e === 'agy' ? '0' : `1${e}`);
+  return [...byExec.entries()].sort((a, b) => order(a[0]).localeCompare(order(b[0]))).map(([exec, { u, names }]) => {
+    const stale = Date.now() - new Date(u.at).getTime() > 1800000;
+    return `<div class="card agent-card conn-local-card">
+      <div class="agent-header">
+        <span class="agent-title">${esc(EXEC_TITLES[exec] || exec)} ${badge('local', '#0EA5E9')}</span>
+        <span class="usage-at"${stale ? ' style="color:#EAB308"' : ''} title="${esc(new Date(u.at).toLocaleString())}">measured ${timeAgo(u.at)}</span>
+      </div>
+      <div class="conn-local-names">${names.map(esc).join(' · ')}</div>
+      ${usageExecBody(exec, u)}
+    </div>`;
+  });
+}
+
+// Friendly names for the known rate-limit windows (falls back to the raw
+// label for future variants like 7d-opus).
+const WINDOW_NAMES = { '5h': '5-hour', '7d': 'weekly', credits: 'credits' };
+
+// The meter body for one exec's snapshot. Antigravity (agy) reports its quota
+// grouped by model family and as PERCENT-REMAINING, so it gets the grouped
+// "Weekly / Five Hour Limit Remaining" layout; every other exec (claude/codex)
+// keeps the compact used-percent rows.
+function usageExecBody(exec, u) {
+  if (exec === 'agy' && (u.windows || []).some(w => w.group || w.remainingPct != null || w.disabledNote)) {
+    return agyGroupedBody(u);
+  }
+  return (u.windows || []).map(w => {
+    const p = Math.round(w.usedPct);
+    const color = p >= 80 ? '#EF4444' : p >= 50 ? '#EAB308' : '#22C55E';
+    const long = WINDOW_NAMES[w.label] || (w.label.startsWith('7d-') ? `weekly ${w.label.slice(3)}` : w.label);
+    const reset = w.resetsAt ? `resets in ${timeUntil(w.resetsAt)}` : 'reset time unknown';
+    return `<div class="usage-row" title="${esc(long)} · ${w.resetsAt ? `resets ${new Date(w.resetsAt).toLocaleString()}` : 'reset time unknown'}">
+      <span class="usage-window">${esc(w.label)}</span>
+      <div class="usage-track"><div class="usage-fill" style="width:${p}%;background:${color}"></div></div>
+      <span class="usage-pct" style="color:${color}">${p}<span class="usage-pct-sign">%</span></span>
+      <span class="usage-reset">${esc(reset)}</span>
+    </div>`;
+  }).join('');
+}
+
+// Long label for an Antigravity quota window ('7d' → "Weekly Limit Remaining").
+function agyWindowLabel(label) {
+  if (label === '7d') return 'Weekly Limit Remaining';
+  if (label === '5h') return 'Five Hour Limit Remaining';
+  if (label.startsWith('7d-')) return `Weekly ${label.slice(3)} Limit Remaining`;
+  return `${label} Limit Remaining`;
+}
+
+// Order windows within a group: weekly (7d) first, then 5-hour, then the rest —
+// matching the Antigravity panel's ordering.
+function agyWindowRank(label) {
+  if (label === '7d' || label.startsWith('7d-')) return 0;
+  if (label === '5h') return 1;
+  return 2;
+}
+
+// Grouped Antigravity quota body: one section per model-group, each showing its
+// member models and a "remaining" bar per window (weekly / five-hour), or a
+// disabled note when a window no longer applies. Mirrors the Antigravity IDE's
+// rate-limit panel. `remainingPct` drives the bar (high remaining = green).
+function agyGroupedBody(u) {
+  const groups = new Map();
+  for (const w of u.windows || []) {
+    const key = w.group || 'Antigravity';
+    if (!groups.has(key)) groups.set(key, { models: w.groupModels || [], windows: [] });
+    const entry = groups.get(key);
+    if ((!entry.models || !entry.models.length) && w.groupModels?.length) entry.models = w.groupModels;
+    entry.windows.push(w);
+  }
+  return [...groups.entries()].map(([name, { models, windows }]) => {
+    const rows = windows.slice().sort((a, b) => agyWindowRank(a.label) - agyWindowRank(b.label)).map(w => {
+      const label = agyWindowLabel(w.label);
+      if (w.disabledNote != null && w.remainingPct == null) {
+        return `<div class="agy-win">
+          <div class="agy-win-label">${esc(label)}</div>
+          <div class="agy-win-disabled">${esc(w.disabledNote)}</div>
+        </div>`;
+      }
+      const rem = Math.max(0, Math.min(100, Number(w.remainingPct != null ? w.remainingPct : (100 - w.usedPct))));
+      const color = rem >= 50 ? '#22C55E' : rem >= 20 ? '#EAB308' : '#EF4444';
+      const precise = Number.isInteger(rem) ? `${rem}` : rem.toFixed(2);
+      const reset = w.resetsAt ? `Refreshes in ${resetsInHM(w.resetsAt)}` : 'reset time unknown';
+      return `<div class="agy-win" title="${esc(label)} · ${w.resetsAt ? `refreshes ${new Date(w.resetsAt).toLocaleString()}` : 'reset time unknown'}">
+        <div class="agy-win-label">${esc(label)}</div>
+        <div class="agy-bar-row">
+          <div class="agy-bar"><div class="agy-bar-fill" style="width:${rem}%;background:${color}"></div></div>
+          <span class="agy-bar-pct" style="color:${color}">${precise}<span class="usage-pct-sign">%</span></span>
+        </div>
+        <div class="agy-win-meta">${Math.round(rem)}% remaining · ${esc(reset)}</div>
+      </div>`;
+    }).join('');
+    const modelsLine = (models && models.length)
+      ? `<div class="agy-group-models">Models within this group: ${models.map(esc).join(', ')}</div>`
+      : '';
+    return `<div class="agy-group">
+      <div class="agy-group-name">${esc(name)}</div>
+      ${modelsLine}
+      ${rows}
+    </div>`;
+  }).join('');
 }
 
 // A task is "failed" when its whole fallback chain was exhausted. Prefer the
@@ -879,22 +992,19 @@ class App {
         </div>
       </div>`);
 
-    // The cowork host's own metered brains (local claude/codex) get one card of
-    // their own — they belong to no MCP client but their quota matters just as
-    // much when picking a brain.
-    const hostMeters = usageMeters(localBrains, usage);
-    if (hostMeters) clientCards.unshift(`
-      <div class="card agent-card">
-        <div class="agent-header">
-          <span class="agent-title">cowork host</span>
-          ${badge('local', '#0EA5E9')}
-        </div>
-        <p style="margin:6px 0; font-size:0.78rem; color:var(--text-muted)">Brains the dispatcher runs on this machine.</p>
-        ${hostMeters}
-      </div>`);
+    // The cowork host's own metered brains (local claude/codex/antigravity) don't
+    // belong to any MCP client, but their quota matters just as much when picking
+    // a brain. Give each exec its OWN full-width card, stacked vertically, so the
+    // taller ones (Antigravity's grouped per-model quota) have room to breathe
+    // instead of being crammed into a grid column.
+    const localCards = localBrainCards(localBrains, usage);
+    const localHtml = localCards.length ? `
+      <div class="conn-section-label">Local brains <span>· run by the dispatcher on this host</span></div>
+      <div class="conn-local-stack">${localCards.join('')}</div>` : '';
 
-    const cardsHtml = clientCards.length ? `<div class="grid-3">${clientCards.join('')}</div>`
+    const clientsHtml = clientCards.length ? `<div class="grid-3">${clientCards.join('')}</div>`
       : `<div class="empty-state"><div class="empty-state-icon"><i data-lucide="plug"></i></div><h3>No live MCP clients</h3><p>External clients appear here when they register + heartbeat.</p></div>`;
+    const cardsHtml = `${localHtml}${localHtml && clientCards.length ? `<div class="conn-section-label" style="margin-top:var(--space-lg)">MCP clients <span>· external agents that register + heartbeat</span></div>` : ''}${clientsHtml}`;
 
     // Invocation counters: per client × per brain (ran / submitted)
     const clientsSet = new Set([...Object.keys(counters.ran || {}), ...Object.keys(counters.submitted || {})]);

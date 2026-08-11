@@ -229,28 +229,75 @@ function firstNum(...vals: unknown[]): number | null {
 }
 
 /** Short label for an Antigravity quota bucket — prefer a window duration,
- *  else a compact slug of the bucket's display name / id, else 'quota'. */
+ *  else a compact slug of the bucket's display name / id, else 'quota'. The
+ *  duration is reported under several proto names across CLI versions
+ *  (windowMinutes, minutesPerBucket, movingWindowSize/slidingWindow as a
+ *  duration string like "604800s", or an explicit *Seconds field). */
 function agyLabel(bucket: any, group: any): string {
-  const mins = firstNum(bucket?.windowMinutes, group?.windowMinutes);
-  const secs = firstNum(bucket?.windowSeconds, bucket?.windowDurationSeconds, group?.windowSeconds);
+  const mins = firstNum(
+    bucket?.windowMinutes, bucket?.minutesPerBucket,
+    group?.windowMinutes, group?.minutesPerBucket
+  );
+  const secs = firstNum(
+    bucket?.windowSeconds, bucket?.windowDurationSeconds,
+    durationToSeconds(bucket?.movingWindowSize ?? bucket?.slidingWindow ?? bucket?.window),
+    durationToSeconds(group?.movingWindowSize ?? group?.slidingWindow),
+    group?.windowSeconds
+  );
   const m = mins ?? (secs != null ? secs / 60 : null);
   if (m != null && m > 0) {
     if (m === 10080) return '7d';
     if (m === 300) return '5h';
     return m >= 1440 ? `${Math.round(m / 1440)}d` : `${Math.round(m / 60)}h`;
   }
-  const name = String(bucket?.displayName || bucket?.quotaId || bucket?.name
+  const name = String(bucket?.displayName || bucket?.bucketName || bucket?.quotaId || bucket?.name
     || group?.displayName || group?.quotaId || '').trim();
   return name ? name.slice(0, 12) : 'quota';
 }
 
+/** Google protobuf durations serialize to JSON as a "<seconds>s" string (or a
+ *  bare number of seconds). Parse either into seconds, else null. */
+function durationToSeconds(v: unknown): number | null {
+  if (v == null) return null;
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+  const m = String(v).match(/^(\d+(?:\.\d+)?)s?$/);
+  return m ? Number(m[1]) : null;
+}
+
+/** Group display name + member model names for the "Models within this group"
+ *  line. Antigravity names the group under groupName/groupDescription/
+ *  displayName and lists its models under one of a few repeated fields, each
+ *  entry either a bare string or an object with a display name. */
+function agyGroupInfo(group: any): { name?: string; models: string[] } {
+  const name = String(
+    group?.groupName || group?.groupDescription || group?.displayName
+    || group?.tierDisplayName || group?.quotaId || ''
+  ).trim() || undefined;
+  const rawModels =
+    group?.modelDisplayNames || group?.models || group?.modelNames
+    || group?.modelIds || group?.allowedModels || [];
+  const models = (Array.isArray(rawModels) ? rawModels : [])
+    .map((m: any) => typeof m === 'string'
+      ? m
+      : String(m?.displayName || m?.modelDisplayName || m?.name || m?.modelId || '').trim())
+    .filter((s: string) => s.length > 0);
+  return { name, models };
+}
+
 /**
  * Normalize an Antigravity `retrieveUserQuotaSummary` response into windows.
- * Antigravity's schema nests `QuotaSummaryBucket`s (each carrying a *remaining*
- * percent) under one or more `QuotaSummaryGroup`s; we also accept a flat
- * `buckets[]`. Unlike claude/codex the value is REMAINING, so we invert to
- * usedPct = 100 - remaining. Best-effort and tolerant of field-name variants.
- * Exported for tests.
+ * Antigravity's schema nests `QuotaSummaryBucket`s under one or more
+ * `QuotaSummaryGroup`s (grouped by model family); we also accept a flat
+ * `buckets[]`. Each bucket reports how much of the window is LEFT — most often
+ * as `remainingFraction` (0–1), sometimes as an already-scaled percent
+ * (`remaining`/`remainingPercent`/`percentRemaining`, 0–100). We keep BOTH the
+ * remaining percent (what the Antigravity UI shows: "74% remaining") and the
+ * inverted `usedPct = 100 - remaining` (so the shared meter colouring keeps
+ * working). A bucket with no remaining value is kept only if it is explicitly
+ * disabled (weekly cap hit → 5-hour window stops applying), carrying a
+ * `disabledNote` instead of a bar. Each window is tagged with its group name +
+ * member models so the UI can render the grouped Antigravity layout.
+ * Best-effort and tolerant of field-name variants. Exported for tests.
  */
 export function normalizeAgyQuota(raw: any): BrainUsageWindow[] {
   const asArray = (v: any, single: any) =>
@@ -270,18 +317,35 @@ export function normalizeAgyQuota(raw: any): BrainUsageWindow[] {
   }
   const windows: BrainUsageWindow[] = [];
   for (const { b, g } of pairs) {
-    const remaining = firstNum(
+    // A fraction (0–1) and an already-scaled percent (0–100) are reported under
+    // different names; scale the fraction, trust the percent as-is.
+    const frac = firstNum(b?.remainingFraction, b?.bucketInfo?.remainingFraction, b?.quotaInfo?.remainingFraction);
+    const rawPct = firstNum(
       b?.remaining, b?.remainingPercent, b?.percentRemaining,
       b?.bucketInfo?.remaining, b?.quotaInfo?.remaining
     );
-    if (remaining == null) continue;
-    const used = pct(100 - remaining);
-    if (used == null) continue;
-    windows.push({
+    const remaining = frac != null ? pct(frac * 100) : (rawPct != null ? pct(rawPct) : null);
+
+    const disabled = b?.disabled === true || b?.enabled === false || b?.isEnabled === false;
+    const disabledNote = disabled
+      ? String(b?.disabledReason || b?.disabledMessage || b?.message
+          || 'Disabled — this limit does not currently apply.')
+      : undefined;
+
+    // Skip buckets that carry neither a usable remaining value nor a disabled note.
+    if (remaining == null && !disabledNote) continue;
+
+    const { name, models } = agyGroupInfo(g);
+    const win: BrainUsageWindow = {
       label: agyLabel(b, g),
-      usedPct: used,
+      usedPct: remaining != null ? pct(100 - remaining)! : 100,
       resetsAt: b?.resetTime || b?.resetsAt || b?.bucketInfo?.resetTime || g?.resetTime || undefined
-    });
+    };
+    if (remaining != null) win.remainingPct = remaining;
+    if (disabledNote) win.disabledNote = disabledNote;
+    if (name) win.group = name;
+    if (models.length) win.groupModels = models;
+    windows.push(win);
   }
   return windows;
 }

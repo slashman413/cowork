@@ -149,7 +149,7 @@ test('codex: unusual window sizes get derived labels; missing fields are skipped
   assert.deepEqual(w, [{ label: '1h', usedPct: 10, resetsAt: undefined }]);
 });
 
-test('agy: inverts remaining→used and derives window labels from grouped buckets', () => {
+test('agy: inverts remaining→used, keeps remainingPct, and derives labels from grouped buckets', () => {
   // Shape mirrors retrieveUserQuotaSummary: buckets nested under a group,
   // each carrying a REMAINING percent (the CLI renders "%.0f%% remaining").
   const w = normalizeAgyQuota({
@@ -161,9 +161,49 @@ test('agy: inverts remaining→used and derives window labels from grouped bucke
     }]
   });
   assert.deepEqual(w, [
-    { label: '5h', usedPct: 18, resetsAt: '2026-08-06T05:00:00Z' },
-    { label: '7d', usedPct: 59.5, resetsAt: '2026-08-13T00:00:00Z' }
+    { label: '5h', usedPct: 18, resetsAt: '2026-08-06T05:00:00Z', remainingPct: 82 },
+    { label: '7d', usedPct: 59.5, resetsAt: '2026-08-13T00:00:00Z', remainingPct: 40.5 }
   ]);
+});
+
+test('agy: real schema — remainingFraction, groups, member models, disabled 5h bucket', () => {
+  // Mirrors the live retrieveUserQuotaSummary: two model-groups, each with a
+  // 7d + 5h bucket reporting a *fraction* (0–1) left; the Claude/GPT group has
+  // hit its weekly cap (0% left) so its 5h bucket is disabled.
+  const w = normalizeAgyQuota({
+    quotaSummaryGroups: [
+      {
+        groupName: 'Gemini Models',
+        modelDisplayNames: ['Gemini Flash', 'Gemini Pro'],
+        quotaSummaryBuckets: [
+          { remainingFraction: 0.7415, minutesPerBucket: 10080, resetTime: '2026-08-13T00:00:00Z' },
+          { remainingFraction: 0.9161, movingWindowSize: '18000s', resetTime: '2026-08-11T06:00:00Z' }
+        ]
+      },
+      {
+        groupName: 'Claude and GPT Models',
+        models: [{ displayName: 'Claude Opus' }, { displayName: 'Claude Sonnet' }, { displayName: 'GPT-OSS' }],
+        quotaSummaryBuckets: [
+          { remainingFraction: 0, minutesPerBucket: 10080, resetTime: '2026-08-15T00:00:00Z' },
+          { minutesPerBucket: 300, disabled: true, disabledMessage: 'Disabled: You have hit your weekly limit, the 5-hour limit does not currently apply.' }
+        ]
+      }
+    ]
+  });
+  assert.equal(w.length, 4);
+  assert.deepEqual(w[0], {
+    label: '7d', usedPct: 25.8, resetsAt: '2026-08-13T00:00:00Z', remainingPct: 74.2,
+    group: 'Gemini Models', groupModels: ['Gemini Flash', 'Gemini Pro']
+  });
+  assert.equal(w[1].label, '5h');            // 18000s = 300min → 5h
+  assert.equal(w[1].remainingPct, 91.6);
+  assert.equal(w[2].remainingPct, 0);        // weekly cap hit
+  assert.equal(w[2].group, 'Claude and GPT Models');
+  assert.deepEqual(w[2].groupModels, ['Claude Opus', 'Claude Sonnet', 'GPT-OSS']);
+  assert.equal(w[3].label, '5h');
+  assert.equal(w[3].remainingPct, undefined);
+  assert.match(w[3].disabledNote, /5-hour limit does not currently apply/);
+  assert.equal(w[3].usedPct, 100);
 });
 
 test('agy: accepts flat buckets, alias fields, and slug labels; clamps + skips garbage', () => {
@@ -171,12 +211,13 @@ test('agy: accepts flat buckets, alias fields, and slug labels; clamps + skips g
     buckets: [
       { percentRemaining: 100, displayName: 'Gemini 3 Pro Requests' }, // used 0, name slug
       { remaining: -5 },                                               // used clamps to 100
-      { displayName: 'no-remaining-field' }                            // skipped
+      { displayName: 'no-remaining-field' }                            // skipped (no remaining, not disabled)
     ]
   });
   assert.equal(w.length, 2);
-  assert.deepEqual(w[0], { label: 'Gemini 3 Pro', usedPct: 0, resetsAt: undefined });
+  assert.deepEqual(w[0], { label: 'Gemini 3 Pro', usedPct: 0, resetsAt: undefined, remainingPct: 100 });
   assert.equal(w[1].usedPct, 100);
+  assert.equal(w[1].remainingPct, 0);
   assert.deepEqual(normalizeAgyQuota(null), []);
 });
 
