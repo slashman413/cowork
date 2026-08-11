@@ -626,16 +626,22 @@ class App {
   }
 
   navigate() {
-    const hash = window.location.hash.replace('#', '') || 'dashboard';
-    this.currentView = hash;
+    const raw = window.location.hash.replace('#', '') || 'dashboard';
+    // A hash may carry a sub-path: `#inbox/<taskId>` deep-links to one task so a
+    // workflow run's OUTPUT panel can open the exact task in a new tab.
+    const [view, ...rest] = raw.split('/');
+    this.currentView = view || 'dashboard';
+    this.pendingTask = (this.currentView === 'inbox' && rest.length)
+      ? decodeURIComponent(rest.join('/')) : null;
+    if (this.pendingTask) this._focusRetried = false;
     document.querySelectorAll('.nav-item').forEach(item => {
-      item.classList.toggle('active', item.dataset.view === hash);
+      item.classList.toggle('active', item.dataset.view === this.currentView);
     });
     const titles = {
       dashboard: 'Dashboard', chat: 'Chat', portal: 'Portal', connections: 'Connections', inbox: 'Task Inbox',
       workflows: 'Workflows', team: 'Agents', brains: 'Brains', roster: 'Agent Roster', config: 'Configuration'
     };
-    this.viewTitleEl.textContent = titles[hash] || 'Dashboard';
+    this.viewTitleEl.textContent = titles[this.currentView] || 'Dashboard';
     this.renderCurrentView();
   }
 
@@ -1677,6 +1683,41 @@ class App {
       }));
 
     this.applyInboxSearch();
+    if (this.pendingTask) this.focusInboxTask();
+  }
+
+  // Deep-link target from a workflow run's OUTPUT panel (#inbox/<taskId>): expand
+  // that task, scroll it into view and flash it. If it's not on the current page
+  // (older than the loaded window, or hidden by a status filter), widen the net
+  // once — clear the filter and raise the limit — then retry.
+  focusInboxTask() {
+    const id = this.pendingTask;
+    if (!id) return;
+    const card = this.contentEl.querySelector(`[data-task="${(window.CSS && CSS.escape) ? CSS.escape(id) : id}"]`);
+    if (card) {
+      this.pendingTask = null;
+      this._focusRetried = false;
+      card.style.display = '';                 // in case a stale search hid it
+      const d = card.querySelector('.task-detail');
+      if (d) d.style.display = 'block';
+      this.openTasks.add(id);
+      const caret = card.querySelector('.task-caret');
+      if (caret) caret.textContent = '▾';
+      card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      card.classList.add('task-flash');
+      setTimeout(() => card.classList.remove('task-flash'), 2200);
+      createIcons();
+    } else if (!this._focusRetried) {
+      this._focusRetried = true;
+      this.inboxFilter = '';
+      this.inboxSearch = '';
+      this.inboxLimit = 500;
+      this.renderInbox();
+    } else {
+      this._focusRetried = false;
+      this.pendingTask = null;
+      this.toast('task not found', id.slice(0, 8) + '… may have been purged');
+    }
   }
 
   // Show only task cards whose title contains the search text (case-insensitive).
@@ -1776,6 +1817,69 @@ class App {
     return `<div class="wf-dag">${rows || '<div style="font-size:0.8rem;color:var(--text-muted)">Waiting for the orchestrator to pick the first step…</div>'}${terminal}</div>`;
   }
 
+  // The authoring explainer for the Workflows view: what the three phases mean,
+  // what a workflow id actually is, a copy-pasteable sample template, and how to
+  // write a goal the orchestrator can actually drive toward. Collapsed by default
+  // (native <details>) so it never gets in the way of the template list.
+  _workflowGuideHtml() {
+    const sample = `{
+  "id": "blog-post-pipeline",          // ← the workflow id (see below)
+  "name": "Blog Post Pipeline",
+  "description": "Research a topic, draft a post, then edit it.",
+  "params": ["topic"],                 // filled per run, used as {{topic}}
+  "steps": [
+    { "key": "research",
+      "title": "Research {{topic}}",
+      "description": "Gather 5 credible sources on {{topic}} and summarise the key points.",
+      "division": "marketing" },
+    { "key": "draft",
+      "title": "Draft the post",
+      "description": "Write an 800-word post on {{topic}} from the research.",
+      "division": "marketing",
+      "dependsOn": ["research"] },      // ← DAG edge: waits for research
+    { "key": "edit",
+      "title": "Edit & polish",
+      "description": "Proofread the draft for clarity, tone and accuracy.",
+      "dependsOn": ["draft"] }
+  ]
+}`;
+    const codeBox = 'white-space:pre;overflow:auto;background:var(--bg-tertiary);padding:10px 12px;border-radius:8px;margin:6px 0;font-size:0.78rem;line-height:1.45;font-family:ui-monospace,SFMono-Regular,Menlo,monospace';
+    const h = 'font-size:0.82rem;font-weight:600;margin:14px 0 4px;color:var(--text-primary)';
+    const p = 'font-size:0.82rem;color:var(--text-secondary);line-height:1.6;margin:4px 0';
+    return `<details class="wf-guide card" style="margin-bottom:var(--space-lg);background:var(--bg-secondary)">
+      <summary style="cursor:pointer;font-weight:600;font-size:0.9rem;display:flex;align-items:center;gap:8px;list-style:none">
+        <i data-lucide="book-open" style="width:16px;height:16px;flex-shrink:0"></i>
+        How to author a workflow — <span style="color:var(--text-muted);font-weight:400">design → author → register</span>
+        <span style="margin-left:auto;color:var(--text-muted);font-size:0.75rem;font-weight:400">click to expand</span>
+      </summary>
+      <div style="margin-top:10px">
+        <p style="${p}">A workflow is a reusable multi-step pipeline stored as one JSON file in <code>workflows/&lt;id&gt;.json</code>. The <strong>Workflow Builder</strong> template (pinned at the top) automates the three phases below, but here is what each one means so you can author one by hand too.</p>
+
+        <div style="${h}">1 · Design</div>
+        <p style="${p}">Break the goal into the smallest set of concrete steps. For each step decide a unique <code>key</code>, a <code>title</code>, a standalone <code>description</code> (the whole brief the executing agent sees — it can't see the others), which earlier steps it <code>dependsOn</code> (the DAG edges), and, when it clearly belongs to one function, a <code>division</code> or a specific <code>agent</code>. Pull anything that changes per run into <code>params</code> and reference them as <code>{{param}}</code>.</p>
+
+        <div style="${h}">2 · Author</div>
+        <p style="${p}">Write the design as one schema-valid JSON object. The validator enforces three rules: every step needs a <strong>unique string <code>key</code></strong>; every <code>dependsOn</code> entry must reference an <strong>existing key</strong>; and the graph must be <strong>acyclic</strong> (no step may transitively depend on itself). Sample <span style="color:#7C3AED">DAG</span> template:</p>
+        <div style="${codeBox}">${esc(sample)}</div>
+
+        <div style="${h}">3 · Register</div>
+        <p style="${p}">Drop the file in <code>workflows/</code>, or register it live over the API so it's runnable immediately — no restart:</p>
+        <div style="${codeBox}">${esc('curl -sS -X POST http://127.0.0.1:6868/api/workflows \\\n  -H \'Content-Type: application/json\' -d @workflow.json\n\n# already exists? re-POST to overwrite:\n#   -d \'{"def": <the json>, "overwrite": true}\'')}</div>
+        <p style="${p}">A <code>201 { ok: true }</code> means it validated and was written. It then appears in <strong>Templates</strong> below. Confirm the resolved graph with <strong>Dry run</strong> (nothing is created) before the first real <strong>Run ▶</strong>.</p>
+
+        <div style="${h}">🔑 What is a <code>workflow-id</code>?</div>
+        <p style="${p}">The <code>id</code> field is the template's <strong>stable, unique handle</strong> — the purple <span class="badge" style="background:#7C3AED18;color:#7C3AED;border:1px solid #7C3AED40">badge</span> on each card. It must be <strong>kebab-case</strong> (<code>^[a-z0-9][a-z0-9-]*$</code> — lowercase letters, digits, hyphens; e.g. <code>blog-post-pipeline</code>). It's what the API uses — <code>POST /api/workflows/&lt;id&gt;/run</code> — and it must be unique across templates (re-registering the same id needs <code>overwrite: true</code>). By convention the file is <code>workflows/&lt;id&gt;.json</code>, but the <code>id</code> inside the file wins. Don't confuse it with two neighbours:</p>
+        <p style="${p}">&nbsp;&nbsp;• a <strong>step <code>key</code></strong> — a node id unique <em>within one template</em> (<code>research</code>, <code>draft</code>).<br>
+        &nbsp;&nbsp;• a <strong>run id</strong> (<code>run-1a2b3c4d</code>) — generated fresh for <em>each execution</em> of a template.</p>
+
+        <div style="${h}">🎯 Writing a great goal (orchestrated mode)</div>
+        <p style="${p}">In <span style="color:#0EA5E9">orchestrated</span> mode the steps are just a <em>library</em>; after every step the orchestrator re-reads the <code>goal</code> to decide the next step — or to answer DONE. So a vague goal never terminates well. A great goal names the <strong>concrete deliverables</strong>, gives enough <strong>scope</strong> to judge coverage, and states an explicit <strong>done-condition</strong>.</p>
+        <p style="${p}"><span style="color:#EF4444">✗ Too vague:</span> <em>"Improve our go-to-market."</em> — no deliverables, no way to know when it's finished.</p>
+        <p style="${p}"><span style="color:#22C55E">✓ Great:</span> <em>"Produce a launch-ready GTM plan for {{product}}: a one-sentence positioning statement, 3 target segments each with its top pain point, a 4-week content calendar, and a one-page press release. Done when all four artifacts exist, are internally consistent, and name {{product}} explicitly."</em></p>
+      </div>
+    </details>`;
+  }
+
   async renderWorkflows() {
     const [defs, runs, invalid] = await Promise.all([
       this.api.get('/workflows'), this.api.get('/workflow-runs'),
@@ -1866,9 +1970,10 @@ class App {
           <div style="margin:3px 0">${badge('adaptive · orchestrator-driven', '#0EA5E9')} steps are a <em>library</em>; nothing is planned up front. After each step, the <strong>orchestrator decides the next step automatically</strong> from the goal + results so far — or answers DONE. The path adapts to what comes back.</div>
         </div>
       </div>
+      ${this._workflowGuideHtml()}
       ${invalidCard}
       <h3 style="font-size:0.9rem;margin:var(--space-md) 0 6px">Templates</h3>${tplCards}
-      <h3 style="font-size:0.9rem;margin:var(--space-xl) 0 6px">Runs <span style="font-size:0.72rem;color:var(--text-muted);font-weight:400">(click a node to see its output)</span></h3>${runCards}`;
+      <h3 style="font-size:0.9rem;margin:var(--space-xl) 0 6px">Runs <span style="font-size:0.72rem;color:var(--text-muted);font-weight:400">(click a node → its result, artifacts &amp; a link to open the full task)</span></h3>${runCards}`;
 
     this.contentEl.querySelectorAll('.wf-card').forEach(card => {
       const id = card.dataset.wf;
@@ -1910,8 +2015,34 @@ class App {
       detail.innerHTML = '<span style="opacity:.6;font-size:0.82rem">loading…</span>';
       try {
         const t = await this.api.get(`/inbox/${encodeURIComponent(node.dataset.wfTask)}`);
-        detail.innerHTML = `<div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:4px">${badge(t.status, STATUS_COLORS[t.status] || '#94A3B8')} <strong>${esc(t.title)}</strong></div>${mdViewer(t.result || t.description || '(no output yet)', 'OUTPUT')}`;
+        const arts = Array.isArray(t.artifacts) ? t.artifacts : [];
+        // Deep link into the full task in the Inbox — opens in a new tab so the
+        // run view stays put. `#inbox/<id>` is handled by navigate()/focusInboxTask.
+        const taskUrl = `#inbox/${encodeURIComponent(t.id)}`;
+        const artHtml = arts.length ? `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin:8px 0 2px">
+            <span style="font-size:0.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.03em">Artifacts</span>
+            ${arts.map(f => `<a href="/api/artifacts/${encodeURIComponent(t.id)}/${encodeURIComponent(f)}" download class="btn" style="font-size:0.8rem;margin:0;display:inline-flex;align-items:center;gap:4px"><i data-lucide="download" style="width:12px;height:12px"></i>${esc(f)}</a>`).join('')}
+          </div>` : '';
+        detail.innerHTML = `
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
+            ${badge(t.status, STATUS_COLORS[t.status] || '#94A3B8')}
+            <strong style="font-size:0.86rem">${esc(t.title)}</strong>
+            <a href="${taskUrl}" target="_blank" rel="noopener" class="btn" title="Open this task in the Task Inbox in a new tab — full result, inputs and downloadable artifacts"
+               style="margin-left:auto;font-size:0.74rem;display:inline-flex;align-items:center;gap:4px;color:#0EA5E9;border-color:#0EA5E966"><i data-lucide="external-link" style="width:12px;height:12px"></i>Open task ↗</a>
+          </div>
+          <div style="display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:0 0 2px;font-size:0.72rem;color:var(--text-muted)">
+            <span class="copyable" data-copy="${esc(t.id)}" title="Task ID — click to copy" style="cursor:pointer;font-family:ui-monospace,SFMono-Regular,Menlo,monospace"><i data-lucide="hash" style="width:11px;height:11px;vertical-align:-1px"></i>${esc(t.id)}</span>
+            <span class="copyable" data-copy="artifacts/${esc(t.id)}/" title="Artifacts directory — click to copy" style="cursor:pointer;font-family:ui-monospace,SFMono-Regular,Menlo,monospace"><i data-lucide="folder" style="width:11px;height:11px;vertical-align:-1px"></i>artifacts/${esc(t.id)}/</span>
+          </div>
+          ${artHtml}
+          ${mdViewer(t.result || t.description || '(no output yet)', 'OUTPUT')}`;
         createIcons();
+        // Local copy handler (the inbox's delegated one isn't bound in this view).
+        detail.querySelectorAll('[data-copy]').forEach(el => el.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const text = el.dataset.copy;
+          this.toast(await this.copyText(text) ? 'copied' : 'copy failed', text);
+        }));
       } catch (e) { detail.innerHTML = `<span style="color:#EF4444;font-size:0.8rem">${esc(e.message)}</span>`; }
     }));
   }
