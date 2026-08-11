@@ -90,7 +90,7 @@ function localBrainCards(localBrains, usage) {
         <span class="agent-title">${esc(EXEC_TITLES[exec] || exec)} ${badge('local', '#0EA5E9')}</span>
         <span class="usage-at"${stale ? ' style="color:#EAB308"' : ''} title="${esc(new Date(u.at).toLocaleString())}">measured ${timeAgo(u.at)}</span>
       </div>
-      <div class="conn-local-names">${names.map(esc).join(' · ')}</div>
+      <div class="conn-local-names">${names.slice().sort().map(n => `<div>${esc(n)}</div>`).join('')}</div>
       ${usageExecBody(exec, u)}
     </div>`;
   });
@@ -984,7 +984,7 @@ class App {
           ${badge(a.live ? 'live' : 'stale', a.live ? '#22C55E' : '#94A3B8')}
         </div>
         <p style="margin:6px 0">${badge(a.platform, '#D97757')} ${badge(a.status, STATUS_COLORS[a.status] || '#94A3B8')}</p>
-        ${a.capabilities?.length ? `<p style="font-size:0.78rem; color:var(--text-muted); margin-top:6px">${a.capabilities.map(c => esc(c)).join(' · ')}</p>` : ''}
+        ${a.capabilities?.length ? `<div class="agent-capabilities" style="font-size:0.78rem; color:var(--text-muted); margin-top:6px; display:flex; flex-direction:column; gap:2px;">${a.capabilities.slice().sort().map(c => `<div>${esc(c)}</div>`).join('')}</div>` : ''}
         ${usageMeters(a.capabilities, usage)}
         <div class="agent-footer">
           <span><i data-lucide="heart" style="width:12px;height:12px;vertical-align:middle;margin-right:2px"></i> ${timeAgo(a.lastHeartbeat)}</span>

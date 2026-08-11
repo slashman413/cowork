@@ -583,12 +583,11 @@ a { color: inherit; text-decoration: none; }
    capped on wide PC monitors so the per-model quota bars keep a readable
    measure instead of stretching edge-to-edge. */
 .conn-local-stack {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: var(--space-md);
   margin-bottom: var(--space-lg);
   width: 100%;
-  max-width: 860px;
 }
 /* Full-width within the stack, height grows to fit all groups/windows. */
 .conn-local-card {
@@ -599,6 +598,9 @@ a { color: inherit; text-decoration: none; }
   align-items: center;
 }
 .conn-local-names {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   font-size: 0.75rem;
   color: var(--text-muted);
   margin: 2px 0 2px;
