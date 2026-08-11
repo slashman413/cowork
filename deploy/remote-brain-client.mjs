@@ -282,6 +282,7 @@ function discoverAgyRefreshToken() {
   if (env) return env;
   const candidates = [
     process.env.AGY_TOKEN_FILE?.trim(),
+    join(os.homedir(), '.gemini', 'antigravity-cli', 'antigravity-oauth-token'),
     join(os.homedir(), '.gemini', 'user_refresh.antigravity'),
     join(os.homedir(), '.gemini', 'oauth_creds.json')
   ].filter(Boolean);
@@ -289,7 +290,9 @@ function discoverAgyRefreshToken() {
     let raw;
     try { raw = readFileSync(file, 'utf8').trim(); } catch { continue; }
     try {
-      const tok = JSON.parse(raw)?.refresh_token;
+      const j = JSON.parse(raw);
+      // Antigravity CLI nests it under `token`; gemini-cli keeps it top-level.
+      const tok = j?.token?.refresh_token || j?.refresh_token;
       if (typeof tok === 'string' && tok) return tok;
     } catch {
       // Not JSON — user_refresh.antigravity is the bare refresh token string.
@@ -305,13 +308,18 @@ async function agyAccessToken() {
   // discovered refresh token via the standard Google OAuth refresh grant.
   const env = process.env.AGY_ACCESS_TOKEN?.trim();
   if (env) return env;
-  for (const file of [process.env.AGY_TOKEN_FILE?.trim(), join(os.homedir(), '.gemini', 'oauth_creds.json')].filter(Boolean)) {
-    try {
-      const j = JSON.parse(readFileSync(file, 'utf8'));
-      const tok = j?.access_token || j?.token;
-      const exp = Number(j?.expiry_date);   // gemini-cli stamps epoch-ms expiry
-      if (typeof tok === 'string' && tok && (!Number.isFinite(exp) || exp > Date.now() + 60000)) return tok;
-    } catch { /* unreadable / not JSON → next source */ }
+  const cached = (file) => {
+    let j; try { j = JSON.parse(readFileSync(file, 'utf8')); } catch { return null; }
+    const nested = j?.token && typeof j.token === 'object' ? j.token : null;   // Antigravity CLI shape
+    const tok = nested?.access_token || (typeof j?.access_token === 'string' ? j.access_token : null) || (typeof j?.token === 'string' ? j.token : null);
+    if (typeof tok !== 'string' || !tok) return null;
+    const expMs = nested?.expiry ? Date.parse(nested.expiry) : Number(j?.expiry_date);   // rfc3339 str | epoch-ms
+    if (Number.isFinite(expMs) && expMs <= Date.now() + 60000) return null;
+    return tok;
+  };
+  for (const file of [process.env.AGY_TOKEN_FILE?.trim(), join(os.homedir(), '.gemini', 'antigravity-cli', 'antigravity-oauth-token'), join(os.homedir(), '.gemini', 'oauth_creds.json')].filter(Boolean)) {
+    const tok = cached(file);
+    if (tok) return tok;
   }
   if (agyMinted && agyMinted.expMs > Date.now() + 60000) return agyMinted.token;
   const refresh = discoverAgyRefreshToken();
@@ -344,6 +352,9 @@ async function probeAgyUsage() {
   const num = (...vs) => { for (const v of vs) { if (v == null) continue; const n = +v; if (Number.isFinite(n)) return n; } return null; };
   const dur = (v) => { if (v == null) return null; if (typeof v === 'number') return Number.isFinite(v) ? v : null; const m = String(v).match(/^(\d+(?:\.\d+)?)s?$/); return m ? +m[1] : null; };
   const agyLabel = (b, g) => {
+    const winStr = String(b?.window ?? g?.window ?? '').toLowerCase().trim();   // Antigravity: "weekly"/"5h"
+    if (winStr === 'weekly' || winStr === '7d') return '7d';
+    if (winStr === '5h' || winStr === 'five_hour' || winStr === 'fivehour') return '5h';
     const mins = num(b?.windowMinutes, b?.minutesPerBucket, g?.windowMinutes, g?.minutesPerBucket);
     const secs = num(b?.windowSeconds, b?.windowDurationSeconds, dur(b?.movingWindowSize ?? b?.slidingWindow ?? b?.window), dur(g?.movingWindowSize ?? g?.slidingWindow), g?.windowSeconds);
     const m = mins ?? (secs != null ? secs / 60 : null);
@@ -357,15 +368,24 @@ async function probeAgyUsage() {
     const models = (Array.isArray(raw) ? raw : [])
       .map((m) => typeof m === 'string' ? m : String(m?.displayName || m?.modelDisplayName || m?.name || m?.modelId || '').trim())
       .filter((s) => s.length > 0);
+    // Antigravity names members inline in the group description, not a field.
+    if (!models.length && typeof g?.description === 'string') {
+      const mm = g.description.match(/Models within this group:\s*(.+)$/i);
+      if (mm) models.push(...mm[1].split(',').map((s) => s.trim()).filter(Boolean));
+    }
     return { name, models };
   };
-  try {
-    const res = await fetch('https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary', {
+  // The consumer/Antigravity tier is on the `daily-` host; the RPC is gated
+  // behind a User-Agent containing "antigravity" (else 403). Try both hosts.
+  const hosts = ['daily-cloudcode-pa.googleapis.com', 'cloudcode-pa.googleapis.com'];
+  for (const host of hosts) {
+   try {
+    const res = await fetch(`https://${host}/v1internal:retrieveUserQuotaSummary`, {
       method: 'POST', body: '{}',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'User-Agent': 'antigravity-cli/1.0' },
       signal: AbortSignal.timeout(15000)
     });
-    if (!res.ok) return null;
+    if (!res.ok) continue;
     const raw = await res.json();
     const arr = (v, s) => Array.isArray(v) ? v : (s != null ? [s] : []);
     const pairs = [];
@@ -378,7 +398,7 @@ async function probeAgyUsage() {
       const rawPct = num(b?.remaining, b?.remainingPercent, b?.percentRemaining, b?.bucketInfo?.remaining, b?.quotaInfo?.remaining);
       const remaining = frac != null ? clampPct(frac * 100) : (rawPct != null ? clampPct(rawPct) : null);
       const disabled = b?.disabled === true || b?.enabled === false || b?.isEnabled === false;
-      const disabledNote = disabled ? String(b?.disabledReason || b?.disabledMessage || b?.message || 'Disabled — this limit does not currently apply.') : null;
+      const disabledNote = disabled ? String(b?.disabledReason || b?.disabledMessage || b?.message || b?.description || 'Disabled — this limit does not currently apply.') : null;
       if (remaining == null && !disabledNote) continue;
       const resetsAt = b?.resetTime || b?.resetsAt || b?.bucketInfo?.resetTime || g?.resetTime || null;
       const { name, models } = groupInfo(g);
@@ -386,14 +406,17 @@ async function probeAgyUsage() {
         label: agyLabel(b, g),
         usedPct: remaining != null ? clampPct(100 - remaining) : 100,
         ...(resetsAt ? { resetsAt } : {}),
-        ...(remaining != null ? { remainingPct: remaining } : {}),
+        // A disabled bucket may still report 100% remaining — show the note, not a bar.
+        ...(remaining != null && !disabled ? { remainingPct: remaining } : {}),
         ...(disabledNote ? { disabledNote } : {}),
         ...(name ? { group: name } : {}),
         ...(models.length ? { groupModels: models } : {})
       });
     }
-    return windows.length ? windows : null;
-  } catch { return null; }
+    if (windows.length) return windows;
+   } catch { /* network/timeout → try the next host */ }
+  }
+  return null;
 }
 
 async function refreshUsage() {

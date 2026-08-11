@@ -578,13 +578,19 @@ a { color: inherit; text-decoration: none; }
   text-transform: none;
   color: var(--text-muted);
 }
+/* Brains are piled vertically (one card per exec, single column at every
+   breakpoint). The stack stays fluid — full width on mobile/tablet — but is
+   capped on wide PC monitors so the per-model quota bars keep a readable
+   measure instead of stretching edge-to-edge. */
 .conn-local-stack {
   display: flex;
   flex-direction: column;
   gap: var(--space-md);
   margin-bottom: var(--space-lg);
+  width: 100%;
+  max-width: 860px;
 }
-/* Full-width, height grows to fit all groups/windows — never clipped. */
+/* Full-width within the stack, height grows to fit all groups/windows. */
 .conn-local-card {
   width: 100%;
   height: auto;
@@ -970,6 +976,7 @@ a { color: inherit; text-decoration: none; }
 /* ===== Responsive: Tablet ===== */
 @media (max-width: 1024px) {
   .grid-4 { grid-template-columns: repeat(2, 1fr); }
+  .grid-3 { grid-template-columns: repeat(2, 1fr); }  /* pad/tablet: 2-up cards */
   .grid-2 { grid-template-columns: 1fr; }
   .content-area { padding: var(--space-lg); }
 }

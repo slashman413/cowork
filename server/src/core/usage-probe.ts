@@ -38,7 +38,14 @@ import type { Store } from './store.js';
  */
 
 const CLAUDE_USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
-const AGY_QUOTA_URL = 'https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary';
+// Antigravity's quota lives behind Code Assist's `retrieveUserQuotaSummary`. The
+// consumer/Antigravity tier is served by the `daily-` host; the older paid
+// gemini-cli path used the plain host — try both (daily first). The RPC is
+// gated behind a client User-Agent that identifies as Antigravity: a generic
+// UA (or node's default) returns 403 PERMISSION_DENIED, so we MUST send one
+// containing "antigravity". This was why the meter silently never appeared.
+const AGY_QUOTA_HOSTS = ['daily-cloudcode-pa.googleapis.com', 'cloudcode-pa.googleapis.com'];
+const AGY_USER_AGENT = 'antigravity-cli/1.0';
 
 /** Clamp + round a percent into 0–100 with one decimal. */
 function pct(n: unknown): number | null {
@@ -234,6 +241,11 @@ function firstNum(...vals: unknown[]): number | null {
  *  (windowMinutes, minutesPerBucket, movingWindowSize/slidingWindow as a
  *  duration string like "604800s", or an explicit *Seconds field). */
 function agyLabel(bucket: any, group: any): string {
+  // Antigravity reports the window as a plain string ("weekly" / "5h") rather
+  // than a duration; that field is authoritative when present.
+  const winStr = String(bucket?.window ?? group?.window ?? '').toLowerCase().trim();
+  if (winStr === 'weekly' || winStr === '7d') return '7d';
+  if (winStr === '5h' || winStr === 'five_hour' || winStr === 'fivehour') return '5h';
   const mins = firstNum(
     bucket?.windowMinutes, bucket?.minutesPerBucket,
     group?.windowMinutes, group?.minutesPerBucket
@@ -281,6 +293,12 @@ function agyGroupInfo(group: any): { name?: string; models: string[] } {
       ? m
       : String(m?.displayName || m?.modelDisplayName || m?.name || m?.modelId || '').trim())
     .filter((s: string) => s.length > 0);
+  // Antigravity doesn't expose a structured model list — the members are named
+  // inline in the group description ("Models within this group: A, B").
+  if (!models.length && typeof group?.description === 'string') {
+    const m = group.description.match(/Models within this group:\s*(.+)$/i);
+    if (m) models.push(...m[1].split(',').map((s: string) => s.trim()).filter(Boolean));
+  }
   return { name, models };
 }
 
@@ -328,7 +346,7 @@ export function normalizeAgyQuota(raw: any): BrainUsageWindow[] {
 
     const disabled = b?.disabled === true || b?.enabled === false || b?.isEnabled === false;
     const disabledNote = disabled
-      ? String(b?.disabledReason || b?.disabledMessage || b?.message
+      ? String(b?.disabledReason || b?.disabledMessage || b?.message || b?.description
           || 'Disabled — this limit does not currently apply.')
       : undefined;
 
@@ -341,7 +359,10 @@ export function normalizeAgyQuota(raw: any): BrainUsageWindow[] {
       usedPct: remaining != null ? pct(100 - remaining)! : 100,
       resetsAt: b?.resetTime || b?.resetsAt || b?.bucketInfo?.resetTime || g?.resetTime || undefined
     };
-    if (remaining != null) win.remainingPct = remaining;
+    // A disabled bucket (e.g. the 5-hour window once the weekly cap is hit) may
+    // still report remainingFraction:1 — showing a green "100%" bar would be
+    // misleading, so we render the disabled note instead of a bar for it.
+    if (remaining != null && !disabled) win.remainingPct = remaining;
     if (disabledNote) win.disabledNote = disabledNote;
     if (name) win.group = name;
     if (models.length) win.groupModels = models;
@@ -369,6 +390,7 @@ export function discoverAgyRefreshToken(home = os.homedir()): string | null {
   if (env) return env;
   const candidates = [
     process.env.AGY_TOKEN_FILE?.trim(),
+    path.join(home, '.gemini', 'antigravity-cli', 'antigravity-oauth-token'),
     path.join(home, '.gemini', 'user_refresh.antigravity'),
     path.join(home, '.gemini', 'oauth_creds.json')
   ].filter((f): f is string => !!f);
@@ -376,7 +398,9 @@ export function discoverAgyRefreshToken(home = os.homedir()): string | null {
     let raw: string;
     try { raw = fs.readFileSync(file, 'utf8').trim(); } catch { continue; }
     try {
-      const tok = JSON.parse(raw)?.refresh_token;
+      const j = JSON.parse(raw);
+      // The Antigravity CLI nests it under `token`; gemini-cli keeps it top-level.
+      const tok = j?.token?.refresh_token || j?.refresh_token;
       if (typeof tok === 'string' && tok) return tok;
     } catch {
       // Not JSON — user_refresh.antigravity is the bare refresh token string.
@@ -390,23 +414,39 @@ export function discoverAgyRefreshToken(home = os.homedir()): string | null {
 // on every 5-minute poll while the last token is still live.
 let agyMinted: { token: string; expMs: number } | null = null;
 
+/** Read a cached Antigravity/Gemini access token from a creds file, honouring
+ *  its expiry. Handles the Antigravity CLI shape (`{token:{access_token,
+ *  expiry:"<rfc3339>"}}`) and the Gemini-CLI shape (`{access_token/token,
+ *  expiry_date:<epoch-ms>}`). Returns the token only when it has no expiry or is
+ *  still valid (>1min of life). Exported for tests. */
+export function readCachedAgyToken(file: string): string | null {
+  let j: any;
+  try { j = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
+  const nested = j?.token && typeof j.token === 'object' ? j.token : null;
+  const tok = nested?.access_token
+    || (typeof j?.access_token === 'string' ? j.access_token : null)
+    || (typeof j?.token === 'string' ? j.token : null);
+  if (typeof tok !== 'string' || !tok) return null;
+  // Antigravity stamps an RFC3339 expiry string; gemini-cli an epoch-ms number.
+  const expMs = nested?.expiry ? Date.parse(nested.expiry) : Number(j?.expiry_date);
+  if (Number.isFinite(expMs) && expMs <= Date.now() + 60000) return null;  // expired / near-expiry
+  return tok;
+}
+
 /** A ready-to-use Antigravity bearer access token: AGY_ACCESS_TOKEN, an
- *  AGY_TOKEN_FILE / Gemini-CLI `oauth_creds.json` cached access token that
- *  hasn't expired, or one minted from a discovered refresh token. */
+ *  AGY_TOKEN_FILE / Antigravity-CLI / Gemini-CLI cached access token that hasn't
+ *  expired, or one minted from a discovered refresh token. */
 async function agyAccessToken(): Promise<string | null> {
   const env = process.env.AGY_ACCESS_TOKEN?.trim();
   if (env) return env;
   const files = [
     process.env.AGY_TOKEN_FILE?.trim(),
+    path.join(os.homedir(), '.gemini', 'antigravity-cli', 'antigravity-oauth-token'),
     path.join(os.homedir(), '.gemini', 'oauth_creds.json')
   ].filter((f): f is string => !!f);
   for (const file of files) {
-    try {
-      const j = JSON.parse(fs.readFileSync(file, 'utf8'));
-      const tok = j?.access_token || j?.token;
-      const exp = Number(j?.expiry_date);   // gemini-cli stamps epoch-ms expiry
-      if (typeof tok === 'string' && tok && (!Number.isFinite(exp) || exp > Date.now() + 60000)) return tok;
-    } catch { /* unreadable / not JSON → next source */ }
+    const tok = readCachedAgyToken(file);
+    if (tok) return tok;
   }
   if (agyMinted && agyMinted.expMs > Date.now() + 60000) return agyMinted.token;
   const refresh = discoverAgyRefreshToken();
@@ -434,17 +474,24 @@ async function agyAccessToken(): Promise<string | null> {
 async function probeAgy(): Promise<BrainUsageWindow[] | null> {
   const token = await agyAccessToken();
   if (!token) return null;
-  try {
-    const res = await fetch(AGY_QUOTA_URL, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: '{}',
-      signal: AbortSignal.timeout(15000)
-    });
-    if (!res.ok) return null;
-    const windows = normalizeAgyQuota(await res.json());
-    return windows.length ? windows : null;
-  } catch { return null; }
+  for (const host of AGY_QUOTA_HOSTS) {
+    try {
+      const res = await fetch(`https://${host}/v1internal:retrieveUserQuotaSummary`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'User-Agent': AGY_USER_AGENT   // gates the RPC — see AGY_USER_AGENT note
+        },
+        body: '{}',
+        signal: AbortSignal.timeout(15000)
+      });
+      if (!res.ok) continue;  // 403 on the wrong host/tier → try the next
+      const windows = normalizeAgyQuota(await res.json());
+      if (windows.length) return windows;
+    } catch { /* network/timeout → try the next host */ }
+  }
+  return null;
 }
 
 /** Execs we know how to meter on THIS host. */

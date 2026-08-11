@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { normalizeClaudeUsage, normalizeCodexRateLimits, normalizeAgyQuota, isMeteredExec, findRateLimitsSnapshot, discoverAgyRefreshToken } from './usage-probe.js';
+import { normalizeClaudeUsage, normalizeCodexRateLimits, normalizeAgyQuota, isMeteredExec, findRateLimitsSnapshot, discoverAgyRefreshToken, readCachedAgyToken } from './usage-probe.js';
 
 // Shape captured from a live GET /api/oauth/usage response (values trimmed).
 const CLAUDE_LIVE_SHAPE = {
@@ -206,6 +206,69 @@ test('agy: real schema — remainingFraction, groups, member models, disabled 5h
   assert.equal(w[3].usedPct, 100);
 });
 
+test('agy: live daily schema — window strings, models in group description, disabled bucket keeps no bar', () => {
+  // Exact shape of the Antigravity CLI's retrieveUserQuotaSummary (daily host):
+  // `window` is a STRING ("weekly"/"5h"), member models are named inline in the
+  // group `description`, and the Claude/GPT 5h bucket is disabled yet still
+  // reports remainingFraction:1 — which must NOT render as a 100% bar.
+  const w = normalizeAgyQuota({
+    groups: [
+      {
+        displayName: 'Gemini Models',
+        description: 'Models within this group: Gemini Flash, Gemini Pro',
+        buckets: [
+          { bucketId: 'gemini-weekly', window: 'weekly', resetTime: '2026-08-13T06:16:47Z', remainingFraction: 0.7415407 },
+          { bucketId: 'gemini-5h', window: '5h', resetTime: '2026-08-11T15:44:38Z', remainingFraction: 1 }
+        ]
+      },
+      {
+        displayName: 'Claude and GPT models',
+        description: 'Models within this group: Claude Opus, Claude Sonnet, GPT-OSS',
+        buckets: [
+          { bucketId: '3p-weekly', window: 'weekly', resetTime: '2026-08-15T15:34:06Z', remainingFraction: 0 },
+          { bucketId: '3p-5h', window: '5h', resetTime: '2026-08-11T15:44:38Z', disabled: true, remainingFraction: 1,
+            description: 'You have hit your weekly limit, the 5-hour limit does not currently apply.' }
+        ]
+      }
+    ]
+  });
+  assert.equal(w.length, 4);
+  assert.deepEqual(w[0], {
+    label: '7d', usedPct: 25.8, resetsAt: '2026-08-13T06:16:47Z', remainingPct: 74.2,
+    group: 'Gemini Models', groupModels: ['Gemini Flash', 'Gemini Pro']
+  });
+  assert.equal(w[1].label, '5h');
+  assert.equal(w[1].remainingPct, 100);
+  assert.equal(w[2].label, '7d');
+  assert.equal(w[2].remainingPct, 0);        // 3p weekly cap hit
+  assert.deepEqual(w[2].groupModels, ['Claude Opus', 'Claude Sonnet', 'GPT-OSS']);
+  assert.equal(w[3].label, '5h');
+  assert.equal(w[3].remainingPct, undefined, 'disabled 5h bucket must not carry a remaining bar');
+  assert.match(w[3].disabledNote, /5-hour limit does not currently apply/);
+});
+
+test('agy: readCachedAgyToken honours nested antigravity + flat gemini shapes and expiry', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-tok-'));
+  try {
+    const f = (name: string, obj: unknown) => {
+      const p = path.join(dir, name); fs.writeFileSync(p, JSON.stringify(obj)); return p;
+    };
+    const future = new Date(Date.now() + 3600_000).toISOString();
+    const past = new Date(Date.now() - 60_000).toISOString();
+    // Antigravity CLI nested shape with an RFC3339 expiry string.
+    assert.equal(readCachedAgyToken(f('agy.json', { token: { access_token: 'agy-live', expiry: future }, auth_method: 'consumer' })), 'agy-live');
+    assert.equal(readCachedAgyToken(f('agy-exp.json', { token: { access_token: 'agy-dead', expiry: past } })), null);
+    // gemini-cli flat shape with an epoch-ms expiry_date.
+    assert.equal(readCachedAgyToken(f('gem.json', { access_token: 'gem-live', expiry_date: Date.now() + 3600_000 })), 'gem-live');
+    assert.equal(readCachedAgyToken(f('gem-exp.json', { access_token: 'gem-dead', expiry_date: Date.now() - 60_000 })), null);
+    // No expiry → treated as usable.
+    assert.equal(readCachedAgyToken(f('noexp.json', { token: { access_token: 'agy-noexp' } })), 'agy-noexp');
+    assert.equal(readCachedAgyToken(path.join(dir, 'missing.json')), null);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('agy: accepts flat buckets, alias fields, and slug labels; clamps + skips garbage', () => {
   const w = normalizeAgyQuota({
     buckets: [
@@ -251,6 +314,11 @@ test('agy: discovers a refresh token from user_refresh.antigravity or oauth_cred
     // ...and a JSON-shaped variant of that file also works
     fs.writeFileSync(path.join(gemini, 'user_refresh.antigravity'), JSON.stringify({ refresh_token: '1//agy-json-rt' }));
     assert.equal(discoverAgyRefreshToken(home), '1//agy-json-rt');
+    // The Antigravity CLI token file (nested under `token`) is checked first.
+    const agyCli = path.join(gemini, 'antigravity-cli');
+    fs.mkdirSync(agyCli, { recursive: true });
+    fs.writeFileSync(path.join(agyCli, 'antigravity-oauth-token'), JSON.stringify({ token: { access_token: 'a', refresh_token: '1//agy-cli-rt' }, auth_method: 'consumer' }));
+    assert.equal(discoverAgyRefreshToken(home), '1//agy-cli-rt');
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
