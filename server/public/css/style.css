@@ -187,6 +187,21 @@ a { color: inherit; text-decoration: none; }
   overflow-y: auto;
 }
 
+/* Sidebar nav is grouped into labelled sections (Operations / AI Fleet /
+   System) so 10 destinations read as three scannable clusters instead of one
+   flat list. Labels collapse to dividers in the icon-only sidebar. */
+.nav-section + .nav-section { margin-top: var(--space-sm); }
+.nav-section-label {
+  display: block;
+  padding: 6px 12px 4px;
+  font-size: 0.66rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-muted);
+  user-select: none;
+}
+
 .nav-item {
   display: flex;
   align-items: center;
@@ -854,7 +869,14 @@ a { color: inherit; text-decoration: none; }
 /* ===== Responsive: Mobile ===== */
 @media (max-width: 768px) {
   .sidebar { width: 60px; }
-  .logo-text, .nav-text, .sidebar-footer { display: none; }
+  .logo-text, .nav-text, .sidebar-footer, .nav-section-label { display: none; }
+  /* Section labels vanish in icon-only mode; keep the groups readable with a
+     thin divider between them instead. */
+  .nav-section + .nav-section {
+    margin-top: var(--space-sm);
+    padding-top: var(--space-sm);
+    border-top: 1px solid var(--border-color);
+  }
   .nav-item {
     justify-content: center;
     padding: 10px;

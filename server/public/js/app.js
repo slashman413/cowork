@@ -237,15 +237,27 @@ class App {
   initTheme() {
     const saved = localStorage.getItem('cowork-theme') || 'dark';
     document.documentElement.setAttribute('data-theme', saved);
-    const toggleIcon = document.querySelector('#theme-toggle [data-lucide]');
-    if (toggleIcon) {
-      toggleIcon.setAttribute('data-lucide', saved === 'dark' ? 'moon' : 'sun');
-    }
+    this._syncThemeToggle(saved);
     const toggleBtn = document.getElementById('theme-toggle');
     if (toggleBtn) {
       toggleBtn.addEventListener('click', () => this.toggleTheme());
     }
     createIcons();
+  }
+
+  // Keep the theme toggle's icon and its screen-reader state (aria-pressed +
+  // label) in sync with the active theme so it announces correctly.
+  _syncThemeToggle(theme) {
+    const toggleIcon = document.querySelector('#theme-toggle [data-lucide]');
+    if (toggleIcon) {
+      toggleIcon.setAttribute('data-lucide', theme === 'dark' ? 'moon' : 'sun');
+    }
+    const toggleBtn = document.getElementById('theme-toggle');
+    if (toggleBtn) {
+      toggleBtn.setAttribute('aria-pressed', theme === 'dark' ? 'true' : 'false');
+      toggleBtn.setAttribute('aria-label',
+        theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme');
+    }
   }
 
   toggleTheme() {
@@ -254,10 +266,7 @@ class App {
     const next = current === 'dark' ? 'light' : 'dark';
     html.setAttribute('data-theme', next);
     localStorage.setItem('cowork-theme', next);
-    const toggleIcon = document.querySelector('#theme-toggle [data-lucide]');
-    if (toggleIcon) {
-      toggleIcon.setAttribute('data-lucide', next === 'dark' ? 'moon' : 'sun');
-    }
+    this._syncThemeToggle(next);
     createIcons();
   }
 

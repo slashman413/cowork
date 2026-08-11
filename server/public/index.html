@@ -16,47 +16,56 @@
         <i data-lucide="zap"></i>
         <h1 class="logo-text">Cowork</h1>
       </div>
-      <nav class="nav-menu">
-        <a href="#dashboard" class="nav-item active" data-view="dashboard" data-label="Dashboard">
-          <i data-lucide="layout-dashboard"></i>
-          <span class="nav-text">Dashboard</span>
-        </a>
-        <a href="#portal" class="nav-item" data-view="portal" data-label="Portal">
-          <i data-lucide="layout-grid"></i>
-          <span class="nav-text">Portal</span>
-        </a>
-        <a href="#chat" class="nav-item" data-view="chat" data-label="Chat">
-          <i data-lucide="message-square"></i>
-          <span class="nav-text">Chat</span>
-        </a>
-        <a href="#inbox" class="nav-item" data-view="inbox" data-label="Inbox">
-          <i data-lucide="inbox"></i>
-          <span class="nav-text">Inbox</span>
-        </a>
-        <a href="#workflows" class="nav-item" data-view="workflows" data-label="Workflows">
-          <i data-lucide="workflow"></i>
-          <span class="nav-text">Workflows</span>
-        </a>
-        <a href="#team" class="nav-item" data-view="team" data-label="Agents">
-          <i data-lucide="bot"></i>
-          <span class="nav-text">Agents</span>
-        </a>
-        <a href="#brains" class="nav-item" data-view="brains" data-label="Brains">
-          <i data-lucide="cpu"></i>
-          <span class="nav-text">Brains</span>
-        </a>
-        <a href="#roster" class="nav-item" data-view="roster" data-label="Agent Roster">
-          <i data-lucide="users-round"></i>
-          <span class="nav-text">Agent Roster</span>
-        </a>
-        <a href="#connections" class="nav-item" data-view="connections" data-label="Connections">
-          <i data-lucide="plug"></i>
-          <span class="nav-text">Connections</span>
-        </a>
-        <a href="#config" class="nav-item" data-view="config" data-label="Configuration">
-          <i data-lucide="settings"></i>
-          <span class="nav-text">Configuration</span>
-        </a>
+      <nav class="nav-menu" aria-label="Primary">
+        <div class="nav-section" role="group" aria-label="Operations">
+          <span class="nav-section-label" aria-hidden="true">Operations</span>
+          <a href="#dashboard" class="nav-item active" data-view="dashboard" data-label="Dashboard">
+            <i data-lucide="layout-dashboard"></i>
+            <span class="nav-text">Dashboard</span>
+          </a>
+          <a href="#portal" class="nav-item" data-view="portal" data-label="Portal">
+            <i data-lucide="layout-grid"></i>
+            <span class="nav-text">Portal</span>
+          </a>
+          <a href="#chat" class="nav-item" data-view="chat" data-label="Chat">
+            <i data-lucide="message-square"></i>
+            <span class="nav-text">Chat</span>
+          </a>
+          <a href="#inbox" class="nav-item" data-view="inbox" data-label="Inbox">
+            <i data-lucide="inbox"></i>
+            <span class="nav-text">Inbox</span>
+          </a>
+          <a href="#workflows" class="nav-item" data-view="workflows" data-label="Workflows">
+            <i data-lucide="workflow"></i>
+            <span class="nav-text">Workflows</span>
+          </a>
+        </div>
+        <div class="nav-section" role="group" aria-label="AI Fleet">
+          <span class="nav-section-label" aria-hidden="true">AI Fleet</span>
+          <a href="#team" class="nav-item" data-view="team" data-label="Agents">
+            <i data-lucide="bot"></i>
+            <span class="nav-text">Agents</span>
+          </a>
+          <a href="#brains" class="nav-item" data-view="brains" data-label="Brains">
+            <i data-lucide="cpu"></i>
+            <span class="nav-text">Brains</span>
+          </a>
+          <a href="#roster" class="nav-item" data-view="roster" data-label="Agent Roster">
+            <i data-lucide="users-round"></i>
+            <span class="nav-text">Agent Roster</span>
+          </a>
+        </div>
+        <div class="nav-section" role="group" aria-label="System">
+          <span class="nav-section-label" aria-hidden="true">System</span>
+          <a href="#connections" class="nav-item" data-view="connections" data-label="Connections">
+            <i data-lucide="plug"></i>
+            <span class="nav-text">Connections</span>
+          </a>
+          <a href="#config" class="nav-item" data-view="config" data-label="Configuration">
+            <i data-lucide="settings"></i>
+            <span class="nav-text">Configuration</span>
+          </a>
+        </div>
       </nav>
       <div class="sidebar-footer">
         Cowork Server v1.0.0
@@ -71,7 +80,7 @@
             <div class="dot connecting"></div>
             <span>Connecting…</span>
           </div>
-          <button id="theme-toggle" class="icon-btn" type="button" aria-label="Toggle theme" title="Toggle theme">
+          <button id="theme-toggle" class="icon-btn" type="button" aria-label="Toggle theme" aria-pressed="false" title="Toggle theme">
             <i data-lucide="moon"></i>
           </button>
         </div>
