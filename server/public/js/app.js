@@ -2097,6 +2097,33 @@ class App {
   async renderGoals() {
     const goals = await this.api.get('/goals');
     const inp = 'padding:6px 8px;background:var(--bg-tertiary);border:1px solid var(--bg-tertiary);border-radius:8px;color:inherit;font-size:0.8rem;width:100%;box-sizing:border-box';
+    const lbl = 'font-size:0.72rem;color:var(--text-muted);font-weight:600;display:block;margin-bottom:3px';
+    // First run gets the create form open by default — a blank Goals page with a
+    // collapsed form is the biggest "how do I even start" cliff.
+    const firstRun = goals.length === 0;
+    // One-click starter goals. Each fills the whole form (still fully editable) so
+    // an author never faces a blank page or has to learn the criterion/phase shape
+    // from scratch — the single biggest setup-simplicity win.
+    const templates = [
+      { key: 'newsletter', label: '📧 Grow a newsletter',
+        title: 'Reach 1,000 newsletter subscribers',
+        description: 'Grow the newsletter to 1,000 confirmed subscribers through content and a lead magnet.',
+        successCriteria: 'Does the subscriber list have ≥1,000 confirmed subscribers?',
+        reportBrief: 'subscriber growth per phase',
+        phases: 'Research the target audience\nBuild a lead magnet\nLaunch the signup campaign\nOptimize the conversion funnel' },
+      { key: 'api', label: '🚀 Ship a v1 API',
+        title: 'Launch the v1 public API',
+        description: 'Design, build, document and deploy a first public version of the API.',
+        successCriteria: 'Is the v1 API deployed to production and publicly documented?',
+        reportBrief: '',
+        phases: 'Design the API contract\nImplement the endpoints\nWrite docs and examples\nDeploy to production' },
+      { key: 'seo', label: '🔍 Rank a page on Google',
+        title: 'Rank on page 1 for a target keyword',
+        description: 'Publish and promote an article until it ranks in the top 10 Google results for the target keyword.',
+        successCriteria: 'Is the page ranking in the top 10 Google results for the target keyword?',
+        reportBrief: '',
+        phases: 'Keyword and competitor research\nWrite and publish the article\nBuild backlinks\nMonitor rankings' }
+    ];
 
     const goalCard = (g) => {
       const color = this._goalStatusColor(g.status);
@@ -2153,38 +2180,82 @@ class App {
         </div>
       </div>
 
-      <details class="card" style="margin-bottom:var(--space-lg)">
+      <details class="card" style="margin-bottom:var(--space-lg)" ${firstRun ? 'open' : ''}>
         <summary style="cursor:pointer;font-weight:600;font-size:0.9rem">➕ Create a goal</summary>
-        <div style="display:flex;flex-direction:column;gap:8px;margin-top:12px">
-          <input id="goal-title" placeholder="Title — e.g. Reach 1,000 newsletter subscribers" style="${inp}">
-          <textarea id="goal-desc" placeholder="Description / context for the executors…" rows="2" style="${inp};resize:vertical"></textarea>
-          <input id="goal-criteria" placeholder="Binary success criterion — e.g. Does the list have ≥1000 subscribers? (must be answerable Yes/No)" style="${inp}">
-          <input id="goal-report" placeholder="Report focus for the Judger (optional) — e.g. financial breakdown per phase" style="${inp}">
-          <textarea id="goal-phases" placeholder="Phases, one per line as  key: Title&#10;research: Research the audience&#10;launch: Launch the campaign" rows="3" style="${inp};resize:vertical;font-family:inherit"></textarea>
-          <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <input id="goal-achiever" placeholder="Achiever brain ids (comma-sep, optional)" style="${inp};flex:1">
-            <input id="goal-judger" placeholder="Judger brain ids (comma-sep, optional)" style="${inp};flex:1">
-            <input id="goal-budget" type="number" min="1" placeholder="Budget (24)" style="${inp};width:110px;flex:0 0 auto">
+        <div style="display:flex;flex-direction:column;gap:11px;margin-top:12px">
+          <div>
+            <span style="${lbl}">Start from an example <span style="font-weight:400;color:var(--text-muted)">— fills the form, edit anything</span></span>
+            <div style="display:flex;gap:6px;flex-wrap:wrap">${
+              templates.map(t => `<button type="button" class="btn goal-template" data-tpl="${esc(t.key)}" style="font-size:0.74rem;padding:4px 10px">${esc(t.label)}</button>`).join('')
+            }</div>
           </div>
-          <div style="font-size:0.74rem;color:var(--text-muted)">Guardrails: a goal must carry a <em>binary</em> criterion and ≥1 phase before it can be activated — this keeps the autonomous loop able to terminate.</div>
-          <button class="btn btn-primary" id="goal-create" style="align-self:flex-start;font-size:0.8rem">Create draft</button>
+          <div>
+            <label style="${lbl}">Goal title</label>
+            <input id="goal-title" placeholder="e.g. Reach 1,000 newsletter subscribers" style="${inp}">
+          </div>
+          <div>
+            <label style="${lbl}">Success criterion — a Yes/No question that flips true when you're done</label>
+            <input id="goal-criteria" placeholder="e.g. Does the list have ≥1,000 subscribers?" style="${inp}">
+          </div>
+          <div>
+            <label style="${lbl}">Phases — one waypoint per line, plain language is fine</label>
+            <textarea id="goal-phases" placeholder="Research the audience&#10;Build a lead magnet&#10;Launch the campaign" rows="3" style="${inp};resize:vertical;font-family:inherit"></textarea>
+          </div>
+          <details style="margin:0">
+            <summary style="cursor:pointer;font-size:0.78rem;color:var(--text-secondary)">Advanced options (optional)</summary>
+            <div style="display:flex;flex-direction:column;gap:9px;margin-top:9px">
+              <div>
+                <label style="${lbl}">Context for the executing agents</label>
+                <textarea id="goal-desc" placeholder="Anything the agents doing the work should know…" rows="2" style="${inp};resize:vertical"></textarea>
+              </div>
+              <div>
+                <label style="${lbl}">Report focus for the Judger</label>
+                <input id="goal-report" placeholder="e.g. financial breakdown per phase" style="${inp}">
+              </div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap">
+                <div style="flex:1;min-width:150px"><label style="${lbl}">Achiever brains</label><input id="goal-achiever" placeholder="comma-sep — blank = auto-route" style="${inp}"></div>
+                <div style="flex:1;min-width:150px"><label style="${lbl}">Judger brains</label><input id="goal-judger" placeholder="comma-sep — blank = auto-route" style="${inp}"></div>
+                <div style="flex:0 0 auto"><label style="${lbl}">Step budget</label><input id="goal-budget" type="number" min="1" placeholder="24" style="${inp};width:90px"></div>
+              </div>
+            </div>
+          </details>
+          <div style="font-size:0.74rem;color:var(--text-muted)">A goal needs a <em>Yes/No</em> criterion and at least one phase before it can run — this keeps the autonomous loop able to stop.</div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <button class="btn btn-primary" id="goal-create-activate" style="font-size:0.8rem">Create &amp; activate ▶</button>
+            <button class="btn" id="goal-create" style="font-size:0.8rem">Save as draft</button>
+          </div>
         </div>
       </details>
 
       <h3 style="font-size:0.9rem;margin:var(--space-md) 0 6px">Goals</h3>
       ${cards}`;
 
-    // Create
-    this.contentEl.querySelector('#goal-create')?.addEventListener('click', async () => {
-      const parseList = (v) => (v || '').split(',').map(s => s.trim()).filter(Boolean);
+    // One-click example → fill the form (leaves it fully editable).
+    this.contentEl.querySelectorAll('.goal-template').forEach(b => b.addEventListener('click', () => {
+      const t = templates.find(x => x.key === b.dataset.tpl);
+      if (!t) return;
+      this.contentEl.querySelector('#goal-title').value = t.title;
+      this.contentEl.querySelector('#goal-desc').value = t.description;
+      this.contentEl.querySelector('#goal-criteria').value = t.successCriteria;
+      this.contentEl.querySelector('#goal-report').value = t.reportBrief;
+      this.contentEl.querySelector('#goal-phases').value = t.phases;
+      this.contentEl.querySelector('#goal-title').focus();
+    }));
+
+    // Create — one reader for both "save as draft" and "create & activate". Phase
+    // lines are plain titles now; the kebab key is derived (a leading "key:" is
+    // still honoured for power users, but never required).
+    const parseList = (v) => (v || '').split(',').map(s => s.trim()).filter(Boolean);
+    const readGoalBody = () => {
       const phases = (this.contentEl.querySelector('#goal-phases').value || '').split('\n').map(l => l.trim()).filter(Boolean).map(line => {
         const i = line.indexOf(':');
-        const key = (i >= 0 ? line.slice(0, i) : line).trim().toLowerCase().replace(/\s+/g, '-');
+        const rawKey = (i >= 0 ? line.slice(0, i) : line).trim();
+        const key = rawKey.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
         const title = (i >= 0 ? line.slice(i + 1) : line).trim();
-        return { key, title: title || key };
+        return { key: key || 'phase', title: title || rawKey };
       });
       const budget = parseInt(this.contentEl.querySelector('#goal-budget').value, 10);
-      const body = {
+      return {
         title: this.contentEl.querySelector('#goal-title').value.trim(),
         description: this.contentEl.querySelector('#goal-desc').value.trim(),
         successCriteria: this.contentEl.querySelector('#goal-criteria').value.trim(),
@@ -2194,12 +2265,28 @@ class App {
         judgerBrainChain: parseList(this.contentEl.querySelector('#goal-judger').value),
         stepBudget: Number.isFinite(budget) && budget > 0 ? budget : undefined
       };
+    };
+    const submitGoal = async (activate) => {
+      const body = readGoalBody();
+      // Catch the two guardrails client-side so the user gets a plain-language nudge
+      // pointing at the exact missing field instead of a raw server error.
+      if (!body.title) return this.toast('add a title', 'Give the goal a short title first.');
+      if (!body.successCriteria) return this.toast('add a success criterion', 'A Yes/No question lets the goal know when it is done.');
+      if (activate && !body.phases.length) return this.toast('add a phase', 'A goal needs at least one phase before it can be activated.');
       try {
-        await this.api.post('/goals', body);
-        this.toast('goal created', `${body.title} — draft. Activate it to start autonomous work.`);
+        const res = await this.api.post('/goals', body);
+        const goalId = res?.goal?.goalId;
+        if (activate && goalId) {
+          await this.api.post(`/goals/${encodeURIComponent(goalId)}/activate`);
+          this.toast('goal activated', `${body.title} — autonomous work has started.`);
+        } else {
+          this.toast('goal created', `${body.title} — draft. Activate it to start autonomous work.`);
+        }
         this.renderGoals();
       } catch (e) { this.toast('create failed', e.message); }
-    });
+    };
+    this.contentEl.querySelector('#goal-create')?.addEventListener('click', () => submitGoal(false));
+    this.contentEl.querySelector('#goal-create-activate')?.addEventListener('click', () => submitGoal(true));
 
     const act = async (sel, fn) => this.contentEl.querySelectorAll(sel).forEach(b => b.addEventListener('click', async () => {
       try { await fn(b.dataset.id); this.renderGoals(); }
@@ -2216,6 +2303,11 @@ class App {
       if (!confirm('Delete this goal and every task it generated?')) throw new Error('cancelled');
       return this.api.del(`/goals/${encodeURIComponent(id)}?withTasks=1`);
     });
+
+    // In-place re-renders (after create/activate/pause/etc.) bypass
+    // renderCurrentView's trailing createIcons(), so the delete glyph would vanish
+    // until a full view switch — re-hydrate the lucide icons here too.
+    createIcons();
   }
 
   async renderWorkflows() {
