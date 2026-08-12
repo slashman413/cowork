@@ -2247,12 +2247,21 @@ class App {
     // still honoured for power users, but never required).
     const parseList = (v) => (v || '').split(',').map(s => s.trim()).filter(Boolean);
     const readGoalBody = () => {
-      const phases = (this.contentEl.querySelector('#goal-phases').value || '').split('\n').map(l => l.trim()).filter(Boolean).map(line => {
+      // Keys are derived from plain-language titles, so collisions are easy
+      // ("Launch!" and "Launch?" both → "launch", punctuation-only lines → "").
+      // The backend rejects blank/duplicate keys, so guarantee both here — a
+      // number suffix keeps every phase's row unique without the author ever
+      // seeing a raw "duplicate phase key" error.
+      const seen = new Set();
+      const phases = (this.contentEl.querySelector('#goal-phases').value || '').split('\n').map(l => l.trim()).filter(Boolean).map((line, idx) => {
         const i = line.indexOf(':');
         const rawKey = (i >= 0 ? line.slice(0, i) : line).trim();
-        const key = rawKey.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
         const title = (i >= 0 ? line.slice(i + 1) : line).trim();
-        return { key: key || 'phase', title: title || rawKey };
+        let base = rawKey.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || `phase-${idx + 1}`;
+        let key = base, n = 2;
+        while (seen.has(key)) key = `${base}-${n++}`;
+        seen.add(key);
+        return { key, title: title || rawKey || key };
       });
       const budget = parseInt(this.contentEl.querySelector('#goal-budget').value, 10);
       return {
@@ -2273,17 +2282,22 @@ class App {
       if (!body.title) return this.toast('add a title', 'Give the goal a short title first.');
       if (!body.successCriteria) return this.toast('add a success criterion', 'A Yes/No question lets the goal know when it is done.');
       if (activate && !body.phases.length) return this.toast('add a phase', 'A goal needs at least one phase before it can be activated.');
+      let goalId;
       try {
         const res = await this.api.post('/goals', body);
-        const goalId = res?.goal?.goalId;
-        if (activate && goalId) {
+        goalId = res?.goal?.goalId;
+      } catch (e) { return this.toast('create failed', e.message); }
+      if (activate && goalId) {
+        // Created; activation is a second call so it can fail on its own. Be
+        // honest that the draft was saved rather than reporting "create failed".
+        try {
           await this.api.post(`/goals/${encodeURIComponent(goalId)}/activate`);
           this.toast('goal activated', `${body.title} — autonomous work has started.`);
-        } else {
-          this.toast('goal created', `${body.title} — draft. Activate it to start autonomous work.`);
-        }
-        this.renderGoals();
-      } catch (e) { this.toast('create failed', e.message); }
+        } catch (e) { this.toast('saved as draft', `Created, but couldn't activate: ${e.message}`); }
+      } else {
+        this.toast('goal created', `${body.title} — draft. Activate it to start autonomous work.`);
+      }
+      this.renderGoals();
     };
     this.contentEl.querySelector('#goal-create')?.addEventListener('click', () => submitGoal(false));
     this.contentEl.querySelector('#goal-create-activate')?.addEventListener('click', () => submitGoal(true));
