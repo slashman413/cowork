@@ -177,7 +177,7 @@ async function probeClaudeUsage() {
     });
     if (!res.ok) return null;
     const raw = await res.json();
-    const label = k => k === 'session' || k === 'five_hour' ? '5h' : k === 'weekly' || k === 'weekly_all' || k === 'seven_day' ? '7d' : String(k).replace(/^seven_day_/, '7d-');
+    const label = k => k === 'session' || k === 'five_hour' ? '5h' : k === 'weekly' || k === 'weekly_all' || k === 'seven_day' || k === 'seven_day_weekly_all' ? '7d' : String(k).replace(/^seven_day_/, '7d-');
     // MERGE both sources the payload can carry a window in — the structured
     // limits[] array (authoritative: is_active/severity) AND the per-window
     // objects hanging off the root (five_hour, seven_day, seven_day_opus, …).

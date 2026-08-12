@@ -88,7 +88,7 @@ function isWindowKey(key: string): boolean {
 export function normalizeClaudeUsage(raw: any): BrainUsageWindow[] {
   const label = (kind: string) =>
     kind === 'session' || kind === 'five_hour' ? '5h'
-      : kind === 'weekly' || kind === 'weekly_all' || kind === 'seven_day' ? '7d'
+      : kind === 'weekly' || kind === 'weekly_all' || kind === 'seven_day' || kind === 'seven_day_weekly_all' ? '7d'
       : kind.replace(/^seven_day_/, '7d-');
   const byLabel = new Map<string, BrainUsageWindow>();  // first writer wins → limits[] authoritative
   const add = (lbl: string, p: number | null, resetsAt: unknown) => {
