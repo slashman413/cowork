@@ -78,7 +78,9 @@
   },
   "orchestration": {
     "enabled": true,
-    "maxConcurrent": 2,
+    "_concurrency_comment": "maxConcurrent is the GLOBAL ceiling on locally-spawned runs across all brains. defaultBrainConcurrency is the per-brain fallback cap for brains without their own maxConcurrent. A brain backed by a shared inference server (the local hermes/vLLM brains) or a stateless CLI can set brains.<id>.maxConcurrent > 1 to serve several tasks at once on ONE instance; when a preferred chain rung is saturated the dispatcher load-balances the overflow onto the next local rung with spare capacity, so no single workhorse brain absorbs every task.",
+    "maxConcurrent": 6,
+    "defaultBrainConcurrency": 1,
     "pollIntervalMs": 5000,
     "taskTimeoutMs": 3000000,
     "defaultRole": "generalist",
@@ -143,25 +145,30 @@
         "description": "Local Hermes agent on Qwen3.6-35B-A3B",
         "location": "local",
         "exec": "hermes",
-        "model": "nvidia/Qwen3.6-35B-A3B-NVFP4"
+        "model": "nvidia/Qwen3.6-35B-A3B-NVFP4",
+        "maxConcurrent": 3
       },
       "local-ha-deepseek": {
         "description": "Local Hermes agent on DeepSeek-V4-Flash",
         "location": "local",
         "exec": "hermes",
-        "model": "deepseek:deepseek-v4-flash"
+        "model": "deepseek:deepseek-v4-flash",
+        "maxConcurrent": 3
       },
       "local-ha-deepseek-v4-pro": {
         "description": "Local Hermes agent on DeepSeek V4 Pro (custom provider)",
         "location": "local",
         "exec": "hermes",
-        "model": "deepseek-ai/deepseek-v4-pro"
+        "model": "deepseek-ai/deepseek-v4-pro",
+        "_maxConcurrent_comment": "The workhorse brain: all credential/local-file tasks are pinned here (Inc 6 rule). Backed by a shared inference server, so it serves several pinned tasks at once instead of serialising them behind a global cap of 1.",
+        "maxConcurrent": 4
       },
       "local-cc-opus": {
         "description": "Local Claude Code using Opus 4.8",
         "location": "local",
         "exec": "claude",
-        "model": "claude-opus-4-8"
+        "model": "claude-opus-4-8",
+        "maxConcurrent": 2
       },
       "local-cc-sonnet": {
         "description": "Local Claude Code using Sonnet 5",

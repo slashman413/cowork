@@ -58,7 +58,7 @@ export class Dispatcher {
   private store: Store;
   private eventBus: EventBus;
   private workflows?: Workflows;
-  private running = new Map<string, { role: string; startedAt: number; workerAgentId?: string }>();
+  private running = new Map<string, { role: string; startedAt: number; workerAgentId?: string; brainId?: string }>();
   private agentId: string | null = null;
   private timer: NodeJS.Timeout | null = null;
   private stopped = false;
@@ -163,6 +163,61 @@ export class Dispatcher {
     return null;
   }
 
+  /** How many local runs this ONE brain instance may serve at once. Per-brain
+   *  {@link BrainConfig.maxConcurrent}, else orchestration.defaultBrainConcurrency,
+   *  else 1. Never returns < 1. Remote brains are governed by their own client, so
+   *  this only bounds locally-spawned runs. */
+  private brainCap(brainId: string): number {
+    const b = this.config.orchestration.brains?.[brainId];
+    const cap = b?.maxConcurrent ?? this.config.orchestration.defaultBrainConcurrency ?? 1;
+    return cap > 0 ? cap : 1;
+  }
+
+  /** How many locally-spawned runs are in flight on `brainId` right now. */
+  private brainLoad(brainId: string): number {
+    let n = 0;
+    for (const r of this.running.values()) if (r.brainId === brainId) n++;
+    return n;
+  }
+
+  /**
+   * Pick which rung of a fallback chain to run for a FRESH (unpinned) dispatch,
+   * with preference-preserving load balancing.
+   *
+   * The chain is an ordered PREFERENCE list (best brain first), so the preferred
+   * rung `chain[attempt]` wins whenever it has spare capacity — under no contention
+   * this returns `chain[attempt]` unchanged, exactly as before. Only when the
+   * preferred rung is a LOCAL brain that is SATURATED (at its maxConcurrent) do we
+   * scan the rest of the chain and hand the overflow to the local rung with the most
+   * spare capacity. That is what stops one reliable workhorse brain (e.g.
+   * `local-ha-deepseek-v4-pro`) from absorbing every concurrent task while its
+   * peers sit idle.
+   *
+   * Remote rungs and unrunnable/missing brains are left to the caller's existing
+   * index-based handling (the remote claim/grace protocol keys on `chain[attempt]`),
+   * so this only ever redirects among LOCAL, runnable brains.
+   */
+  private selectRung(
+    chain: string[], attempt: number,
+    brains: Record<string, { location: string; exec?: string; maxConcurrent?: number }>
+  ): { brainId: string; index: number } {
+    const head = chain[attempt];
+    const hb = brains[head];
+    // Only load-balance a local, runnable preferred rung; anything else keeps the
+    // index so remote/skip handling upstream is untouched.
+    if (!hb || hb.location !== 'local' || !hb.exec) return { brainId: head, index: attempt };
+    if (this.brainLoad(head) < this.brainCap(head)) return { brainId: head, index: attempt };
+    // Preferred rung saturated → least-loaded local rung with room (ties: earliest).
+    let bestIdx = -1, bestSlack = 0;
+    for (let i = attempt; i < chain.length; i++) {
+      const b = brains[chain[i]];
+      if (!b || b.location !== 'local' || !b.exec) continue;
+      const slack = this.brainCap(chain[i]) - this.brainLoad(chain[i]);
+      if (slack > bestSlack) { bestSlack = slack; bestIdx = i; }
+    }
+    return bestIdx >= 0 ? { brainId: chain[bestIdx], index: bestIdx } : { brainId: head, index: attempt };
+  }
+
   /** Persistent per-task artifacts dir (survives reboot — under the repo, gitignored). */
   private artifactsDir(taskId: string): string {
     return join(this.config.paths.artifacts, taskId);
@@ -230,6 +285,13 @@ export class Dispatcher {
         case 'route': this.route(task); continue;
         case 'execute':
           if (!this.depsSatisfied(task)) continue;
+          // Per-brain concurrency: if this brain is already at its capacity, skip
+          // THIS task (don't break) so a task bound to a different, free brain can
+          // still launch this tick. A brain with spare room runs the task
+          // concurrently on the same instance. selectRung already steered fresh
+          // dispatches toward free rungs; this backstops a pinned task or a fully
+          // saturated chain.
+          if (this.brainLoad(plan.exec.brainId) >= this.brainCap(plan.exec.brainId)) continue;
           this.execute(task, plan.exec).catch(e => console.error(`Dispatcher: task ${task.id} failed:`, e));
       }
     }
@@ -314,14 +376,17 @@ export class Dispatcher {
       return this.brainPlan(agentName, division, ctxBrain, brains[ctxBrain], { pinned: true, attempt, chainLen: 0 });
     }
 
-    // (3) an agent (special or roster) → run on its resolved brain chain.
+    // (3) an agent (special or roster) → run on its resolved brain chain. The
+    //     preferred rung is chain[attempt]; selectRung keeps it unless it is a
+    //     saturated LOCAL brain, in which case the overflow is load-balanced onto
+    //     the next local rung with spare capacity.
     if (agentName) {
       const chain = this.chainFor(agentName, division);
       if (!chain.length || attempt >= chain.length) return { action: 'skip' };  // exhausted / misconfigured
-      const brainId = chain[attempt];
+      const { brainId, index } = this.selectRung(chain, attempt, brains);
       const b = brains[brainId];
       if (!b) return { action: 'skip' };
-      return this.brainPlan(agentName, division, brainId, b, { pinned: false, attempt, chainLen: chain.length });
+      return this.brainPlan(agentName, division, brainId, b, { pinned: false, attempt: index, chainLen: chain.length });
     }
 
     // (4) unassigned → two-stage router picks division + roster agent.
@@ -1010,7 +1075,7 @@ export class Dispatcher {
     });
     this.store.updateHeartbeat({ agentId: worker.id, status: 'working', currentTask: task.title });
 
-    this.running.set(task.id, { role: plan.label, startedAt: Date.now(), workerAgentId: worker.id });
+    this.running.set(task.id, { role: plan.label, startedAt: Date.now(), workerAgentId: worker.id, brainId: plan.brainId });
     console.log(`Dispatcher: [${plan.label}/${plan.exec}:${plan.model || 'default'}] running task ${task.id} — ${task.title}`);
 
     // Persistent per-task artifacts dir (agents save files here → downloadable).

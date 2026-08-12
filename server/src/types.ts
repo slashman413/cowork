@@ -43,6 +43,15 @@ export interface BrainConfig {
   command?: string[];
   /** remote brains: which machine/client (informational + claim-routing hint). */
   host?: string;
+  /** How many tasks this ONE instance may run CONCURRENTLY. A brain backed by a
+   *  shared inference server (the local hermes/vLLM brains) or a stateless CLI can
+   *  serve several requests at once, so it need not serialise one-task-at-a-time.
+   *  The dispatcher never launches more than this many local runs on the brain
+   *  simultaneously, and — when the preferred chain rung is saturated — spreads the
+   *  overflow to the next local rung with spare capacity (load balancing). Defaults
+   *  to orchestration.defaultBrainConcurrency (or 1). Ignored for remote brains
+   *  (their own client governs concurrency). */
+  maxConcurrent?: number;
   /** Brain alias to hand off to after a failed attempt. */
   fallback?: string;
   /** True when auto-registered by a connecting MCP client (vs configured by
@@ -181,7 +190,13 @@ export interface AgentConfig {
 
 export interface OrchestrationConfig {
   enabled: boolean;
+  /** Global ceiling on locally-spawned concurrent runs across ALL brains. The
+   *  per-brain {@link BrainConfig.maxConcurrent} caps are the finer governor; this
+   *  is the total the host machine will run at once. */
   maxConcurrent: number;
+  /** Fallback per-brain concurrency for any brain without its own maxConcurrent.
+   *  Default 1 (one task at a time), preserving the historical behaviour. */
+  defaultBrainConcurrency?: number;
   pollIntervalMs: number;
   taskTimeoutMs: number;
   defaultRole: string;
