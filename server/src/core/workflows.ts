@@ -403,6 +403,30 @@ export class Workflows {
     return tasks.length ? this.runFromTasks(runId, tasks) : null;
   }
 
+  deleteRun(runId: string): void {
+    const p = path.join(this.runsDir(), `${runId}.json`);
+    if (fs.existsSync(p)) fs.unlinkSync(p);
+    const tasks = this.store.listTasks().filter(t => t.context?.workflowRunId === runId);
+    for (const t of tasks) {
+      this.store.deleteTask(t.id);
+    }
+    console.log(`Workflows: deleted run ${runId} (${tasks.length} tasks removed)`);
+  }
+
+  deleteAllRuns(): void {
+    const dir = this.runsDir();
+    if (fs.existsSync(dir)) {
+      for (const f of fs.readdirSync(dir)) {
+        if (f.endsWith('.json')) fs.unlinkSync(path.join(dir, f));
+      }
+    }
+    const tasks = this.store.listTasks().filter(t => typeof t.context?.workflowRunId === 'string');
+    for (const t of tasks) {
+      this.store.deleteTask(t.id);
+    }
+    console.log(`Workflows: deleted all runs (${tasks.length} tasks removed)`);
+  }
+
   private runFromTasks(runId: string, tasks: Task[]): WorkflowRun {
     const failed = tasks.some(t => t.status === 'rejected');
     const allDone = tasks.every(t => t.status === 'done');

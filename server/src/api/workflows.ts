@@ -77,5 +77,23 @@ export function createWorkflowRouter(workflows: Workflows): Router {
     res.json(run);
   });
 
+  router.delete('/workflow-runs/:runId', (req, res) => {
+    try {
+      workflows.deleteRun(req.params.runId);
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(400).json({ error: e.message });
+    }
+  });
+
+  router.delete('/workflow-runs', (req, res) => {
+    try {
+      workflows.deleteAllRuns();
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(400).json({ error: e.message });
+    }
+  });
+
   return router;
 }

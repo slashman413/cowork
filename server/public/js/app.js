@@ -15,6 +15,35 @@ function timeAgo(iso) {
   return `${Math.floor(s / 86400)}d ago`;
 }
 
+// Extractive ~5-word summary of a chat's opening request, so the recent list reads
+// like "Fix login redirect bug" instead of just an agent/roster label. Purely local
+// (no LLM) — drops filler words, urls, markdown noise; falls back to a raw head slice.
+function summarizeRequest(text) {
+  if (!text) return '';
+  let t = String(text)
+    .replace(/📎[^\n]*/g, ' ')           // attachment note line
+    .replace(/https?:\/\/\S+/g, ' ')      // urls add no meaning to a title
+    .replace(/[`*_>#\[\]()]/g, ' ')       // markdown punctuation
+    .replace(/\s+/g, ' ').trim();
+  if (!t) return '';
+  // CJK-heavy text has no word spaces — take a short leading run of characters.
+  const cjk = (t.match(/[一-鿿]/g) || []).length;
+  if (cjk >= 4 && t.split(' ').length <= 3) return t.slice(0, 14);
+  const stop = new Set(('the a an to of for and or in on at with please can could would should '
+    + 'will i we you me my our your it this that be is are do does how what why when help need '
+    + 'want make create build fix add pls hey hi hello let us give show tell about so just').split(' '));
+  const kept = [];
+  for (const w of t.split(' ')) {
+    const lw = w.toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (!lw || stop.has(lw)) continue;
+    kept.push(w);
+    if (kept.length >= 5) break;
+  }
+  const words = kept.length ? kept : t.split(' ').slice(0, 5);
+  const s = words.join(' ');
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
 // Countdown twin of timeAgo — "2h 10m", "3d 4h", "now" — for rate-limit resets.
 function timeUntil(iso) {
   if (!iso) return '';
@@ -318,8 +347,9 @@ class App {
     this.chatSel = { brain: '', division: '', agent: '' };
     this.chatBusyBrains = new Set();  // brain keys ('' selection → 'auto') with a chat in flight — the composer locks per brain, not globally
     this.chatAttachments = [];  // File[] staged in the composer, sent as task inputs
-    this.chatSessions = this.loadChatSessions();  // persisted recent chat sessions (newest first)
+    this.chatSessions = this.loadChatSessions();  // persisted recent chat sessions (ordered by creation time)
     this.chatSessionId = null;                    // id of the session currently open in the composer
+    this.chatExpanded = new Set();                // ids of expanded nodes in the Recent tree view
 
     this.contentEl = document.getElementById('content');
     this.viewTitleEl = document.getElementById('view-title');
@@ -345,6 +375,8 @@ class App {
     document.addEventListener('click', (e) => {
       const del = e.target.closest('[data-chat-del]');
       if (del) { e.preventDefault(); e.stopPropagation(); this.deleteChatSession(del.dataset.chatDel); return; }
+      const exp = e.target.closest('[data-chat-expand]');
+      if (exp) { e.preventDefault(); e.stopPropagation(); this.toggleChatExpand(exp.dataset.chatExpand); return; }
       const open = e.target.closest('[data-chat-open]');
       if (open) this.openChatSession(open.dataset.chatOpen);
     });
@@ -1204,27 +1236,40 @@ class App {
     catch { /* storage unavailable — recent list is a nicety, not required */ }
   }
 
-  /** Snapshot the open conversation into the session list (newest first). No-op
-   *  until there's at least one completed message worth remembering. */
-  persistCurrentChat() {
+  /** Snapshot the open conversation into the session list. No-op until there's at
+   *  least one completed message worth remembering.
+   *  Ordering is by CREATION time and is stable: `createdAt` is stamped once and
+   *  never changes, and the record is updated in place (never moved to the front).
+   *  `updatedAt` — the "activity" time shown in the list — is bumped ONLY when the
+   *  user actually sends a message (`bump: true`); merely opening a chat or switching
+   *  away from it must not disturb its timestamp or its position. */
+  persistCurrentChat({ bump = false } = {}) {
     const msgs = this.chatMessages.filter(m => !m.pending && (m.content || '').trim());
     if (!msgs.length) return;
     const firstUser = msgs.find(m => m.role === 'user');
-    const title = (firstUser?.content || 'chat').replace(/\s+/g, ' ').trim().slice(0, 48) || 'chat';
+    const reqText = firstUser?.content || '';
+    const title = reqText.replace(/\s+/g, ' ').trim().slice(0, 80) || 'chat';
+    const summary = summarizeRequest(reqText) || title.slice(0, 40) || 'chat';
     if (!this.chatSessionId) this.chatSessionId = 's' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+    const existing = this.chatSessions.find(s => s.id === this.chatSessionId);
+    const now = new Date().toISOString();
     const rec = {
       id: this.chatSessionId,
-      title,
+      title, summary,
       sel: { ...this.chatSel },
       messages: msgs.map(m => ({ role: m.role, content: m.content, meta: m.meta || null })),
-      updatedAt: new Date().toISOString()
+      createdAt: existing?.createdAt || existing?.updatedAt || now,
+      updatedAt: bump ? now : (existing?.updatedAt || now)
     };
-    this.chatSessions = [rec, ...this.chatSessions.filter(s => s.id !== rec.id)];
+    // In-place update preserves list position; only a brand-new chat is prepended.
+    this.chatSessions = existing
+      ? this.chatSessions.map(s => s.id === rec.id ? rec : s)
+      : [rec, ...this.chatSessions];
     this.saveChatSessions();
   }
 
   startNewChat() {
-    this.persistCurrentChat();      // keep the conversation being left behind
+    this.persistCurrentChat({ bump: false });   // keep it, but don't disturb its time/order
     this.chatMessages = [];
     this.chatSessionId = null;
     this.chatAttachments = [];
@@ -1236,7 +1281,9 @@ class App {
   openChatSession(id) {
     const rec = this.chatSessions.find(s => s.id === id);
     if (!rec) return;
-    this.persistCurrentChat();      // save whatever's open before switching away
+    // Save whatever's open before switching away — WITHOUT bumping its time or
+    // position. Opening a recent chat used to reshuffle the whole list; it no longer does.
+    this.persistCurrentChat({ bump: false });
     this.chatSessionId = rec.id;
     this.chatAttachments = [];       // drop composer attachments when switching sessions
     this.chatSel = { brain: '', division: '', agent: '', ...(rec.sel || {}) };
@@ -1246,39 +1293,78 @@ class App {
 
   deleteChatSession(id) {
     this.chatSessions = this.chatSessions.filter(s => s.id !== id);
+    this.chatExpanded.delete(id);
     this.saveChatSessions();
     if (this.chatSessionId === id) { this.chatMessages = []; this.chatSessionId = null; this.renderChatMessages(); }
     this.renderChatRecent();
   }
 
-  /** The recent-sessions list shown above the brain/agent select row. Takes the
-   *  5 most-recent sessions and lays them out vertically, sorted by time with the
-   *  OLDEST at the top and the LATEST at the bottom of the list.
-   *  Always emits the #chat-recent container (hidden when empty) so it can be
-   *  refreshed in place. Every interpolated value is esc()'d (no raw HTML). */
-  chatRecentBar() {
-    // chatSessions is kept newest-first; take the 5 newest, then order them
-    // ascending by updatedAt so the display reads oldest (top) → latest (bottom).
-    const recent = this.chatSessions.slice(0, 5)
-      .sort((a, b) => new Date(a.updatedAt || 0) - new Date(b.updatedAt || 0));
-    const inner = recent.map(s => {
+  toggleChatExpand(id) {
+    if (this.chatExpanded.has(id)) this.chatExpanded.delete(id);
+    else this.chatExpanded.add(id);
+    this.renderChatRecent();
+  }
+
+  /** Recent chats as a compact, expandable TREE. Order is fixed by CREATION time
+   *  (newest first) and does NOT change when a chat is opened. Each node's primary
+   *  label is a ~5-word summary of the opening request (not just the agent/roster),
+   *  with the target + activity time as secondary metadata. Click the row to open a
+   *  chat; click the ▸/▾ caret to expand a node and preview its opening request and
+   *  details. Container #chat-recent is always emitted (hidden when empty) for
+   *  in-place refresh; every interpolated value is esc()'d (no raw HTML). */
+  chatRecentBar(isOpen = true) {
+    const recent = this.chatSessions
+      .slice()
+      .sort((a, b) => new Date(b.createdAt || b.updatedAt || 0) - new Date(a.createdAt || a.updatedAt || 0))
+      .slice(0, 15);
+    const nodes = recent.map(s => {
       const active = s.id === this.chatSessionId;
+      const expanded = this.chatExpanded.has(s.id);
       const target = s.sel?.agent || s.sel?.brain || (s.sel?.division ? 'division:' + s.sel.division : 'auto');
-      return `<span class="chat-recent-chip" data-chat-open="${esc(s.id)}" title="${esc(s.title)}"
-        style="display:inline-flex;align-items:center;gap:6px;max-width:240px;padding:5px 9px;border-radius:999px;border:1px solid var(--bg-tertiary);background:${active ? 'var(--bg-tertiary)' : 'var(--bg-secondary)'};font-size:0.74rem;cursor:pointer">
-        <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:120px">${esc(s.title || 'chat')}</span>
-        <span style="color:var(--text-muted);white-space:nowrap">${esc(target)} · ${timeAgo(s.updatedAt)}</span>
-        <span data-chat-del="${esc(s.id)}" title="Delete" style="opacity:.55;padding:0 2px;font-weight:600">×</span>
-      </span>`;
+      const summary = s.summary || s.title || 'chat';
+      const msgCount = (s.messages || []).length;
+      const firstReq = ((s.messages || []).find(m => m.role === 'user')?.content || s.title || '')
+        .replace(/\s+/g, ' ').trim();
+      const rowBg = active ? 'var(--bg-tertiary)' : 'transparent';
+      const head = `<div class="chat-tree-head" data-chat-open="${esc(s.id)}"
+          style="display:flex;align-items:flex-start;gap:7px;padding:6px 8px;border-radius:8px;cursor:pointer;background:${rowBg}">
+          <span data-chat-expand="${esc(s.id)}" title="${expanded ? 'Collapse' : 'Expand'}"
+            style="flex:0 0 auto;width:14px;text-align:center;color:var(--text-muted);font-size:0.7rem;cursor:pointer;user-select:none;transition:transform .15s;margin-top:4px">${expanded ? '▾' : '▸'}</span>
+          <div style="flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:3px">
+            <div style="display:flex;align-items:center;gap:6px">
+              ${active ? '<span style="width:5px;height:5px;border-radius:50%;background:#7C3AED;flex-shrink:0"></span>' : ''}
+              <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:0.8rem;font-weight:${active ? 600 : 500};color:var(--text-primary)">${esc(summary)}</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;font-size:0.68rem;color:var(--text-muted)">
+              <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:var(--bg-secondary);padding:1px 6px;border-radius:999px;color:var(--text-secondary)" title="${esc(target)}">${esc(target)}</span>
+              <span style="white-space:nowrap">${timeAgo(s.createdAt || s.updatedAt)}</span>
+            </div>
+          </div>
+          <span data-chat-del="${esc(s.id)}" title="Delete" style="flex:0 0 auto;opacity:.5;padding:0 2px;font-weight:600;cursor:pointer;margin-top:2px">×</span>
+        </div>`;
+      const detail = expanded ? `<div style="padding:2px 8px 8px 29px;font-size:0.74rem;color:var(--text-secondary);line-height:1.45">
+          <div style="white-space:normal;overflow:hidden;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical">${esc(firstReq) || '<span style="opacity:.6">(no request text)</span>'}</div>
+          <div style="margin-top:4px;color:var(--text-muted);font-size:0.68rem">↳ ${esc(target)} · ${msgCount} msg${msgCount === 1 ? '' : 's'}</div>
+        </div>` : '';
+      return `<div class="chat-tree-node" style="border-radius:8px">${head}${detail}</div>`;
     }).join('');
-    return `<div id="chat-recent" style="display:${recent.length ? 'flex' : 'none'};flex-direction:column;gap:6px;align-items:stretch;margin-bottom:8px">
-      <span style="font-size:0.7rem;color:var(--text-muted)">Recent</span>${inner}
-    </div>`;
+    return `<details id="chat-recent" ${isOpen ? 'open' : ''} style="display:${recent.length ? 'block' : 'none'};margin-bottom:8px">
+      <summary style="font-size:0.7rem;color:var(--text-muted);padding:4px 8px;cursor:pointer;user-select:none;font-weight:600;display:flex;align-items:center;gap:4px">
+        <i data-lucide="history" style="width:12px;height:12px"></i> Recent chats
+      </summary>
+      <div style="display:flex;flex-direction:column;gap:2px;align-items:stretch;max-height:280px;overflow-y:auto;margin-top:4px;padding-left:8px;border-left:1px solid var(--bg-tertiary);margin-left:12px">
+        ${nodes}
+      </div>
+    </details>`;
   }
 
   renderChatRecent() {
     const el = this.contentEl.querySelector('#chat-recent');
-    if (el) el.outerHTML = this.chatRecentBar();
+    const wasOpen = el ? el.open : true;
+    if (el) {
+      el.outerHTML = this.chatRecentBar(wasOpen);
+      createIcons(); // re-init any lucide icons we just injected
+    }
   }
 
   populateChatAgents(division) {
@@ -1400,7 +1486,7 @@ class App {
     } finally {
       this.chatBusyBrains.delete(busyKey);
       this.renderChatMessages();
-      this.persistCurrentChat();   // snapshot this exchange into the recent list
+      this.persistCurrentChat({ bump: true });   // a real send: snapshot + mark activity
       this.renderChatRecent();
     }
   }
@@ -2067,7 +2153,10 @@ class App {
       return `<div class="card" style="margin-bottom:var(--space-md)">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
           <div>${badge(r.workflowId, '#7C3AED')} ${modeBadge(r.mode)} ${badge(r.status, color)}</div>
-          <span style="font-size:0.75rem;color:var(--text-muted)">${esc(r.runId)} · ${count} · ${timeAgo(r.createdAt)}</span>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="font-size:0.75rem;color:var(--text-muted)">${esc(r.runId)} · ${count} · ${timeAgo(r.createdAt)}</span>
+            <button class="btn-icon wf-delete-run" data-run-id="${esc(r.runId)}" title="Delete run and its tasks" style="padding:4px;background:none;border:none;cursor:pointer"><i data-lucide="trash-2" style="width:14px;height:14px;color:var(--text-muted)"></i></button>
+          </div>
         </div>
         ${orchestrated && r.goal ? `<p style="font-size:0.8rem;margin:6px 0"><span style="color:var(--text-muted)">🎯 Goal:</span> ${esc(r.goal)}</p>` : ''}
         ${body}
@@ -2086,7 +2175,11 @@ class App {
       ${this._workflowGuideHtml()}
       ${invalidCard}
       <h3 style="font-size:0.9rem;margin:var(--space-md) 0 6px">Templates</h3>${tplCards}
-      <h3 style="font-size:0.9rem;margin:var(--space-xl) 0 6px">Runs <span style="font-size:0.72rem;color:var(--text-muted);font-weight:400">(click a node → its result, artifacts &amp; a link to open the full task)</span></h3>${runCards}`;
+      <div style="display:flex;justify-content:space-between;align-items:flex-end;margin:var(--space-xl) 0 6px">
+        <h3 style="font-size:0.9rem;margin:0">Runs <span style="font-size:0.72rem;color:var(--text-muted);font-weight:400">(click a node → its result, artifacts &amp; a link to open the full task)</span></h3>
+        ${runs.length ? `<button class="btn wf-delete-all-runs" style="font-size:0.75rem;padding:4px 8px;margin-bottom:2px" title="Delete all workflow runs and their tasks"><i data-lucide="trash-2" style="width:12px;height:12px;margin-right:4px"></i>Delete all</button>` : ''}
+      </div>
+      ${runCards}`;
 
     this.contentEl.querySelectorAll('.wf-card').forEach(card => {
       const id = card.dataset.wf;
@@ -2158,6 +2251,29 @@ class App {
         }));
       } catch (e) { detail.innerHTML = `<span style="color:#EF4444;font-size:0.8rem">${esc(e.message)}</span>`; }
     }));
+
+    this.contentEl.querySelectorAll('.wf-delete-run').forEach(btn => btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const runId = btn.dataset.runId;
+      if (!confirm(`Delete workflow run ${runId} and all its tasks?`)) return;
+      try {
+        await this.api.del(`/workflow-runs/${encodeURIComponent(runId)}`);
+        this.toast('run deleted', runId);
+        this.renderWorkflows();
+      } catch (err) { this.toast('error', err.message); }
+    }));
+
+    this.contentEl.querySelector('.wf-delete-all-runs')?.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      if (!confirm(`Delete all workflow runs and their tasks?`)) return;
+      try {
+        await this.api.del('/workflow-runs');
+        this.toast('all runs deleted');
+        this.renderWorkflows();
+      } catch (err) { this.toast('error', err.message); }
+    });
+
+    createIcons();
   }
 
   // ── Reports ────────────────────────────────────────────────────────────
