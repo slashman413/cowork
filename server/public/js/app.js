@@ -45,24 +45,24 @@ function shortBrain(id) {
 // Usage meters for the metered brains among `brainIds` (rate-limit % + reset).
 // Brains with no usage snapshot (hermes/ollama/script — no quota) simply don't
 // appear. Brains sharing one account (e.g. all cc-* on a host) produce identical
-// snapshots, so meters are grouped per exec instead of repeated per brain.
+// snapshots, so meters are grouped per exec instead of repeated per brain. The
+// brain names themselves aren't repeated here — the card already lists them in
+// its capabilities section, so the rate-limit block shows only the meters.
 function usageMeters(brainIds, usage) {
   const byExec = new Map();
   for (const id of brainIds || []) {
     const u = usage?.[id];
     if (!u?.windows?.length) continue;
-    if (!byExec.has(u.exec)) byExec.set(u.exec, { u, names: [] });
-    byExec.get(u.exec).names.push(shortBrain(id));
+    if (!byExec.has(u.exec)) byExec.set(u.exec, { u });
   }
   if (!byExec.size) return '';
-  const blocks = [...byExec.entries()].map(([exec, { u, names }]) => {
+  const blocks = [...byExec.entries()].map(([exec, { u }]) => {
     const stale = Date.now() - new Date(u.at).getTime() > 1800000;
     return `<div class="usage-brain">
       <div class="usage-brain-head">
         ${badge(exec, '#7C3AED')}
         <span class="usage-at"${stale ? ' style="color:#EAB308"' : ''} title="${esc(new Date(u.at).toLocaleString())}">measured ${timeAgo(u.at)}</span>
       </div>
-      <div class="conn-local-names">${names.slice().sort().map(n => `<div>${esc(n)}</div>`).join('')}</div>
       ${usageExecBody(exec, u)}
     </div>`;
   }).join('');
