@@ -815,6 +815,7 @@ class App {
         case 'connections': await this.renderConnections(); break;
         case 'inbox': await this.renderInbox(); break;
         case 'workflows': await this.renderWorkflows(); break;
+        case 'goals': await this.renderGoals(); break;
         case 'team': await this.renderTeam(); break;
         case 'brains': await this.renderBrains(); break;
         case 'roster': await this.renderRoster(); break;
@@ -2077,6 +2078,144 @@ class App {
         <p style="${p}"><span style="color:#22C55E">✓ Great:</span> <em>"Produce a launch-ready GTM plan for {{product}}: a one-sentence positioning statement, 3 target segments each with its top pain point, a 4-week content calendar, and a one-page press release. Done when all four artifacts exist, are internally consistent, and name {{product}} explicitly."</em></p>
       </div>
     </details>`;
+  }
+
+  // ── Goals ──────────────────────────────────────────────────────────────
+  // Long-lived, phase-tracked objectives that sit beneath Workflows. Unlike a
+  // workflow run (which ends), a goal PERSISTS until its binary success criterion
+  // flips (→ achieved) or a human/budget stops it (→ abandoned). The Achiever
+  // generates and the Judger audits each phase; the whole autonomous loop is
+  // recorded as the decision log rendered here.
+
+  _goalStatusColor(s) {
+    return ({ draft: '#94A3B8', active: '#0EA5E9', paused: '#F59E0B', achieved: '#22C55E', abandoned: '#EF4444' })[s] || '#94A3B8';
+  }
+  _phaseStatusColor(s) {
+    return ({ planned: '#94A3B8', active: '#0EA5E9', completing: '#F59E0B', done: '#22C55E', audited: '#22C55E' })[s] || '#94A3B8';
+  }
+
+  async renderGoals() {
+    const goals = await this.api.get('/goals');
+    const inp = 'padding:6px 8px;background:var(--bg-tertiary);border:1px solid var(--bg-tertiary);border-radius:8px;color:inherit;font-size:0.8rem;width:100%;box-sizing:border-box';
+
+    const goalCard = (g) => {
+      const color = this._goalStatusColor(g.status);
+      const audited = g.phases.filter(p => p.status === 'audited').length;
+      const pct = g.phases.length ? Math.round(100 * audited / g.phases.length) : 0;
+      const brainChips = [
+        ...(g.achieverBrainChain || []).map(b => badge('🎯 ' + b, '#0EA5E9')),
+        ...(g.judgerBrainChain || []).map(b => badge('⚖️ ' + b, '#7C3AED'))
+      ].join(' ');
+      const controls = [];
+      if (g.status === 'draft' || g.status === 'paused') controls.push(`<button class="btn btn-primary goal-activate" data-id="${esc(g.goalId)}" style="font-size:0.75rem">Activate ▶</button>`);
+      if (g.status === 'active') controls.push(`<button class="btn goal-pause" data-id="${esc(g.goalId)}" style="font-size:0.75rem">Pause</button>`);
+      if (g.status !== 'achieved' && g.status !== 'abandoned') controls.push(`<button class="btn goal-abandon" data-id="${esc(g.goalId)}" style="font-size:0.75rem">Abandon</button>`);
+      controls.push(`<button class="btn-icon goal-delete" data-id="${esc(g.goalId)}" title="Delete goal + its tasks" style="padding:4px;background:none;border:none;cursor:pointer"><i data-lucide="trash-2" style="width:14px;height:14px;color:var(--text-muted)"></i></button>`);
+
+      const phaseTimeline = g.phases.map(p => `<span title="${esc(p.title)}" style="display:inline-flex;align-items:center;gap:4px;font-size:0.72rem;padding:2px 7px;border-radius:999px;background:${this._phaseStatusColor(p.status)}18;color:${this._phaseStatusColor(p.status)};border:1px solid ${this._phaseStatusColor(p.status)}40">${esc(p.key)} · ${esc(p.status)}</span>`).join(' ');
+
+      const decisionLog = (g.history || []).length ? `<div style="margin-top:10px"><div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:4px">Decision log (${g.history.length})</div>${
+        g.history.slice(-12).map(h => `<div style="font-size:0.76rem;padding:3px 0;border-top:1px solid var(--bg-tertiary)"><code>${esc(h.kind)}</code>${h.phaseKey ? ' · ' + esc(h.phaseKey) : ''}${h.met !== undefined ? ' · met=' + h.met : ''}${h.reason ? ' — ' + esc(h.reason) : ''} <span style="color:var(--text-muted)">${timeAgo(h.at)}</span></div>`).join('')
+      }</div>` : '';
+
+      const minutes = (g.minutes || []).length ? `<div style="margin-top:10px"><div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:4px">Reports &amp; meeting minutes</div>${
+        g.minutes.map(m => `<div style="font-size:0.78rem"><a href="/api/artifacts/${esc(m.artifact)}" target="_blank" rel="noopener">📝 minutes — ${esc(m.phaseKey)}</a></div>`).join('')
+      }${g.phases.filter(p => p.reportArtifact).map(p => `<div style="font-size:0.78rem"><a href="/api/artifacts/${esc(p.reportArtifact)}" target="_blank" rel="noopener">📊 report — ${esc(p.key)}</a></div>`).join('')}</div>` : '';
+
+      return `<div class="card" style="margin-bottom:var(--space-md)">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap"><strong>${esc(g.title)}</strong> ${badge(g.status, color)} ${badge(g.goalId, '#7C3AED')}</div>
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">${controls.join('')}</div>
+        </div>
+        <p style="font-size:0.8rem;margin:6px 0"><span style="color:var(--text-muted)">✅ Success:</span> ${esc(g.successCriteria)}</p>
+        ${g.reportBrief ? `<p style="font-size:0.78rem;margin:4px 0;color:var(--text-secondary)"><span style="color:var(--text-muted)">📊 Report focus:</span> ${esc(g.reportBrief)}</p>` : ''}
+        <div style="display:flex;align-items:center;gap:8px;margin:6px 0">
+          <div style="flex:1;height:6px;background:var(--bg-tertiary);border-radius:999px;overflow:hidden"><div style="width:${pct}%;height:100%;background:${color}"></div></div>
+          <span style="font-size:0.72rem;color:var(--text-muted)">${audited}/${g.phases.length} phases audited</span>
+        </div>
+        <div style="display:flex;gap:5px;flex-wrap:wrap;margin:6px 0">${phaseTimeline}</div>
+        ${brainChips ? `<div style="margin:6px 0">${brainChips}</div>` : ''}
+        ${g.closedReason ? `<p style="font-size:0.76rem;color:${color}">⛔ ${esc(g.closedReason)}</p>` : ''}
+        ${decisionLog}
+        ${minutes}
+      </div>`;
+    };
+
+    const cards = goals.length ? goals.map(goalCard).join('')
+      : `<div class="empty-state"><div class="empty-state-icon"><i data-lucide="target"></i></div><h3>No goals yet</h3><p>Create a long-lived objective below — the Achiever will generate work and the Judger will audit each phase until the success criterion is met.</p></div>`;
+
+    this.contentEl.innerHTML = `
+      <div class="card" style="margin-bottom:var(--space-md);background:var(--bg-secondary)">
+        <div style="font-size:0.85rem;color:var(--text-secondary);line-height:1.6">
+          <div style="margin-bottom:4px"><strong>Goals</strong> are advanced, long-term objectives — a self-terminating engine that runs beneath Workflows.</div>
+          <div style="margin:3px 0">🎯 The <strong>Achiever</strong> continuously evaluates progress, plans phases, and generates tasks. ⚖️ The <strong>Judger</strong> wakes when a phase completes, writes a report + meeting minutes, and re-arms the Achiever.</div>
+          <div style="margin:3px 0">A goal runs until its <strong>binary (Yes/No) success criterion</strong> flips true (→ achieved), a human stops it, or its step budget is exhausted (→ abandoned, never a silent "done").</div>
+        </div>
+      </div>
+
+      <details class="card" style="margin-bottom:var(--space-lg)">
+        <summary style="cursor:pointer;font-weight:600;font-size:0.9rem">➕ Create a goal</summary>
+        <div style="display:flex;flex-direction:column;gap:8px;margin-top:12px">
+          <input id="goal-title" placeholder="Title — e.g. Reach 1,000 newsletter subscribers" style="${inp}">
+          <textarea id="goal-desc" placeholder="Description / context for the executors…" rows="2" style="${inp};resize:vertical"></textarea>
+          <input id="goal-criteria" placeholder="Binary success criterion — e.g. Does the list have ≥1000 subscribers? (must be answerable Yes/No)" style="${inp}">
+          <input id="goal-report" placeholder="Report focus for the Judger (optional) — e.g. financial breakdown per phase" style="${inp}">
+          <textarea id="goal-phases" placeholder="Phases, one per line as  key: Title&#10;research: Research the audience&#10;launch: Launch the campaign" rows="3" style="${inp};resize:vertical;font-family:inherit"></textarea>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <input id="goal-achiever" placeholder="Achiever brain ids (comma-sep, optional)" style="${inp};flex:1">
+            <input id="goal-judger" placeholder="Judger brain ids (comma-sep, optional)" style="${inp};flex:1">
+            <input id="goal-budget" type="number" min="1" placeholder="Budget (24)" style="${inp};width:110px;flex:0 0 auto">
+          </div>
+          <div style="font-size:0.74rem;color:var(--text-muted)">Guardrails: a goal must carry a <em>binary</em> criterion and ≥1 phase before it can be activated — this keeps the autonomous loop able to terminate.</div>
+          <button class="btn btn-primary" id="goal-create" style="align-self:flex-start;font-size:0.8rem">Create draft</button>
+        </div>
+      </details>
+
+      <h3 style="font-size:0.9rem;margin:var(--space-md) 0 6px">Goals</h3>
+      ${cards}`;
+
+    // Create
+    this.contentEl.querySelector('#goal-create')?.addEventListener('click', async () => {
+      const parseList = (v) => (v || '').split(',').map(s => s.trim()).filter(Boolean);
+      const phases = (this.contentEl.querySelector('#goal-phases').value || '').split('\n').map(l => l.trim()).filter(Boolean).map(line => {
+        const i = line.indexOf(':');
+        const key = (i >= 0 ? line.slice(0, i) : line).trim().toLowerCase().replace(/\s+/g, '-');
+        const title = (i >= 0 ? line.slice(i + 1) : line).trim();
+        return { key, title: title || key };
+      });
+      const budget = parseInt(this.contentEl.querySelector('#goal-budget').value, 10);
+      const body = {
+        title: this.contentEl.querySelector('#goal-title').value.trim(),
+        description: this.contentEl.querySelector('#goal-desc').value.trim(),
+        successCriteria: this.contentEl.querySelector('#goal-criteria').value.trim(),
+        reportBrief: this.contentEl.querySelector('#goal-report').value.trim() || undefined,
+        phases,
+        achieverBrainChain: parseList(this.contentEl.querySelector('#goal-achiever').value),
+        judgerBrainChain: parseList(this.contentEl.querySelector('#goal-judger').value),
+        stepBudget: Number.isFinite(budget) && budget > 0 ? budget : undefined
+      };
+      try {
+        await this.api.post('/goals', body);
+        this.toast('goal created', `${body.title} — draft. Activate it to start autonomous work.`);
+        this.renderGoals();
+      } catch (e) { this.toast('create failed', e.message); }
+    });
+
+    const act = async (sel, fn) => this.contentEl.querySelectorAll(sel).forEach(b => b.addEventListener('click', async () => {
+      try { await fn(b.dataset.id); this.renderGoals(); }
+      catch (e) { if (e.message !== 'cancelled') this.toast('action failed', e.message); }
+    }));
+    act('.goal-activate', id => this.api.post(`/goals/${encodeURIComponent(id)}/activate`));
+    act('.goal-pause', id => this.api.post(`/goals/${encodeURIComponent(id)}/pause`));
+    act('.goal-abandon', async id => {
+      const reason = prompt('Reason for abandoning this goal?', 'abandoned by a human');
+      if (reason === null) throw new Error('cancelled');
+      return this.api.post(`/goals/${encodeURIComponent(id)}/abandon`, { reason });
+    });
+    act('.goal-delete', async id => {
+      if (!confirm('Delete this goal and every task it generated?')) throw new Error('cancelled');
+      return this.api.del(`/goals/${encodeURIComponent(id)}?withTasks=1`);
+    });
   }
 
   async renderWorkflows() {

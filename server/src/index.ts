@@ -8,8 +8,10 @@ import { Dispatcher } from './core/dispatcher.js';
 import { createMcpServer } from './mcp/server.js';
 import { createApiRouter } from './api/router.js';
 import { createWorkflowRouter } from './api/workflows.js';
+import { createGoalRouter } from './api/goals.js';
 import { createSSEHandler } from './api/sse.js';
 import { Workflows } from './core/workflows.js';
+import { Goals } from './core/goals.js';
 import { SystemMetrics } from './core/system-metrics.js';
 import { UsagePoller, isMeteredExec } from './core/usage-probe.js';
 import { probeServices } from './core/service-probe.js';
@@ -66,8 +68,22 @@ async function main() {
   const workflows = new Workflows(config, store);
   app.use('/api', createWorkflowRouter(workflows));
 
+  // Goals: long-lived, phase-tracked objectives beneath Workflows. State lives in
+  // paths.goals (goals/*.json). The Achiever half is driven by the dispatcher's
+  // tick; the Judger half is event-driven — Goals.onTaskCompleted rides the store's
+  // existing taskCompleted event (no new transport) to audit each finished phase.
+  if (!fs.existsSync(config.paths.goals)) {
+    try { fs.mkdirSync(config.paths.goals, { recursive: true }); } catch { /* ignore */ }
+  }
+  const goals = new Goals(config, store);
+  app.use('/api', createGoalRouter(goals));
+  eventBus.on('taskCompleted', (evt: any) => {
+    try { goals.onTaskCompleted(evt.payload.task); }
+    catch (e) { console.error('Goals: taskCompleted handler failed:', e); }
+  });
+
   // MCP Server
-  const mcpServer = createMcpServer(config, store, eventBus);
+  const mcpServer = createMcpServer(config, store, eventBus, goals);
 
   const mcpHandler = async (req: express.Request, res: express.Response) => {
     try {
@@ -112,7 +128,7 @@ async function main() {
 
   // Dispatcher: executes role-tagged inbox tasks by spawning platform CLIs, and
   // drives orchestrated workflow runs (decides each next step via the router brain).
-  const dispatcher = new Dispatcher(config, store, eventBus, workflows);
+  const dispatcher = new Dispatcher(config, store, eventBus, workflows, goals);
   dispatcher.start();
   app.get('/api/dispatcher', (_req, res) => {
     res.json({

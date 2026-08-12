@@ -4,6 +4,7 @@ import { z } from 'zod';
 import type { Config } from '../types.js';
 import type { Store } from '../core/store.js';
 import type { EventBus } from '../core/events.js';
+import type { Goals } from '../core/goals.js';
 import { registerBrain, removeBrainCascade } from '../config.js';
 
 // Stateless streamable-HTTP pattern: build a fresh McpServer + transport per
@@ -52,7 +53,7 @@ function capEnv(env: Record<string, unknown>): import('../types.js').BrainEnv {
   return out;
 }
 
-function buildServer(config: Config, store: Store, eventBus: EventBus): McpServer {
+function buildServer(config: Config, store: Store, eventBus: EventBus, goals?: Goals): McpServer {
   const server = new McpServer({
     name: config.server.name || 'Multi-Agent Cowork Server',
     version: config.server.version || '1.0.0'
@@ -361,6 +362,106 @@ function buildServer(config: Config, store: Store, eventBus: EventBus): McpServe
     }
   );
 
+  // ── Goals: long-lived, phase-tracked objectives (scriptable from any agent) ──
+  if (goals) {
+    // create_goal — the goal counterpart of create_task. Authors a DRAFT; a
+    // separate activate step (dashboard or PATCH/activate) starts autonomous work.
+    server.tool(
+      'create_goal',
+      'Create a long-lived Goal — an objective driven toward a BINARY (Yes/No) ' +
+      'success criterion through named phases, auditing its own progress until the ' +
+      'criterion flips. Created as a draft; activate it to begin autonomous work.',
+      {
+        title: z.string(),
+        description: z.string().optional(),
+        success_criteria: z.string(),
+        report_brief: z.string().optional(),
+        phases: z.array(z.object({ key: z.string(), title: z.string() })).optional(),
+        achiever_brain_chain: z.array(z.string()).optional(),
+        judger_brain_chain: z.array(z.string()).optional(),
+        step_budget: z.number().optional()
+      },
+      async (args) => {
+        try {
+          const g = goals.create({
+            title: args.title,
+            description: args.description,
+            successCriteria: args.success_criteria,
+            reportBrief: args.report_brief,
+            phases: args.phases,
+            achieverBrainChain: args.achiever_brain_chain,
+            judgerBrainChain: args.judger_brain_chain,
+            stepBudget: args.step_budget
+          });
+          return { content: [{ type: 'text', text: JSON.stringify(g) }] };
+        } catch (e: any) {
+          return { content: [{ type: 'text', text: e.message }], isError: true };
+        }
+      }
+    );
+
+    server.tool(
+      'list_goals',
+      'List all Goals (newest first) with status, phases and audit history.',
+      {},
+      async () => {
+        try { return { content: [{ type: 'text', text: JSON.stringify(goals.list()) }] }; }
+        catch (e: any) { return { content: [{ type: 'text', text: e.message }], isError: true }; }
+      }
+    );
+
+    server.tool(
+      'get_goal',
+      'Fetch one Goal by id (phases, decision history, meeting-minutes pointers).',
+      { goal_id: z.string() },
+      async (args) => {
+        try {
+          const g = goals.get(args.goal_id);
+          if (!g) throw new Error('goal not found');
+          return { content: [{ type: 'text', text: JSON.stringify(g) }] };
+        } catch (e: any) {
+          return { content: [{ type: 'text', text: e.message }], isError: true };
+        }
+      }
+    );
+
+    // update_goal_progress — the MCP counterpart of applyAchieverDecision, so a
+    // remote/CLI Achiever brain can advance a goal exactly as the in-process
+    // driver does: one evaluate | plan | emit move per call.
+    server.tool(
+      'update_goal_progress',
+      'Submit ONE Achiever move for a Goal: evaluate the binary success criterion ' +
+      '(kind:"evaluate", met:true|false), plan the next phase (kind:"plan", phase), ' +
+      'or emit a phase\'s worth of real tasks (kind:"emit", tasks[]).',
+      {
+        goal_id: z.string(),
+        kind: z.enum(['evaluate', 'plan', 'emit']),
+        met: z.boolean().optional(),
+        reason: z.string().optional(),
+        phase: z.object({ key: z.string(), title: z.string() }).optional(),
+        tasks: z.array(z.object({
+          title: z.string(),
+          description: z.string().optional(),
+          brain: z.string().optional()
+        })).optional()
+      },
+      async (args) => {
+        try {
+          const applied = goals.applyAchieverDecision(args.goal_id, {
+            kind: args.kind,
+            met: args.met,
+            reason: args.reason,
+            phase: args.phase,
+            tasks: args.tasks
+          });
+          return { content: [{ type: 'text', text: JSON.stringify({ ok: true, applied, goal: goals.get(args.goal_id) }) }] };
+        } catch (e: any) {
+          return { content: [{ type: 'text', text: e.message }], isError: true };
+        }
+      }
+    );
+  }
+
   server.resource(
     'status',
     'cowork://status',
@@ -390,9 +491,9 @@ function buildServer(config: Config, store: Store, eventBus: EventBus): McpServe
   return server;
 }
 
-export function createMcpServer(config: Config, store: Store, eventBus: EventBus) {
+export function createMcpServer(config: Config, store: Store, eventBus: EventBus, goals?: Goals) {
   const handleRequest = async (req: any, res: any) => {
-    const server = buildServer(config, store, eventBus);
+    const server = buildServer(config, store, eventBus, goals);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on('close', () => {
       transport.close();
