@@ -16,6 +16,10 @@ docs/backlink-*.md
 artifacts/
 inputs/
 workflow-runs/
+# Goal aggregates (goals/<goalId>.json, ADR-006) are long-lived per-server runtime
+# state — same class as inbox/ and workflow-runs/, and they carry private goal
+# context (tokens paths, revenue targets). Never commit them.
+goals/
 
 # Scratch/debug scripts — the server is TypeScript; stray .py files are local-only
 # and have leaked private paths before. Keep them out of git. Dispatched agents

@@ -2148,25 +2148,47 @@ class App {
     // One-click starter goals. Each fills the whole form (still fully editable) so
     // an author never faces a blank page or has to learn the criterion/phase shape
     // from scratch — the single biggest setup-simplicity win.
+    //
+    // Design rule (learned the hard way — see the abandoned "$500k revenue" goal):
+    // every starter must be DELIVERABLE-BOUND, not METRIC-OPEN. The success
+    // criterion has to flip true the moment a concrete artifact EXISTS ("is the
+    // tool live?", "is the product for sale?") — not when an external market number
+    // is hit ("1,000 subscribers", "rank #1"), which the Achiever cannot force and
+    // so burns its whole step budget → abandoned. Each phase is an explicit
+    // checkpoint that HANDS OFF a finished artifact to the next (scope → build →
+    // package → ship), so the Judger always has something concrete to audit and the
+    // loop marches forward instead of spinning.
     const templates = [
-      { key: 'newsletter', label: '📧 Grow a newsletter',
-        title: 'Reach 1,000 newsletter subscribers',
-        description: 'Grow the newsletter to 1,000 confirmed subscribers through content and a lead magnet.',
-        successCriteria: 'Does the subscriber list have ≥1,000 confirmed subscribers?',
-        reportBrief: 'subscriber growth per phase',
-        phases: 'Research the target audience\nBuild a lead magnet\nLaunch the signup campaign\nOptimize the conversion funnel' },
-      { key: 'api', label: '🚀 Ship a v1 API',
+      { key: 'web-tool', label: '🚀 Ship a web tool',
+        title: 'Ship a new single-page web tool',
+        description: 'Build and deploy a new client-side tool (vanilla HTML/CSS/JS, no build step) live on GitHub Pages, following the workspace static-tool template.',
+        successCriteria: 'Is the tool live on GitHub Pages with a working index.html, og.png, and README?',
+        reportBrief: 'what shipped this phase + the live/preview URL',
+        phases: 'Scope the tool and check competitors\nBuild the single-page tool\nAdd og.png, README, and the branding footer\nDeploy to GitHub Pages and verify it loads' },
+      { key: 'api', label: '🔌 Ship a v1 API',
         title: 'Launch the v1 public API',
         description: 'Design, build, document and deploy a first public version of the API.',
         successCriteria: 'Is the v1 API deployed to production and publicly documented?',
-        reportBrief: '',
-        phases: 'Design the API contract\nImplement the endpoints\nWrite docs and examples\nDeploy to production' },
-      { key: 'seo', label: '🔍 Rank a page on Google',
-        title: 'Rank on page 1 for a target keyword',
-        description: 'Publish and promote an article until it ranks in the top 10 Google results for the target keyword.',
-        successCriteria: 'Is the page ranking in the top 10 Google results for the target keyword?',
-        reportBrief: '',
-        phases: 'Keyword and competitor research\nWrite and publish the article\nBuild backlinks\nMonitor rankings' }
+        reportBrief: 'endpoints delivered + how they were verified',
+        phases: 'Design the API contract\nImplement the endpoints\nWrite docs and runnable examples\nDeploy to production and smoke-test the live endpoints' },
+      { key: 'automation', label: '⚙️ Automate a recurring task',
+        title: 'Automate a recurring task on a schedule',
+        description: 'Turn a manual chore into a scheduled GitHub Actions workflow that produces its output unattended.',
+        successCriteria: 'Does one real scheduled run finish green and produce its expected output file?',
+        reportBrief: 'what the run produced + the Actions run link',
+        phases: 'Define the trigger and the expected output\nWrite the script that produces it\nAdd the workflow YAML and cron schedule\nVerify one real scheduled run succeeds' },
+      { key: 'article', label: '📝 Write & publish an article',
+        title: 'Publish an article to its live URL',
+        description: 'Take an article from research to a published, publicly reachable page.',
+        successCriteria: 'Is the article published and reachable at its public URL?',
+        reportBrief: 'draft state + the published URL',
+        phases: 'Research the topic and outline it\nWrite the full draft\nEdit and add visuals\nPublish and confirm the live URL' },
+      { key: 'product', label: '📦 Launch a digital product',
+        title: 'Launch a digital product for sale',
+        description: 'Package a deliverable and put it on sale with a working sales page (e.g. Gumroad).',
+        successCriteria: 'Is the product live for sale with a sales page and at least one delivery file?',
+        reportBrief: 'what is ready to sell + the product URL',
+        phases: 'Define the product, audience, and price\nCreate the deliverable\nBuild the sales page and set up delivery\nPublish the listing and confirm it can be bought' }
     ];
 
     const goalCard = (g) => {
@@ -2235,15 +2257,17 @@ class App {
           </div>
           <div>
             <label style="${lbl}">Goal title</label>
-            <input id="goal-title" placeholder="e.g. Reach 1,000 newsletter subscribers" style="${inp}">
+            <input id="goal-title" placeholder="e.g. Ship a new single-page web tool" style="${inp}">
           </div>
           <div>
-            <label style="${lbl}">Success criterion — a Yes/No question that flips true when you're done</label>
-            <input id="goal-criteria" placeholder="e.g. Does the list have ≥1,000 subscribers?" style="${inp}">
+            <label style="${lbl}">Success criterion — a Yes/No question that flips true when a concrete deliverable EXISTS</label>
+            <input id="goal-criteria" placeholder="e.g. Is the tool live on GitHub Pages with a working index.html?" style="${inp}">
+            <div style="font-size:0.7rem;color:var(--text-muted);margin-top:3px">Tie it to something you can point at ("is X live / shipped / for sale?"). Open-ended metrics that depend on the market ("reach 1,000 users", "rank #1") can't flip true on their own and tend to run out the step budget → abandoned.</div>
           </div>
           <div>
-            <label style="${lbl}">Phases — one waypoint per line, plain language is fine</label>
-            <textarea id="goal-phases" placeholder="Research the audience&#10;Build a lead magnet&#10;Launch the campaign" rows="3" style="${inp};resize:vertical;font-family:inherit"></textarea>
+            <label style="${lbl}">Phases — one explicit checkpoint per line, in order</label>
+            <textarea id="goal-phases" placeholder="Scope the tool and check competitors&#10;Build the single-page tool&#10;Add og.png, README, and the branding footer&#10;Deploy to GitHub Pages and verify it loads" rows="4" style="${inp};resize:vertical;font-family:inherit"></textarea>
+            <div style="font-size:0.7rem;color:var(--text-muted);margin-top:3px">Each phase should hand a finished artifact to the next (scope → build → package → ship). The Judger writes a report and audits each one before the next begins, so keep them concrete and sequential.</div>
           </div>
           <details style="margin:0">
             <summary style="cursor:pointer;font-size:0.78rem;color:var(--text-secondary)">Advanced options (optional)</summary>
