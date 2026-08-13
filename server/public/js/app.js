@@ -1258,7 +1258,7 @@ class App {
       id: this.chatSessionId,
       title, summary,
       sel: { ...this.chatSel },
-      messages: msgs.map(m => ({ role: m.role, content: m.content, meta: m.meta || null })),
+      messages: msgs.map(m => ({ role: m.role, content: m.content, meta: m.meta || null, taskId: m.taskId || null })),
       createdAt: existing?.createdAt || existing?.updatedAt || now,
       updatedAt: bump ? now : (existing?.updatedAt || now)
     };
@@ -1383,8 +1383,18 @@ class App {
     const body = user ? esc(m.content).replace(/\n/g, '<br>')
       : (m.pending ? '<span style="opacity:.6">▋ thinking…</span>' : md(m.content || '(no output)'));
     const meta = m.meta ? `<div style="font-size:0.66rem;opacity:.6;margin-bottom:3px">${esc(m.meta)}</div>` : '';
+    // Every assistant reply is the result of a real task; surface a deep-link to it
+    // so the user can check status, verify the output/artifacts, and act on it. The
+    // `#inbox/<id>` hash is handled by navigate()/focusInboxTask (opens the exact
+    // task, expanded). Shown while running too — the id is stamped at dispatch.
+    const taskLink = (!user && m.taskId)
+      ? `<div style="margin-top:6px;font-size:0.72rem;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+          <a href="#inbox/${encodeURIComponent(m.taskId)}" target="_blank" rel="noopener" title="Open this task in the Task Inbox — status, full result, inputs and downloadable artifacts" style="display:inline-flex;align-items:center;gap:4px;color:#0EA5E9;text-decoration:none"><i data-lucide="external-link" style="width:12px;height:12px"></i>Related task ↗</a>
+          <span class="copyable" data-copy="${esc(m.taskId)}" title="Task ID — click to copy" style="cursor:pointer;opacity:.65;font-family:ui-monospace,SFMono-Regular,Menlo,monospace">#${esc(m.taskId.slice(0, 8))}</span>
+        </div>`
+      : '';
     return `<div style="display:flex;justify-content:${user ? 'flex-end' : 'flex-start'};margin:8px 0">
-      <div class="md-block" style="max-width:80%;padding:9px 12px;border-radius:12px;overflow-x:auto;font-size:0.88rem;line-height:1.5;background:${user ? '#7C3AED' : 'var(--bg-secondary)'};color:${user ? '#fff' : 'inherit'}">${meta}${body}</div>
+      <div class="md-block" style="max-width:80%;padding:9px 12px;border-radius:12px;overflow-x:auto;font-size:0.88rem;line-height:1.5;background:${user ? '#7C3AED' : 'var(--bg-secondary)'};color:${user ? '#fff' : 'inherit'}">${meta}${body}${taskLink}</div>
     </div>`;
   }
 
@@ -1394,6 +1404,16 @@ class App {
     box.innerHTML = this.chatMessages.length
       ? this.chatMessages.map(m => this.chatBubble(m)).join('')
       : '<div style="color:var(--text-muted);text-align:center;margin-top:40px;font-size:0.85rem">Start a conversation — your message is dispatched to the selected brain/agent and the reply is the task result.</div>';
+    createIcons();  // render the "Related task ↗" link glyphs we just injected
+    // Wire click-to-copy on the per-reply task-id chips (Chat has no delegated
+    // copy handler of its own, unlike the Inbox card renderer).
+    box.querySelectorAll('[data-copy]').forEach(el =>
+      el.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const text = el.dataset.copy;
+        if (await this.copyText(text)) this.toast('copied', text);
+        else this.toast('copy failed', text);
+      }));
     box.scrollTop = box.scrollHeight;
   }
 
@@ -1473,6 +1493,11 @@ class App {
       };
       if (inputs.length) body.inputs = inputs;
       const task = await this.api.post('/inbox', body);
+      // Stamp the created task's id on the assistant bubble the moment it exists,
+      // so the "related task" link is available while the task is still running
+      // (lets the user open the Inbox and watch status/verify without waiting).
+      ph.taskId = task.id;
+      this.renderChatMessages();
       const done = await this.pollChatTask(task.id);
       const c = done.context || {};
       const ranAgent = c.ranAgent ? (c.ranDivision ? `${c.ranDivision}/${c.ranAgent}` : c.ranAgent) : '';
