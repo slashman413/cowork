@@ -822,29 +822,47 @@ export class Store {
     return task;
   }
 
+  // ── Parsed-task read-through cache (keyed on mtime+size) ───────────────────
+  // The store is one JSON file per task. The dispatcher re-scans the WHOLE inbox
+  // up to three times per 5s tick (releaseDueScheduled, reclaimStaleClaims, and
+  // the pending scan) and every dashboard poll re-reads it too — so a few hundred
+  // mostly-`done` task files get read + JSON.parsed over and over even though they
+  // never change. This cache re-reads a file only when its mtime OR byte size has
+  // changed, so callers still observe exact on-disk state (any write busts the
+  // entry — a status flip always changes the file's size/mtime) while an unchanged
+  // file costs a single stat. Callers mutate the tasks they receive (claim/save),
+  // so every read returns a structuredClone; the cached copy is never aliased.
+  private taskCache = new Map<string, { key: string; task: Task | null }>();
+
+  private readTaskFile(file: string): Task | null {
+    const fullPath = path.join(this.config.paths.inbox, file);
+    let st: fs.Stats;
+    try { st = fs.statSync(fullPath); }
+    catch { this.taskCache.delete(file); return null; }   // gone → drop any stale entry
+    const key = `${st.mtimeMs}:${st.size}`;
+    const hit = this.taskCache.get(file);
+    // A cached entry (including a negative one — task:null for unparseable bytes)
+    // is trusted until the file's mtime/size changes, so a persistently malformed
+    // file isn't re-read on every tick.
+    if (hit && hit.key === key) return hit.task ? structuredClone(hit.task) : null;
+    let task: Task | null = null;
+    try { task = JSON.parse(fs.readFileSync(fullPath, 'utf-8')) as Task; }
+    catch { task = null; }   // stay quiet: listTasks has always tolerated bad files
+    this.taskCache.set(file, { key, task });
+    return task ? structuredClone(task) : null;
+  }
+
   public getTask(id: string): Task | null {
     if (!id) return null;
     // Fast path: exact filename match (full UUID, the canonical stored form).
-    const taskPath = path.join(this.config.paths.inbox, `${id}.json`);
-    if (fs.existsSync(taskPath)) {
-      try {
-        return JSON.parse(fs.readFileSync(taskPath, 'utf-8')) as Task;
-      } catch (e) {
-        console.error(`Failed to parse task ${id}`, e);
-      }
-    }
+    const direct = this.readTaskFile(`${id}.json`);
+    if (direct) return direct;
     // Slow path: the UI and chat both surface an 8-char SHORT id
     // (first UUID segment, e.g. "6e7fa48c"). When a caller looks a task up by
     // that short id the exact match above misses, even though the task exists
     // on disk as "6e7fa48c-….json". Resolve the short id by prefix.
     const shortId = this.resolveTaskFile(id);
-    if (shortId) {
-      try {
-        return JSON.parse(fs.readFileSync(path.join(this.config.paths.inbox, shortId), 'utf-8')) as Task;
-      } catch (e) {
-        console.error(`Failed to parse task ${id} (${shortId})`, e);
-      }
-    }
+    if (shortId) return this.readTaskFile(shortId);
     return null;
   }
 
@@ -863,19 +881,24 @@ export class Store {
   }
 
   public listTasks(filters?: { status?: string; platform?: string; agent?: string; limit?: number }): Task[] {
-    const taskFiles = globSync('*.json', { cwd: this.config.paths.inbox });
-    let tasks: Task[] = [];
-    
-    for (const file of taskFiles) {
-      try {
-        const fullPath = path.join(this.config.paths.inbox, file);
-        const task = JSON.parse(fs.readFileSync(fullPath, 'utf-8')) as Task;
-        tasks.push(task);
-      } catch (e) {
-        // ignore bad files
-      }
+    // Flat directory of <id>.json files — a plain readdir is ~5x cheaper than a
+    // glob here and yields the same set (dotfiles can't be task ids).
+    let taskFiles: string[];
+    try { taskFiles = fs.readdirSync(this.config.paths.inbox).filter(f => f.endsWith('.json')); }
+    catch { taskFiles = []; }
+    // Evict cache entries for files that no longer exist (deleted/purged tasks)
+    // so the parse cache stays bounded to the live inbox.
+    if (this.taskCache.size) {
+      const present = new Set(taskFiles);
+      for (const f of this.taskCache.keys()) if (!present.has(f)) this.taskCache.delete(f);
     }
-    
+    let tasks: Task[] = [];
+
+    for (const file of taskFiles) {
+      const task = this.readTaskFile(file);   // mtime+size cached; skips re-parsing unchanged files
+      if (task) tasks.push(task);
+    }
+
     // Sort by created desc
     tasks.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
     
@@ -931,14 +954,20 @@ export class Store {
   public getDashboard(): DashboardData {
     const activeAgents = this.activeAgents.size;
     const tasks = this.listTasks();
-    const pending = tasks.filter(t => t.status === 'pending').length;
-    const scheduled = tasks.filter(t => t.status === 'scheduled').length;
-    const waitingInput = tasks.filter(t => t.status === 'wait-input').length;
-    const inProgress = tasks.filter(t => t.status === 'in-progress' || t.status === 'claimed').length;
-    const failed = tasks.filter(isFailedTask).length;
-    // "completed" is every finished task (done or rejected); the UI derives the
-    // green "done" pill as completed - failed, so failed must be a subset here.
-    const completed = tasks.filter(t => t.status === 'done' || t.status === 'rejected').length;
+    // Single pass over the task list instead of six full .filter() scans.
+    let pending = 0, scheduled = 0, waitingInput = 0, inProgress = 0, failed = 0, completed = 0;
+    for (const t of tasks) {
+      switch (t.status) {
+        case 'pending': pending++; break;
+        case 'scheduled': scheduled++; break;
+        case 'wait-input': waitingInput++; break;
+        case 'in-progress': case 'claimed': inProgress++; break;
+      }
+      // "completed" is every finished task (done or rejected); the UI derives the
+      // green "done" pill as completed - failed, so failed must be a subset here.
+      if (t.status === 'done' || t.status === 'rejected') completed++;
+      if (isFailedTask(t)) failed++;
+    }
 
     const platformStatus: Record<string, boolean> = {};
     for (const [id, p] of Object.entries(this.config.platforms)) {
