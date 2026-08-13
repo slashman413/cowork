@@ -1121,12 +1121,18 @@ a { color: inherit; text-decoration: none; }
 /* ===== Gemini-Style Chat UI ===== */
 .chat-messages-area {
   flex: 1;
+  min-height: 0;              /* let this pane shrink/grow inside the flex column */
   overflow-y: auto;
   padding: 8px 12px 24px;
   background: var(--bg-primary);
   border-radius: 12px;
   scroll-behavior: smooth;
 }
+
+/* Recent-chats tree: caret points right when collapsed, down when expanded. */
+.chat-recent > summary { list-style: none; }
+.chat-recent > summary::-webkit-details-marker { display: none; }
+.chat-recent[open] > summary .chat-recent-caret { transform: rotate(90deg); }
 
 .chat-input-container {
   margin-top: 10px;

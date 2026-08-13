@@ -350,6 +350,10 @@ class App {
     this.chatSessions = this.loadChatSessions();  // persisted recent chat sessions (ordered by creation time)
     this.chatSessionId = null;                    // id of the session currently open in the composer
     this.chatExpanded = new Set();                // ids of expanded nodes in the Recent tree view
+    // Recent-chats panel collapsed/expanded state, persisted across navigation and
+    // re-renders. Default COLLAPSED so the conversation opens with maximum height;
+    // the reclaimed space is absorbed by #chat-msgs' flex:1. (absent key → collapsed)
+    this.chatRecentOpen = (() => { try { return localStorage.getItem('cowork.chatRecentOpen') === '1'; } catch { return false; } })();
 
     this.contentEl = document.getElementById('content');
     this.viewTitleEl = document.getElementById('view-title');
@@ -380,6 +384,14 @@ class App {
       const open = e.target.closest('[data-chat-open]');
       if (open) this.openChatSession(open.dataset.chatOpen);
     });
+    // Persist the Recent-chats <details> collapse state whenever the user toggles it.
+    // `toggle` doesn't bubble, so we listen in the CAPTURE phase (which still reaches a
+    // document-level listener); this survives the in-place outerHTML refresh of the panel.
+    document.addEventListener('toggle', (e) => {
+      if (e.target?.id !== 'chat-recent') return;
+      this.chatRecentOpen = e.target.open;
+      try { localStorage.setItem('cowork.chatRecentOpen', e.target.open ? '1' : '0'); } catch { /* storage optional */ }
+    }, true);
   }
 
   initTheme() {
@@ -1313,7 +1325,7 @@ class App {
    *  chat; click the ▸/▾ caret to expand a node and preview its opening request and
    *  details. Container #chat-recent is always emitted (hidden when empty) for
    *  in-place refresh; every interpolated value is esc()'d (no raw HTML). */
-  chatRecentBar(isOpen = true) {
+  chatRecentBar(isOpen = this.chatRecentOpen) {
     const recent = this.chatSessions
       .slice()
       .sort((a, b) => new Date(b.createdAt || b.updatedAt || 0) - new Date(a.createdAt || a.updatedAt || 0))
@@ -1349,9 +1361,16 @@ class App {
         </div>` : '';
       return `<div class="chat-tree-node" style="border-radius:8px">${head}${detail}</div>`;
     }).join('');
-    return `<details id="chat-recent" ${isOpen ? 'open' : ''} style="display:${recent.length ? 'block' : 'none'};margin-bottom:8px">
-      <summary style="font-size:0.7rem;color:var(--text-muted);padding:4px 8px;cursor:pointer;user-select:none;font-weight:600;display:flex;align-items:center;gap:4px">
+    // The whole panel is a native <details>: collapsing it reclaims its vertical
+    // footprint, which #chat-msgs (flex:1) absorbs — the conversation grows/shrinks
+    // dynamically. The open/closed state is persisted (see the 'toggle' handler in the
+    // constructor), so it survives navigation and session switches. The caret + count
+    // make the collapsed state a clear, one-line affordance that stays out of the way.
+    return `<details id="chat-recent" ${isOpen ? 'open' : ''} class="chat-recent" style="display:${recent.length ? 'block' : 'none'};margin-bottom:8px">
+      <summary style="font-size:0.7rem;color:var(--text-muted);padding:4px 8px;cursor:pointer;user-select:none;font-weight:600;display:flex;align-items:center;gap:5px">
+        <span class="chat-recent-caret" style="font-size:0.62rem;transition:transform .15s">▸</span>
         <i data-lucide="history" style="width:12px;height:12px"></i> Recent chats
+        <span style="opacity:.65;font-weight:500">(${recent.length})</span>
       </summary>
       <div style="display:flex;flex-direction:column;gap:2px;align-items:stretch;max-height:280px;overflow-y:auto;margin-top:4px;padding-left:8px;border-left:1px solid var(--bg-tertiary);margin-left:12px">
         ${nodes}
