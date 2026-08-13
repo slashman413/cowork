@@ -5,7 +5,11 @@ class SSEClient {
     this.eventSource = null;
     this.reconnectTimeout = null;
     this.reconnectDelay = 1000;
-    this.maxReconnectDelay = 30000;
+    // Cap the MANUAL reconnect backoff low. This path only runs when the browser
+    // has fully given up (readyState CLOSED); a transient blip is handled by the
+    // browser's own fast native reconnect (see onerror), so there is no reason to
+    // ever stretch the badge out to the old 30s ceiling.
+    this.maxReconnectDelay = 8000;
   }
 
   connect() {
@@ -36,7 +40,17 @@ class SSEClient {
     };
 
     this.eventSource.onerror = () => {
-      this.eventSource.close();
+      // EventSource fires onerror on any hiccup — including transient blips it will
+      // recover from on its own. If it is still CONNECTING, the browser is already
+      // auto-reconnecting (fast, using the server's `retry:` hint); tearing it down
+      // here and starting our own exponential backoff is what used to strand the
+      // badge on "Connecting…" for up to the old 30s ceiling. So only take over the
+      // reconnect when the stream is truly CLOSED.
+      if (this.eventSource && this.eventSource.readyState === EventSource.CONNECTING) {
+        this.updateStatus('connecting');
+        return; // let the native reconnect finish; onopen/onmessage will flip to connected
+      }
+      if (this.eventSource) this.eventSource.close();
       this.updateStatus('disconnected');
       this.scheduleReconnect();
     };

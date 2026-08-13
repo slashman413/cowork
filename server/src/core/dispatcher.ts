@@ -1,10 +1,11 @@
 import { spawn } from 'child_process';
 import { join } from 'node:path';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, statSync } from 'node:fs';
-import type { Config, RoleConfig, Task } from '../types.js';
+import type { Config, RoleConfig, Task, AchieverDecision } from '../types.js';
 import type { EventBus } from './events.js';
 import type { Store, CompletionDecision } from './store.js';
 import type { Workflows } from './workflows.js';
+import type { Goals } from './goals.js';
 import { verifyOutput, buildVerifierPrompt, parseLlmVerdict, detectInputRequest, type VerifyVerdict, type InputOptions, type InputRequest } from './result-verifier.js';
 import { buildLesson, appendLesson } from './lessons.js';
 
@@ -58,22 +59,30 @@ export class Dispatcher {
   private store: Store;
   private eventBus: EventBus;
   private workflows?: Workflows;
+  private goals?: Goals;
   private running = new Map<string, { role: string; startedAt: number; workerAgentId?: string; brainId?: string }>();
   private agentId: string | null = null;
   private timer: NodeJS.Timeout | null = null;
   private stopped = false;
   private classifying = new Set<string>();
   private decidingRuns = new Set<string>();   // orchestrated runs mid-decision (re-entrancy guard)
+  private decidingGoals = new Set<string>();   // goals mid-Achiever-turn (re-entrancy guard)
   /** Consecutive unusable router answers per orchestrated run (timeout/garbled). */
   private decisionFailures = new Map<string, number>();
+  /** Consecutive unusable / no-progress Achiever turns per goal. */
+  private goalFailures = new Map<string, number>();
   /** Give up on an orchestrated run after this many consecutive bad decisions. */
   static readonly MAX_DECISION_FAILURES = 3;
+  /** Abandon a goal after this many consecutive Achiever turns that make no
+   *  progress (garbled decision, or an evaluate that neither ends nor advances). */
+  static readonly MAX_GOAL_FAILURES = 5;
 
-  constructor(config: Config, store: Store, eventBus: EventBus, workflows?: Workflows) {
+  constructor(config: Config, store: Store, eventBus: EventBus, workflows?: Workflows, goals?: Goals) {
     this.config = config;
     this.store = store;
     this.eventBus = eventBus;
     this.workflows = workflows;
+    this.goals = goals;
   }
 
   public start(): void {
@@ -262,6 +271,10 @@ export class Dispatcher {
     // Advance any orchestrated workflow runs: for each run awaiting a decision,
     // the orchestrator brain picks the next step (or finishes the run).
     this.driveWorkflows();
+
+    // Advance any active Goals: for each goal whose work has finished (quiescent),
+    // the Achiever brain takes one evaluate/plan/emit turn toward the criterion.
+    this.driveGoals();
 
     if (this.running.size >= orch.maxConcurrent) return;
 
@@ -675,6 +688,173 @@ export class Dispatcher {
     lines.push('');
     lines.push(`Reply with ONLY the key of the next step to run, or DONE if the goal is met. Do not run redundant work — if the results above already satisfy the goal, answer DONE.`);
     return lines.join('\n');
+  }
+
+  // ── Goals (the Achiever drive loop) ─────────────────────────────────────────
+
+  /**
+   * Drive active Goals. For each goal whose generated work has finished
+   * (quiescent), the Achiever brain takes ONE structured turn — evaluate the
+   * binary success criterion, plan the next phase, or emit a phase's worth of
+   * real work — and we materialise that decision via the Goals aggregate. This is
+   * the sibling of driveWorkflows(): edge-triggered on work completing, a per-goal
+   * re-entrancy guard prevents overlapping turns, and layered runaway guards
+   * (self-heal, step budget, consecutive-failure abort) keep an autonomous loop
+   * bounded, observable, and interruptible. The Judger half is event-driven
+   * (Goals.onTaskCompleted), wired on the eventBus at startup.
+   */
+  private driveGoals(): void {
+    if (!this.goals) return;
+
+    // Self-heal pass, across ALL active goals: a `completing` phase with no live
+    // Judger task means the taskCompleted event that should have woken the Judger
+    // was dropped. Re-emit it (same spirit as reclaimStaleClaims). This runs over
+    // active goals — not just quiescent ones — because a completing phase makes a
+    // goal non-quiescent, so it is invisible to goalsAwaitingAchiever below.
+    let active: ReturnType<Goals['activeGoals']>;
+    try { active = this.goals.activeGoals(); } catch { return; }
+    for (const rec of active) {
+      const stuck = this.goals.phaseNeedingJudger(rec.goalId);
+      if (stuck) this.goals.emitJudgerTask(rec.goalId, stuck);
+    }
+
+    const pending = this.goals.goalsAwaitingAchiever();
+    for (const rec of pending) {
+      const goalId = rec.goalId;
+      if (this.decidingGoals.has(goalId)) continue;
+
+      // Runaway guard: an Achiever that never declares success can't outrun its
+      // execution-task budget — abandon with an honest reason (never pretend-done).
+      if (this.goals.overBudget(goalId)) {
+        this.goals.abandon(goalId, `step budget exhausted (${rec.stepBudget ?? 24} generated tasks) without meeting the success criterion`);
+        this.goalFailures.delete(goalId);
+        continue;
+      }
+
+      const ctx = this.goals.achieverContext(goalId);
+      if (!ctx) continue;
+
+      this.decidingGoals.add(goalId);
+      const timeout = this.config.orchestration.classifier?.timeoutMs || 300000;
+      const prompt = this.achieverPrompt(ctx);
+
+      (async () => {
+        try {
+          const out = await this.askExecutor(rec.achieverBrainChain, prompt, timeout);
+          const decision = this.parseAchieverDecision(out);
+          if (!decision) { this.registerGoalFailure(goalId, 'no usable decision from the Achiever (timeout or unparseable JSON)'); return; }
+          const applied = this.goals!.applyAchieverDecision(goalId, decision);
+          // Progress = the goal ended, a phase was planned, or work was emitted.
+          // An evaluate(met:false) that neither advances nor emits is NO progress
+          // — count it so a stuck goal can't spin on empty evaluations forever.
+          const progressed = applied.achieved || applied.planned || (applied.emitted ?? 0) > 0;
+          if (progressed) this.goalFailures.delete(goalId);
+          else this.registerGoalFailure(goalId, `Achiever turn made no progress (kind=${decision.kind})`);
+        } catch (e) {
+          console.error(`Dispatcher: goal ${goalId} Achiever turn failed:`, e);
+        } finally {
+          this.decidingGoals.delete(goalId);
+        }
+      })();
+    }
+  }
+
+  /** Count a non-progressing Achiever turn; abandon the goal (honest reason)
+   *  once the consecutive-failure ceiling is hit. */
+  private registerGoalFailure(goalId: string, why: string): void {
+    const n = (this.goalFailures.get(goalId) || 0) + 1;
+    this.goalFailures.set(goalId, n);
+    console.error(`Dispatcher: goal ${goalId} — ${why} (attempt ${n}/${Dispatcher.MAX_GOAL_FAILURES})`);
+    if (n >= Dispatcher.MAX_GOAL_FAILURES) {
+      this.goalFailures.delete(goalId);
+      this.goals?.abandon(goalId, `Achiever made no usable progress after ${n} turns (${why}) — goal abandoned, NOT completed`);
+    }
+  }
+
+  /** The prompt the Achiever brain answers each turn. It frames the criterion as
+   *  a strict Yes/No gate and constrains the reply to a single fenced-JSON
+   *  decision (evaluate | plan | emit). */
+  private achieverPrompt(ctx: NonNullable<ReturnType<Goals['achieverContext']>>): string {
+    const rec = ctx.record;
+    const lines: string[] = [];
+    lines.push(`You are the GOAL ACHIEVER driving a long-lived objective toward a BINARY success criterion. Take exactly ONE move this turn.`, '');
+    lines.push(`GOAL: ${rec.title}`);
+    if (rec.description) lines.push(`DETAILS: ${rec.description}`);
+    lines.push(`SUCCESS CRITERIA (strict Yes/No): ${ctx.successCriteria}`);
+    lines.push(`BUDGET: ${ctx.budget.used}/${ctx.budget.cap} execution tasks used.`, '');
+    lines.push(`PHASES:`);
+    for (const ph of ctx.phases) {
+      lines.push(`- ${ph.key} [${ph.status}]: ${ph.title}`);
+      for (const r of ph.results) {
+        const res = (r.result || '').replace(/\s+/g, ' ').slice(0, 300);
+        lines.push(`    · ${r.title} [${r.status}]${res ? ` → ${res}` : ''}`);
+      }
+    }
+    if (ctx.latestMinutes) lines.push('', `Latest Judger minutes: ${ctx.latestMinutes}`);
+    lines.push('', `Current workable phase: ${ctx.currentPhaseKey || '(none — plan one)'}`, '');
+    lines.push(
+      `Reply with ONLY one fenced JSON block describing your single move:`,
+      '```json',
+      `{ "kind": "evaluate", "met": true|false, "reason": "evidence the criterion is/ isn't met" }`,
+      `// OR`,
+      `{ "kind": "plan", "phase": { "key": "kebab-case", "title": "..." }, "reason": "why this phase next" }`,
+      `// OR`,
+      `{ "kind": "emit", "tasks": [ { "title": "...", "description": "the standalone brief" } ], "reason": "..." }`,
+      '```',
+      `Rules: answer evaluate{met:true} ONLY when the criteria are genuinely met (this ENDS the goal). Emit the current phase's real work as a small batch — the last task automatically completes the phase and triggers the Judger. Do not repeat completed work. If no phase is workable, plan one.`
+    );
+    return lines.join('\n');
+  }
+
+  /** Tolerant parser for the Achiever's structured decision (ADR-002): pull the
+   *  last JSON object out of the reply (fenced or bare) and validate its shape.
+   *  Returns null on anything unusable so the caller retries / eventually aborts
+   *  rather than silently mis-applying a move. */
+  private parseAchieverDecision(text: string): AchieverDecision | null {
+    if (!text || !text.trim()) return null;
+    const candidates: string[] = [];
+    const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/gi);
+    if (fenced) for (const f of fenced) candidates.push(f.replace(/```(?:json)?/i, '').replace(/```$/, ''));
+    // Also try the last balanced-looking {...} in the raw text as a fallback.
+    const braceMatches = text.match(/\{[\s\S]*\}/g);
+    if (braceMatches) candidates.push(braceMatches[braceMatches.length - 1]);
+    for (const c of candidates.reverse()) {
+      try {
+        const obj = JSON.parse(c.trim());
+        if (!obj || typeof obj !== 'object') continue;
+        if (obj.kind === 'evaluate' && typeof obj.met === 'boolean') return obj as AchieverDecision;
+        if (obj.kind === 'plan' && obj.phase && obj.phase.key) return obj as AchieverDecision;
+        if (obj.kind === 'emit' && Array.isArray(obj.tasks) && obj.tasks.length) return obj as AchieverDecision;
+      } catch { /* try the next candidate */ }
+    }
+    return null;
+  }
+
+  /** Run a named brain CHAIN's first LOCAL, spawnable brain for a reasoning call
+   *  (the Achiever's turn). Generalises askRouter, which is pinned to the router
+   *  brain; falls back to the router brain if the chain has no local member (its
+   *  remote brains are for executing generated tasks, not reasoning here). */
+  private askExecutor(chain: string[] | undefined, prompt: string, timeoutMs: number): Promise<string> {
+    const { exec, model } = this.execForChain(chain);
+    const argv = this.buildArgv({ exec: exec as RoleConfig['exec'], model }, prompt);
+    return new Promise((resolve) => {
+      const child = spawn(argv[0], argv.slice(1), { env: { ...process.env }, stdio: ['ignore', 'pipe', 'pipe'] });
+      let out = '';
+      const timer = setTimeout(() => { child.kill('SIGTERM'); resolve(out); }, timeoutMs);
+      child.stdout.on('data', d => { out += d.toString(); });
+      child.on('error', () => resolve(''));
+      child.on('close', () => { clearTimeout(timer); resolve(stripAnsi(out)); });
+    });
+  }
+
+  /** First LOCAL, runnable brain in the given chain; else the router brain. */
+  private execForChain(chain?: string[]): { exec: string; model: string } {
+    const orch = this.config.orchestration;
+    for (const id of chain || []) {
+      const b = orch.brains?.[id];
+      if (b?.location === 'local' && b.exec) return { exec: b.exec, model: b.model || '' };
+    }
+    return this.routerModel();
   }
 
   /**

@@ -263,6 +263,9 @@ export interface Config {
     decisions: string;
     /** Dir of declarative workflow templates (workflows/*.json). */
     workflows: string;
+    /** Dir of Goal aggregates (goals/*.json) — long-lived, phase-tracked
+     *  objectives. Sibling of workflows; see core/goals.ts. */
+    goals: string;
   };
   platforms: Record<string, PlatformConfig>;
   services: Record<string, ServiceConfig>;
@@ -516,4 +519,90 @@ export interface CoworkEvent<T extends CoworkEventType> {
   type: T;
   payload: CoworkEventPayloads[T];
   timestamp: string;
+}
+
+// ── Goals ─────────────────────────────────────────────────────────────────
+// A Goal is a long-lived, phase-tracked objective that drives toward a BINARY
+// success criterion, generating and auditing its own work until the criterion
+// flips (→ achieved) or a human/budget stops it (→ abandoned). Unlike a workflow
+// run — which ends — a goal PERSISTS. It composes the existing task/brain/
+// dispatcher primitives rather than adding a second execution engine. See
+// core/goals.ts and the design in goals-architecture.md (ADR-001).
+
+/** One waypoint of a goal (Research → Implementation → Review). Seeded at
+ *  creation and appended by the Achiever during dynamic planning. The unit of
+ *  Judger auditing and reporting. */
+export interface GoalPhase {
+  /** Stable, kebab-case, unique within the goal. Stamped on every task the
+   *  phase generates as context.phaseKey. */
+  key: string;
+  title: string;
+  /** planned → active (work generated) → completing (terminal task done, Judger
+   *  woken) → audited (Judger reviewed). `done` is a transient alias used before
+   *  the Judger fires. */
+  status: 'planned' | 'active' | 'completing' | 'done' | 'audited';
+  /** Ids of the tasks this phase generated (top-down lineage). */
+  taskIds: string[];
+  /** The Judger task auditing this phase, once emitted. */
+  judgerTaskId?: string;
+  /** Pointer into the Judger task's artifacts dir, "<taskId>/report-<key>.md". */
+  reportArtifact?: string;
+}
+
+/** One row of a goal's audit trail — every autonomous move is recorded so the
+ *  loop is fully traceable (the audit trail IS the feature, not an add-on). */
+export interface GoalDecision {
+  kind: 'evaluate' | 'plan' | 'emit' | 'judge' | 'finish';
+  phaseKey?: string;
+  /** For 'emit'/'judge': the task the decision created. */
+  taskId?: string;
+  /** For 'evaluate': did the binary success criterion flip true? */
+  met?: boolean;
+  reason?: string;
+  at: string;
+}
+
+/** The Goal aggregate root, persisted as goals/<goalId>.json (ADR-006), shaped
+ *  like WorkflowRunRecord so it reuses the same file-based inspection/backup. */
+export interface GoalRecord {
+  goalId: string;
+  title: string;
+  description: string;
+  /** The Yes/No question the Achiever must answer to declare victory. Enforced
+   *  non-empty at activation (ADR-003) so the loop can terminate. */
+  successCriteria: string;
+  /** What the Judger should report after each phase ("financial breakdown", …). */
+  reportBrief?: string;
+  status: 'draft' | 'active' | 'paused' | 'achieved' | 'abandoned';
+  phases: GoalPhase[];
+  /** Ordered brain-id chain the Achiever reasons on (execution role). */
+  achieverBrainChain?: string[];
+  /** Ordered brain-id chain the Judger runs on (audit role). */
+  judgerBrainChain?: string[];
+  /** Full audit trail (§4 domain events). */
+  history: GoalDecision[];
+  /** Meeting-minutes pointers, one per audited phase. */
+  minutes: { phaseKey: string; artifact: string; at: string }[];
+  /** Hard cap on generated EXECUTION tasks — the primary runaway guard. */
+  stepBudget?: number;
+  /** Honest reason a goal reached a terminal state (abandoned/achieved). */
+  closedReason?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** The Achiever's one structured move per turn (ADR-002): evaluate the success
+ *  gate, plan the next phase, or emit a phase's worth of real work. Parsed from
+ *  a fenced JSON block in the executor's reply, or submitted via the
+ *  update_goal_progress MCP tool. */
+export interface AchieverDecision {
+  kind: 'evaluate' | 'plan' | 'emit';
+  /** evaluate: strict Yes/No — is the success criterion met? */
+  met?: boolean;
+  reason?: string;
+  /** plan: the phase to append. */
+  phase?: { key: string; title: string };
+  /** emit: the tasks to generate for the current phase (chained in order; the
+   *  last is flagged completesPhase so the Judger wakes when real work ends). */
+  tasks?: { title: string; description?: string; brain?: string }[];
 }
