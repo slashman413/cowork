@@ -1,4 +1,6 @@
 # 🤝 Multi-Agent Cowork Framework
+
+📬 Get AI tips & prompt templates — subscribe to the Slashman Tools newsletter: https://slashmantools.us/subscribe
 > ## 🛍️ **Cowork Pro — the production package**
 > The MCP server above is the open-source core. **[Cowork Pro ($59)](https://slashmaster6.gumroad.com/l/xfhfps)** adds the full production stack: advanced workflows, priority support & lifetime updates. Also included in the **[AI Developer Stack Bundle ($79)](https://slashmaster6.gumroad.com/l/nulyms)**.
 
