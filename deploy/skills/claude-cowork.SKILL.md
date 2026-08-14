@@ -90,7 +90,9 @@ wait-input ┴→ pending → claimed → in-progress → done
 ```
 
 - **`scheduled`** — `create_task(scheduled_at: "<ISO 8601>")` parks the task out of the
-  pending pool until its launch time. Omit it (or pass a past time) to run now.
+  pending pool until its launch time. Omit it (or pass a past time) to run now. A goal
+  Achiever can park its own work the same way via `scheduledAt` on an emitted task —
+  see Goals below, where it doubles as the checkpoint mechanism.
 - **`wait-input`** — held out of the pending pool, never routed, until a person answers.
   Two ways in: (a) you attach an `interaction` packet at creation
   (`{prompt?, fields:[{id,label,type?,options?,required?,placeholder?}]}`) so the Inbox
@@ -187,6 +189,34 @@ Steps pin a `division` or `agent` (never a `brain`) so chains stay editable from
 dashboard. Templates are validated on load (unique keys, deps exist, DAG acyclic);
 invalid ones are skipped and surfaced at `GET /api/workflows-invalid`.
 
+## Goals (long-lived objectives, beneath Workflows)
+
+State in `goals/<goalId>.json`. A goal drives toward one **binary success criterion**
+via two roles on the normal task machinery: the **Achiever** takes one move per turn
+(`evaluate` | `plan` a phase | `emit` that phase's tasks), and the **Judger** wakes when
+a phase's terminal task finishes, writes a report + minutes, and re-arms the Achiever.
+A goal ends `achieved` (criterion met) or `abandoned` **with a reason** — never a silent
+"done". Turns only happen when no generated task is open.
+
+**Checkpoints.** An emitted task may carry `scheduledAt` (ISO 8601, future) —
+`{"kind":"emit","tasks":[{"title":"Measure MRR","scheduledAt":"2026-09-14T00:00:00Z"}]}`.
+Because `scheduled` is an *open* status, an outstanding checkpoint keeps the goal
+non-quiescent, so it takes **no turns and spends no budget** while real time passes.
+This is the correct move whenever the next honest step is to let the world change
+(a month of revenue, an indexing window) — not a stall. Unparseable or past times are
+dropped and the task runs now, so one bad date never aborts an emit.
+
+**Two guards abandon a goal**, and both bite metric-open objectives:
+`stepBudget` (default 24) counts *lifetime* execution tasks, and `MAX_GOAL_FAILURES`
+(5) counts *consecutive* Achiever turns that neither plan nor emit — an
+`evaluate{met:false}` is one of those. So a goal whose criterion depends on an external
+number needs an evidence-bound criterion ("does a dated snapshot in artifacts show X?",
+not "is X true?"), a phase loop that always has work to emit, scheduled checkpoints, and
+a budget sized for the horizon. The dashboard's 💰 📈 🧲 starters are set up this way.
+
+`GET/POST /api/goals` · `GET/PATCH/DELETE /api/goals/:id` ·
+`POST /api/goals/:id/{activate,pause,abandon}` · `GET /api/goals/:id/tasks`.
+
 ## REST mirror (http://localhost:6868/api/...)
 
 `GET status | agents | connections | brains | dispatcher | chains | roster |
@@ -196,7 +226,8 @@ workflow-runs[/:runId] | artifacts/:taskId[/:file] | inputs/:taskId[/:file]` ·
 `POST inbox/:id/{rerun,continue,inputs,interaction}` · `POST inbox/purge` ·
 `DELETE inbox/:id` · `POST uploads?name=` · `PUT chains/default`,
 `chains/division/:div` · `GET/PUT/DELETE brains/:id`, `agents-config/:name` ·
-`POST workflows/:id/run`.
+`POST workflows/:id/run` · `GET/POST goals`, `GET/PATCH/DELETE goals/:id`,
+`POST goals/:id/{activate,pause,abandon}`, `GET goals/:id/tasks`.
 
 SSE event names are camelCase: `agentRegistered`, `taskCreated`, `taskClaimed`,
 `taskCompleted`, `heartbeat` (older docs list snake_case names and a `report_filed`
