@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Cowork Coordination Hub",
+    "output": "cowork-hub.html",
+    "quality_profile": "showcase",
+    "views": [
+      { "id": "dispatch-path", "label": "Dispatch path", "focus": ["agents", "mcp", "inbox", "router", "dispatcher", "brains"], "note": "Follow one dispatched task from the MCP call to the brain that executes it." },
+      { "id": "routing-inputs", "label": "Routing inputs", "focus": ["inbox", "router", "roster", "config"], "note": "How a task with no pinned agent gets a division, a persona, and a chain order." },
+      { "id": "failure-handover", "label": "Failure handover", "focus": ["brains", "verifier", "dispatcher", "artifacts"], "note": "A rejected result hands the task to the next chain rung; written output stays on disk." }
+    ]
+  },
+  "components": [
+    { "id": "dashboard", "type": "frontend", "label": "Cowork Dashboard", "sublabel": "localhost:6868", "pos": [40, 120], "size": [150, 66] },
+    { "id": "agents", "type": "external", "label": "Agent Sessions", "sublabel": "Claude · Hermes · Codex · agy", "pos": [40, 380], "size": [150, 66] },
+    { "id": "rest", "type": "backend", "label": "REST Mirror", "sublabel": "/api · SSE events", "pos": [300, 120], "size": [150, 66] },
+    { "id": "mcp", "type": "backend", "label": "MCP Endpoint", "sublabel": "/mcp · 9 tools", "pos": [300, 380], "size": [150, 66] },
+    { "id": "inbox", "type": "messagebus", "label": "Task Inbox", "sublabel": "pending → done", "tag": "atomic claim", "pos": [560, 380], "size": [150, 66] },
+    { "id": "roster", "type": "database", "label": "Agent Roster", "sublabel": "~285 persona files", "pos": [820, 120], "size": [150, 66] },
+    { "id": "router", "type": "backend", "label": "LLM Router", "sublabel": "two-stage classifier", "pos": [820, 380], "size": [150, 66] },
+    { "id": "config", "type": "database", "label": "Live Config", "sublabel": "~/.cowork/config.json", "tag": "chains + brains", "pos": [820, 640], "size": [150, 66] },
+    { "id": "verifier", "type": "security", "label": "Verifier", "sublabel": "accept or reject result", "pos": [1080, 120], "size": [150, 66] },
+    { "id": "dispatcher", "type": "backend", "label": "Dispatcher", "sublabel": "runs the brain chain", "pos": [1080, 380], "size": [150, 66] },
+    { "id": "artifacts", "type": "database", "label": "Artifacts + Inputs", "sublabel": "artifacts/[task-id]/", "pos": [1080, 640], "size": [150, 66] },
+    { "id": "brains", "type": "external", "label": "Brain Pool", "sublabel": "local + remote execs", "tag": "claude · hermes · agy · codex", "pos": [1340, 380], "size": [160, 66] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "cowork-mcp service · port 6868", "wraps": ["rest", "mcp", "inbox", "roster", "router", "config", "verifier", "dispatcher", "artifacts"], "pad": 20 }
+  ],
+  "connections": [
+    { "id": "agents-to-mcp", "from": "agents", "to": "mcp", "label": "create_task", "variant": "emphasis" },
+    { "id": "mcp-to-inbox", "from": "mcp", "to": "inbox", "label": "file task" },
+    { "id": "inbox-to-router", "from": "inbox", "to": "router", "label": "pending" },
+    { "id": "router-to-dispatcher", "from": "router", "to": "dispatcher", "label": "system prompt" },
+    { "id": "dispatcher-to-brains", "from": "dispatcher", "to": "brains", "label": "chain rung 0 → n", "variant": "emphasis" },
+    { "id": "dashboard-to-rest", "from": "dashboard", "to": "rest", "label": "HTTP + SSE" },
+    { "id": "rest-to-inbox", "from": "rest", "to": "inbox", "label": "/api/inbox", "fromSide": "right", "toSide": "top" },
+    { "id": "roster-to-router", "from": "roster", "to": "router", "label": "division → persona", "labelDy": 100 },
+    { "id": "config-to-dispatcher", "from": "config", "to": "dispatcher", "label": "chain order" },
+    { "id": "brains-to-verifier", "from": "brains", "to": "verifier", "label": "result", "fromSide": "top" },
+    { "id": "verifier-to-dispatcher", "from": "verifier", "to": "dispatcher", "label": "reject → next rung", "variant": "security", "labelDy": 100 },
+    { "id": "brains-to-artifacts", "from": "brains", "to": "artifacts", "label": "writes output", "variant": "dashed" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Entry points", "items": ["MCP at /mcp exposes 9 tools: register, dispatch, claim, complete", "REST mirror at /api plus a camelCase SSE event stream", "Dashboard and API edits persist to the live config with no restart"] },
+    { "dot": "emerald", "title": "Routing", "items": ["With no pinned context the LLM router picks a division, then a persona", "context.agent, division, or brain skips the classifier", "Chains run top to bottom; a rejected result hands over to the next brain"] },
+    { "dot": "rose", "title": "Guarantees", "items": ["Task claims are atomic — the first caller wins", "The verifier rejects quota notices and fabricated success", "A task's whole record is task.result plus its artifacts directory"] }
+  ]
+}
