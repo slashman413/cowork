@@ -21,6 +21,11 @@ workflow-runs/
 # context (tokens paths, revenue targets). Never commit them.
 goals/
 
+# Business audit / ops-health reports dropped by dispatched agents. These are
+# per-server runtime output carrying private business context (revenue targets,
+# funnel state, tool health) — same class as goals/ and inbox/. Never commit them.
+reports/
+
 # Scratch/debug scripts — the server is TypeScript; stray .py files are local-only
 # and have leaked private paths before. Keep them out of git. Dispatched agents
 # occasionally drop working files (scripts, sqlite dbs, ComfyUI graphs) in the repo
