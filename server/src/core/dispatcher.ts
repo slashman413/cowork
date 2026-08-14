@@ -799,9 +799,12 @@ export class Dispatcher {
       `// OR`,
       `{ "kind": "plan", "phase": { "key": "kebab-case", "title": "..." }, "reason": "why this phase next" }`,
       `// OR`,
-      `{ "kind": "emit", "tasks": [ { "title": "...", "description": "the standalone brief" } ], "reason": "..." }`,
+      `{ "kind": "emit", "tasks": [ { "title": "...", "description": "the standalone brief", "scheduledAt": "ISO-8601 (optional, future)" } ], "reason": "..." }`,
       '```',
-      `Rules: answer evaluate{met:true} ONLY when the criteria are genuinely met (this ENDS the goal). Emit the current phase's real work as a small batch — the last task automatically completes the phase and triggers the Judger. Do not repeat completed work. If no phase is workable, plan one.`
+      `Rules: answer evaluate{met:true} ONLY when the criteria are genuinely met (this ENDS the goal). Emit the current phase's real work as a small batch — the last task automatically completes the phase and triggers the Judger. Do not repeat completed work. If no phase is workable, plan one.`,
+      '',
+      `Waiting on the real world: when the next honest move is to LET TIME PASS (a month of revenue, a cohort of traffic, an indexing window), do not burn turns re-evaluating. Emit the measurement task with a future "scheduledAt". The goal then sleeps — no turns, no budget — until that checkpoint fires. This is the correct move, not a stall.`,
+      `Persistence: a criterion that is not yet met is NEVER a reason to stop. If a phase's results disappointed, plan the next phase with a DIFFERENT approach informed by the Judger's minutes above — do not repeat the approach that underperformed. Only evaluate{met:false} when you genuinely cannot plan or emit anything useful; a turn that neither plans nor emits counts as no progress, and enough of those abandon the goal.`
     );
     return lines.join('\n');
   }

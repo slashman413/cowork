@@ -2149,15 +2149,31 @@ class App {
     // an author never faces a blank page or has to learn the criterion/phase shape
     // from scratch — the single biggest setup-simplicity win.
     //
-    // Design rule (learned the hard way — see the abandoned "$500k revenue" goal):
-    // every starter must be DELIVERABLE-BOUND, not METRIC-OPEN. The success
-    // criterion has to flip true the moment a concrete artifact EXISTS ("is the
-    // tool live?", "is the product for sale?") — not when an external market number
-    // is hit ("1,000 subscribers", "rank #1"), which the Achiever cannot force and
-    // so burns its whole step budget → abandoned. Each phase is an explicit
-    // checkpoint that HANDS OFF a finished artifact to the next (scope → build →
-    // package → ship), so the Judger always has something concrete to audit and the
-    // loop marches forward instead of spinning.
+    // Two families, because they fail in different ways.
+    //
+    // SHIPPING goals are DELIVERABLE-BOUND: the criterion flips true the moment a
+    // concrete artifact EXISTS ("is the tool live?", "is the product for sale?").
+    // Short, cheap, and they terminate on their own. Default budget is fine.
+    //
+    // OUTCOME goals are METRIC-OPEN ("$10k/month", "10k visits") — the shape that
+    // burned the abandoned "$500k revenue" goal. The Achiever cannot force a market
+    // number, so the naive version spins evaluations until the step budget dies.
+    // They are viable only with ALL FOUR of these, which every outcome starter below
+    // carries; copy the set if you write your own:
+    //   1. EVIDENCE-BOUND criterion. Not "is MRR $10k?" (unanswerable from inside)
+    //      but "does a dated snapshot in artifacts SHOW $10k?" — binary, auditable,
+    //      and impossible to satisfy by assertion (the verifier rejects fabrication).
+    //   2. A LOOP of phases (measure → research → ship → wait → review), so every
+    //      turn has real work to emit. A turn that neither plans nor emits counts as
+    //      no progress, and MAX_GOAL_FAILURES of those in a row abandons the goal.
+    //   3. SCHEDULED CHECKPOINTS. The measure phase emits its task with a future
+    //      `scheduledAt`; `scheduled` is an OPEN status, so the goal goes quiescent-
+    //      blocked and takes NO turns and spends NO budget while real time passes.
+    //      This is what makes a months-long goal survivable at all.
+    //   4. A budget sized for the horizon — these run for months, not an afternoon.
+    // Outcome goals are honest about their limit: they drive the work and prove the
+    // number, they cannot conjure the market. They end `achieved` when the evidence
+    // says so, or `abandoned` with a reason — never a silent "done".
     const templates = [
       { key: 'web-tool', label: '🚀 Ship a web tool',
         title: 'Ship a new single-page web tool',
@@ -2188,7 +2204,58 @@ class App {
         description: 'Package a deliverable and put it on sale with a working sales page (e.g. Gumroad).',
         successCriteria: 'Is the product live for sale with a sales page and at least one delivery file?',
         reportBrief: 'what is ready to sell + the product URL',
-        phases: 'Define the product, audience, and price\nCreate the deliverable\nBuild the sales page and set up delivery\nPublish the listing and confirm it can be bought' }
+        phases: 'Define the product, audience, and price\nCreate the deliverable\nBuild the sales page and set up delivery\nPublish the listing and confirm it can be bought' },
+
+      // ── Outcome goals (long-horizon, checkpoint-driven) ────────────────────
+      { key: 'revenue', label: '💰 Grow to $10k/month',
+        title: 'Grow {project} to $10,000/month',
+        description: [
+          'Replace {project} with the real project before activating.',
+          '',
+          'Operating doctrine for this goal:',
+          '• Work the loop: measure → research → ship one lever → wait → review. Never skip measurement; the criterion is settled by evidence, not opinion.',
+          '• Research deeply before shipping. Name the specific lever (pricing, a new offer, a traffic channel, conversion on an existing page), what you expect it to be worth per month, and why — a lever with no number attached is a guess.',
+          '• Waiting is a move. Revenue needs weeks to show. Emit the measurement task with a future scheduledAt (typically 30 days) instead of re-evaluating; the goal sleeps and spends nothing until it fires.',
+          '• Every revenue snapshot is a real dated file in artifacts, read from the actual source (Gumroad, Stripe, Ko-fi, platform dashboards). Never estimate a number you did not read, and never report a quota/rate-limit notice as the result.',
+          '• When a lever underperforms, say so in the phase result and pick a DIFFERENT one next phase. Read the Judger minutes first — repeating a flat lever is the main way this goal wastes budget.'
+        ].join('\n'),
+        successCriteria: 'Does a dated revenue snapshot in this goal\'s artifacts show at least $10,000 collected in the trailing 30 days?',
+        reportBrief: 'revenue this checkpoint vs. last, which lever moved it, and the next lever with its expected monthly value',
+        budget: 200,
+        phases: 'Baseline current revenue and inventory every asset that already earns\nResearch and rank the highest-leverage revenue levers with expected monthly value\nShip the top-ranked lever end to end\nSchedule a 30-day checkpoint and record the dated revenue snapshot\nReview what moved the number and choose the next lever' },
+
+      { key: 'traffic', label: '📈 Grow organic traffic',
+        title: 'Grow {project} to 10,000 organic visits/month',
+        description: [
+          'Replace {project} with the real site before activating.',
+          '',
+          'Operating doctrine for this goal:',
+          '• Search compounds on a delay — pages published now show their traffic in 4–8 weeks. Always emit the measurement task with a future scheduledAt rather than re-checking early.',
+          '• Every checkpoint reads real numbers from the actual analytics source into a dated file in artifacts. An unsourced number is not evidence.',
+          '• Research before writing: name the query, its intent, and who currently ranks. Publishing without that is how this goal burns budget on pages nobody searches for.',
+          '• Review each checkpoint for which pages actually earned impressions, and double down there instead of starting fresh topics every phase.'
+        ].join('\n'),
+        successCriteria: 'Does a dated analytics snapshot in this goal\'s artifacts show at least 10,000 organic visits in the trailing 30 days?',
+        reportBrief: 'visits this checkpoint vs. last, which pages earned them, and the next content bet',
+        budget: 150,
+        phases: 'Baseline current organic traffic and index coverage\nResearch target queries and rank them by intent and realistic difficulty\nShip the highest-value pages and fix technical SEO blockers\nSchedule a 45-day checkpoint and record the dated analytics snapshot\nReview which pages earned impressions and pick the next content bet' },
+
+      { key: 'customers', label: '🧲 Reach 100 paying customers',
+        title: 'Reach 100 paying customers for {project}',
+        description: [
+          'Replace {project} with the real offer before activating.',
+          '',
+          'Operating doctrine for this goal:',
+          '• The unit of progress is a paying customer, not a feature. Before building anything, state how the change is supposed to convert someone.',
+          '• Talk to the market before rebuilding the product. Rejected offers, pricing objections, and refund reasons are the highest-value research available, and they are cheap.',
+          '• Emit the count task on a scheduled checkpoint after each change has had time to convert; do not re-evaluate the same week you shipped.',
+          '• Record the customer count from the real billing source into a dated file in artifacts every checkpoint, including when it did not move.',
+          '• A flat checkpoint means change the offer, price, or channel — not ship the same thing harder.'
+        ].join('\n'),
+        successCriteria: 'Does a dated snapshot in this goal\'s artifacts show at least 100 distinct paying customers on the billing platform?',
+        reportBrief: 'customer count this checkpoint vs. last, what converted them, and the next acquisition or offer change',
+        budget: 200,
+        phases: 'Baseline the current customer count and where they came from\nResearch why prospects do and do not buy, and rank the fixes\nShip the top fix to the offer, pricing, or acquisition channel\nSchedule a 30-day checkpoint and record the dated customer count\nReview what converted and choose the next change' }
     ];
 
     const goalCard = (g) => {
@@ -2262,7 +2329,7 @@ class App {
           <div>
             <label style="${lbl}">Success criterion — a Yes/No question that flips true when a concrete deliverable EXISTS</label>
             <input id="goal-criteria" placeholder="e.g. Is the tool live on GitHub Pages with a working index.html?" style="${inp}">
-            <div style="font-size:0.7rem;color:var(--text-muted);margin-top:3px">Tie it to something you can point at ("is X live / shipped / for sale?"). Open-ended metrics that depend on the market ("reach 1,000 users", "rank #1") can't flip true on their own and tend to run out the step budget → abandoned.</div>
+            <div style="font-size:0.7rem;color:var(--text-muted);margin-top:3px">Tie it to something you can point at ("is X live / shipped / for sale?"). For a market number, make it <em>evidence-bound</em> — not "is MRR $10k?" but "does a dated snapshot in artifacts show $10k?" — then give it a long step budget and a phase that measures on a scheduled checkpoint. A bare metric with the default budget runs out and is abandoned; the 💰 📈 🧲 examples above are already set up this way.</div>
           </div>
           <div>
             <label style="${lbl}">Phases — one explicit checkpoint per line, in order</label>
@@ -2307,6 +2374,14 @@ class App {
       this.contentEl.querySelector('#goal-criteria').value = t.successCriteria;
       this.contentEl.querySelector('#goal-report').value = t.reportBrief;
       this.contentEl.querySelector('#goal-phases').value = t.phases;
+      // Outcome goals die on the default 24-task budget long before a market number
+      // moves, so a template that declares a horizon must carry it into the form.
+      // Blank on the shipping templates = the server default.
+      this.contentEl.querySelector('#goal-budget').value = t.budget || '';
+      // Advanced holds description/report/budget — all three are template-filled, so
+      // leaving it collapsed would hide the goal's whole operating doctrine.
+      const adv = this.contentEl.querySelector('#goal-budget').closest('details');
+      if (adv) adv.open = true;
       this.contentEl.querySelector('#goal-title').focus();
     }));
 

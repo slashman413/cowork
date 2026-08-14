@@ -125,6 +125,43 @@ test('emit generates chained lineage tasks with the terminal one completing the 
   void store;
 });
 
+test('emit passes a future scheduledAt through as a checkpoint, and drops unusable ones', () => {
+  const { goals } = makeGoals();
+  const g = goals.create(seed); goals.activate(g.goalId);
+  const future = new Date(Date.now() + 30 * 86_400_000).toISOString();
+  goals.applyAchieverDecision(g.goalId, {
+    kind: 'emit',
+    tasks: [
+      { title: 'Run the experiment' },
+      { title: 'Bad date', scheduledAt: 'in about a month' },
+      { title: 'Already past', scheduledAt: '2001-01-01T00:00:00Z' },
+      { title: 'Measure in 30 days', scheduledAt: future }
+    ]
+  });
+  const [plain, bad, past, checkpoint] = goals.generatedTasks(g.goalId);
+  assert.equal(plain.scheduledAt, undefined, 'no scheduledAt asked for');
+  // An LLM-supplied date is untrusted: unusable values are dropped rather than
+  // thrown, so one bad string cannot abort the whole emit (see checkpointTime).
+  assert.equal(bad.scheduledAt, undefined, 'unparseable date dropped, task runs now');
+  assert.equal(past.scheduledAt, undefined, 'a past time means now');
+  assert.equal(checkpoint.scheduledAt, future, 'future checkpoint preserved');
+});
+
+test('an outstanding checkpoint keeps the goal asleep instead of burning Achiever turns', () => {
+  const { goals, store } = makeGoals();
+  const g = goals.create(seed); goals.activate(g.goalId);
+  goals.applyAchieverDecision(g.goalId, {
+    kind: 'emit',
+    tasks: [{ title: 'Measure next month', scheduledAt: new Date(Date.now() + 30 * 86_400_000).toISOString() }]
+  });
+  // The real Store parks a future scheduledAt on `scheduled`; FakeStore is a thin
+  // stand-in, so set the status the way Store would to assert the consequence.
+  goals.generatedTasks(g.goalId)[0].status = 'scheduled';
+  assert.equal(goals.goalsAwaitingAchiever().length, 0,
+    'a pending checkpoint is an OPEN task — the goal takes no turns and spends no budget until it fires');
+  void store;
+});
+
 test('a quiescent goal is only awaiting the Achiever when no generated task is open', () => {
   const { goals, store } = makeGoals();
   const g = goals.create(seed); goals.activate(g.goalId);

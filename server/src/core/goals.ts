@@ -243,6 +243,29 @@ export class Goals {
 
   private isOpen(t: Task | null): boolean { return !!t && OPEN_STATUSES.has(t.status); }
 
+  /**
+   * Sanitise an Achiever-supplied checkpoint time into a `{ scheduledAt }` patch
+   * for createTask, or null to run the task now.
+   *
+   * The value comes from an LLM, so it is untrusted: Store.createTask THROWS on an
+   * unparseable date, and a throw mid-`emit` would leave the phase holding a
+   * half-created, unchained batch. Dropping a bad date (the task simply runs now)
+   * is strictly better than losing the turn — the Achiever still made progress,
+   * and a checkpoint that fires early is visible and recoverable, whereas an
+   * aborted emit counts against MAX_GOAL_FAILURES. A past time is dropped for the
+   * same reason Store does: it means "now".
+   */
+  private checkpointTime(raw: unknown, goalId: string): { scheduledAt: string } | null {
+    if (typeof raw !== 'string' || !raw.trim()) return null;
+    const ms = Date.parse(raw);
+    if (!Number.isFinite(ms)) {
+      console.warn(`Goals: ${goalId} ignoring unparseable scheduledAt "${raw}" — task will run now`);
+      return null;
+    }
+    if (ms <= Date.now()) return null;
+    return { scheduledAt: new Date(ms).toISOString() };
+  }
+
   /** True when the goal has NO open generated task and no phase mid-audit — i.e.
    *  it is edge-triggered ready for the Achiever's next turn. The direct analogue
    *  of Workflows.runsAwaitingDecision. */
@@ -394,7 +417,8 @@ export class Goals {
           to: {},
           priority: 'normal',
           context,
-          tags: ['goal', goalId]
+          tags: ['goal', goalId],
+          ...(this.checkpointTime(spec.scheduledAt, goalId) ?? {})
         });
         created.push(task.id);
         prevId = task.id;

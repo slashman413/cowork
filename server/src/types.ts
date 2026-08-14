@@ -603,6 +603,13 @@ export interface AchieverDecision {
   /** plan: the phase to append. */
   phase?: { key: string; title: string };
   /** emit: the tasks to generate for the current phase (chained in order; the
-   *  last is flagged completesPhase so the Judger wakes when real work ends). */
-  tasks?: { title: string; description?: string; brain?: string }[];
+   *  last is flagged completesPhase so the Judger wakes when real work ends).
+   *
+   *  `scheduledAt` (ISO 8601, future) parks a task on `scheduled` — the CHECKPOINT
+   *  mechanism for long-horizon goals. Because `scheduled` counts as an OPEN
+   *  status, an outstanding checkpoint keeps the goal non-quiescent, so the
+   *  Achiever takes no turns and burns no step budget until the checkpoint fires.
+   *  That is what lets a goal wait out real-world time (a month of revenue, a
+   *  cohort of traffic) instead of spinning evaluations until it is abandoned. */
+  tasks?: { title: string; description?: string; brain?: string; scheduledAt?: string }[];
 }
