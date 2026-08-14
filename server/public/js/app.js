@@ -656,11 +656,11 @@ class App {
    * that omit `withInputs` (e.g. re-run) get the same `{ brain }` as before —
    * `prompt` is '' and `files` is empty, so reading only `.brain` is safe.
    */
-  async pickBrain({ title, body, defaultBrain = '', confirmLabel = 'Confirm', confirmColor = '#22C55E', withInputs = false }) {
+  async pickBrain({ title, body, defaultBrain = '', confirmLabel = 'Confirm', confirmColor = '#22C55E', withInputs = false, withSchedule = true }) {
     const container = document.getElementById('modal-container');
     const content = document.getElementById('modal-content');
     if (!container || !content) {   // no modal markup → degrade to a plain confirm
-      return window.confirm(`${title}\n\n${body.replace(/<[^>]+>/g, '')}`) ? { brain: defaultBrain, prompt: '', files: [] } : null;
+      return window.confirm(`${title}\n\n${body.replace(/<[^>]+>/g, '')}`) ? { brain: defaultBrain, prompt: '', files: [], scheduledAt: '' } : null;
     }
     let brains = {};
     try { brains = await this.api.get('/brains'); } catch { /* registry unreachable → Auto only */ }
@@ -677,12 +677,16 @@ class App {
       <div id="brain-attachments" style="display:none; flex-wrap:wrap; gap:6px; margin-bottom:8px"></div>
       <input type="file" id="brain-files" multiple style="display:none">
       <button class="btn" id="brain-attach" type="button" style="font-size:0.8rem; margin:0 0 20px; display:inline-flex; align-items:center; gap:6px"><i data-lucide="paperclip" style="width:14px;height:14px"></i> Attach files</button>` : '';
+    const scheduleBlock = withSchedule ? `
+      <label style="${labelStyle}">Run scheduled <span style="text-transform:none; letter-spacing:0">(optional — leave blank to run now)</span></label>
+      <input id="brain-when" type="datetime-local" style="${fieldStyle}; margin-bottom:16px">` : '';
     content.innerHTML = `
       <h3 style="margin:0 0 8px; font-size:1.05rem">${esc(title)}</h3>
       <p style="font-size:0.85rem; color:var(--text-secondary); margin:0 0 16px; line-height:1.5">${body}</p>
       <label style="${labelStyle}">Brain to claim this task</label>
-      <select id="brain-pick" style="${fieldStyle}; margin-bottom:${withInputs ? '16px' : '20px'}">${opts}</select>
+      <select id="brain-pick" style="${fieldStyle}; margin-bottom:${withInputs || withSchedule ? '16px' : '20px'}">${opts}</select>
       ${inputsBlock}
+      ${scheduleBlock}
       <div style="display:flex; gap:8px; justify-content:flex-end">
         <button class="btn" id="brain-cancel" style="font-size:0.85rem">Cancel</button>
         <button class="btn" id="brain-ok" style="font-size:0.85rem; color:${confirmColor}; border-color:${confirmColor}66">${esc(confirmLabel)}</button>
@@ -726,11 +730,19 @@ class App {
       };
       const onKey = (ev) => { if (ev.key === 'Escape') close(null); };
       document.addEventListener('keydown', onKey);
-      content.querySelector('#brain-ok').onclick = () => close({
-        brain: content.querySelector('#brain-pick').value,
-        prompt: withInputs ? content.querySelector('#brain-prompt').value.trim() : '',
-        files: staged.slice()
-      });
+      content.querySelector('#brain-ok').onclick = () => {
+        let when = '';
+        if (withSchedule) {
+          const val = content.querySelector('#brain-when').value;
+          if (val) when = new Date(val).toISOString();
+        }
+        close({
+          brain: content.querySelector('#brain-pick').value,
+          prompt: withInputs ? content.querySelector('#brain-prompt').value.trim() : '',
+          files: staged.slice(),
+          scheduledAt: when
+        });
+      };
       content.querySelector('#brain-cancel').onclick = () => close(null);
       container.querySelector('.modal-backdrop').onclick = () => close(null);
     });
@@ -1892,8 +1904,11 @@ class App {
         if (!choice) return;
         b.disabled = true;
         try {
-          await this.api.post(`/inbox/${encodeURIComponent(id)}/rerun`, { brain: choice.brain });
-          this.toast('re-running', choice.brain ? `Reset to pending — pinned to ${choice.brain}.` : 'Reset to pending — auto-routed via the brain chain.');
+          const body = { brain: choice.brain };
+          if (choice.scheduledAt) body.scheduledAt = choice.scheduledAt;
+          await this.api.post(`/inbox/${encodeURIComponent(id)}/rerun`, body);
+          const routeNote = choice.brain ? `pinned to ${choice.brain}` : 'auto-routed via the brain chain';
+          this.toast('re-running', choice.scheduledAt ? `Scheduled for ${new Date(choice.scheduledAt).toLocaleString()} — ${routeNote}.` : `Reset to pending — ${routeNote}.`);
           this.renderInbox();
         } catch (err) { this.toast('error', err.message); b.disabled = false; }
       }));
@@ -1920,10 +1935,12 @@ class App {
           const body = { brain: choice.brain };
           if (choice.prompt) body.prompt = choice.prompt;
           if (inputs.length) body.inputs = inputs;
+          if (choice.scheduledAt) body.scheduledAt = choice.scheduledAt;
           await this.api.post(`/inbox/${encodeURIComponent(id)}/continue`, body);
           const extras = [choice.prompt ? 'prompt' : null, inputs.length ? `${inputs.length} file(s)` : null].filter(Boolean).join(' + ');
           const routeNote = choice.brain ? `pinned to ${choice.brain}` : 'auto-routed via the brain chain';
-          this.toast('continuing', `Follow-up queued — ${routeNote}${extras ? ` · added ${extras}` : ''}.`);
+          const timingNote = choice.scheduledAt ? `Scheduled for ${new Date(choice.scheduledAt).toLocaleString()}` : 'Follow-up queued';
+          this.toast('continuing', `${timingNote} — ${routeNote}${extras ? ` · added ${extras}` : ''}.`);
           this.renderInbox();
         } catch (err) { this.toast('error', err.message); b.disabled = false; }
       }));
