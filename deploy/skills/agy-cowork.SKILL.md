@@ -423,6 +423,51 @@ Body: { "params": { "topic": "value" }, "dryRun": false }
 
 ---
 
+## Goals (Long-Lived Objectives)
+
+State lives in `goals/<goalId>.json`. A Goal drives toward one **binary success
+criterion** using the ordinary task machinery, via two roles:
+
+- **Achiever** — takes exactly ONE move per turn: `evaluate` (answer the Yes/No gate),
+  `plan` (append the next phase), or `emit` (generate that phase's tasks).
+- **Judger** — wakes when a phase's terminal task finishes, writes a report + meeting
+  minutes into artifacts, and re-arms the Achiever.
+
+A Goal ends `achieved` when the criterion is met, or `abandoned` **with a stated
+reason** — never a silent "done". Turns only occur when no generated task is open.
+
+### Scheduled Checkpoints (`scheduledAt`)
+
+An emitted task may carry a future `scheduledAt` (ISO 8601):
+
+```json
+{ "kind": "emit",
+  "tasks": [ { "title": "Measure MRR", "scheduledAt": "2026-09-14T00:00:00Z" } ] }
+```
+
+Because `scheduled` is an **open** status, an outstanding checkpoint keeps the Goal
+non-quiescent — it takes **no turns and spends no budget** while real-world time
+passes. Emitting a checkpoint is the correct move whenever the next honest step is to
+let the world change (a month of revenue, a search-indexing window); it is not a stall.
+Unparseable or already-past times are dropped and the task simply runs now, so one bad
+date can never abort an emit.
+
+### Two Guards Abandon a Goal
+
+| Guard | Counts | Default |
+|-------|--------|---------|
+| `stepBudget` | **Lifetime** execution tasks generated | 24 |
+| `MAX_GOAL_FAILURES` | **Consecutive** Achiever turns that neither plan nor emit | 5 |
+
+An `evaluate{met:false}` is one of those non-progressing turns. Both guards punish
+metric-open objectives ("$10k/month"), which is why such a Goal needs an
+**evidence-bound** criterion ("does a dated snapshot in artifacts show X?" rather than
+"is X true?"), a phase loop that always has real work to emit, scheduled checkpoints,
+and a budget sized for the horizon. The dashboard's 💰 📈 🧲 starters ship set up this
+way; copy that shape rather than writing a bare metric.
+
+---
+
 ## REST API Quick Reference
 
 | Method | Path | Description |
@@ -449,6 +494,10 @@ Body: { "params": { "topic": "value" }, "dryRun": false }
 | `GET` | `/api/workflows` | Workflow templates |
 | `POST` | `/api/workflows/:id/run` | Start a workflow run |
 | `GET` | `/api/workflow-runs/:runId` | Run status and decision log |
+| `GET`/`POST` | `/api/goals` | List goals / create one |
+| `GET`/`PATCH`/`DELETE` | `/api/goals/:id` | Read, edit, or remove a goal |
+| `POST` | `/api/goals/:id/activate`, `/pause`, `/abandon` | Drive a goal's lifecycle (`abandon` takes a reason) |
+| `GET` | `/api/goals/:id/tasks` | The tasks a goal generated |
 | `GET` | `/api/events` | SSE event stream (real-time) |
 
 ### Web Dashboard

@@ -57,6 +57,26 @@ journalctl --user -u cowork-local-brain@codex.service -n 100 --no-pager
 - A failed brain rung hands the task to the next rung. Do not duplicate the task while
   handover is in progress.
 
+## Goals
+
+A goal (`goals/<goalId>.json`, `/api/goals`) is a long-lived objective driving toward
+one binary success criterion. An **Achiever** takes one move per turn — `evaluate`,
+`plan` a phase, or `emit` that phase's tasks — and a **Judger** audits each finished
+phase, then re-arms the Achiever. It ends `achieved` or `abandoned` with a reason,
+never a silent "done".
+
+If you run as the Achiever, two things matter most:
+
+- **Checkpoints.** An emitted task may carry a future `scheduledAt` (ISO 8601). Since
+  `scheduled` is an open status, an outstanding checkpoint keeps the goal
+  non-quiescent, so it takes no turns and spends no budget while real time passes.
+  Emit one when the next honest step is to let the world change — that is the correct
+  move, not a stall.
+- **Never stop at an unmet criterion.** `stepBudget` (default 24) caps lifetime
+  execution tasks, and 5 consecutive turns that neither plan nor emit abandon the goal
+  — an `evaluate{met:false}` is one of those. Plan a different approach instead, guided
+  by the Judger's latest minutes.
+
 ## Core MCP tools
 
 | Tool | Use |

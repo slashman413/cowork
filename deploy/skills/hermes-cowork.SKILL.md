@@ -191,6 +191,44 @@ their own chains; everything else routes through the 285-agent roster:
 - Chains run top→bottom with failure handover; `remoteGraceMs` (60s) auto-advances past
   an unclaimed remote rung. Pin a single task with `context.brain: "<id>"`.
 
+## Goals (long-lived objectives)
+
+State in `goals/<goalId>.json`. A goal drives toward one **binary success criterion**
+on the normal task machinery, via two roles:
+
+- **Achiever** — exactly ONE move per turn: `evaluate` (answer the Yes/No gate), `plan`
+  (append the next phase), or `emit` (generate that phase's tasks).
+- **Judger** — wakes when a phase's terminal task finishes, writes a report + minutes
+  into artifacts, and re-arms the Achiever.
+
+A goal ends `achieved`, or `abandoned` **with a reason** — never a silent "done". Turns
+happen only when no generated task is open.
+
+**Scheduled checkpoints.** An emitted task may carry a future `scheduledAt` (ISO 8601):
+
+```json
+{ "kind": "emit",
+  "tasks": [ { "title": "Measure MRR", "scheduledAt": "2026-09-14T00:00:00Z" } ] }
+```
+
+`scheduled` is an *open* status, so an outstanding checkpoint keeps the goal
+non-quiescent: **no turns, no budget spent** while real time passes. Emit one whenever
+the next honest step is to let the world change (a month of revenue, an indexing
+window) — it is the correct move, not a stall. Unparseable or past times are dropped
+and the task runs now, so one bad date never aborts an emit.
+
+**Two guards abandon a goal.** `stepBudget` (default 24) counts *lifetime* execution
+tasks; `MAX_GOAL_FAILURES` (5) counts *consecutive* Achiever turns that neither plan
+nor emit — and an `evaluate{met:false}` is one of those. Both punish metric-open
+objectives, so a goal riding an external number needs an evidence-bound criterion
+("does a dated snapshot in artifacts show X?", not "is X true?"), a phase loop that
+always has work to emit, scheduled checkpoints, and a budget sized for the horizon.
+The dashboard's 💰 📈 🧲 starters are already shaped this way — copy one rather than
+writing a bare metric.
+
+`GET/POST /api/goals` · `GET/PATCH/DELETE /api/goals/:id` ·
+`POST /api/goals/:id/{activate,pause,abandon}` · `GET /api/goals/:id/tasks`
+
 ## Procedure
 
 ### 1. Register + Declare Brains
