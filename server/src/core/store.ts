@@ -462,7 +462,7 @@ export class Store {
    * this behind an explicit confirmation. Returns null if the task is gone or is
    * not in a re-runnable (finished-failed) state.
    */
-  public rerunTask(taskId: string, brainOverride?: string): Task | null {
+  public rerunTask(taskId: string, brainOverride?: string, opts?: { scheduledAt?: string }): Task | null {
     const task = this.getTask(taskId);
     if (!task) return null;
     if (!isFailedTask(task)) return null;
@@ -485,6 +485,16 @@ export class Store {
 
     task.context = ctx;
     task.status = 'pending';
+    if (opts?.scheduledAt !== undefined) {
+      const at = Date.parse(String(opts.scheduledAt));
+      if (!Number.isFinite(at)) {
+        throw new Error(`Invalid scheduledAt "${opts.scheduledAt}" — use an ISO 8601 date-time (e.g. 2026-08-08T09:00:00+08:00)`);
+      }
+      task.scheduledAt = new Date(at).toISOString();
+      if (at > Date.now()) task.status = 'scheduled';
+    } else {
+      delete task.scheduledAt;
+    }
     delete task.failed;
     delete task.result;
     delete task.claimedAt;
@@ -565,7 +575,7 @@ export class Store {
   public continueTask(
     taskId: string,
     brainOverride?: string,
-    opts: { prompt?: string; inputs?: Array<{ token?: string; name?: string }> } = {}
+    opts: { prompt?: string; inputs?: Array<{ token?: string; name?: string }>; scheduledAt?: string } = {}
   ): Task | null {
     const prev = this.getTask(taskId);
     if (!prev) return null;
@@ -616,6 +626,15 @@ export class Store {
       ...(prev.skill ? { skill: prev.skill } : {}),
       ...(Array.isArray(prev.tags) ? { tags: [...prev.tags] } : {})
     };
+
+    if (opts?.scheduledAt !== undefined) {
+      const at = Date.parse(String(opts.scheduledAt));
+      if (!Number.isFinite(at)) {
+        throw new Error(`Invalid scheduledAt "${opts.scheduledAt}" — use an ISO 8601 date-time (e.g. 2026-08-08T09:00:00+08:00)`);
+      }
+      task.scheduledAt = new Date(at).toISOString();
+      if (at > Date.now()) task.status = 'scheduled';
+    }
 
     // Seed inputs from the prior run's outputs BEFORE the task is visible/pending,
     // then fold in any extra files the operator attached in the Continue dialog.

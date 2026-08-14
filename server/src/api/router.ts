@@ -114,7 +114,9 @@ export function createApiRouter(store: Store, eventBus: EventBus): Router {
       // Optional { brain }: '' → route via the agent's chain, '<id>' → pin that
       // brain, absent → keep the task's existing brain targeting (default).
       const brain = typeof req.body?.brain === 'string' ? req.body.brain : undefined;
-      const task = store.rerunTask(req.params.id, brain);
+      const scheduledAt = typeof req.body?.scheduledAt === 'string' ? req.body.scheduledAt
+        : typeof req.body?.scheduled_at === 'string' ? req.body.scheduled_at : undefined;
+      const task = store.rerunTask(req.params.id, brain, { scheduledAt });
       if (!task) return res.status(404).json({ error: 'Task not found or not in a re-runnable (failed) state' });
       res.json(task);
     } catch (e: any) {
@@ -136,7 +138,9 @@ export function createApiRouter(store: Store, eventBus: EventBus): Router {
       // attached alongside the prior run's outputs.
       const prompt = typeof req.body?.prompt === 'string' ? req.body.prompt : undefined;
       const inputs = Array.isArray(req.body?.inputs) ? req.body.inputs : undefined;
-      const task = store.continueTask(req.params.id, brain, { prompt, inputs });
+      const scheduledAt = typeof req.body?.scheduledAt === 'string' ? req.body.scheduledAt
+        : typeof req.body?.scheduled_at === 'string' ? req.body.scheduled_at : undefined;
+      const task = store.continueTask(req.params.id, brain, { prompt, inputs, scheduledAt });
       if (!task) return res.status(400).json({ error: 'Task not found or not in a continuable (finished-success) state' });
       res.status(201).json(task);
     } catch (e: any) {
