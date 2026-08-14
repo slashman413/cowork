@@ -270,6 +270,19 @@ function mdViewer(text, label, opts = {}) {
   </div>`;
 }
 
+// One artifact chip. Markdown files (.md / .markdown) open in the in-app popup
+// viewer (a button wired to App.openMarkdownModal via the delegated .md-artifact
+// handler) so they can be read without leaving the dashboard; every other file
+// type stays a plain download link. Shared by the Inbox and the Workflow-run
+// drawer so both artifact lists stay visually identical.
+function artifactChip(taskId, f, fontSize = '0.9rem') {
+  const base = `font-size:${fontSize};margin:0;display:inline-flex;align-items:center;gap:4px`;
+  if (/\.(md|markdown)$/i.test(f)) {
+    return `<button class="btn md-artifact" data-md-task="${esc(taskId)}" data-md-file="${esc(f)}" title="Open “${esc(f)}” in the markdown viewer" style="${base}"><i data-lucide="book-open" style="width:12px;height:12px"></i>${esc(f)}</button>`;
+  }
+  return `<a href="/api/artifacts/${encodeURIComponent(taskId)}/${encodeURIComponent(f)}" download class="btn" style="${base}"><i data-lucide="download" style="width:12px;height:12px"></i>${esc(f)}</a>`;
+}
+
 /** Brain chip accent (translucent bg / border / text share one hue). */
 const BRAIN_COLOR = '#F97316';        // orange
 const BRAIN_BAD_COLOR = '#EF4444';    // unknown / deregistered brain
@@ -373,6 +386,16 @@ class App {
       body.style.display = showRaw ? 'none' : '';
       raw.hidden = !showRaw;
       btn.textContent = showRaw ? 'Rendered' : 'Raw';
+    });
+    // Delegated: markdown artifacts open in the in-app popup viewer instead of
+    // downloading. Works for both the Inbox cards and the Workflow-run drawer,
+    // which re-render in place, so a document-level handler avoids stale listeners.
+    document.addEventListener('click', (e) => {
+      const btn = e.target.closest('.md-artifact');
+      if (!btn) return;
+      e.preventDefault();
+      e.stopPropagation();
+      this.openMarkdownModal(btn.dataset.mdTask, btn.dataset.mdFile);
     });
     // Delegated open/delete for the Chat view's recent-sessions strip (the chips
     // are re-rendered in place, so a document-level handler avoids stale listeners).
@@ -547,6 +570,77 @@ class App {
       ta.remove();
       return ok;
     } catch { return false; }
+  }
+
+  /**
+   * Open a task's markdown artifact in a popup viewer (rendered, with a Raw
+   * toggle and a Download fallback) instead of downloading it. Reuses the shared
+   * #modal-container. fetch() ignores the download route's Content-Disposition,
+   * so we get the raw text back; agent output is untrusted → md() sanitizes it
+   * (DOMPurify). Non-markdown artifacts never reach here — they stay download
+   * links (see artifactChip).
+   */
+  async openMarkdownModal(taskId, file) {
+    const container = document.getElementById('modal-container');
+    const content = document.getElementById('modal-content');
+    if (!container || !content) return;
+    const url = `/api/artifacts/${encodeURIComponent(taskId)}/${encodeURIComponent(file)}`;
+    const barBtn = 'font-size:0.75rem;padding:3px 8px;display:inline-flex;align-items:center;gap:4px';
+    content.classList.add('modal-md');
+    content.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin:0 0 12px">
+        <h3 style="margin:0;font-size:1.02rem;display:flex;align-items:center;gap:6px;min-width:0">
+          <i data-lucide="book-open" style="width:16px;height:16px;flex:0 0 auto"></i>
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(file)}</span>
+        </h3>
+        <div style="display:flex;gap:6px;flex:0 0 auto">
+          <button class="btn mdm-toggle" title="Toggle raw / rendered" style="${barBtn}" disabled>Raw</button>
+          <a class="btn" href="${url}" download title="Download this file" style="${barBtn}"><i data-lucide="download" style="width:13px;height:13px"></i></a>
+          <button class="btn mdm-close" title="Close" style="${barBtn}"><i data-lucide="x" style="width:14px;height:14px"></i></button>
+        </div>
+      </div>
+      <div class="md-body mdm-body" style="font-size:0.95rem;line-height:1.55;color:var(--text-muted)">Loading…</div>
+      <pre class="mdm-raw" hidden style="white-space:pre-wrap;font-size:0.85rem;background:var(--bg-tertiary);padding:10px;border-radius:8px;margin:4px 0"></pre>`;
+    container.classList.remove('hidden');
+    createIcons();
+
+    const close = () => {
+      container.classList.add('hidden');
+      content.classList.remove('modal-md');
+      content.innerHTML = '';
+      document.removeEventListener('keydown', onKey);
+    };
+    const onKey = (ev) => { if (ev.key === 'Escape') close(); };
+    document.addEventListener('keydown', onKey);
+    content.querySelector('.mdm-close').onclick = close;
+    container.querySelector('.modal-backdrop').onclick = close;
+
+    let raw = '';
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      raw = await res.text();
+    } catch (err) {
+      const body = content.querySelector('.mdm-body');
+      if (body) body.innerHTML = `<p style="color:#EF4444">Could not load <strong>${esc(file)}</strong>: ${esc(err.message)}. <a href="${url}" download>Download instead</a>.</p>`;
+      return;
+    }
+
+    const body = content.querySelector('.mdm-body');
+    const rawEl = content.querySelector('.mdm-raw');
+    const toggle = content.querySelector('.mdm-toggle');
+    if (!body || !rawEl || !toggle) return;   // modal was closed while loading
+    body.style.color = 'var(--text-primary)';
+    body.innerHTML = md(raw);
+    rawEl.textContent = raw;
+    toggle.disabled = false;
+    toggle.onclick = () => {
+      const showRaw = body.style.display !== 'none';
+      body.style.display = showRaw ? 'none' : '';
+      rawEl.hidden = !showRaw;
+      toggle.textContent = showRaw ? 'Rendered' : 'Raw';
+    };
+    createIcons();
   }
 
   /**
@@ -1693,6 +1787,8 @@ class App {
           ${t.priority && t.priority !== 'normal' ? badge(t.priority, t.priority === 'urgent' ? '#EF4444' : (t.priority === 'high' ? '#EAB308' : '#94A3B8')) : ''}
           ${(Array.isArray(t.tags) ? t.tags : []).filter(tag => tag !== 'chat').map(tag => badge('#' + tag, '#64748B')).join('')}
           <span class="task-caret" style="margin-left:auto; color:var(--text-muted); font-size:0.72rem; user-select:none">${this.openTasks.has(t.id) ? '▾' : '▸'}</span>
+          <button class="btn-icon task-del" data-del-task="${esc(t.id)}" title="Delete this task, its reports and artifacts"
+            style="margin-left:2px; padding:4px; background:none; border:none; cursor:pointer; line-height:0"><i data-lucide="trash-2" style="width:14px;height:14px;color:var(--text-muted)"></i></button>
         </div>
         <div style="margin:7px 0 3px"><strong style="font-size:1.02rem">${esc(t.title)}</strong></div>
         ${chainHtml}
@@ -1703,9 +1799,7 @@ class App {
             ? `<button class="btn" disabled title="Already continued — a follow-up task was spawned from this run"
             style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#22C55E99;border-color:#22C55E33;opacity:.6;cursor:default">✓ Continued</button>`
             : `<button class="btn" data-continue-task="${esc(t.id)}" data-brain="${esc(brainLabel)}" title="Continue this task — spawn a follow-up seeded with this run's outputs; pick which brain claims it"
-            style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#22C55E;border-color:#22C55E66">▸ Continue</button>`) : ''}
-          <button class="btn" data-del-task="${esc(t.id)}" title="Delete this task, its reports and artifacts"
-            style="font-size:0.72rem;margin-left:6px;padding:2px 7px">✕</button></div>
+            style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#22C55E;border-color:#22C55E66">▸ Continue</button>`) : ''}</div>
         <div class="task-ids" style="display:flex; flex-wrap:wrap; align-items:center; gap:12px; padding:4px 0 2px; font-size:0.72rem; color:var(--text-muted)">
           <span class="copyable" data-copy="${esc(t.id)}" title="Task ID — click to copy" style="cursor:pointer; font-family:ui-monospace,SFMono-Regular,Menlo,monospace">
             <i data-lucide="hash" style="width:11px;height:11px;vertical-align:-1px"></i>${esc(t.id)}</span>
@@ -1714,7 +1808,7 @@ class App {
         </div>
         ${arts.length ? `<div class="task-artifacts" style="display:flex; flex-wrap:wrap; align-items:center; gap:4px; padding:6px 0 2px">
           <span style="font-size:0.85rem; color:var(--text-muted); margin-right:2px; text-transform:uppercase; letter-spacing:.03em">Artifacts</span>
-          ${arts.map(f => `<a href="/api/artifacts/${encodeURIComponent(t.id)}/${encodeURIComponent(f)}" download class="btn" style="font-size:0.9rem;margin:0;display:inline-flex;align-items:center;gap:4px"><i data-lucide="download" style="width:12px;height:12px"></i>${esc(f)}</a>`).join('')}</div>` : ''}
+          ${arts.map(f => artifactChip(t.id, f, '0.9rem')).join('')}</div>` : ''}
         ${(inputs.length || canAttach) ? `<div class="task-inputs" style="display:flex; flex-wrap:wrap; align-items:center; gap:4px; padding:6px 0 2px">
           <span style="font-size:0.72rem; color:var(--text-muted); margin-right:2px; text-transform:uppercase; letter-spacing:.03em">Inputs</span>
           ${inputs.map(f => `<a href="/api/inputs/${encodeURIComponent(t.id)}/${encodeURIComponent(f)}" download class="btn" style="font-size:0.78rem;margin:0;display:inline-flex;align-items:center;gap:4px"><i data-lucide="paperclip" style="width:12px;height:12px"></i>${esc(f)}</a>`).join('')}
@@ -2615,7 +2709,7 @@ class App {
         const taskUrl = `#inbox/${encodeURIComponent(t.id)}`;
         const artHtml = arts.length ? `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin:8px 0 2px">
             <span style="font-size:0.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.03em">Artifacts</span>
-            ${arts.map(f => `<a href="/api/artifacts/${encodeURIComponent(t.id)}/${encodeURIComponent(f)}" download class="btn" style="font-size:0.8rem;margin:0;display:inline-flex;align-items:center;gap:4px"><i data-lucide="download" style="width:12px;height:12px"></i>${esc(f)}</a>`).join('')}
+            ${arts.map(f => artifactChip(t.id, f, '0.8rem')).join('')}
           </div>` : '';
         detail.innerHTML = `
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
