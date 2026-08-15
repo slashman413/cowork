@@ -38,6 +38,25 @@ if [ "$RESTART" = "0" ]; then
 fi
 
 if command -v systemctl >/dev/null 2>&1 && systemctl --user status "$SERVICE" >/dev/null 2>&1; then
+  # Self-kill trap: cowork-mcp has KillMode=control-group and runs local-brain
+  # tasks as its own children, so if THIS process is running inside the service's
+  # control group (e.g. a goal/task doing the deploy), restarting it would SIGKILL
+  # us mid-restart — the fix builds but never goes live. Detect that and hand off
+  # to the detached, wait-for-idle path instead of committing suicide.
+  MAIN_PID="$(systemctl --user show -p MainPID --value "$SERVICE" 2>/dev/null || echo 0)"
+  MY_CG="$(cat /proc/self/cgroup 2>/dev/null || true)"
+  if [ -n "$MAIN_PID" ] && [ "$MAIN_PID" != "0" ] && printf '%s' "$MY_CG" | grep -q "${SERVICE}.service"; then
+    echo "Detected: this process runs INSIDE ${SERVICE}'s control group."
+    echo "A direct restart would kill it (and this deploy) — handing off to the"
+    echo "detached, wait-for-idle redeploy so the restart survives and no task dies:"
+    echo
+    echo "  systemd-run --user --collect --unit=cowork-server-redeploy \\"
+    echo "    $REPO/deploy/redeploy-server-when-idle.sh --no-build"
+    systemd-run --user --collect --unit=cowork-server-redeploy \
+      "$REPO/deploy/redeploy-server-when-idle.sh" --no-build
+    echo "Scheduled — cowork-mcp will restart onto the fresh build once it goes idle."
+    exit 0
+  fi
   echo "Restarting systemd user service: $SERVICE"
   systemctl --user restart "$SERVICE"
   sleep 2

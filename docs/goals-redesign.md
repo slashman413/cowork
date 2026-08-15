@@ -286,6 +286,47 @@ grown backoff.
 
 ---
 
+## ADR-009 — a fix isn't fixed until it's *deployed*: the self-restart trap
+
+**Status:** Accepted · **Date:** 2026-08-15
+
+ADR-007 and ADR-008 landed the code that makes a `blocked` goal resumable (manually) and
+self-healing (automatically). Yet an operator clicking **Resume now** on the live dashboard
+still got `action failed — cannot activate a blocked goal`. The code was correct; the
+**running server was not the code**.
+
+**Root cause.** `cowork-mcp` runs from `server/dist/` (a `.gitignored` compiled artifact),
+and node loads it once at startup — pushing to `main` and even rebuilding `dist/` changes
+nothing in the live process. The live server had been running since *before* the
+recoverable-`blocked` feature existed (commit `ab62931`), whose `activate()` allow-list was
+`draft | paused` only, so it rejected every `blocked` goal. The fix (`05f1636`) was
+committed and built but **never restarted into service**.
+
+**Why the restart kept not happening — the trap.** `cowork-mcp` has
+`KillMode=control-group` and runs **local-brain tasks as its own child processes**. The task
+that would deploy the fix is therefore a child of the very service it must restart, so a
+plain `systemctl --user restart cowork-mcp` SIGKILLs the deploying task mid-restart — the
+result is never written and the restart aborts with it. Every attempt to self-deploy from a
+task was suicide.
+
+**The fix.** `deploy/redeploy-server-when-idle.sh` — the server-side sibling of the existing
+`restart-brain-when-idle.sh`. Run **detached** via `systemd-run --user` so it lives in its
+own scope (not cowork-mcp's control group), it waits until the server has **no task
+children** (idle), then restarts it — so no in-flight task is killed and the deploy
+survives. `deploy/redeploy.sh` now **detects** when it is being run from inside
+cowork-mcp's control group and automatically hands off to that detached path instead of
+committing suicide.
+
+**Operational rule.** *A committed fix to server code is not live until `dist/` is rebuilt
+**and** the process is restarted.* From inside a cowork task, deploy with:
+
+```
+systemd-run --user --collect --unit=cowork-server-redeploy \
+  deploy/redeploy-server-when-idle.sh
+```
+
+---
+
 ## Sources
 - Locke & Latham, *Building a Practically Useful Theory of Goal Setting and Task
   Motivation* — https://med.stanford.edu/content/dam/sm/s-spire/documents/PD.locke-and-latham-retrospective_Paper.pdf
