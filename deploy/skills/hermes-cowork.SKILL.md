@@ -203,9 +203,12 @@ on the normal task machinery, via two roles:
 
 A goal ends **`achieved`** (the only terminal state). If it hits an obstacle it can't
 clear itself it goes **`blocked`** — a *recoverable* hold recording the reason **and** the
-specific condition to resume (`unblockCriteria`). Never a silent "done" and never a silent
-give-up: a human **resumes** a blocked goal once the obstacle is cleared, or **deletes** it
-if it's truly dead. Turns happen only when no generated task is open.
+specific condition to resume (`unblockCriteria`). `blocked` is **self-healing**: the drive
+loop **auto-resumes** it on an exponential backoff (minutes, then hours) for a HALF-OPEN
+probe, so it recovers on its own once the obstacle clears — recovery never waits on a
+human. Never a silent "done" and never a silent give-up: a human can **resume now** to
+retry at once, or **delete** it if it's truly dead. Turns happen only when no generated
+task is open.
 
 **Scheduled checkpoints.** An emitted task may carry a future `scheduledAt` (ISO 8601):
 
@@ -224,7 +227,9 @@ and the task runs now, so one bad date never aborts an emit.
 execution tasks; `MAX_GOAL_FAILURES` (5) counts *consecutive* Achiever turns that neither
 plan nor emit — and an `evaluate{met:false}` is one of those. When either trips the goal
 is **blocked with a concrete resume contract** (raise the budget / narrow the criterion,
-or verify the brain, then resume), not discarded. Both punish metric-open objectives, so a
+or verify the brain) and then **auto-retried on a backoff** — a transient brain blip
+self-heals in minutes, and raising the budget lets it self-resume with no click, not
+discarded. Both punish metric-open objectives, so a
 goal riding an external number needs an evidence-bound criterion ("does a dated snapshot
 in artifacts show X?", not "is X true?"), a phase loop that always has work to emit,
 scheduled checkpoints, and a budget sized for the horizon. The dashboard's 💰 📈 🧲

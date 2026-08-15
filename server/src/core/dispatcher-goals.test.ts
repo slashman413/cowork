@@ -46,11 +46,20 @@ function harness(decisions: (AchieverDecision | null)[]) {
     const d = queue.length ? queue.shift() : null;
     return d ? '```json\n' + JSON.stringify(d) + '\n```' : '';
   };
-  return { goals, store, dispatcher };
+  return { goals, store, dispatcher, dir };
 }
 
 const settle = () => new Promise(r => setTimeout(r, 5));
 const drive = (d: any) => d.driveGoals();
+
+/** Fast-forward a blocked goal's auto-retry time into the past so the next
+ *  driveGoals() tick treats it as due (avoids waiting out the real backoff). */
+function makeRetryDue(dir: string, goalId: string) {
+  const p = path.join(dir, `${goalId}.json`);
+  const rec = JSON.parse(fs.readFileSync(p, 'utf-8'));
+  rec.nextRetryAt = new Date(0).toISOString();
+  fs.writeFileSync(p, JSON.stringify(rec, null, 2));
+}
 
 function seedGoal(goals: Goals) {
   const g = goals.create({
@@ -161,6 +170,38 @@ test('an Achiever that self-declares a block holds the goal recoverably (not a f
   assert.equal(rec.status, 'blocked');
   assert.equal(rec.unblockCriteria, 'the CEO approves the price');
   assert.equal(rec.history.at(-1)!.kind, 'block');
+});
+
+test('a blocked goal AUTO-RESUMES when its retry time arrives — recovery needs no human', async () => {
+  // The transient fault clears: the Achiever now returns a usable emit decision.
+  const { goals, store, dispatcher, dir } = harness([{ kind: 'emit', tasks: [{ title: 'real work' }] }]);
+  const goalId = seedGoal(goals);
+  goals.block(goalId, 'transient brain fault');
+  assert.equal(goals.get(goalId)!.status, 'blocked');
+
+  makeRetryDue(dir, goalId);                 // its backoff has elapsed
+  drive(dispatcher); await settle();         // one tick: auto-resume + a fresh turn
+
+  const rec = goals.get(goalId)!;
+  assert.equal(rec.status, 'active', 'the goal recovered on its own — no manual resume');
+  assert.equal(store.tasks.length, 1, 'the half-open probe made real progress');
+  assert.equal(rec.blockCount, undefined, 'progress reset the breaker');
+  assert.ok(rec.history.some(h => h.kind === 'resume' && /auto-resumed/.test(h.reason || '')), 'audit trail records the automatic resume');
+});
+
+test('a half-open probe that still fails re-blocks with a GROWN backoff (one-shot trial)', async () => {
+  const { goals, dispatcher, dir } = harness([]);
+  (dispatcher as any).askExecutor = async () => 'still broken, no JSON';   // fault persists
+  const goalId = seedGoal(goals);
+  goals.block(goalId, 'transient brain fault');
+  assert.equal(goals.get(goalId)!.blockCount, 1);
+
+  makeRetryDue(dir, goalId);
+  drive(dispatcher); await settle();         // auto-resume → one failing turn → re-block
+
+  const rec = goals.get(goalId)!;
+  assert.equal(rec.status, 'blocked', 'a single failed probe re-opens the breaker (no 5-turn spin)');
+  assert.equal(rec.blockCount, 2, 'the backoff advanced instead of restarting');
 });
 
 test('driver self-heals a dropped Judger event by re-emitting the Judger', async () => {

@@ -718,6 +718,28 @@ export class Dispatcher {
       if (stuck) this.goals.emitJudgerTask(rec.goalId, stuck);
     }
 
+    // Auto-resume pass (self-healing circuit breaker, ADR-008). A blocked goal is
+    // NOT a human-only dead end: once its backoff elapses we resume it for a single
+    // HALF-OPEN probe, so recovery never waits on a person. We pre-seed the
+    // in-memory failure counter to one-below the ceiling, so ONE more non-progress
+    // turn re-opens the breaker (a true one-shot trial) while any real progress
+    // clears the counter and the goal is healthy again. A budget-exhausted goal
+    // re-blocks for free in the loop below (its overBudget guard fires before any
+    // LLM turn), so raising the budget is all a human need do — the goal then
+    // self-resumes on the next retry.
+    let due: ReturnType<Goals['blockedGoalsDueForRetry']>;
+    try { due = this.goals.blockedGoalsDueForRetry(); } catch { due = []; }
+    for (const rec of due) {
+      if (this.decidingGoals.has(rec.goalId)) continue;
+      try {
+        this.goals.activate(rec.goalId, { auto: true });
+        this.goalFailures.set(rec.goalId, Dispatcher.MAX_GOAL_FAILURES - 1);
+        console.log(`Dispatcher: goal ${rec.goalId} auto-resumed for a half-open retry (block #${rec.blockCount ?? '?'})`);
+      } catch (e) {
+        console.error(`Dispatcher: goal ${rec.goalId} auto-resume failed:`, e);
+      }
+    }
+
     const pending = this.goals.goalsAwaitingAchiever();
     for (const rec of pending) {
       const goalId = rec.goalId;
@@ -732,7 +754,7 @@ export class Dispatcher {
         this.goals.block(
           goalId,
           `step budget exhausted (${cap} generated tasks) without meeting the success criterion`,
-          `Raise this goal's stepBudget above ${cap} (if the criterion is genuinely reachable with more work), OR narrow the success criterion, then resume. If the objective is no longer worth pursuing, delete the goal.`
+          `Raise this goal's stepBudget above ${cap} (if the criterion is genuinely reachable with more work), OR narrow the success criterion. The goal auto-retries on a backoff and self-resumes once it is back under budget — no need to click Resume. If the objective is no longer worth pursuing, delete the goal.`
         );
         this.goalFailures.delete(goalId);
         continue;
@@ -771,8 +793,9 @@ export class Dispatcher {
    *  concrete resume contract) once the consecutive-failure ceiling is hit. This
    *  ceiling most often trips on TRANSIENT infrastructure faults (the Achiever
    *  brain offline, overloaded, or returning unparseable output), so the goal is
-   *  held recoverably — not abandoned — and a resume re-arms it with a clean
-   *  counter (circuit-breaker OPEN → HALF-OPEN, ADR-007). */
+   *  held recoverably — not abandoned — and the drive loop AUTOMATICALLY resumes
+   *  it on a backoff for a clean HALF-OPEN retry (circuit-breaker OPEN → HALF-OPEN,
+   *  ADR-008): a transient blip self-heals in minutes with no human. */
   private registerGoalFailure(goalId: string, why: string): void {
     const n = (this.goalFailures.get(goalId) || 0) + 1;
     this.goalFailures.set(goalId, n);
@@ -782,7 +805,7 @@ export class Dispatcher {
       this.goals?.block(
         goalId,
         `Achiever made no usable progress after ${n} turns (${why}) — goal held, NOT completed`,
-        `The Achiever brain is reachable and returns a parseable decision. This ceiling usually trips on a transient fault (brain offline/overloaded/unparseable output); verify the brain, then resume to retry. If the goal's criterion or phases are genuinely unworkable, edit them first.`
+        `The Achiever brain is reachable and returns a parseable decision. This ceiling usually trips on a transient fault (brain offline/overloaded/unparseable output), so the goal auto-retries on a backoff and self-heals once the brain recovers — no action needed for a blip. If it keeps re-blocking, the brain or the goal's criterion/phases are genuinely unworkable — verify the brain or edit the goal.`
       );
     }
   }
@@ -823,7 +846,7 @@ export class Dispatcher {
       '',
       `Waiting on the real world: when the next honest move is to LET TIME PASS (a month of revenue, a cohort of traffic, an indexing window), do not burn turns re-evaluating. Emit the measurement task with a future "scheduledAt". The goal then sleeps — no turns, no budget — until that checkpoint fires. This is the correct move, not a stall.`,
       `Persistence: a criterion that is not yet met is NEVER a reason to stop. If a phase's results disappointed, plan the next phase with a DIFFERENT approach informed by the Judger's minutes above — do not repeat the approach that underperformed.`,
-      `Blocking honestly: if — and only if — you hit a real obstacle you cannot clear yourself (a missing credential, an external dependency, a decision only a human can make, a criterion that has become impossible), return kind:"block" with a precise unblockCriteria. A blocked goal is HELD, not abandoned: it stops spending turns and budget and waits for that condition or a human to resume it. Prefer block over spinning: an evaluate{met:false} that neither plans nor emits counts as no progress, and enough of those will block the goal automatically with a generic reason — declaring the block yourself, with a specific unblockCriteria, is always better.`
+      `Blocking honestly: if — and only if — you hit a real obstacle you cannot clear yourself (a missing credential, an external dependency, a decision only a human can make, a criterion that has become impossible), return kind:"block" with a precise unblockCriteria. A blocked goal is HELD, not abandoned, and it is SELF-HEALING: it stops spending turns and budget, then the system auto-resumes it for a fresh probe on a backoff (minutes at first, later hours), so it recovers on its own the moment the obstacle clears — no human click required. Make unblockCriteria a concrete, checkable condition so that probe can tell whether to proceed. Prefer block over spinning: an evaluate{met:false} that neither plans nor emits counts as no progress, and enough of those will block the goal automatically with a generic reason — declaring the block yourself, with a specific unblockCriteria, is always better.`
     );
     return lines.join('\n');
   }

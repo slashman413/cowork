@@ -37,9 +37,38 @@ export class Goals {
   private config: Config;
   private store: GoalStore;
 
+  /**
+   * Auto-resume backoff for a blocked goal (ADR-008 — self-healing circuit
+   * breaker). A blocked goal is retried automatically after RETRY_BASE_MS,
+   * doubling on each consecutive re-block up to RETRY_CAP_MS. The point: a
+   * transient fault (the exact thing that killed the first real goal) recovers in
+   * ~10 minutes with NO human, while a goal that keeps re-blocking settles into a
+   * cheap, capped heartbeat — still re-checking the world every few hours, so it
+   * self-resumes the instant the obstacle actually clears, but never spinning.
+   * This is what makes `blocked` genuinely different from the old terminal
+   * `abandoned`: recovery does not depend on a person clicking Resume.
+   */
+  static readonly RETRY_BASE_MS = 10 * 60_000;         // 10 min — first retry
+  static readonly RETRY_CAP_MS = 6 * 60 * 60_000;      // 6 h — steady-state ceiling
+
   constructor(config: Config, store: GoalStore) {
     this.config = config;
     this.store = store;
+  }
+
+  /** Exponential backoff (base·2^(n-1), capped) for the n-th consecutive block. */
+  private backoffMs(blockCount: number): number {
+    const n = Math.max(1, blockCount);
+    return Math.min(Goals.RETRY_CAP_MS, Goals.RETRY_BASE_MS * 2 ** (n - 1));
+  }
+
+  /** Clear the circuit-breaker backoff state — called when a goal makes real
+   *  forward progress or an operator manually resumes it (the breaker resets to
+   *  CLOSED). */
+  private clearBackoff(rec: GoalRecord): void {
+    delete rec.blockedAt;
+    delete rec.blockCount;
+    delete rec.nextRetryAt;
   }
 
   private dir(): string {
@@ -185,10 +214,18 @@ export class Goals {
   /** draft/paused/blocked → active. Refuses a goal that violates the
    *  terminate-ability guardrails: it must carry a binary criterion AND at least
    *  one phase to work (ADR-003). Resuming from `blocked` clears the block
-   *  contract (blockReason/unblockCriteria) — the circuit-breaker HALF-OPEN retry
-   *  (ADR-007): the operator asserts the unblock condition now holds, so the goal
-   *  gets a fresh turn. `achieved` is terminal and cannot be reactivated. */
-  activate(goalId: string): GoalRecord {
+   *  contract (blockReason/unblockCriteria) — the circuit-breaker HALF-OPEN retry.
+   *
+   *  `opts.auto` distinguishes the two resume paths (ADR-008):
+   *   - MANUAL (`auto` falsy — a human via the API/UI): asserts the obstacle is
+   *     fixed, so the breaker RESETS — `blockCount` clears and the next block (if
+   *     any) starts backoff from scratch.
+   *   - AUTO (`auto:true` — the drive loop's scheduled retry): a HALF-OPEN probe.
+   *     `blockCount` is KEPT so that if the probe re-blocks, the backoff keeps
+   *     growing instead of restarting.
+   *
+   *  `achieved` is terminal and cannot be reactivated. */
+  activate(goalId: string, opts: { auto?: boolean } = {}): GoalRecord {
     const rec = this.load(goalId);
     if (!rec) throw new Error('goal not found');
     if (rec.status === 'active') return rec;
@@ -198,9 +235,13 @@ export class Goals {
     if (!rec.successCriteria.trim()) throw new Error('cannot activate: successCriteria (binary Yes/No) is required');
     if (!rec.phases.length) throw new Error('cannot activate: at least one phase (waypoint) is required');
     if (rec.status === 'blocked') {
-      rec.history.push({ kind: 'resume', reason: `unblocked (was: ${rec.blockReason || 'blocked'})`, at: new Date().toISOString() });
+      const how = opts.auto ? 'auto-resumed (circuit-breaker half-open probe)' : 'resumed by operator';
+      rec.history.push({ kind: 'resume', reason: `${how} (was: ${rec.blockReason || 'blocked'})`, at: new Date().toISOString() });
       delete rec.blockReason;
       delete rec.unblockCriteria;
+      delete rec.blockedAt;
+      delete rec.nextRetryAt;
+      if (!opts.auto) delete rec.blockCount;   // manual resume resets the breaker
     }
     rec.status = 'active';
     return this.save(rec);
@@ -226,8 +267,15 @@ export class Goals {
    * dead. This is the circuit-breaker OPEN state: stop compounding, name the fault,
    * stay recoverable — never a silent "done" AND never a silent "gave up".
    *
-   * Idempotent: re-blocking an already-blocked goal just refreshes the reason.
-   * An `achieved` goal is terminal and is left untouched.
+   * A block is SELF-HEALING (ADR-008): it schedules an automatic HALF-OPEN retry
+   * at `nextRetryAt` (exponential backoff on `blockCount`). The drive loop resumes
+   * the goal on its own once that time passes, so a block never depends on a human
+   * being present to recover — the fix for the old `blocked`, whose human-only
+   * resume made it as terminal as `abandoned` on an unattended system.
+   *
+   * Idempotent: re-blocking an already-blocked goal advances the backoff (a
+   * consecutive block, so the next retry is further out). An `achieved` goal is
+   * terminal and is left untouched.
    */
   block(goalId: string, reason: string, unblockCriteria?: string): GoalRecord {
     const rec = this.load(goalId);
@@ -237,10 +285,26 @@ export class Goals {
     rec.blockReason = reason;
     rec.unblockCriteria = unblockCriteria && unblockCriteria.trim()
       ? unblockCriteria.trim()
-      : 'A human reviews the block reason above, addresses it, and resumes the goal.';
-    rec.history.push({ kind: 'block', reason, unblockCriteria: rec.unblockCriteria, at: new Date().toISOString() });
-    console.log(`Goals: blocked ${goalId} — ${reason} | unblock when: ${rec.unblockCriteria}`);
+      : 'Addressed automatically on the next scheduled retry, or by a human who resolves the reason above and resumes.';
+    rec.blockCount = (rec.blockCount || 0) + 1;
+    rec.blockedAt = new Date().toISOString();
+    rec.nextRetryAt = new Date(Date.now() + this.backoffMs(rec.blockCount)).toISOString();
+    rec.history.push({ kind: 'block', reason, unblockCriteria: rec.unblockCriteria, at: rec.blockedAt });
+    console.log(`Goals: blocked ${goalId} — ${reason} | unblock when: ${rec.unblockCriteria} | auto-retry #${rec.blockCount} at ${rec.nextRetryAt}`);
     return this.save(rec);
+  }
+
+  /** Blocked goals whose scheduled auto-retry time has arrived — the population
+   *  the dispatcher resumes for a single HALF-OPEN probe (ADR-008). A LEGACY
+   *  blocked record with no `nextRetryAt` (blocked under ADR-007, before backoff
+   *  existed) counts as due, so it self-migrates into the auto-resume loop on the
+   *  first tick instead of staying stuck forever. `now` is injectable for tests. */
+  blockedGoalsDueForRetry(now: number = Date.now()): GoalRecord[] {
+    return this.list().filter(rec => {
+      if (rec.status !== 'blocked') return false;
+      if (typeof rec.nextRetryAt !== 'string') return true;   // legacy → due now
+      return Date.parse(rec.nextRetryAt) <= now;
+    });
   }
 
   /** Remove a goal, optionally deleting the tasks it generated too (mirrors
@@ -405,6 +469,7 @@ export class Goals {
       rec.history.push({ kind: 'evaluate', met, reason: decision.reason, at });
       if (met) {
         rec.status = 'achieved';
+        this.clearBackoff(rec);
         rec.closedReason = decision.reason || 'success criteria met';
         rec.history.push({ kind: 'finish', reason: rec.closedReason, at });
         this.save(rec);
@@ -424,6 +489,7 @@ export class Goals {
       if (rec.phases.some(p => p.key === key)) { console.warn(`Goals: ${goalId} plan rejected — phase "${key}" exists`); return {}; }
       rec.phases.push({ key, title: title || key, status: 'planned', taskIds: [] });
       rec.history.push({ kind: 'plan', phaseKey: key, reason: decision.reason, at });
+      this.clearBackoff(rec);   // forward progress → breaker back to CLOSED
       this.save(rec);
       console.log(`Goals: ${goalId} planned phase "${key}"`);
       return { planned: true };
@@ -461,6 +527,7 @@ export class Goals {
       });
       phase.taskIds.push(...created);
       phase.status = 'active';
+      this.clearBackoff(rec);   // forward progress → breaker back to CLOSED
       this.save(rec);
       console.log(`Goals: ${goalId} emitted ${created.length} task(s) for phase "${phase.key}"`);
       return { emitted: created.length };

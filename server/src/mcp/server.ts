@@ -434,7 +434,9 @@ function buildServer(config: Config, store: Store, eventBus: EventBus, goals?: G
       '(kind:"evaluate", met:true|false), plan the next phase (kind:"plan", phase), ' +
       'emit a phase\'s worth of real tasks (kind:"emit", tasks[]), or block the goal ' +
       'on an obstacle you cannot clear (kind:"block", reason, unblockCriteria). A ' +
-      'blocked goal is HELD recoverably — never abandoned.',
+      'blocked goal is HELD recoverably and SELF-HEALING — the system auto-resumes ' +
+      'it on a backoff, so it recovers on its own once the obstacle clears; never ' +
+      'abandoned.',
       {
         goal_id: z.string(),
         kind: z.enum(['evaluate', 'plan', 'emit', 'block']),

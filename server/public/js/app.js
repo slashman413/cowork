@@ -15,6 +15,18 @@ function timeAgo(iso) {
   return `${Math.floor(s / 86400)}d ago`;
 }
 
+// Human label for a FUTURE instant (the goal auto-retry time). "in 8m" / "in 2h",
+// or "now" once it is due (the next drive tick will pick it up).
+function retryLabel(iso) {
+  if (!iso) return '';
+  const s = Math.floor((new Date(iso).getTime() - Date.now()) / 1000);
+  if (s <= 0) return 'now';
+  if (s < 60) return `in ${s}s`;
+  if (s < 3600) return `in ${Math.ceil(s / 60)}m`;
+  if (s < 86400) return `in ${Math.ceil(s / 3600)}h`;
+  return `in ${Math.ceil(s / 86400)}d`;
+}
+
 // Extractive ~5-word summary of a chat's opening request, so the recent list reads
 // like "Fix login redirect bug" instead of just an agent/roster label. Purely local
 // (no LLM) — drops filler words, urls, markdown noise; falls back to a raw head slice.
@@ -2383,7 +2395,7 @@ class App {
       ].join(' ');
       const controls = [];
       if (g.status === 'draft' || g.status === 'paused') controls.push(`<button class="btn btn-primary goal-activate" data-id="${esc(g.goalId)}" style="font-size:0.75rem">Activate ▶</button>`);
-      if (g.status === 'blocked') controls.push(`<button class="btn btn-primary goal-activate" data-id="${esc(g.goalId)}" title="Clear the block and give the goal a fresh turn" style="font-size:0.75rem">Resume ▶</button>`);
+      if (g.status === 'blocked') controls.push(`<button class="btn btn-primary goal-activate" data-id="${esc(g.goalId)}" title="Retry now — the goal already auto-resumes on a backoff; this skips the wait and resets the breaker" style="font-size:0.75rem">Resume now ▶</button>`);
       if (g.status === 'active') controls.push(`<button class="btn goal-pause" data-id="${esc(g.goalId)}" style="font-size:0.75rem">Pause</button>`);
       if (g.status !== 'achieved' && g.status !== 'blocked') controls.push(`<button class="btn goal-block" data-id="${esc(g.goalId)}" title="Hold the goal recoverably with a reason + a resume condition" style="font-size:0.75rem">Block</button>`);
       controls.push(`<button class="btn-icon goal-delete" data-id="${esc(g.goalId)}" title="Delete goal + its tasks" style="padding:4px;background:none;border:none;cursor:pointer"><i data-lucide="trash-2" style="width:14px;height:14px;color:var(--text-muted)"></i></button>`);
@@ -2414,6 +2426,7 @@ class App {
         ${g.status === 'blocked' ? `<div style="font-size:0.76rem;margin:6px 0;padding:6px 9px;border-radius:8px;background:${color}14;border:1px solid ${color}40">
           <div style="color:${color}"><strong>⛔ Blocked:</strong> ${esc(g.blockReason || 'held')}</div>
           ${g.unblockCriteria ? `<div style="color:var(--text-secondary);margin-top:3px"><strong>▶ Resume when:</strong> ${esc(g.unblockCriteria)}</div>` : ''}
+          ${g.nextRetryAt ? `<div style="color:var(--text-muted);margin-top:3px">↻ <strong>Auto-resumes</strong> ${esc(retryLabel(g.nextRetryAt))}${g.blockCount ? ` · retry #${g.blockCount}` : ''} — recovers on its own, no click needed</div>` : ''}
         </div>` : ''}
         ${g.status === 'achieved' && g.closedReason ? `<p style="font-size:0.76rem;color:${color}">🏁 ${esc(g.closedReason)}</p>` : ''}
         ${decisionLog}
@@ -2429,7 +2442,7 @@ class App {
         <div style="font-size:0.85rem;color:var(--text-secondary);line-height:1.6">
           <div style="margin-bottom:4px"><strong>Goals</strong> are advanced, long-term objectives — a self-terminating engine that runs beneath Workflows.</div>
           <div style="margin:3px 0">🎯 The <strong>Achiever</strong> continuously evaluates progress, plans phases, and generates tasks. ⚖️ The <strong>Judger</strong> wakes when a phase completes, writes a report + meeting minutes, and re-arms the Achiever.</div>
-          <div style="margin:3px 0">A goal runs until its <strong>binary (Yes/No) success criterion</strong> flips true (→ <strong>achieved</strong>, the only terminal state). If it hits an obstacle it can't clear — the budget runs out, a credential is missing, a decision needs a human — it goes <strong>blocked</strong>: a recoverable hold that records the reason <em>and the specific condition to resume</em>. It is never silently "done" and never silently thrown away — you <strong>Resume</strong> a blocked goal after clearing the obstacle, or <strong>Delete</strong> it if it's genuinely dead.</div>
+          <div style="margin:3px 0">A goal runs until its <strong>binary (Yes/No) success criterion</strong> flips true (→ <strong>achieved</strong>, the only terminal state). If it hits an obstacle it can't clear — the budget runs out, a credential is missing, a decision needs a human — it goes <strong>blocked</strong>: a recoverable hold that records the reason <em>and the specific condition to resume</em>. A blocked goal is <strong>self-healing</strong> — it <strong>auto-resumes on a backoff</strong> (minutes at first, then hours) and continues the instant the obstacle clears, so recovery never waits on a human. You can <strong>Resume now</strong> to retry immediately after fixing something, or <strong>Delete</strong> it if it's genuinely dead. It is never silently "done" and never silently thrown away.</div>
         </div>
       </div>
 
@@ -2449,7 +2462,7 @@ class App {
           <div>
             <label style="${lbl}">Success criterion — a Yes/No question that flips true when a concrete deliverable EXISTS</label>
             <input id="goal-criteria" placeholder="e.g. Is the tool live on GitHub Pages with a working index.html?" style="${inp}">
-            <div style="font-size:0.7rem;color:var(--text-muted);margin-top:3px">Tie it to something you can point at ("is X live / shipped / for sale?"). For a market number, make it <em>evidence-bound</em> — not "is MRR $10k?" but "does a dated snapshot in artifacts show $10k?" — then give it a long step budget and a phase that measures on a scheduled checkpoint. A bare metric with the default budget runs out and blocks (recoverably — you raise the budget and resume); the 💰 📈 🧲 examples above are already set up this way.</div>
+            <div style="font-size:0.7rem;color:var(--text-muted);margin-top:3px">Tie it to something you can point at ("is X live / shipped / for sale?"). For a market number, make it <em>evidence-bound</em> — not "is MRR $10k?" but "does a dated snapshot in artifacts show $10k?" — then give it a long step budget and a phase that measures on a scheduled checkpoint. A bare metric with the default budget runs out and blocks (recoverably — raise the budget and the goal self-resumes on its next auto-retry, no click needed); the 💰 📈 🧲 examples above are already set up this way.</div>
           </div>
           <div>
             <label style="${lbl}">Phases — one explicit checkpoint per line, in order</label>

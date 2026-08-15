@@ -1,12 +1,26 @@
-# Goals redesign — from *abandon* to *recoverable block* (ADR-007)
+# Goals redesign — from *abandon* to *recoverable, self-healing block* (ADR-007 · ADR-008)
 
 **Status:** Accepted · **Date:** 2026-08-15 · **Supersedes the terminal `abandoned`
 state introduced in** `goals-architecture.md` (ADR-003 termination model).
 
 This document is two things: a **deep survey of what makes a goal realistic, practical,
-and achievable**, and the **design record** for the change that survey motivated —
+and achievable**, and the **design record** for the changes that survey motivated —
 replacing the Goals engine's terminal `abandoned` status with a *recoverable* `blocked`
-status that always carries a specific, checkable resume condition.
+status that always carries a specific, checkable resume condition (**ADR-007**), and then
+making that `blocked` status **self-healing** so recovery no longer depends on a human
+being present to click Resume (**ADR-008**).
+
+> **ADR-008 (this revision) — why `blocked` needed a second pass.** ADR-007 made a stalled
+> goal *recoverable* but left `resume` a **manual, human-only** action, and excluded blocked
+> goals from the drive loop entirely. On an unattended, autonomous system (which cowork is)
+> nobody is watching to click Resume — so a `blocked` goal sat forever exactly like the
+> `abandoned` tombstone it replaced. A recoverable state whose only recovery path never
+> fires is not recoverable. ADR-008 closes that gap: **blocked goals auto-resume on an
+> exponential-backoff schedule** — the circuit-breaker OPEN→HALF-OPEN *automatic* transition
+> the literature actually prescribes (ADR-007 named HALF-OPEN but wired it to a human). A
+> transient fault now self-heals in minutes; a genuinely stuck goal settles into a cheap,
+> capped heartbeat that still re-checks the world and resumes the instant the obstacle
+> clears. Only `achieved` is terminal; only a human `delete` truly ends a goal.
 
 ---
 
@@ -161,12 +175,40 @@ counts as *progress* (the loop resolved cleanly), not a failure. This is WOOP's
 obstacle→plan performed by the agent at reasoning time — the single change most likely to
 turn "stalls into a vague death" into "stops with an actionable next step."
 
-### 3.4 Resume = circuit-breaker HALF-OPEN
-`activate()` now also accepts `blocked`. Resuming clears `blockReason`/`unblockCriteria`,
-records a `resume` history event, and resets the consecutive-failure counter — the human
-(or a met unblock condition) asserts the obstacle is cleared, and the goal gets one clean
-turn. If the obstacle persists, it simply blocks again with a fresh, honest reason. No
-infinite loop: blocked goals are excluded from the drive loop exactly like paused ones.
+### 3.4 Resume = circuit-breaker HALF-OPEN — now **automatic** (ADR-008)
+`activate()` accepts `blocked` and, on resume, clears `blockReason`/`unblockCriteria`,
+records a `resume` history event, and re-arms the goal for one clean turn.
+
+**ADR-007 wired this to a human only — which is the bug ADR-008 fixes.** A real circuit
+breaker does not sit OPEN until an operator flips it; it transitions OPEN→HALF-OPEN
+*automatically* after a cool-down, tries once, and either closes (recovered) or re-opens
+with a longer cool-down. ADR-008 implements exactly that:
+
+- **`block()` schedules its own retry.** Every block stamps `blockedAt`, increments a
+  consecutive-block counter `blockCount`, and sets `nextRetryAt = now + backoff(blockCount)`,
+  where `backoff` is exponential — `10 min · 2^(blockCount−1)`, capped at `6 h`. A transient
+  fault is retried in ~10 minutes; a goal that keeps re-blocking backs off to a 6-hour
+  heartbeat and stays there (cheap, but never dead).
+- **The drive loop resumes due goals.** `driveGoals()` gains an auto-resume pass:
+  `blockedGoalsDueForRetry()` (those whose `nextRetryAt` has passed) are resumed with
+  `activate(id, { auto:true })` and given a **single HALF-OPEN probe** — the dispatcher
+  pre-seeds the in-memory failure counter to one-below the ceiling, so *one* non-progress
+  turn re-opens the breaker instead of spinning five. Real progress clears the counter and
+  the goal is healthy again.
+- **Two resume paths, deliberately different.** An **auto** resume keeps `blockCount` so a
+  re-block keeps backing off; a **manual** resume (the operator clicking *Resume now*, or a
+  budget/criterion edit) *resets* `blockCount` — the human asserts the obstacle is fixed, so
+  the breaker starts fresh. Any real forward progress (`plan`/`emit`/`achieved`) also clears
+  the backoff (breaker → CLOSED).
+- **No spin, no infinite loop.** Between retries a blocked goal is invisible to the Achiever
+  loop (like `paused`); it wakes only when `nextRetryAt` passes, and the re-entrancy guard
+  plus the growing backoff bound the cost. A budget-exhausted goal re-blocks *for free* on
+  each probe (its budget guard fires before any LLM turn), so raising the budget is all a
+  human need do — the goal then self-resumes on its next retry with no click.
+
+The upshot: the exact failure that killed `goal-278e9d28` (a few unparseable Achiever
+replies) now parks the goal and **brings it back on its own ~10 minutes later** — weeks of
+progress continue with zero human involvement.
 
 ### 3.5 What deliberately did **not** change
 - **Workflow *runs*** still `abandon` with a reason. A run is ephemeral (it ends by
@@ -180,9 +222,10 @@ infinite loop: blocked goals are excluded from the drive loop exactly like pause
 
 ## 4. Why this makes goals more achievable (not just more forgiving)
 
-1. **Transient faults stop being fatal.** The exact failure that killed `goal-278e9d28`
-   (a few unparseable Achiever replies) now parks the goal recoverably; one resume
-   continues weeks of work instead of re-authoring it.
+1. **Transient faults stop being fatal — and self-heal.** The exact failure that killed
+   `goal-278e9d28` (a few unparseable Achiever replies) now parks the goal recoverably and
+   **auto-resumes it ~10 minutes later with no human** (ADR-008); weeks of work continue
+   instead of being re-authored, even on a system nobody is watching.
 2. **Obstacles become actionable.** "blocked because the budget is too small, resume when
    it's raised" tells the operator precisely what to do; "abandoned" told them only that
    it's over.
@@ -198,6 +241,7 @@ infinite loop: blocked goals are excluded from the drive loop exactly like pause
 
 ## 5. Surface changes (implementation map)
 
+**ADR-007 (recoverable block):**
 - **`types.ts`** — `GoalRecord.status` drops `abandoned`, adds `blocked`; adds
   `blockReason` + `unblockCriteria`; `GoalDecision.kind` adds `block`/`resume`;
   `AchieverDecision.kind` adds `block` + `unblockCriteria`.
@@ -213,12 +257,32 @@ infinite loop: blocked goals are excluded from the drive loop exactly like pause
 - **`mcp/server.ts`** — `update_goal_progress` accepts `kind:"block"` + `unblockCriteria`.
 - **`public/js/app.js`** — status colour, **Block** + **Resume** controls, a blocked-panel
   showing *Blocked: … / Resume when: …*, and refreshed help text.
-- **Skill docs** (`deploy/skills/{claude,hermes,agy,codex}-cowork.SKILL.md`) — updated to
-  the blocked/resume model and the self-block move.
 
-All 190 server tests pass, including new coverage for the block/resume contract, the
-default-unblock guarantee, editability of blocked goals, `achieved` terminality, and the
-Achiever's self-declared block.
+**ADR-008 (self-healing auto-resume):**
+- **`types.ts`** — `GoalRecord` adds `blockedAt` + `blockCount` + `nextRetryAt` (the
+  circuit-breaker backoff state).
+- **`core/goals.ts`** — `block()` stamps `blockedAt`/`blockCount`/`nextRetryAt` on an
+  exponential backoff (`RETRY_BASE_MS` 10 min → `RETRY_CAP_MS` 6 h); `activate(id,{auto})`
+  distinguishes an auto HALF-OPEN probe (keeps `blockCount`) from a manual reset (clears
+  it); new `blockedGoalsDueForRetry(now?)`; forward progress clears the backoff via
+  `clearBackoff()`.
+- **`core/dispatcher.ts`** — `driveGoals()` gains an auto-resume pass that resumes due
+  blocked goals and pre-seeds the failure counter for a true one-shot probe; the block
+  reasons and Achiever prompt now say the goal self-heals on a backoff.
+- **`mcp/server.ts`** — `update_goal_progress` description notes blocked goals are
+  self-healing.
+- **`public/js/app.js`** — the blocked panel shows *↻ Auto-resumes in N · retry #k*; the
+  button is **Resume now**; a `retryLabel()` helper renders the future retry time; help
+  text explains the self-healing behaviour.
+- **Skill docs** (`deploy/skills/{claude,hermes,agy,codex}-cowork.SKILL.md`) — updated to
+  the blocked/resume model, the self-block move, and the self-healing auto-resume.
+
+All 197 server tests pass, including new coverage for the block/resume contract, the
+default-unblock guarantee, editability of blocked goals, `achieved` terminality, the
+Achiever's self-declared block, and — new in ADR-008 — the scheduled backoff, the
+due-for-retry query, auto-vs-manual `blockCount` semantics, backoff reset on progress, a
+blocked goal auto-resuming on its own, and a failed HALF-OPEN probe re-blocking with a
+grown backoff.
 
 ---
 

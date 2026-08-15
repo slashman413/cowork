@@ -197,10 +197,12 @@ via two roles on the normal task machinery: the **Achiever** takes one move per 
 a phase's terminal task finishes, writes a report + minutes, and re-arms the Achiever.
 A goal ends **`achieved`** (criterion met) — the only terminal state. If it hits an
 obstacle it can't clear itself, it goes **`blocked`**: a *recoverable* hold that records
-the reason **and** the specific condition to resume (`unblockCriteria`). Never a silent
-"done" and never a silent give-up — a human **Resumes** a blocked goal after clearing the
-obstacle, or **Deletes** it if it's truly dead. Turns only happen when no generated task
-is open.
+the reason **and** the specific condition to resume (`unblockCriteria`). `blocked` is
+**self-healing** — the drive loop **auto-resumes** it on an exponential backoff (minutes,
+then hours), giving it a HALF-OPEN probe that continues the moment the obstacle clears, so
+recovery **never waits on a human**. Never a silent "done" and never a silent give-up — a
+human can **Resume now** to retry immediately after a fix, or **Delete** it if it's truly
+dead. Turns only happen when no generated task is open.
 
 **Checkpoints.** An emitted task may carry `scheduledAt` (ISO 8601, future) —
 `{"kind":"emit","tasks":[{"title":"Measure MRR","scheduledAt":"2026-09-14T00:00:00Z"}]}`.
@@ -214,8 +216,10 @@ dropped and the task runs now, so one bad date never aborts an emit.
 `stepBudget` (default 24) counts *lifetime* execution tasks, and `MAX_GOAL_FAILURES`
 (5) counts *consecutive* Achiever turns that neither plan nor emit — an
 `evaluate{met:false}` is one of those. When a guard trips, the goal is **blocked with a
-concrete resume contract** (raise the budget / narrow the criterion, then resume; or
-verify the brain, then resume), not thrown away. So a goal whose criterion depends on an
+concrete resume contract** (raise the budget / narrow the criterion; or verify the brain)
+and then **auto-retried on a backoff** — so a transient brain blip self-heals in minutes,
+and raising the budget lets the goal self-resume with no click; it is never thrown away.
+So a goal whose criterion depends on an
 external number needs an evidence-bound criterion ("does a dated snapshot in artifacts
 show X?", not "is X true?"), a phase loop that always has work to emit, scheduled
 checkpoints, and a budget sized for the horizon. The dashboard's 💰 📈 🧲 starters are set

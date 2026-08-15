@@ -127,6 +127,80 @@ test('a blocked goal is editable so the operator can clear the obstacle before r
   assert.equal(u.status, 'blocked', 'editing does not silently change status');
 });
 
+test('block schedules an automatic retry (self-healing) — the goal is not human-only', () => {
+  const { goals } = makeGoals();
+  const g = goals.create(seed); goals.activate(g.goalId);
+  const before = Date.now();
+  const b = goals.block(g.goalId, 'transient brain fault');
+  assert.equal(b.blockCount, 1);
+  assert.ok(b.blockedAt, 'records when the hold began');
+  assert.ok(b.nextRetryAt, 'schedules an auto-retry — recovery does not wait on a human');
+  const delay = Date.parse(b.nextRetryAt!) - before;
+  assert.ok(delay >= Goals.RETRY_BASE_MS - 50 && delay <= Goals.RETRY_BASE_MS + 2000,
+    'first retry is ~one base interval out');
+});
+
+test('consecutive blocks back off exponentially, capped', () => {
+  const { goals } = makeGoals();
+  const g = goals.create(seed); goals.activate(g.goalId);
+  goals.block(g.goalId, 'x');                        // #1 → base
+  const b2 = goals.block(g.goalId, 'x');             // #2 → 2×base
+  assert.equal(b2.blockCount, 2);
+  const d2 = Date.parse(b2.nextRetryAt!) - Date.parse(b2.blockedAt!);
+  assert.ok(d2 >= Goals.RETRY_BASE_MS * 2 - 50 && d2 <= Goals.RETRY_BASE_MS * 2 + 50, 'second block ~doubles');
+  for (let i = 0; i < 20; i++) goals.block(g.goalId, 'x');   // way past the cap
+  const bN = goals.get(g.goalId)!;
+  const dN = Date.parse(bN.nextRetryAt!) - Date.parse(bN.blockedAt!);
+  assert.ok(dN <= Goals.RETRY_CAP_MS + 50, 'backoff never exceeds the cap');
+});
+
+test('blockedGoalsDueForRetry returns a goal only once its retry time has passed', () => {
+  const { goals } = makeGoals();
+  const g = goals.create(seed); goals.activate(g.goalId);
+  goals.block(g.goalId, 'held');
+  assert.equal(goals.blockedGoalsDueForRetry(Date.now()).length, 0, 'not yet due');
+  const future = Date.now() + Goals.RETRY_CAP_MS + 1;
+  assert.equal(goals.blockedGoalsDueForRetry(future).length, 1, 'due once the backoff has elapsed');
+});
+
+test('a legacy blocked record (no nextRetryAt) counts as due so it self-migrates', () => {
+  const { goals, dir } = makeGoals();
+  const g = goals.create(seed); goals.activate(g.goalId);
+  goals.block(g.goalId, 'blocked under the old model');
+  // Simulate an ADR-007-era record: strip the backoff fields off disk.
+  const p = path.join(dir, `${g.goalId}.json`);
+  const rec = JSON.parse(fs.readFileSync(p, 'utf-8'));
+  delete rec.nextRetryAt; delete rec.blockCount; delete rec.blockedAt;
+  fs.writeFileSync(p, JSON.stringify(rec, null, 2));
+  assert.equal(goals.blockedGoalsDueForRetry(Date.now()).length, 1, 'a legacy block is retried, not stuck forever');
+});
+
+test('an AUTO resume keeps the backoff count; a MANUAL resume resets the breaker', () => {
+  const { goals } = makeGoals();
+  const g = goals.create(seed); goals.activate(g.goalId);
+  goals.block(g.goalId, 'x'); goals.block(g.goalId, 'x');   // blockCount = 2
+  // Auto (half-open probe): count is retained so a re-block keeps growing.
+  const auto = goals.activate(g.goalId, { auto: true });
+  assert.equal(auto.status, 'active');
+  assert.equal(auto.blockCount, 2, 'auto-resume keeps the block count');
+  assert.equal(auto.nextRetryAt, undefined, 'active goals carry no pending retry');
+  // Re-block continues the backoff, then a MANUAL resume resets it.
+  goals.block(g.goalId, 'x');                                // blockCount = 3
+  const manual = goals.resume(g.goalId);                     // human asserts fixed
+  assert.equal(manual.blockCount, undefined, 'manual resume clears the breaker count');
+});
+
+test('real forward progress after a block clears the backoff (breaker → CLOSED)', () => {
+  const { goals } = makeGoals();
+  const g = goals.create(seed); goals.activate(g.goalId);
+  goals.block(g.goalId, 'x');
+  goals.activate(g.goalId, { auto: true });                 // half-open probe
+  goals.applyAchieverDecision(g.goalId, { kind: 'emit', tasks: [{ title: 'do real work' }] });
+  const rec = goals.get(g.goalId)!;
+  assert.equal(rec.blockCount, undefined, 'progress resets the backoff');
+  assert.equal(rec.nextRetryAt, undefined);
+});
+
 test('an achieved goal is terminal and cannot be reactivated', () => {
   const { goals } = makeGoals();
   const g = goals.create(seed); goals.activate(g.goalId);

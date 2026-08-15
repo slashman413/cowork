@@ -436,9 +436,12 @@ criterion** using the ordinary task machinery, via two roles:
 
 A Goal ends **`achieved`** when the criterion is met — the only terminal state. If it hits
 an obstacle it can't clear itself it goes **`blocked`**: a *recoverable* hold recording the
-reason **and** `unblockCriteria`, the specific condition that would let it resume. Never a
-silent "done" and never a silent give-up — a human **resumes** it once the obstacle clears,
-or **deletes** it if it's truly dead. Turns only occur when no generated task is open.
+reason **and** `unblockCriteria`, the specific condition that would let it resume. `blocked`
+is **self-healing**: the drive loop **auto-resumes** it on an exponential backoff (minutes,
+then hours) for a HALF-OPEN probe, so it recovers on its own once the obstacle clears —
+recovery never waits on a human. Never a silent "done" and never a silent give-up — a human
+can **resume now** to retry immediately, or **delete** it if it's truly dead. Turns only
+occur when no generated task is open.
 
 ### Scheduled Checkpoints (`scheduledAt`)
 
@@ -465,7 +468,9 @@ date can never abort an emit.
 
 An `evaluate{met:false}` is one of those non-progressing turns. When a guard trips the
 Goal is **blocked with a concrete resume contract** (raise the budget / narrow the
-criterion, or verify the brain, then resume) — held, not thrown away. Both guards punish
+criterion, or verify the brain) and then **auto-retried on a backoff** — a transient brain
+blip self-heals in minutes, and raising the budget lets it self-resume with no click; held,
+not thrown away. Both guards punish
 metric-open objectives ("$10k/month"), which is why such a Goal needs an
 **evidence-bound** criterion ("does a dated snapshot in artifacts show X?" rather than
 "is X true?"), a phase loop that always has real work to emit, scheduled checkpoints,

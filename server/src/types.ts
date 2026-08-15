@@ -580,8 +580,10 @@ export interface GoalRecord {
   /** Lifecycle. Only `achieved` is terminal — a goal is never silently thrown
    *  away. `blocked` is a RECOVERABLE hold: the goal hit an obstacle it could not
    *  clear itself, recorded why (`blockReason`) and exactly what would let it
-   *  continue (`unblockCriteria`), and is waiting for that condition / a human to
-   *  resume it. A human who genuinely wants a goal gone DELETEs it. */
+   *  continue (`unblockCriteria`). `blocked` is SELF-HEALING: the drive loop
+   *  auto-resumes it on an exponential backoff (ADR-008), so it recovers the
+   *  moment the obstacle clears without waiting on a human. A human who genuinely
+   *  wants a goal gone DELETEs it. */
   status: 'draft' | 'active' | 'paused' | 'achieved' | 'blocked';
   phases: GoalPhase[];
   /** Ordered brain-id chain the Achiever reasons on (execution role). */
@@ -603,6 +605,20 @@ export interface GoalRecord {
    *  the goal to make progress again — the "resume when …" contract shown to the
    *  operator (WOOP obstacle→plan). Cleared on resume. */
   unblockCriteria?: string;
+  /** Self-healing circuit-breaker backoff (ADR-008). A blocked goal is NOT inert:
+   *  the drive loop AUTOMATICALLY resumes it for one HALF-OPEN probe once
+   *  `nextRetryAt` passes, so recovery never depends on a human being present —
+   *  which is what made the old `blocked` (human-only resume) as good as dead on an
+   *  unattended system. `blockCount` is the consecutive auto-block cycles that grow
+   *  the exponential backoff (transient faults recover in minutes; a genuinely
+   *  stuck goal settles into a cheap, capped heartbeat that still re-checks the
+   *  world). `blockedAt` is when the current hold began. All three clear on real
+   *  forward progress or a manual (operator) resume; a manual resume also resets
+   *  `blockCount` — the human asserts the obstacle is fixed, so the breaker starts
+   *  fresh. */
+  blockedAt?: string;
+  blockCount?: number;
+  nextRetryAt?: string;
   createdAt: string;
   updatedAt: string;
 }

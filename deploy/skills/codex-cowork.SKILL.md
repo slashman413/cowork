@@ -65,8 +65,10 @@ one binary success criterion. An **Achiever** takes one move per turn — `evalu
 condition to resume) — and a **Judger** audits each finished phase, then re-arms the
 Achiever. It ends **`achieved`** (the only terminal state); if it hits an obstacle it
 can't clear it goes **`blocked`** — a recoverable hold carrying the reason **and**
-`unblockCriteria` (the specific condition to resume). Never a silent "done" and never a
-silent give-up.
+`unblockCriteria` (the specific condition to resume). `blocked` is **self-healing**: the
+system **auto-resumes** it on an exponential backoff (minutes, then hours) for a HALF-OPEN
+probe, so it recovers on its own once the obstacle clears — no human needed. Never a silent
+"done" and never a silent give-up.
 
 If you run as the Achiever, three things matter most:
 
@@ -77,13 +79,16 @@ If you run as the Achiever, three things matter most:
   move, not a stall.
 - **Never stop at an unmet criterion.** `stepBudget` (default 24) caps lifetime
   execution tasks, and 5 consecutive turns that neither plan nor emit **block** the goal
-  (recoverably — raise the budget / verify the brain, then resume) — an
+  (recoverably — raise the budget / verify the brain; it then auto-retries on a backoff and
+  self-resumes once it's back under budget or the brain recovers) — an
   `evaluate{met:false}` is one of those. Plan a different approach instead, guided by the
   Judger's latest minutes.
 - **Block honestly, don't spin.** If you hit a real obstacle you can't clear — a missing
   credential, an external dependency, a human-only decision — return
-  `{"kind":"block","reason":"…","unblockCriteria":"…"}`. The goal holds recoverably
-  instead of burning turns until a guard blocks it with a generic reason.
+  `{"kind":"block","reason":"…","unblockCriteria":"…"}`. The goal holds recoverably and
+  is **self-healing** — the system auto-resumes it on a backoff for a fresh probe, so it
+  continues the moment the obstacle clears, no human click required — instead of burning
+  turns until a guard blocks it with a generic reason.
 
 ## Core MCP tools
 
