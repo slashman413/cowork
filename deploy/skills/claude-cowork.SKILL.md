@@ -195,8 +195,12 @@ State in `goals/<goalId>.json`. A goal drives toward one **binary success criter
 via two roles on the normal task machinery: the **Achiever** takes one move per turn
 (`evaluate` | `plan` a phase | `emit` that phase's tasks), and the **Judger** wakes when
 a phase's terminal task finishes, writes a report + minutes, and re-arms the Achiever.
-A goal ends `achieved` (criterion met) or `abandoned` **with a reason** — never a silent
-"done". Turns only happen when no generated task is open.
+A goal ends **`achieved`** (criterion met) — the only terminal state. If it hits an
+obstacle it can't clear itself, it goes **`blocked`**: a *recoverable* hold that records
+the reason **and** the specific condition to resume (`unblockCriteria`). Never a silent
+"done" and never a silent give-up — a human **Resumes** a blocked goal after clearing the
+obstacle, or **Deletes** it if it's truly dead. Turns only happen when no generated task
+is open.
 
 **Checkpoints.** An emitted task may carry `scheduledAt` (ISO 8601, future) —
 `{"kind":"emit","tasks":[{"title":"Measure MRR","scheduledAt":"2026-09-14T00:00:00Z"}]}`.
@@ -206,16 +210,21 @@ This is the correct move whenever the next honest step is to let the world chang
 (a month of revenue, an indexing window) — not a stall. Unparseable or past times are
 dropped and the task runs now, so one bad date never aborts an emit.
 
-**Two guards abandon a goal**, and both bite metric-open objectives:
+**Two guards block a goal** (recoverably), and both bite metric-open objectives:
 `stepBudget` (default 24) counts *lifetime* execution tasks, and `MAX_GOAL_FAILURES`
 (5) counts *consecutive* Achiever turns that neither plan nor emit — an
-`evaluate{met:false}` is one of those. So a goal whose criterion depends on an external
-number needs an evidence-bound criterion ("does a dated snapshot in artifacts show X?",
-not "is X true?"), a phase loop that always has work to emit, scheduled checkpoints, and
-a budget sized for the horizon. The dashboard's 💰 📈 🧲 starters are set up this way.
+`evaluate{met:false}` is one of those. When a guard trips, the goal is **blocked with a
+concrete resume contract** (raise the budget / narrow the criterion, then resume; or
+verify the brain, then resume), not thrown away. So a goal whose criterion depends on an
+external number needs an evidence-bound criterion ("does a dated snapshot in artifacts
+show X?", not "is X true?"), a phase loop that always has work to emit, scheduled
+checkpoints, and a budget sized for the horizon. The dashboard's 💰 📈 🧲 starters are set
+up this way. The Achiever can also **block itself** — `{"kind":"block","reason":"…",
+"unblockCriteria":"…"}` — the honest move when it hits a missing credential, an external
+dependency, or a decision only a human can make.
 
 `GET/POST /api/goals` · `GET/PATCH/DELETE /api/goals/:id` ·
-`POST /api/goals/:id/{activate,pause,abandon}` · `GET /api/goals/:id/tasks`.
+`POST /api/goals/:id/{activate,pause,block}` · `GET /api/goals/:id/tasks`.
 
 ## REST mirror (http://localhost:6868/api/...)
 
@@ -227,7 +236,7 @@ workflow-runs[/:runId] | artifacts/:taskId[/:file] | inputs/:taskId[/:file]` ·
 `DELETE inbox/:id` · `POST uploads?name=` · `PUT chains/default`,
 `chains/division/:div` · `GET/PUT/DELETE brains/:id`, `agents-config/:name` ·
 `POST workflows/:id/run` · `GET/POST goals`, `GET/PATCH/DELETE goals/:id`,
-`POST goals/:id/{activate,pause,abandon}`, `GET goals/:id/tasks`.
+`POST goals/:id/{activate,pause,block}`, `GET goals/:id/tasks`.
 
 SSE event names are camelCase: `agentRegistered`, `taskCreated`, `taskClaimed`,
 `taskCompleted`, `heartbeat` (older docs list snake_case names and a `report_filed`

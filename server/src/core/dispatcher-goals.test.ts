@@ -111,7 +111,7 @@ test('driver walks emit → phase-complete → Judger → evaluate(met) to achie
   assert.equal(goals.get(goalId)!.status, 'achieved');
 });
 
-test('driver abandons (honest reason) a goal that exhausts its step budget', async () => {
+test('driver BLOCKS (honest reason + resume contract) a goal that exhausts its step budget', async () => {
   // An Achiever that always emits one task and never declares success. We
   // complete each task's status (→ quiescent) WITHOUT auditing its phase, so the
   // phase stays workable and execution tasks accrue until the budget guard bites.
@@ -130,11 +130,13 @@ test('driver abandons (honest reason) a goal that exhausts its step budget', asy
     store.tasks.forEach(t => { if (t.status !== 'done') t.status = 'done'; });   // quiescent, phase stays 'active'
     if (goals.get(g.goalId)!.status !== 'active') break;
   }
-  assert.equal(goals.get(g.goalId)!.status, 'abandoned');
-  assert.match(goals.get(g.goalId)!.closedReason || '', /budget/);
+  const blocked = goals.get(g.goalId)!;
+  assert.equal(blocked.status, 'blocked');
+  assert.match(blocked.blockReason || '', /budget/);
+  assert.ok(blocked.unblockCriteria && /stepBudget/i.test(blocked.unblockCriteria), 'names the concrete resume path');
 });
 
-test('driver abandons a goal whose Achiever never returns a usable decision', async () => {
+test('driver BLOCKS (recoverably) a goal whose Achiever never returns a usable decision', async () => {
   const { goals, dispatcher } = harness([]);
   (dispatcher as any).askExecutor = async () => 'sorry, I could not decide';   // unparseable every time
   const goalId = seedGoal(goals);
@@ -143,8 +145,22 @@ test('driver abandons a goal whose Achiever never returns a usable decision', as
     await settle();
     if (goals.get(goalId)!.status !== 'active') break;
   }
-  assert.equal(goals.get(goalId)!.status, 'abandoned');
-  assert.match(goals.get(goalId)!.closedReason || '', /no usable progress/);
+  const blocked = goals.get(goalId)!;
+  assert.equal(blocked.status, 'blocked');
+  assert.match(blocked.blockReason || '', /no usable progress/);
+  assert.ok(blocked.unblockCriteria && blocked.unblockCriteria.length > 0, 'a transient-fault block still names a resume path');
+});
+
+test('an Achiever that self-declares a block holds the goal recoverably (not a failure)', async () => {
+  const { goals, dispatcher } = harness([]);
+  (dispatcher as any).askExecutor = async () =>
+    '```json\n' + JSON.stringify({ kind: 'block', reason: 'needs a human decision on pricing', unblockCriteria: 'the CEO approves the price' }) + '\n```';
+  const goalId = seedGoal(goals);
+  drive(dispatcher); await settle();
+  const rec = goals.get(goalId)!;
+  assert.equal(rec.status, 'blocked');
+  assert.equal(rec.unblockCriteria, 'the CEO approves the price');
+  assert.equal(rec.history.at(-1)!.kind, 'block');
 });
 
 test('driver self-heals a dropped Judger event by re-emitting the Judger', async () => {

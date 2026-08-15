@@ -201,8 +201,11 @@ on the normal task machinery, via two roles:
 - **Judger** — wakes when a phase's terminal task finishes, writes a report + minutes
   into artifacts, and re-arms the Achiever.
 
-A goal ends `achieved`, or `abandoned` **with a reason** — never a silent "done". Turns
-happen only when no generated task is open.
+A goal ends **`achieved`** (the only terminal state). If it hits an obstacle it can't
+clear itself it goes **`blocked`** — a *recoverable* hold recording the reason **and** the
+specific condition to resume (`unblockCriteria`). Never a silent "done" and never a silent
+give-up: a human **resumes** a blocked goal once the obstacle is cleared, or **deletes** it
+if it's truly dead. Turns happen only when no generated task is open.
 
 **Scheduled checkpoints.** An emitted task may carry a future `scheduledAt` (ISO 8601):
 
@@ -217,17 +220,20 @@ the next honest step is to let the world change (a month of revenue, an indexing
 window) — it is the correct move, not a stall. Unparseable or past times are dropped
 and the task runs now, so one bad date never aborts an emit.
 
-**Two guards abandon a goal.** `stepBudget` (default 24) counts *lifetime* execution
-tasks; `MAX_GOAL_FAILURES` (5) counts *consecutive* Achiever turns that neither plan
-nor emit — and an `evaluate{met:false}` is one of those. Both punish metric-open
-objectives, so a goal riding an external number needs an evidence-bound criterion
-("does a dated snapshot in artifacts show X?", not "is X true?"), a phase loop that
-always has work to emit, scheduled checkpoints, and a budget sized for the horizon.
-The dashboard's 💰 📈 🧲 starters are already shaped this way — copy one rather than
-writing a bare metric.
+**Two guards block a goal** (recoverably). `stepBudget` (default 24) counts *lifetime*
+execution tasks; `MAX_GOAL_FAILURES` (5) counts *consecutive* Achiever turns that neither
+plan nor emit — and an `evaluate{met:false}` is one of those. When either trips the goal
+is **blocked with a concrete resume contract** (raise the budget / narrow the criterion,
+or verify the brain, then resume), not discarded. Both punish metric-open objectives, so a
+goal riding an external number needs an evidence-bound criterion ("does a dated snapshot
+in artifacts show X?", not "is X true?"), a phase loop that always has work to emit,
+scheduled checkpoints, and a budget sized for the horizon. The dashboard's 💰 📈 🧲
+starters are already shaped this way — copy one rather than writing a bare metric. The
+Achiever can also **block itself** (`{"kind":"block","reason":"…","unblockCriteria":"…"}`)
+when it hits a missing credential, an external dependency, or a human-only decision.
 
 `GET/POST /api/goals` · `GET/PATCH/DELETE /api/goals/:id` ·
-`POST /api/goals/:id/{activate,pause,abandon}` · `GET /api/goals/:id/tasks`
+`POST /api/goals/:id/{activate,pause,block}` · `GET /api/goals/:id/tasks`
 
 ## Procedure
 

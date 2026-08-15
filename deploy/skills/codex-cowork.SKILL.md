@@ -61,11 +61,14 @@ journalctl --user -u cowork-local-brain@codex.service -n 100 --no-pager
 
 A goal (`goals/<goalId>.json`, `/api/goals`) is a long-lived objective driving toward
 one binary success criterion. An **Achiever** takes one move per turn — `evaluate`,
-`plan` a phase, or `emit` that phase's tasks — and a **Judger** audits each finished
-phase, then re-arms the Achiever. It ends `achieved` or `abandoned` with a reason,
-never a silent "done".
+`plan` a phase, `emit` that phase's tasks, or `block` (declare an obstacle with the
+condition to resume) — and a **Judger** audits each finished phase, then re-arms the
+Achiever. It ends **`achieved`** (the only terminal state); if it hits an obstacle it
+can't clear it goes **`blocked`** — a recoverable hold carrying the reason **and**
+`unblockCriteria` (the specific condition to resume). Never a silent "done" and never a
+silent give-up.
 
-If you run as the Achiever, two things matter most:
+If you run as the Achiever, three things matter most:
 
 - **Checkpoints.** An emitted task may carry a future `scheduledAt` (ISO 8601). Since
   `scheduled` is an open status, an outstanding checkpoint keeps the goal
@@ -73,9 +76,14 @@ If you run as the Achiever, two things matter most:
   Emit one when the next honest step is to let the world change — that is the correct
   move, not a stall.
 - **Never stop at an unmet criterion.** `stepBudget` (default 24) caps lifetime
-  execution tasks, and 5 consecutive turns that neither plan nor emit abandon the goal
-  — an `evaluate{met:false}` is one of those. Plan a different approach instead, guided
-  by the Judger's latest minutes.
+  execution tasks, and 5 consecutive turns that neither plan nor emit **block** the goal
+  (recoverably — raise the budget / verify the brain, then resume) — an
+  `evaluate{met:false}` is one of those. Plan a different approach instead, guided by the
+  Judger's latest minutes.
+- **Block honestly, don't spin.** If you hit a real obstacle you can't clear — a missing
+  credential, an external dependency, a human-only decision — return
+  `{"kind":"block","reason":"…","unblockCriteria":"…"}`. The goal holds recoverably
+  instead of burning turns until a guard blocks it with a generic reason.
 
 ## Core MCP tools
 

@@ -524,10 +524,11 @@ export interface CoworkEvent<T extends CoworkEventType> {
 // ── Goals ─────────────────────────────────────────────────────────────────
 // A Goal is a long-lived, phase-tracked objective that drives toward a BINARY
 // success criterion, generating and auditing its own work until the criterion
-// flips (→ achieved) or a human/budget stops it (→ abandoned). Unlike a workflow
-// run — which ends — a goal PERSISTS. It composes the existing task/brain/
-// dispatcher primitives rather than adding a second execution engine. See
-// core/goals.ts and the design in goals-architecture.md (ADR-001).
+// flips (→ achieved) or it hits an obstacle it cannot clear on its own
+// (→ blocked, RECOVERABLE — never a terminal "give up"). Unlike a workflow run —
+// which ends — a goal PERSISTS. It composes the existing task/brain/dispatcher
+// primitives rather than adding a second execution engine. See core/goals.ts and
+// the design in goals-architecture.md (ADR-001) / goals-redesign.md (ADR-007).
 
 /** One waypoint of a goal (Research → Implementation → Review). Seeded at
  *  creation and appended by the Achiever during dynamic planning. The unit of
@@ -552,13 +553,16 @@ export interface GoalPhase {
 /** One row of a goal's audit trail — every autonomous move is recorded so the
  *  loop is fully traceable (the audit trail IS the feature, not an add-on). */
 export interface GoalDecision {
-  kind: 'evaluate' | 'plan' | 'emit' | 'judge' | 'finish';
+  kind: 'evaluate' | 'plan' | 'emit' | 'judge' | 'finish' | 'block' | 'resume';
   phaseKey?: string;
   /** For 'emit'/'judge': the task the decision created. */
   taskId?: string;
   /** For 'evaluate': did the binary success criterion flip true? */
   met?: boolean;
   reason?: string;
+  /** For 'block': the specific, checkable condition that would let the goal
+   *  resume (the WOOP-style if-then unblock plan). */
+  unblockCriteria?: string;
   at: string;
 }
 
@@ -573,7 +577,12 @@ export interface GoalRecord {
   successCriteria: string;
   /** What the Judger should report after each phase ("financial breakdown", …). */
   reportBrief?: string;
-  status: 'draft' | 'active' | 'paused' | 'achieved' | 'abandoned';
+  /** Lifecycle. Only `achieved` is terminal — a goal is never silently thrown
+   *  away. `blocked` is a RECOVERABLE hold: the goal hit an obstacle it could not
+   *  clear itself, recorded why (`blockReason`) and exactly what would let it
+   *  continue (`unblockCriteria`), and is waiting for that condition / a human to
+   *  resume it. A human who genuinely wants a goal gone DELETEs it. */
+  status: 'draft' | 'active' | 'paused' | 'achieved' | 'blocked';
   phases: GoalPhase[];
   /** Ordered brain-id chain the Achiever reasons on (execution role). */
   achieverBrainChain?: string[];
@@ -585,8 +594,15 @@ export interface GoalRecord {
   minutes: { phaseKey: string; artifact: string; at: string }[];
   /** Hard cap on generated EXECUTION tasks — the primary runaway guard. */
   stepBudget?: number;
-  /** Honest reason a goal reached a terminal state (abandoned/achieved). */
+  /** Honest reason the goal reached `achieved`. */
   closedReason?: string;
+  /** Set while `blocked`: what obstacle stopped forward progress. Cleared on
+   *  resume. */
+  blockReason?: string;
+  /** Set while `blocked`: the specific, checkable condition(s) that must hold for
+   *  the goal to make progress again — the "resume when …" contract shown to the
+   *  operator (WOOP obstacle→plan). Cleared on resume. */
+  unblockCriteria?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -596,10 +612,17 @@ export interface GoalRecord {
  *  a fenced JSON block in the executor's reply, or submitted via the
  *  update_goal_progress MCP tool. */
 export interface AchieverDecision {
-  kind: 'evaluate' | 'plan' | 'emit';
+  kind: 'evaluate' | 'plan' | 'emit' | 'block';
   /** evaluate: strict Yes/No — is the success criterion met? */
   met?: boolean;
   reason?: string;
+  /** block: the specific, checkable condition that would let the goal resume.
+   *  Required for a well-formed block — a blocker with no stated way out is just a
+   *  disguised "abandon", which this design does not allow. The Achiever declares
+   *  this itself when it hits a real obstacle (a missing credential, a decision
+   *  only a human can make, an external dependency), so the goal HOLDS with an
+   *  honest recovery contract instead of spinning turns until it is killed. */
+  unblockCriteria?: string;
   /** plan: the phase to append. */
   phase?: { key: string; title: string };
   /** emit: the tasks to generate for the current phase (chained in order; the
@@ -610,6 +633,6 @@ export interface AchieverDecision {
    *  status, an outstanding checkpoint keeps the goal non-quiescent, so the
    *  Achiever takes no turns and burns no step budget until the checkpoint fires.
    *  That is what lets a goal wait out real-world time (a month of revenue, a
-   *  cohort of traffic) instead of spinning evaluations until it is abandoned. */
+   *  cohort of traffic) instead of spinning evaluations until it blocks. */
   tasks?: { title: string; description?: string; brain?: string; scheduledAt?: string }[];
 }

@@ -4,7 +4,7 @@ import type { Goals } from '../core/goals.js';
 /**
  * REST surface for the Goals feature — long-lived, phase-tracked objectives that
  * sit beneath Workflows. Authoring (create/edit/validate) plus lifecycle control
- * (activate/pause/abandon) and the lineage/minutes read views. Autonomous
+ * (activate/pause/block) and the lineage/minutes read views. Autonomous
  * progress is driven by the dispatcher; this surface is for humans authoring and
  * supervising goals.
  *
@@ -12,9 +12,9 @@ import type { Goals } from '../core/goals.js';
  *   POST   /goals                     create a draft goal
  *   GET    /goals/:id                 one goal + phases + history + minutes
  *   PATCH  /goals/:id                 edit criteria/phases/brains/budget
- *   POST   /goals/:id/activate        draft/paused → active (guardrails enforced)
+ *   POST   /goals/:id/activate        draft/paused/blocked → active (resume)
  *   POST   /goals/:id/pause           active → paused
- *   POST   /goals/:id/abandon         terminal, with an honest reason
+ *   POST   /goals/:id/block           recoverable hold, with reason + unblockCriteria
  *   DELETE /goals/:id                 remove goal (?withTasks=1 drops its tasks)
  *   GET    /goals/:id/tasks           the tasks this goal generated (lineage)
  */
@@ -69,10 +69,11 @@ export function createGoalRouter(goals: Goals): Router {
     catch (e: any) { res.status(400).json({ error: e.message }); }
   });
 
-  router.post('/goals/:id/abandon', (req, res) => {
+  router.post('/goals/:id/block', (req, res) => {
     try {
-      const reason = String((req.body && req.body.reason) || 'abandoned by a human');
-      res.json({ ok: true, goal: goals.abandon(req.params.id, reason) });
+      const reason = String((req.body && req.body.reason) || 'blocked by a human');
+      const unblockCriteria = req.body && req.body.unblockCriteria ? String(req.body.unblockCriteria) : undefined;
+      res.json({ ok: true, goal: goals.block(req.params.id, reason, unblockCriteria) });
     } catch (e: any) { res.status(400).json({ error: e.message }); }
   });
 

@@ -87,14 +87,64 @@ test('pause and resume move a goal in and out of the drive loop', () => {
   assert.equal(goals.goalsAwaitingAchiever().length, 1);
 });
 
-test('abandon is terminal and records an honest reason (never silent done)', () => {
+test('block is a RECOVERABLE hold with an honest reason + a resume contract', () => {
   const { goals } = makeGoals();
   const g = goals.create(seed); goals.activate(g.goalId);
-  const a = goals.abandon(g.goalId, 'budget exhausted');
-  assert.equal(a.status, 'abandoned');
-  assert.equal(a.closedReason, 'budget exhausted');
-  assert.equal(a.history.at(-1)!.kind, 'finish');
+  const b = goals.block(g.goalId, 'budget exhausted', 'raise stepBudget then resume');
+  assert.equal(b.status, 'blocked');
+  assert.equal(b.blockReason, 'budget exhausted');
+  assert.equal(b.unblockCriteria, 'raise stepBudget then resume');
+  assert.equal(b.history.at(-1)!.kind, 'block');
+  assert.equal(goals.goalsAwaitingAchiever().length, 0, 'blocked goal is not driven');
+});
+
+test('block always carries a resume contract, even when the caller omits one', () => {
+  const { goals } = makeGoals();
+  const g = goals.create(seed); goals.activate(g.goalId);
+  const b = goals.block(g.goalId, 'stuck');
+  assert.equal(b.status, 'blocked');
+  assert.ok(b.unblockCriteria && b.unblockCriteria.trim().length > 0, 'a default unblock contract is filled in');
+});
+
+test('resume clears the block contract and re-arms the goal (circuit-breaker HALF-OPEN)', () => {
+  const { goals } = makeGoals();
+  const g = goals.create(seed); goals.activate(g.goalId);
+  goals.block(g.goalId, 'transient brain fault', 'brain reachable, then resume');
+  const r = goals.resume(g.goalId);
+  assert.equal(r.status, 'active');
+  assert.equal(r.blockReason, undefined);
+  assert.equal(r.unblockCriteria, undefined);
+  assert.equal(r.history.at(-1)!.kind, 'resume');
+  assert.equal(goals.goalsAwaitingAchiever().length, 1, 'resumed goal is driven again');
+});
+
+test('a blocked goal is editable so the operator can clear the obstacle before resuming', () => {
+  const { goals } = makeGoals();
+  const g = goals.create({ ...seed, stepBudget: 2 }); goals.activate(g.goalId);
+  goals.block(g.goalId, 'budget exhausted', 'raise stepBudget then resume');
+  const u = goals.update(g.goalId, { stepBudget: 50 });
+  assert.equal(u.stepBudget, 50);
+  assert.equal(u.status, 'blocked', 'editing does not silently change status');
+});
+
+test('an achieved goal is terminal and cannot be reactivated', () => {
+  const { goals } = makeGoals();
+  const g = goals.create(seed); goals.activate(g.goalId);
+  goals.applyAchieverDecision(g.goalId, { kind: 'evaluate', met: true, reason: 'done' });
+  assert.equal(goals.get(g.goalId)!.status, 'achieved');
   assert.throws(() => goals.activate(g.goalId), /cannot activate/);
+});
+
+test('the Achiever can self-declare a block with its own unblock criteria', () => {
+  const { goals } = makeGoals();
+  const g = goals.create(seed); goals.activate(g.goalId);
+  const applied = goals.applyAchieverDecision(g.goalId, {
+    kind: 'block', reason: 'needs the Gumroad API token', unblockCriteria: 'GUMROAD_TOKEN is present in ~/.priv'
+  });
+  assert.equal(applied.blocked, true);
+  const rec = goals.get(g.goalId)!;
+  assert.equal(rec.status, 'blocked');
+  assert.equal(rec.unblockCriteria, 'GUMROAD_TOKEN is present in ~/.priv');
 });
 
 // ── the Achiever decision surface ────────────────────────────────────────────

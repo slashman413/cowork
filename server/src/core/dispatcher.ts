@@ -724,9 +724,16 @@ export class Dispatcher {
       if (this.decidingGoals.has(goalId)) continue;
 
       // Runaway guard: an Achiever that never declares success can't outrun its
-      // execution-task budget — abandon with an honest reason (never pretend-done).
+      // execution-task budget — BLOCK with an honest reason and a concrete unblock
+      // contract (never pretend-done, and never a terminal give-up). Raising the
+      // budget or narrowing the criterion, then resuming, is the recovery path.
       if (this.goals.overBudget(goalId)) {
-        this.goals.abandon(goalId, `step budget exhausted (${rec.stepBudget ?? 24} generated tasks) without meeting the success criterion`);
+        const cap = rec.stepBudget ?? 24;
+        this.goals.block(
+          goalId,
+          `step budget exhausted (${cap} generated tasks) without meeting the success criterion`,
+          `Raise this goal's stepBudget above ${cap} (if the criterion is genuinely reachable with more work), OR narrow the success criterion, then resume. If the objective is no longer worth pursuing, delete the goal.`
+        );
         this.goalFailures.delete(goalId);
         continue;
       }
@@ -744,10 +751,11 @@ export class Dispatcher {
           const decision = this.parseAchieverDecision(out);
           if (!decision) { this.registerGoalFailure(goalId, 'no usable decision from the Achiever (timeout or unparseable JSON)'); return; }
           const applied = this.goals!.applyAchieverDecision(goalId, decision);
-          // Progress = the goal ended, a phase was planned, or work was emitted.
-          // An evaluate(met:false) that neither advances nor emits is NO progress
-          // — count it so a stuck goal can't spin on empty evaluations forever.
-          const progressed = applied.achieved || applied.planned || (applied.emitted ?? 0) > 0;
+          // Progress = the goal ended (achieved), the Achiever declared an honest
+          // block (loop resolved, recoverable), a phase was planned, or work was
+          // emitted. An evaluate(met:false) that neither advances nor emits is NO
+          // progress — count it so a stuck goal can't spin on empty evaluations.
+          const progressed = applied.achieved || applied.blocked || applied.planned || (applied.emitted ?? 0) > 0;
           if (progressed) this.goalFailures.delete(goalId);
           else this.registerGoalFailure(goalId, `Achiever turn made no progress (kind=${decision.kind})`);
         } catch (e) {
@@ -759,15 +767,23 @@ export class Dispatcher {
     }
   }
 
-  /** Count a non-progressing Achiever turn; abandon the goal (honest reason)
-   *  once the consecutive-failure ceiling is hit. */
+  /** Count a non-progressing Achiever turn; BLOCK the goal (honest reason + a
+   *  concrete resume contract) once the consecutive-failure ceiling is hit. This
+   *  ceiling most often trips on TRANSIENT infrastructure faults (the Achiever
+   *  brain offline, overloaded, or returning unparseable output), so the goal is
+   *  held recoverably — not abandoned — and a resume re-arms it with a clean
+   *  counter (circuit-breaker OPEN → HALF-OPEN, ADR-007). */
   private registerGoalFailure(goalId: string, why: string): void {
     const n = (this.goalFailures.get(goalId) || 0) + 1;
     this.goalFailures.set(goalId, n);
     console.error(`Dispatcher: goal ${goalId} — ${why} (attempt ${n}/${Dispatcher.MAX_GOAL_FAILURES})`);
     if (n >= Dispatcher.MAX_GOAL_FAILURES) {
       this.goalFailures.delete(goalId);
-      this.goals?.abandon(goalId, `Achiever made no usable progress after ${n} turns (${why}) — goal abandoned, NOT completed`);
+      this.goals?.block(
+        goalId,
+        `Achiever made no usable progress after ${n} turns (${why}) — goal held, NOT completed`,
+        `The Achiever brain is reachable and returns a parseable decision. This ceiling usually trips on a transient fault (brain offline/overloaded/unparseable output); verify the brain, then resume to retry. If the goal's criterion or phases are genuinely unworkable, edit them first.`
+      );
     }
   }
 
@@ -800,11 +816,14 @@ export class Dispatcher {
       `{ "kind": "plan", "phase": { "key": "kebab-case", "title": "..." }, "reason": "why this phase next" }`,
       `// OR`,
       `{ "kind": "emit", "tasks": [ { "title": "...", "description": "the standalone brief", "scheduledAt": "ISO-8601 (optional, future)" } ], "reason": "..." }`,
+      `// OR`,
+      `{ "kind": "block", "reason": "the concrete obstacle you cannot clear yourself", "unblockCriteria": "the specific, checkable condition that must hold to resume" }`,
       '```',
       `Rules: answer evaluate{met:true} ONLY when the criteria are genuinely met (this ENDS the goal). Emit the current phase's real work as a small batch — the last task automatically completes the phase and triggers the Judger. Do not repeat completed work. If no phase is workable, plan one.`,
       '',
       `Waiting on the real world: when the next honest move is to LET TIME PASS (a month of revenue, a cohort of traffic, an indexing window), do not burn turns re-evaluating. Emit the measurement task with a future "scheduledAt". The goal then sleeps — no turns, no budget — until that checkpoint fires. This is the correct move, not a stall.`,
-      `Persistence: a criterion that is not yet met is NEVER a reason to stop. If a phase's results disappointed, plan the next phase with a DIFFERENT approach informed by the Judger's minutes above — do not repeat the approach that underperformed. Only evaluate{met:false} when you genuinely cannot plan or emit anything useful; a turn that neither plans nor emits counts as no progress, and enough of those abandon the goal.`
+      `Persistence: a criterion that is not yet met is NEVER a reason to stop. If a phase's results disappointed, plan the next phase with a DIFFERENT approach informed by the Judger's minutes above — do not repeat the approach that underperformed.`,
+      `Blocking honestly: if — and only if — you hit a real obstacle you cannot clear yourself (a missing credential, an external dependency, a decision only a human can make, a criterion that has become impossible), return kind:"block" with a precise unblockCriteria. A blocked goal is HELD, not abandoned: it stops spending turns and budget and waits for that condition or a human to resume it. Prefer block over spinning: an evaluate{met:false} that neither plans nor emits counts as no progress, and enough of those will block the goal automatically with a generic reason — declaring the block yourself, with a specific unblockCriteria, is always better.`
     );
     return lines.join('\n');
   }
@@ -828,6 +847,7 @@ export class Dispatcher {
         if (obj.kind === 'evaluate' && typeof obj.met === 'boolean') return obj as AchieverDecision;
         if (obj.kind === 'plan' && obj.phase && obj.phase.key) return obj as AchieverDecision;
         if (obj.kind === 'emit' && Array.isArray(obj.tasks) && obj.tasks.length) return obj as AchieverDecision;
+        if (obj.kind === 'block' && typeof obj.reason === 'string' && obj.reason.trim()) return obj as AchieverDecision;
       } catch { /* try the next candidate */ }
     }
     return null;

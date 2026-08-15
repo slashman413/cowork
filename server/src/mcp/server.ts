@@ -432,12 +432,15 @@ function buildServer(config: Config, store: Store, eventBus: EventBus, goals?: G
       'update_goal_progress',
       'Submit ONE Achiever move for a Goal: evaluate the binary success criterion ' +
       '(kind:"evaluate", met:true|false), plan the next phase (kind:"plan", phase), ' +
-      'or emit a phase\'s worth of real tasks (kind:"emit", tasks[]).',
+      'emit a phase\'s worth of real tasks (kind:"emit", tasks[]), or block the goal ' +
+      'on an obstacle you cannot clear (kind:"block", reason, unblockCriteria). A ' +
+      'blocked goal is HELD recoverably — never abandoned.',
       {
         goal_id: z.string(),
-        kind: z.enum(['evaluate', 'plan', 'emit']),
+        kind: z.enum(['evaluate', 'plan', 'emit', 'block']),
         met: z.boolean().optional(),
         reason: z.string().optional(),
+        unblockCriteria: z.string().optional(),
         phase: z.object({ key: z.string(), title: z.string() }).optional(),
         tasks: z.array(z.object({
           title: z.string(),
@@ -451,6 +454,7 @@ function buildServer(config: Config, store: Store, eventBus: EventBus, goals?: G
             kind: args.kind,
             met: args.met,
             reason: args.reason,
+            unblockCriteria: args.unblockCriteria,
             phase: args.phase,
             tasks: args.tasks
           });

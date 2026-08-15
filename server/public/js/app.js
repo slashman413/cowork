@@ -2238,12 +2238,14 @@ class App {
   // ── Goals ──────────────────────────────────────────────────────────────
   // Long-lived, phase-tracked objectives that sit beneath Workflows. Unlike a
   // workflow run (which ends), a goal PERSISTS until its binary success criterion
-  // flips (→ achieved) or a human/budget stops it (→ abandoned). The Achiever
-  // generates and the Judger audits each phase; the whole autonomous loop is
-  // recorded as the decision log rendered here.
+  // flips (→ achieved, the only terminal state) or it hits an obstacle it can't
+  // clear itself (→ blocked — RECOVERABLE, carrying the reason + the specific
+  // condition that would let it resume). The Achiever generates and the Judger
+  // audits each phase; the whole autonomous loop is recorded as the decision log
+  // rendered here.
 
   _goalStatusColor(s) {
-    return ({ draft: '#94A3B8', active: '#0EA5E9', paused: '#F59E0B', achieved: '#22C55E', abandoned: '#EF4444' })[s] || '#94A3B8';
+    return ({ draft: '#94A3B8', active: '#0EA5E9', paused: '#F59E0B', achieved: '#22C55E', blocked: '#EF4444' })[s] || '#94A3B8';
   }
   _phaseStatusColor(s) {
     return ({ planned: '#94A3B8', active: '#0EA5E9', completing: '#F59E0B', done: '#22C55E', audited: '#22C55E' })[s] || '#94A3B8';
@@ -2267,8 +2269,8 @@ class App {
     // Short, cheap, and they terminate on their own. Default budget is fine.
     //
     // OUTCOME goals are METRIC-OPEN ("$10k/month", "10k visits") — the shape that
-    // burned the abandoned "$500k revenue" goal. The Achiever cannot force a market
-    // number, so the naive version spins evaluations until the step budget dies.
+    // stalled the "$500k revenue" goal. The Achiever cannot force a market number,
+    // so the naive version spins evaluations until the step budget runs out.
     // They are viable only with ALL FOUR of these, which every outcome starter below
     // carries; copy the set if you write your own:
     //   1. EVIDENCE-BOUND criterion. Not "is MRR $10k?" (unanswerable from inside)
@@ -2276,15 +2278,17 @@ class App {
     //      and impossible to satisfy by assertion (the verifier rejects fabrication).
     //   2. A LOOP of phases (measure → research → ship → wait → review), so every
     //      turn has real work to emit. A turn that neither plans nor emits counts as
-    //      no progress, and MAX_GOAL_FAILURES of those in a row abandons the goal.
+    //      no progress, and MAX_GOAL_FAILURES of those in a row BLOCKS the goal
+    //      (recoverably — raise the budget / narrow the criterion, then resume).
     //   3. SCHEDULED CHECKPOINTS. The measure phase emits its task with a future
     //      `scheduledAt`; `scheduled` is an OPEN status, so the goal goes quiescent-
-    //      blocked and takes NO turns and spends NO budget while real time passes.
+    //      waiting and takes NO turns and spends NO budget while real time passes.
     //      This is what makes a months-long goal survivable at all.
     //   4. A budget sized for the horizon — these run for months, not an afternoon.
     // Outcome goals are honest about their limit: they drive the work and prove the
     // number, they cannot conjure the market. They end `achieved` when the evidence
-    // says so, or `abandoned` with a reason — never a silent "done".
+    // says so, or `blocked` with a reason + a resume contract — never a silent
+    // "done" and never a silent "gave up".
     const templates = [
       { key: 'web-tool', label: '🚀 Ship a web tool',
         title: 'Ship a new single-page web tool',
@@ -2379,14 +2383,15 @@ class App {
       ].join(' ');
       const controls = [];
       if (g.status === 'draft' || g.status === 'paused') controls.push(`<button class="btn btn-primary goal-activate" data-id="${esc(g.goalId)}" style="font-size:0.75rem">Activate ▶</button>`);
+      if (g.status === 'blocked') controls.push(`<button class="btn btn-primary goal-activate" data-id="${esc(g.goalId)}" title="Clear the block and give the goal a fresh turn" style="font-size:0.75rem">Resume ▶</button>`);
       if (g.status === 'active') controls.push(`<button class="btn goal-pause" data-id="${esc(g.goalId)}" style="font-size:0.75rem">Pause</button>`);
-      if (g.status !== 'achieved' && g.status !== 'abandoned') controls.push(`<button class="btn goal-abandon" data-id="${esc(g.goalId)}" style="font-size:0.75rem">Abandon</button>`);
+      if (g.status !== 'achieved' && g.status !== 'blocked') controls.push(`<button class="btn goal-block" data-id="${esc(g.goalId)}" title="Hold the goal recoverably with a reason + a resume condition" style="font-size:0.75rem">Block</button>`);
       controls.push(`<button class="btn-icon goal-delete" data-id="${esc(g.goalId)}" title="Delete goal + its tasks" style="padding:4px;background:none;border:none;cursor:pointer"><i data-lucide="trash-2" style="width:14px;height:14px;color:var(--text-muted)"></i></button>`);
 
       const phaseTimeline = g.phases.map(p => `<span title="${esc(p.title)}" style="display:inline-flex;align-items:center;gap:4px;font-size:0.72rem;padding:2px 7px;border-radius:999px;background:${this._phaseStatusColor(p.status)}18;color:${this._phaseStatusColor(p.status)};border:1px solid ${this._phaseStatusColor(p.status)}40">${esc(p.key)} · ${esc(p.status)}</span>`).join(' ');
 
       const decisionLog = (g.history || []).length ? `<div style="margin-top:10px"><div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:4px">Decision log (${g.history.length})</div>${
-        g.history.slice(-12).map(h => `<div style="font-size:0.76rem;padding:3px 0;border-top:1px solid var(--bg-tertiary)"><code>${esc(h.kind)}</code>${h.phaseKey ? ' · ' + esc(h.phaseKey) : ''}${h.met !== undefined ? ' · met=' + h.met : ''}${h.reason ? ' — ' + esc(h.reason) : ''} <span style="color:var(--text-muted)">${timeAgo(h.at)}</span></div>`).join('')
+        g.history.slice(-12).map(h => `<div style="font-size:0.76rem;padding:3px 0;border-top:1px solid var(--bg-tertiary)"><code>${esc(h.kind)}</code>${h.phaseKey ? ' · ' + esc(h.phaseKey) : ''}${h.met !== undefined ? ' · met=' + h.met : ''}${h.reason ? ' — ' + esc(h.reason) : ''}${h.unblockCriteria ? ` <span style="color:var(--text-muted)">(resume when: ${esc(h.unblockCriteria)})</span>` : ''} <span style="color:var(--text-muted)">${timeAgo(h.at)}</span></div>`).join('')
       }</div>` : '';
 
       const minutes = (g.minutes || []).length ? `<div style="margin-top:10px"><div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:4px">Reports &amp; meeting minutes</div>${
@@ -2406,7 +2411,11 @@ class App {
         </div>
         <div style="display:flex;gap:5px;flex-wrap:wrap;margin:6px 0">${phaseTimeline}</div>
         ${brainChips ? `<div style="margin:6px 0">${brainChips}</div>` : ''}
-        ${g.closedReason ? `<p style="font-size:0.76rem;color:${color}">⛔ ${esc(g.closedReason)}</p>` : ''}
+        ${g.status === 'blocked' ? `<div style="font-size:0.76rem;margin:6px 0;padding:6px 9px;border-radius:8px;background:${color}14;border:1px solid ${color}40">
+          <div style="color:${color}"><strong>⛔ Blocked:</strong> ${esc(g.blockReason || 'held')}</div>
+          ${g.unblockCriteria ? `<div style="color:var(--text-secondary);margin-top:3px"><strong>▶ Resume when:</strong> ${esc(g.unblockCriteria)}</div>` : ''}
+        </div>` : ''}
+        ${g.status === 'achieved' && g.closedReason ? `<p style="font-size:0.76rem;color:${color}">🏁 ${esc(g.closedReason)}</p>` : ''}
         ${decisionLog}
         ${minutes}
       </div>`;
@@ -2420,7 +2429,7 @@ class App {
         <div style="font-size:0.85rem;color:var(--text-secondary);line-height:1.6">
           <div style="margin-bottom:4px"><strong>Goals</strong> are advanced, long-term objectives — a self-terminating engine that runs beneath Workflows.</div>
           <div style="margin:3px 0">🎯 The <strong>Achiever</strong> continuously evaluates progress, plans phases, and generates tasks. ⚖️ The <strong>Judger</strong> wakes when a phase completes, writes a report + meeting minutes, and re-arms the Achiever.</div>
-          <div style="margin:3px 0">A goal runs until its <strong>binary (Yes/No) success criterion</strong> flips true (→ achieved), a human stops it, or its step budget is exhausted (→ abandoned, never a silent "done").</div>
+          <div style="margin:3px 0">A goal runs until its <strong>binary (Yes/No) success criterion</strong> flips true (→ <strong>achieved</strong>, the only terminal state). If it hits an obstacle it can't clear — the budget runs out, a credential is missing, a decision needs a human — it goes <strong>blocked</strong>: a recoverable hold that records the reason <em>and the specific condition to resume</em>. It is never silently "done" and never silently thrown away — you <strong>Resume</strong> a blocked goal after clearing the obstacle, or <strong>Delete</strong> it if it's genuinely dead.</div>
         </div>
       </div>
 
@@ -2440,7 +2449,7 @@ class App {
           <div>
             <label style="${lbl}">Success criterion — a Yes/No question that flips true when a concrete deliverable EXISTS</label>
             <input id="goal-criteria" placeholder="e.g. Is the tool live on GitHub Pages with a working index.html?" style="${inp}">
-            <div style="font-size:0.7rem;color:var(--text-muted);margin-top:3px">Tie it to something you can point at ("is X live / shipped / for sale?"). For a market number, make it <em>evidence-bound</em> — not "is MRR $10k?" but "does a dated snapshot in artifacts show $10k?" — then give it a long step budget and a phase that measures on a scheduled checkpoint. A bare metric with the default budget runs out and is abandoned; the 💰 📈 🧲 examples above are already set up this way.</div>
+            <div style="font-size:0.7rem;color:var(--text-muted);margin-top:3px">Tie it to something you can point at ("is X live / shipped / for sale?"). For a market number, make it <em>evidence-bound</em> — not "is MRR $10k?" but "does a dated snapshot in artifacts show $10k?" — then give it a long step budget and a phase that measures on a scheduled checkpoint. A bare metric with the default budget runs out and blocks (recoverably — you raise the budget and resume); the 💰 📈 🧲 examples above are already set up this way.</div>
           </div>
           <div>
             <label style="${lbl}">Phases — one explicit checkpoint per line, in order</label>
@@ -2562,10 +2571,12 @@ class App {
     }));
     act('.goal-activate', id => this.api.post(`/goals/${encodeURIComponent(id)}/activate`));
     act('.goal-pause', id => this.api.post(`/goals/${encodeURIComponent(id)}/pause`));
-    act('.goal-abandon', async id => {
-      const reason = prompt('Reason for abandoning this goal?', 'abandoned by a human');
+    act('.goal-block', async id => {
+      const reason = prompt('Why is this goal blocked? (the obstacle)', 'blocked by a human');
       if (reason === null) throw new Error('cancelled');
-      return this.api.post(`/goals/${encodeURIComponent(id)}/abandon`, { reason });
+      const unblockCriteria = prompt('Resume when… (the specific condition that would let it continue)', '');
+      if (unblockCriteria === null) throw new Error('cancelled');
+      return this.api.post(`/goals/${encodeURIComponent(id)}/block`, { reason, unblockCriteria: unblockCriteria || undefined });
     });
     act('.goal-delete', async id => {
       if (!confirm('Delete this goal and every task it generated?')) throw new Error('cancelled');

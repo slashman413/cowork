@@ -429,12 +429,16 @@ State lives in `goals/<goalId>.json`. A Goal drives toward one **binary success
 criterion** using the ordinary task machinery, via two roles:
 
 - **Achiever** — takes exactly ONE move per turn: `evaluate` (answer the Yes/No gate),
-  `plan` (append the next phase), or `emit` (generate that phase's tasks).
+  `plan` (append the next phase), `emit` (generate that phase's tasks), or `block`
+  (declare an obstacle it can't clear, with the condition to resume).
 - **Judger** — wakes when a phase's terminal task finishes, writes a report + meeting
   minutes into artifacts, and re-arms the Achiever.
 
-A Goal ends `achieved` when the criterion is met, or `abandoned` **with a stated
-reason** — never a silent "done". Turns only occur when no generated task is open.
+A Goal ends **`achieved`** when the criterion is met — the only terminal state. If it hits
+an obstacle it can't clear itself it goes **`blocked`**: a *recoverable* hold recording the
+reason **and** `unblockCriteria`, the specific condition that would let it resume. Never a
+silent "done" and never a silent give-up — a human **resumes** it once the obstacle clears,
+or **deletes** it if it's truly dead. Turns only occur when no generated task is open.
 
 ### Scheduled Checkpoints (`scheduledAt`)
 
@@ -452,14 +456,16 @@ let the world change (a month of revenue, a search-indexing window); it is not a
 Unparseable or already-past times are dropped and the task simply runs now, so one bad
 date can never abort an emit.
 
-### Two Guards Abandon a Goal
+### Two Guards Block a Goal (recoverably)
 
 | Guard | Counts | Default |
 |-------|--------|---------|
 | `stepBudget` | **Lifetime** execution tasks generated | 24 |
 | `MAX_GOAL_FAILURES` | **Consecutive** Achiever turns that neither plan nor emit | 5 |
 
-An `evaluate{met:false}` is one of those non-progressing turns. Both guards punish
+An `evaluate{met:false}` is one of those non-progressing turns. When a guard trips the
+Goal is **blocked with a concrete resume contract** (raise the budget / narrow the
+criterion, or verify the brain, then resume) — held, not thrown away. Both guards punish
 metric-open objectives ("$10k/month"), which is why such a Goal needs an
 **evidence-bound** criterion ("does a dated snapshot in artifacts show X?" rather than
 "is X true?"), a phase loop that always has real work to emit, scheduled checkpoints,
@@ -496,7 +502,7 @@ way; copy that shape rather than writing a bare metric.
 | `GET` | `/api/workflow-runs/:runId` | Run status and decision log |
 | `GET`/`POST` | `/api/goals` | List goals / create one |
 | `GET`/`PATCH`/`DELETE` | `/api/goals/:id` | Read, edit, or remove a goal |
-| `POST` | `/api/goals/:id/activate`, `/pause`, `/abandon` | Drive a goal's lifecycle (`abandon` takes a reason) |
+| `POST` | `/api/goals/:id/activate`, `/pause`, `/block` | Drive a goal's lifecycle (`activate` also resumes a blocked goal; `block` takes a `reason` + `unblockCriteria`) |
 | `GET` | `/api/goals/:id/tasks` | The tasks a goal generated |
 | `GET` | `/api/events` | SSE event stream (real-time) |
 

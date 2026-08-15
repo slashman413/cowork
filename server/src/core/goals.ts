@@ -155,7 +155,10 @@ export class Goals {
     & { phases?: { key: string; title: string }[] }): GoalRecord {
     const rec = this.load(goalId);
     if (!rec) throw new Error('goal not found');
-    if (rec.status === 'achieved' || rec.status === 'abandoned') throw new Error(`cannot edit a ${rec.status} goal`);
+    // Only `achieved` is uneditable. A `blocked` goal is editable ON PURPOSE:
+    // raising the budget or narrowing the criterion is often exactly what clears
+    // the block before a resume.
+    if (rec.status === 'achieved') throw new Error(`cannot edit an ${rec.status} goal`);
     if (patch.title !== undefined) rec.title = String(patch.title).trim();
     if (patch.description !== undefined) rec.description = String(patch.description).trim();
     if (patch.successCriteria !== undefined) rec.successCriteria = String(patch.successCriteria).trim();
@@ -179,16 +182,26 @@ export class Goals {
     return this.save(rec);
   }
 
-  /** draft → active. Refuses a goal that violates the terminate-ability
-   *  guardrails: it must carry a binary criterion AND at least one phase to
-   *  work (ADR-003). This is where the spec's authoring discipline is enforced. */
+  /** draft/paused/blocked → active. Refuses a goal that violates the
+   *  terminate-ability guardrails: it must carry a binary criterion AND at least
+   *  one phase to work (ADR-003). Resuming from `blocked` clears the block
+   *  contract (blockReason/unblockCriteria) — the circuit-breaker HALF-OPEN retry
+   *  (ADR-007): the operator asserts the unblock condition now holds, so the goal
+   *  gets a fresh turn. `achieved` is terminal and cannot be reactivated. */
   activate(goalId: string): GoalRecord {
     const rec = this.load(goalId);
     if (!rec) throw new Error('goal not found');
     if (rec.status === 'active') return rec;
-    if (rec.status !== 'draft' && rec.status !== 'paused') throw new Error(`cannot activate a ${rec.status} goal`);
+    if (rec.status !== 'draft' && rec.status !== 'paused' && rec.status !== 'blocked') {
+      throw new Error(`cannot activate an ${rec.status} goal`);
+    }
     if (!rec.successCriteria.trim()) throw new Error('cannot activate: successCriteria (binary Yes/No) is required');
     if (!rec.phases.length) throw new Error('cannot activate: at least one phase (waypoint) is required');
+    if (rec.status === 'blocked') {
+      rec.history.push({ kind: 'resume', reason: `unblocked (was: ${rec.blockReason || 'blocked'})`, at: new Date().toISOString() });
+      delete rec.blockReason;
+      delete rec.unblockCriteria;
+    }
     rec.status = 'active';
     return this.save(rec);
   }
@@ -203,17 +216,30 @@ export class Goals {
 
   resume(goalId: string): GoalRecord { return this.activate(goalId); }
 
-  /** Terminal, honest close: never a silent "done". Records the reason on the
-   *  aggregate and in the audit trail (mirrors the orchestrated-run
-   *  abandon-with-reason at dispatcher.ts). */
-  abandon(goalId: string, reason: string): GoalRecord {
+  /**
+   * Recoverable hold — the replacement for the old terminal `abandon` (ADR-007).
+   * A blocked goal is NOT thrown away: it records the obstacle (`reason`) and the
+   * specific, checkable condition that would let it continue (`unblockCriteria` —
+   * the WOOP obstacle→plan contract). It stops consuming turns and budget (blocked
+   * is excluded from the drive loop, like paused) and waits for a human to clear
+   * the obstacle and `resume`, or to `delete` it if the objective is genuinely
+   * dead. This is the circuit-breaker OPEN state: stop compounding, name the fault,
+   * stay recoverable — never a silent "done" AND never a silent "gave up".
+   *
+   * Idempotent: re-blocking an already-blocked goal just refreshes the reason.
+   * An `achieved` goal is terminal and is left untouched.
+   */
+  block(goalId: string, reason: string, unblockCriteria?: string): GoalRecord {
     const rec = this.load(goalId);
     if (!rec) throw new Error('goal not found');
-    if (rec.status === 'achieved' || rec.status === 'abandoned') return rec;
-    rec.status = 'abandoned';
-    rec.closedReason = reason;
-    rec.history.push({ kind: 'finish', reason, at: new Date().toISOString() });
-    console.log(`Goals: abandoned ${goalId} — ${reason}`);
+    if (rec.status === 'achieved') return rec;
+    rec.status = 'blocked';
+    rec.blockReason = reason;
+    rec.unblockCriteria = unblockCriteria && unblockCriteria.trim()
+      ? unblockCriteria.trim()
+      : 'A human reviews the block reason above, addresses it, and resumes the goal.';
+    rec.history.push({ kind: 'block', reason, unblockCriteria: rec.unblockCriteria, at: new Date().toISOString() });
+    console.log(`Goals: blocked ${goalId} — ${reason} | unblock when: ${rec.unblockCriteria}`);
     return this.save(rec);
   }
 
@@ -360,10 +386,19 @@ export class Goals {
    * Returns a small summary the dispatcher uses to manage idle/failure counters.
    */
   applyAchieverDecision(goalId: string, decision: AchieverDecision):
-    { achieved?: boolean; planned?: boolean; emitted?: number; evaluated?: boolean } {
+    { achieved?: boolean; planned?: boolean; emitted?: number; evaluated?: boolean; blocked?: boolean } {
     const rec = this.load(goalId);
     if (!rec || rec.status !== 'active') return {};
     const at = new Date().toISOString();
+
+    if (decision.kind === 'block') {
+      // The Achiever recognised a genuine obstacle it cannot clear itself and
+      // named the recovery condition. Hold the goal honestly rather than spinning
+      // turns until the failure ceiling kills it. This is the intended, graceful
+      // stop — it counts as PROGRESS (the loop resolved), not a failure.
+      this.block(goalId, decision.reason || 'Achiever declared the goal blocked', decision.unblockCriteria);
+      return { blocked: true };
+    }
 
     if (decision.kind === 'evaluate') {
       const met = decision.met === true;
