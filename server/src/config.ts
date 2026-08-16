@@ -15,7 +15,7 @@ const rootDir = path.resolve(__dirname, '../../');
 // personal host/brain settings are never committed and the server's live edits don't
 // churn the repo. On first run we seed the user config from the repo template.
 const REPO_TEMPLATE = path.resolve(rootDir, 'config.json');
-function activeConfigPath(): string {
+export function activeConfigPath(): string {
   if (process.env.COWORK_CONFIG) return expandHome(process.env.COWORK_CONFIG);
   return path.join(os.homedir(), '.cowork', 'config.json');
 }

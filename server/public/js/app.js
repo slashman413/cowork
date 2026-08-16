@@ -3156,13 +3156,35 @@ class App {
     const config = await this.api.get('/config');
     this.contentEl.innerHTML = `
       <div class="card">
-        <div style="display:flex; align-items:center; gap:8px; margin-bottom:var(--space-md)">
-          <i data-lucide="settings" style="width:18px;height:18px;color:var(--text-muted)"></i>
-          <h3 style="font-size:0.95rem">Configuration</h3>
-          <span style="font-size:0.75rem; color:var(--text-muted); font-weight:400">(config.json — API keys masked)</span>
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:var(--space-md)">
+          <div style="display:flex; align-items:center; gap:8px;">
+            <i data-lucide="settings" style="width:18px;height:18px;color:var(--text-muted)"></i>
+            <h3 style="font-size:0.95rem">Configuration</h3>
+            <span style="font-size:0.75rem; color:var(--text-muted); font-weight:400">(config.json — API keys masked)</span>
+          </div>
+          <button id="save-config-btn" class="btn btn-primary" style="font-size:0.8rem">Save Config (Requires Restart)</button>
         </div>
-        <pre style="white-space:pre-wrap; font-size:0.83rem; max-height:70vh; overflow-y:auto">${esc(JSON.stringify(config, null, 2))}</pre>
+        <textarea id="config-editor" style="width:100%; height:70vh; font-family:monospace; font-size:0.83rem; padding:8px; background:var(--bg-tertiary); color:inherit; border:1px solid var(--bg-tertiary); border-radius:4px;">${esc(JSON.stringify(config, null, 2))}</textarea>
       </div>`;
+      
+    if (window.lucide) window.lucide.createIcons();
+    
+    this.contentEl.querySelector('#save-config-btn')?.addEventListener('click', async (e) => {
+      const btn = e.target;
+      const editor = this.contentEl.querySelector('#config-editor');
+      try {
+        const newConfig = JSON.parse(editor.value);
+        btn.textContent = 'Saving...';
+        btn.disabled = true;
+        await this.api.put('/config', newConfig);
+        btn.textContent = 'Saved! Restart Server to Apply';
+        btn.style.background = '#22c55e'; // green
+      } catch (err) {
+        alert('Failed to save config. Ensure it is valid JSON. Error: ' + err.message);
+        btn.textContent = 'Save Config (Requires Restart)';
+        btn.disabled = false;
+      }
+    });
   }
 }
 

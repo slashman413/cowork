@@ -1,4 +1,6 @@
-import { Router } from 'express';
+import express, { Router } from 'express';
+import * as fs from 'fs';
+import { activeConfigPath } from '../config.js';
 import type { Store } from '../core/store.js';
 import type { EventBus } from '../core/events.js';
 
@@ -212,6 +214,29 @@ export function createApiRouter(store: Store, eventBus: EventBus): Router {
     if (sanitized.server) sanitized.server.apiKey = sanitized.server.apiKey ? '***' : null;
 
     res.json(sanitized);
+  });
+
+  router.put('/config', express.json(), (req, res) => {
+    try {
+      const newConfig = req.body;
+      if (!newConfig || typeof newConfig !== 'object') {
+        throw new Error('Invalid config body');
+      }
+
+      const configPath = activeConfigPath();
+      let current: any = {};
+      try { current = JSON.parse(fs.readFileSync(configPath, 'utf-8')); } catch { /* ignore */ }
+
+      // Restore API key if it was masked
+      if (newConfig.server && newConfig.server.apiKey === '***') {
+        newConfig.server.apiKey = current.server?.apiKey || null;
+      }
+
+      fs.writeFileSync(configPath, JSON.stringify(newConfig, null, 2));
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(400).json({ error: e.message });
+    }
   });
 
   return router;
