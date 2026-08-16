@@ -118,9 +118,9 @@
       "orchestrator": {
         "description": "Decompose a CEO idea into role-tagged subtasks and dispatch them",
         "brains": [
-          "local-cc-fable",
-          "local-ha-deepseek-v4-pro",
           "local-ha-qwen35b",
+          "local-ha-deepseek-v4-pro",
+          "local-cc-fable",
           "local-ha-deepseek"
         ]
       },
