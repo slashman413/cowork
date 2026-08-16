@@ -1,7 +1,7 @@
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
-import { loadConfig, persistRegistries, removeBrainCascade } from './config.js';
+import { loadConfig, persistRegistries, removeBrainCascade, restoreClientBrains } from './config.js';
 import { EventBus } from './core/events.js';
 import { Store } from './core/store.js';
 import { Dispatcher } from './core/dispatcher.js';
@@ -22,6 +22,22 @@ async function main() {
   const store = new Store(config, eventBus);
 
   store.initialize();
+
+  // Self-heal the brain registry from the last known CLIENT declarations: a
+  // client-declared brain (e.g. every `local-agy-*` the Antigravity client
+  // registers) must always be selectable, but a full-config UI save or a
+  // template reseed can wipe the persisted dynamic entries — and clients only
+  // re-declare their brains when THEY restart, not when the server does.
+  // Restore anything the persisted roster still declares before the dispatcher
+  // and UI come up. Idempotent; existing static defs are never overwritten.
+  try {
+    const restored = restoreClientBrains(config, store.getActiveAgents());
+    if (restored.length) {
+      console.log(`Restored ${restored.length} client-declared brain(s) into the registry: ${restored.join(', ')}`);
+    }
+  } catch (e) {
+    console.error('restoreClientBrains failed:', e);
+  }
 
   // Host system-load sampler feeding the dashboard's top metrics bar.
   const sysMetrics = new SystemMetrics();

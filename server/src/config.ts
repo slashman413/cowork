@@ -212,3 +212,55 @@ export function registerBrain(config: Config, id: string, brain: import('./types
   config.orchestration.brains[id] = brain;
   persistRegistries(config);
 }
+
+/** Client platforms whose capabilities are brain ids, and the exec each implies. */
+const CLIENT_PLATFORM_EXEC: Record<string, NonNullable<import('./types.js').BrainConfig['exec']>> = {
+  claude: 'claude',
+  antigravity: 'agy',
+  codex: 'codex',
+  hermes: 'hermes',
+  ollama: 'ollama'
+};
+
+/** Brain-shaped capability ids use the `local-*` / `remote-*` alias convention. */
+const BRAIN_ID_RE = /^(local|remote)-/;
+
+/**
+ * Rebuild dynamic brains from the last known CLIENT declarations (the persisted
+ * agent roster in .status/agents.json) whenever the registry lost them — a
+ * full-config UI save, a template reseed, or a manual cleanup can wipe
+ * auto-registered entries, and clients only re-declare their brains when THEY
+ * restart, not when the server restarts. Client capabilities are the source of
+ * truth for what a connected client can actually run, so a capability that is
+ * missing from the registry must be restored or the UI shows the client with
+ * its brains while the brain dropdown cannot select them.
+ *
+ * Idempotent and fail-soft: existing registry entries (static or dynamic) are
+ * never overwritten; platforms without a known exec (dispatcher/orchestrator
+ * internals) and non-brain capabilities are skipped. Returns the ids restored.
+ */
+export function restoreClientBrains(
+  config: Config,
+  agents: Array<{ id: string; platform: string; capabilities?: string[] }>
+): string[] {
+  const restored: string[] = [];
+  config.orchestration.brains = config.orchestration.brains || {};
+  for (const a of agents) {
+    const exec = CLIENT_PLATFORM_EXEC[a.platform];
+    if (!exec) continue;
+    for (const cap of a.capabilities || []) {
+      if (!BRAIN_ID_RE.test(cap)) continue;
+      if (config.orchestration.brains[cap]) continue;
+      config.orchestration.brains[cap] = {
+        description: `${cap} (declared by client ${a.id.slice(0, 8)}; restored from persisted registration)`,
+        location: cap.startsWith('local-') ? 'local' : 'remote',
+        exec,
+        dynamic: true,
+        registeredBy: a.id
+      };
+      restored.push(cap);
+    }
+  }
+  if (restored.length) persistRegistries(config);
+  return restored;
+}
