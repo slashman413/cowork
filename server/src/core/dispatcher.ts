@@ -628,7 +628,7 @@ export class Dispatcher {
 
       (async () => {
         try {
-          const out = await this.askRouter(prompt, timeout);
+          const out = await this.askExecutor(this.config.orchestration.agents.orchestrator?.brains, prompt, timeout);
           // The orchestrator answers with a step key or DONE; take the LAST match
           // so a trailing final answer wins over any earlier mention.
           const pick = this.pickLast([...keys, 'DONE'], out);
