@@ -1,6 +1,11 @@
 import express, { Router } from 'express';
-import * as fs from 'fs';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { activeConfigPath } from '../config.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 import type { Store } from '../core/store.js';
 import type { EventBus } from '../core/events.js';
 
