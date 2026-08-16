@@ -233,6 +233,21 @@ export function createApiRouter(store: Store, eventBus: EventBus): Router {
       }
 
       fs.writeFileSync(configPath, JSON.stringify(newConfig, null, 2));
+
+      // Also update the repo template if we are in the repo, commit, push, and restart
+      const repoTemplate = path.resolve(__dirname, '../../config.json');
+      if (fs.existsSync(repoTemplate)) {
+        fs.writeFileSync(repoTemplate, JSON.stringify(newConfig, null, 2));
+        import('child_process').then(({ exec }) => {
+          exec('git add config.json && git commit -m "chore: update config via web UI" && git push', { cwd: path.resolve(__dirname, '../../') }, (err) => {
+            if (err) console.error('Failed to commit config changes:', err);
+            else console.log('Config changes committed and pushed');
+            // Graceful restart (if managed by systemd/pm2, this will restart it)
+            process.exit(0);
+          });
+        }).catch(err => console.error('Failed to load child_process:', err));
+      }
+
       res.json({ ok: true });
     } catch (e: any) {
       res.status(400).json({ error: e.message });

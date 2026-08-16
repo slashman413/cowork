@@ -3162,7 +3162,7 @@ class App {
             <h3 style="font-size:0.95rem">Configuration</h3>
             <span style="font-size:0.75rem; color:var(--text-muted); font-weight:400">(config.json — API keys masked)</span>
           </div>
-          <button id="save-config-btn" class="btn btn-primary" style="font-size:0.8rem">Save Config (Requires Restart)</button>
+          <button id="save-config-btn" class="btn btn-primary" style="font-size:0.8rem">Save Config</button>
         </div>
         <textarea id="config-editor" style="width:100%; height:70vh; font-family:monospace; font-size:0.83rem; padding:8px; background:var(--bg-tertiary); color:inherit; border:1px solid var(--bg-tertiary); border-radius:4px;">${esc(JSON.stringify(config, null, 2))}</textarea>
       </div>`;
@@ -3177,11 +3177,11 @@ class App {
         btn.textContent = 'Saving...';
         btn.disabled = true;
         await this.api.put('/config', newConfig);
-        btn.textContent = 'Saved! Restart Server to Apply';
+        btn.textContent = 'Saved! Server restarting...';
         btn.style.background = '#22c55e'; // green
       } catch (err) {
         alert('Failed to save config. Ensure it is valid JSON. Error: ' + err.message);
-        btn.textContent = 'Save Config (Requires Restart)';
+        btn.textContent = 'Save Config';
         btn.disabled = false;
       }
     });

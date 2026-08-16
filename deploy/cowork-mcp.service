@@ -7,7 +7,7 @@ Type=simple
 # Edit the paths below to match this machine before `systemctl enable`.
 Environment=PATH=/home/USER/.local/bin:/snap/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
 WorkingDirectory=/home/USER/cowork/server
-ExecStart=/home/USER/.local/bin/node dist/index.js
+ExecStart=/home/USER/.local/bin/node dist/index.js --host 0.0.0.0
 Restart=always
 RestartSec=5
 TimeoutStopSec=10
