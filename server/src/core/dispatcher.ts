@@ -576,6 +576,37 @@ export class Dispatcher {
     return best;
   }
 
+  /**
+   * Parse the orchestrator's next-step decision. Step keys are lowercase slugs and
+   * match case-insensitively. DONE, however, is accepted ONLY as the explicit
+   * uppercase token standing on its own — the prompt tells the brain to answer
+   * literally "DONE" — so the ordinary English word "done" appearing in the brain's
+   * reasoning prose can never finish the run (the run-99b3d715 regression). The
+   * "last decisive token wins" rule is preserved by position: a DONE only wins when
+   * it appears AFTER the last real step-key mention. Returns null when neither a
+   * step key nor an explicit DONE is present, so the caller retries rather than
+   * silently completing a run that executed nothing.
+   */
+  private parseWorkflowDecision(text: string, keys: string[]): string | null {
+    const src = text || '';
+    // Last mention of any real step key (case-insensitive slug match).
+    let keyPos = -1, keyPick: string | null = null;
+    for (const c of keys) {
+      const re = new RegExp(`\\b${c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'gi');
+      let m: RegExpExecArray | null, last = -1;
+      while ((m = re.exec(src))) last = m.index;
+      if (last > keyPos) { keyPos = last; keyPick = c; }
+    }
+    // Explicit DONE: the uppercase token, case-SENSITIVE, as a standalone word.
+    let donePos = -1;
+    const doneRe = /(?:^|[^A-Za-z0-9_])DONE(?:[^A-Za-z0-9_]|$)/g;
+    let dm: RegExpExecArray | null;
+    while ((dm = doneRe.exec(src))) donePos = dm.index;
+    if (keyPick && keyPos >= donePos) return keyPick;
+    if (donePos >= 0) return 'DONE';
+    return keyPick;
+  }
+
   private assignAgent(task: Task, agent: string, division: string | undefined): void {
     const fresh = this.store.getTask(task.id);
     if (fresh && fresh.status === 'pending') {
@@ -628,10 +659,14 @@ export class Dispatcher {
 
       (async () => {
         try {
-          const out = await this.askExecutor(this.config.orchestration.agents.orchestrator?.brains, prompt, timeout);
-          // The orchestrator answers with a step key or DONE; take the LAST match
-          // so a trailing final answer wins over any earlier mention.
-          const pick = this.pickLast([...keys, 'DONE'], out);
+          const out = await this.askExecutor(this.config.orchestration.agents?.orchestrator?.brains, prompt, timeout);
+          // The orchestrator answers with a step key or DONE. Parse strictly:
+          // DONE must be the explicit uppercase token, NEVER the ordinary English
+          // word "done" buried in the brain's reasoning prose — that false match
+          // is what latched run-99b3d715 to premature completion (a rambling small
+          // model whose recorded reason literally said "…then dispatch G2", i.e. it
+          // wanted to CONTINUE, yet the run was marked done having executed nothing).
+          const pick = this.parseWorkflowDecision(out, keys);
           const reason = (out.split('\n').map(l => l.trim()).filter(Boolean).pop() || '').slice(0, 200);
           if (pick === 'DONE') {
             this.decisionFailures.delete(rec.runId);
@@ -686,7 +721,13 @@ export class Dispatcher {
     lines.push(`CANDIDATE NEXT STEPS (reply with exactly one key):`);
     for (const s of ctx.available) lines.push(`- ${s.key}: ${s.title} — ${s.description.replace(/\s+/g, ' ').slice(0, 160)}`);
     lines.push('');
-    lines.push(`Reply with ONLY the key of the next step to run, or DONE if the goal is met. Do not run redundant work — if the results above already satisfy the goal, answer DONE.`);
+    lines.push(
+      `IMPORTANT: producing a PLAN, ANALYSIS, STRATEGY, or SUMMARY is NOT the same as achieving the goal. ` +
+      `When the goal is to build / execute / ship / schedule something, it is met ONLY once that work has actually been carried out AND verified by a later step. ` +
+      `If any execution, integration, verification, or delivery step is still available and has not run, the goal is NOT yet met — pick the next such step instead of answering DONE.`
+    );
+    lines.push('');
+    lines.push(`Reply with ONLY the key of the next step to run, or the single uppercase word DONE if — and only if — the goal is fully achieved and verified. Do not run redundant work.`);
     return lines.join('\n');
   }
 

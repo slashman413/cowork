@@ -15,6 +15,9 @@ import type { Config, Task, WorkflowDef } from '../types.js';
  * a brain is spawned) is stubbed with a scripted sequence of replies, so the
  * decision loop runs deterministically: pick → materialise task → complete →
  * pick again → … → DONE.
+ *
+ * The driver spawns its brain via `askExecutor` (the orchestrator's reasoning
+ * call), so that is the method stubbed here.
  */
 
 class FakeStore {
@@ -53,7 +56,7 @@ function harness(replies: string[]) {
   const dispatcher = new Dispatcher(config, store as any, {} as any, workflows);
   // Stub the (private) brain call with a scripted queue of decisions.
   const queue = [...replies];
-  (dispatcher as any).askRouter = async () => queue.shift() ?? 'DONE';
+  (dispatcher as any).askExecutor = async () => queue.shift() ?? 'DONE';
   return { workflows, store, dispatcher };
 }
 
@@ -102,10 +105,33 @@ test('driver walks the full adaptive run to completion, wiring deps as it goes',
   assert.deepEqual(byKey.get('write')!.context!.dependsOn, [byKey.get('research')!.id]);
 });
 
+test('parseWorkflowDecision: a step-key pick beats incidental lowercase "done" in prose', () => {
+  // The run-99b3d715 failure mode: a rambling orchestrator brain mentions being
+  // "done" with a sub-phase, then says what to dispatch next. The word "done" must
+  // NOT finish the run — the real step key wins.
+  const { dispatcher } = harness([]);
+  const keys = ['orchestrate-execution', 'integrate', 'verify-requirements'];
+  const rambling = 'The planning phase is done. Next: dispatch orchestrate-execution to run the real jobs.';
+  assert.equal((dispatcher as any).parseWorkflowDecision(rambling, keys), 'orchestrate-execution');
+});
+
+test('parseWorkflowDecision: prose "done" with NO step key does not complete the run', () => {
+  const { dispatcher } = harness([]);
+  // Neither a real step key nor an explicit uppercase DONE → null → caller retries
+  // instead of silently marking the run complete having executed nothing.
+  assert.equal((dispatcher as any).parseWorkflowDecision('I think we are basically done here.', ['integrate']), null);
+});
+
+test('parseWorkflowDecision: an explicit uppercase DONE after the last step key finishes the run', () => {
+  const { dispatcher } = harness([]);
+  const out = 'We already ran integrate and verify-requirements passed everything.\nDONE';
+  assert.equal((dispatcher as any).parseWorkflowDecision(out, ['integrate', 'verify-requirements']), 'DONE');
+});
+
 test('driver force-finishes a run that never says DONE at the step cap', async () => {
   // A router that always picks a step (never DONE); the cap must stop it.
   const { workflows, store, dispatcher } = harness([]);
-  (dispatcher as any).askRouter = async () => 'scope';  // always the same pick
+  (dispatcher as any).askExecutor = async () => 'scope';  // always the same pick
   (dispatcher as any).config.orchestration.maxWorkflowSteps = 2;
   const r = workflows.run('adaptive', {});
 

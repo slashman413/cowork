@@ -38,6 +38,15 @@ test('quota / credits exhaustion is rejected', () => {
   assert.equal(verifyOutput('quota exceeded for this key', true).ok, false);
 });
 
+test('context-length / compression overflow that exited 0 is rejected', () => {
+  // The exact soft-failure run-99b3d715's analyze-plan step returned yet was
+  // accepted as a real deliverable, silently corrupting the whole workflow.
+  const v = verifyOutput('Context length exceeded: max compression attempts (3) reached.', true);
+  assert.equal(v.ok, false);
+  assert.match(v.reason || '', /failure pattern/i);
+  assert.equal(verifyOutput('The maximum context length is 200000 tokens; this request exceeds it.', true).ok, false);
+});
+
 test('empty output is rejected even when the process exited 0', () => {
   const v = verifyOutput('   \n  ', true);
   assert.equal(v.ok, false);

@@ -65,6 +65,16 @@ export const DEFAULT_FAIL_PATTERNS: string[] = [
   'model is overloaded',
   'currently overloaded',
   'overloaded_error',
+  // context-window / compression overflow — the CLI ran out of room and could not
+  // produce the deliverable, yet still exited 0 (observed on run-99b3d715's
+  // analyze-plan: "Context length exceeded: max compression attempts (3) reached").
+  'context length exceeded',
+  'context window exceeded',
+  'maximum context length',
+  'exceeds the maximum context',
+  'max compression attempts',
+  'maximum compression attempts',
+  'reached max compression',
   // HTTP status shapes
   'error 429',
   '429 too many requests',
