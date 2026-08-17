@@ -1,0 +1,24 @@
+{
+  "id": "daily-fantasy-vlog",
+  "name": "Daily Fantasy Vlog Pipeline",
+  "description": "Generates a 10-minute vlog video using ComfyUI and Lora, and uploads it to YouTube publicly.",
+  "mode": "dag",
+  "params": [],
+  "steps": [
+    {
+      "key": "generate-vlog",
+      "title": "Generate Daily Vlog",
+      "description": "Generate today's 10-minute fantasy vlog using the established ComfyUI + LoRA pipeline. Ensure visuals, pacing, and audio match the reference aesthetic.",
+      "division": "specialized",
+      "context": { "brain": "local-ha-deepseek-v4-pro" }
+    },
+    {
+      "key": "upload-vlog",
+      "title": "Upload Vlog to YouTube (Public)",
+      "description": "Upload the generated vlog to the Gentle Soul YouTube channel as a PUBLIC video. Use ~/.priv/gentle_soul_youtube_token.json.",
+      "division": "marketing",
+      "context": { "brain": "local-ha-deepseek-v4-pro" },
+      "dependsOn": ["generate-vlog"]
+    }
+  ]
+}
