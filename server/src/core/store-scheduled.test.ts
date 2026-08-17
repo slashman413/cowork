@@ -146,6 +146,30 @@ test('a scheduled task with a garbled scheduledAt releases immediately (fail ope
   assert.equal(store.getTask(id)?.status, 'pending');
 });
 
+test('releasing a due `manual` task warns that the dispatcher will not auto-run it', () => {
+  const { store } = makeStore();
+  const task = store.createTask({
+    title: 'scheduled + manual (contradiction)',
+    from: { platform: 'p', agent: 'a' },
+    scheduledAt: future(),
+    tags: ['manual'],
+  } as any);
+  assert.equal(task.status, 'scheduled');
+
+  const warnings: string[] = [];
+  const orig = console.warn;
+  console.warn = (...a: unknown[]) => { warnings.push(a.join(' ')); };
+  try {
+    const [released] = store.releaseDueScheduled(new Date(task.scheduledAt!).getTime());
+    assert.equal(released?.status, 'pending', 'still released to pending (behaviour unchanged)');
+  } finally {
+    console.warn = orig;
+  }
+  assert.equal(warnings.length, 1, 'exactly one warning about the silent-stall');
+  assert.match(warnings[0], /manual/, 'names the offending tag');
+  assert.match(warnings[0], new RegExp(task.id), 'names the task so it is diagnosable');
+});
+
 test('getDashboard counts scheduled tasks in their own bucket', () => {
   const { store } = makeStore();
   store.createTask({ title: 'now', from: { platform: 'p', agent: 'a' } } as any);

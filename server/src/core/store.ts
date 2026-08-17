@@ -369,6 +369,15 @@ export class Store {
       const awaiting = task.interaction && Array.isArray(task.interaction.fields)
         && task.interaction.fields.length > 0 && task.interaction.status !== 'submitted';
       task.status = awaiting ? 'wait-input' : 'pending';
+      // A `manual`-tagged task is skipped by the dispatcher forever (planFor
+      // returns 'skip'). Combined with a scheduledAt that's now due, it releases
+      // into `pending` and then silently rots there — never dispatched, never
+      // visible as stuck. That contradiction (schedule = "run it automatically"
+      // vs manual = "never auto-run") is almost always a mistake at task
+      // creation; warn loudly so the stall is diagnosable instead of invisible.
+      if (task.tags?.includes('manual') && !awaiting) {
+        console.warn(`Store: released scheduled task ${task.id} is tagged \`manual\` — the dispatcher will NOT auto-run it; it will sit in \`pending\`. Remove the manual tag to let it dispatch, or trigger it by hand. — ${task.title}`);
+      }
       this.saveTask(task);
       this.eventBus.emitTaskCreated(task);   // nudge live dashboards to refresh
       released.push(task);
