@@ -191,6 +191,14 @@ invalid ones are skipped and surfaced at `GET /api/workflows-invalid`.
 
 ## Goals (long-lived objectives, beneath Workflows)
 
+**The `/goal` + `/loop` idiom.** A goal *is* Claude-CLI's `/goal` (declare the objective +
+its binary "done") paired with a `/loop` that runs 24/7 **until it's met**: the dispatcher
+drives the Achiever↔Judger cycle continuously, sleeps for free on checkpoints, blocks
+recoverably on obstacles, and terminates **only** on `achieved` — never a timer. Curated
+`/goal`+`/loop` starter pairs live in one source of truth, `GET /api/goals/templates`
+(the dashboard reads the same endpoint). Full mapping + copy-paste templates:
+`docs/goal-loop-idiom.md`.
+
 State in `goals/<goalId>.json`. A goal drives toward one **binary success criterion**
 via two roles on the normal task machinery: the **Achiever** takes one move per turn
 (`evaluate` | `plan` a phase | `emit` that phase's tasks), and the **Judger** wakes when
@@ -227,8 +235,9 @@ up this way. The Achiever can also **block itself** — `{"kind":"block","reason
 "unblockCriteria":"…"}` — the honest move when it hits a missing credential, an external
 dependency, or a decision only a human can make.
 
-`GET/POST /api/goals` · `GET/PATCH/DELETE /api/goals/:id` ·
-`POST /api/goals/:id/{activate,pause,block}` · `GET /api/goals/:id/tasks`.
+`GET/POST /api/goals` · `GET /api/goals/templates` (starter library) ·
+`GET/PATCH/DELETE /api/goals/:id` · `POST /api/goals/:id/{activate,pause,block}` ·
+`GET /api/goals/:id/tasks`.
 
 ## REST mirror (http://localhost:6868/api/...)
 

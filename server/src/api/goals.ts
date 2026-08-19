@@ -9,6 +9,7 @@ import type { Goals } from '../core/goals.js';
  * supervising goals.
  *
  *   GET    /goals                     list goal records (newest first)
+ *   GET    /goals/templates           curated starter library (the "/goal" idiom)
  *   POST   /goals                     create a draft goal
  *   GET    /goals/:id                 one goal + phases + history + minutes
  *   PATCH  /goals/:id                 edit criteria/phases/brains/budget
@@ -42,6 +43,12 @@ export function createGoalRouter(goals: Goals): Router {
     } catch (e: any) {
       res.status(400).json({ error: e.message });
     }
+  });
+
+  // Curated starter library — the "/goal" half of the goal+loop idiom (ADR-010).
+  // MUST precede `/goals/:id` so the literal path is not captured as an :id.
+  router.get('/goals/templates', (_req, res) => {
+    res.json(goals.templates());
   });
 
   router.get('/goals/:id', (req, res) => {
