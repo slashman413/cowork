@@ -170,6 +170,66 @@ test('releasing a due `manual` task warns that the dispatcher will not auto-run 
   assert.match(warnings[0], new RegExp(task.id), 'names the task so it is diagnosable');
 });
 
+test('runScheduledNow releases a parked task immediately and clears scheduledAt', () => {
+  const { store } = makeStore();
+  const task = store.createTask({ title: 'later', from: { platform: 'p', agent: 'a' }, scheduledAt: future() } as any);
+  assert.equal(task.status, 'scheduled', 'parked to start with');
+
+  const released = store.runScheduledNow(task.id);
+  assert.equal(released?.status, 'pending', 'released straight into the pending pool');
+  assert.equal(released?.scheduledAt, undefined, 'the future time is dropped so nothing re-parks it');
+
+  const claimed = store.claimTask({ taskId: task.id, agentId: 'w', internal: true });
+  assert.equal(claimed?.status, 'in-progress', 'claimable now, without waiting for its time');
+});
+
+test('runScheduledNow parks a task with an unanswered interaction on wait-input', () => {
+  const { store } = makeStore();
+  const task = store.createTask({
+    title: 'scheduled + questions',
+    from: { platform: 'p', agent: 'a' },
+    scheduledAt: future(),
+    interaction: { fields: [{ id: 'q1', label: 'Which env?', required: true }] },
+  } as any);
+
+  const released = store.runScheduledNow(task.id);
+  assert.equal(released?.status, 'wait-input', 'released early but still needs answers before it runs');
+  assert.equal(released?.scheduledAt, undefined, 'no longer time-gated — only input-gated');
+
+  const answered = store.submitInteraction({ taskId: task.id, responses: { q1: 'staging' } });
+  assert.equal(answered?.status, 'pending', 'answers release it into normal scheduling');
+});
+
+test('runScheduledNow is a no-op for a task that is not scheduled', () => {
+  const { store } = makeStore();
+  const pending = store.createTask({ title: 'now', from: { platform: 'p', agent: 'a' } } as any);
+  assert.equal(store.runScheduledNow(pending.id), null, 'a pending task has nothing to release');
+  assert.equal(store.runScheduledNow('no-such-id'), null, 'an unknown id returns null, not a throw');
+  assert.equal(store.getTask(pending.id)?.status, 'pending', 'the pending task is untouched');
+});
+
+test('runScheduledNow on a due `manual` task warns that the dispatcher will not auto-run it', () => {
+  const { store } = makeStore();
+  const task = store.createTask({
+    title: 'scheduled + manual (contradiction)',
+    from: { platform: 'p', agent: 'a' },
+    scheduledAt: future(),
+    tags: ['manual'],
+  } as any);
+
+  const warnings: string[] = [];
+  const orig = console.warn;
+  console.warn = (...a: unknown[]) => { warnings.push(a.join(' ')); };
+  try {
+    const released = store.runScheduledNow(task.id);
+    assert.equal(released?.status, 'pending', 'still released to pending');
+  } finally {
+    console.warn = orig;
+  }
+  assert.equal(warnings.length, 1, 'exactly one warning about the silent-stall');
+  assert.match(warnings[0], /manual/, 'names the offending tag');
+});
+
 test('getDashboard counts scheduled tasks in their own bucket', () => {
   const { store } = makeStore();
   store.createTask({ title: 'now', from: { platform: 'p', agent: 'a' } } as any);

@@ -1819,6 +1819,8 @@ class App {
         <div class="task-meta" style="display:block; margin:2px 0 4px">${esc(t.from?.platform || '?')}/${esc(t.from?.agent || '?')} · <span title="${esc(t.createdAt || '')}">${timeAgo(t.createdAt)}</span>
           ${failed ? `<button class="btn" data-rerun-task="${esc(t.id)}" data-brain="${esc(c.brainAuto ? '' : (c.brain || ''))}" title="Re-run this task — pick which brain claims it"
             style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#EF4444;border-color:#EF444466">↻ Re-run</button>` : ''}
+          ${t.status === 'scheduled' ? `<button class="btn" data-run-now-task="${esc(t.id)}" title="Run now — release this scheduled task immediately instead of waiting for its run time"
+            style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#6366F1;border-color:#6366F166">▶ Run now</button>` : ''}
           ${t.status === 'done' && !failed ? (t.context?.continuedInto
             ? `<button class="btn" disabled title="Already continued — a follow-up task was spawned from this run"
             style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#22C55E99;border-color:#22C55E33;opacity:.6;cursor:default">✓ Continued</button>`
@@ -1921,6 +1923,23 @@ class App {
           await this.api.post(`/inbox/${encodeURIComponent(id)}/rerun`, body);
           const routeNote = choice.brain ? `pinned to ${choice.brain}` : 'auto-routed via the brain chain';
           this.toast('re-running', choice.scheduledAt ? `Scheduled for ${new Date(choice.scheduledAt).toLocaleString()} — ${routeNote}.` : `Reset to pending — ${routeNote}.`);
+          this.renderInbox();
+        } catch (err) { this.toast('error', err.message); b.disabled = false; }
+      }));
+
+    // Run now — release a scheduled task immediately instead of at its run time.
+    this.contentEl.querySelectorAll('[data-run-now-task]').forEach(b =>
+      b.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const id = b.dataset.runNowTask;
+        const title = b.closest('[data-task]')?.dataset.title || id.slice(0, 8);
+        if (!confirm(`Run this scheduled task now?\n\n${title}`)) return;
+        b.disabled = true;
+        try {
+          const t = await this.api.post(`/inbox/${encodeURIComponent(id)}/run-now`, {});
+          this.toast('running now', t.status === 'wait-input'
+            ? 'Released — parked for input; it dispatches once its questions are answered.'
+            : 'Released to pending — dispatched by the next tick.');
           this.renderInbox();
         } catch (err) { this.toast('error', err.message); b.disabled = false; }
       }));

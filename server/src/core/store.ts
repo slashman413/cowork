@@ -385,6 +385,36 @@ export class Store {
     return released;
   }
 
+  /**
+   * Run a SCHEDULED task NOW instead of waiting for its `scheduledAt`. This is
+   * the manual counterpart to releaseDueScheduled: a person hits "Run now" on a
+   * scheduled card and the task is released this instant. It flips `scheduled` →
+   * `pending` (so the dispatcher claims it next tick), or → `wait-input` when it
+   * still carries an unanswered interaction packet (its answers must land in
+   * context.humanInput before it runs — same gate the timed release honours).
+   * The `scheduledAt` is cleared so the task reads as an ordinary "now" task and
+   * won't be re-parked by any later launch check. Returns null when the task is
+   * absent or not in `scheduled` state (nothing to release).
+   */
+  public runScheduledNow(taskId: string): Task | null {
+    const task = this.getTask(taskId);
+    if (!task) return null;
+    if (task.status !== 'scheduled') return null;   // only a parked task can be released
+    const awaiting = task.interaction && Array.isArray(task.interaction.fields)
+      && task.interaction.fields.length > 0 && task.interaction.status !== 'submitted';
+    task.status = awaiting ? 'wait-input' : 'pending';
+    delete task.scheduledAt;   // it's "now" — drop the future time so nothing re-parks it
+    // Mirror releaseDueScheduled's contradiction warning: a `manual`-tagged task
+    // won't be auto-dispatched even once pending, so the button appears to do
+    // nothing. Surface it so the no-op is diagnosable rather than silent.
+    if (task.tags?.includes('manual') && !awaiting) {
+      console.warn(`Store: run-now released task ${task.id} is tagged \`manual\` — the dispatcher will NOT auto-run it; it will sit in \`pending\`. Remove the manual tag to let it dispatch, or trigger it by hand. — ${task.title}`);
+    }
+    this.saveTask(task);
+    this.eventBus.emitTaskCreated(task);   // nudge live dashboards to refresh
+    return task;
+  }
+
   public claimTask(params: { taskId: string; agentId: string; internal?: boolean }): Task | null {
     const task = this.getTask(params.taskId);
     if (!task) return null;

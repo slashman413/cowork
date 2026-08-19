@@ -131,6 +131,20 @@ export function createApiRouter(store: Store, eventBus: EventBus): Router {
     }
   });
 
+  // Run a SCHEDULED task NOW — release it immediately instead of at its
+  // scheduledAt time. The dashboard shows this as a "Run now" button on
+  // scheduled cards. Returns the released task (now pending, or wait-input if it
+  // still needs a person's answers).
+  router.post('/inbox/:id/run-now', (req, res) => {
+    try {
+      const task = store.runScheduledNow(req.params.id);
+      if (!task) return res.status(400).json({ error: 'Task not found or not in a scheduled state' });
+      res.json(task);
+    } catch (e: any) {
+      res.status(400).json({ error: e.message });
+    }
+  });
+
   // Continue a DONE (successful) task — spawn a follow-up task seeded with the
   // finished run's OUTPUT files + result as inputs, pinned to the same executor,
   // so the work carries forward. The dashboard shows this as a "Continue" button
