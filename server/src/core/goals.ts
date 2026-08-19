@@ -2,7 +2,8 @@ import fs from 'fs';
 import path from 'path';
 import { globSync } from 'glob';
 import { v4 as uuidv4 } from 'uuid';
-import type { Config, GoalRecord, GoalPhase, AchieverDecision, Task } from '../types.js';
+import type { Config, GoalRecord, GoalPhase, AchieverDecision, GoalTemplate, Task } from '../types.js';
+import { GOAL_TEMPLATES } from './goal-templates.js';
 
 /** The slice of Store that Goals touches. Keeping it structural lets the unit
  *  tests drive Goals with an in-memory fake exactly like workflows.test.ts. */
@@ -104,6 +105,15 @@ export class Goals {
   }
 
   get(goalId: string): GoalRecord | null { return this.load(goalId); }
+
+  /**
+   * The curated goal starter library — the "/goal" half of the goal+loop idiom
+   * (ADR-010). One source of truth (`core/goal-templates.ts`) that the dashboard,
+   * `GET /api/goals/templates`, and CLI/agents all read, so a starter can never
+   * drift between the UI and the programmatic surfaces the way it did while the
+   * list lived only inside `public/js/app.js`.
+   */
+  templates(): GoalTemplate[] { return GOAL_TEMPLATES; }
 
   // ── Authoring ────────────────────────────────────────────────────────────
 

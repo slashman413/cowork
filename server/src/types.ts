@@ -533,6 +533,53 @@ export interface CoworkEvent<T extends CoworkEventType> {
 /** One waypoint of a goal (Research → Implementation → Review). Seeded at
  *  creation and appended by the Achiever during dynamic planning. The unit of
  *  Judger auditing and reporting. */
+/**
+ * A curated goal starter — the "/goal" half of the goal+loop idiom (ADR-010).
+ * A template pre-fills the whole authoring form (binary criterion + a phase loop
+ * + a horizon-sized budget) AND carries its paired "/loop" driver contract, so a
+ * user goes from an empty page to a self-driving 24/7 objective in one click.
+ *
+ * This is CURATED SOURCE (shipped with the server, one library for the UI, the
+ * API, and CLI/agents), NOT per-server runtime state — hence it lives in
+ * `core/goal-templates.ts`, never in the gitignored `goals/` runtime dir.
+ */
+export interface GoalTemplate {
+  /** Stable, kebab-case handle, unique across the library. */
+  key: string;
+  /** Short button label (may carry a leading emoji). */
+  label: string;
+  /** How the goal fails, and therefore how it must be shaped:
+   *  - `shipping`  — DELIVERABLE-bound; the criterion flips true the moment a
+   *    concrete artifact EXISTS. Terminates on its own; default budget is fine.
+   *  - `outcome`   — METRIC-open (revenue, traffic, customers). The Achiever can't
+   *    force a market number, so it MUST carry an evidence-bound criterion, a
+   *    measure→ship→wait→review phase loop, scheduled checkpoints, and a
+   *    horizon-sized budget. */
+  family: 'shipping' | 'outcome';
+  title: string;
+  description: string;
+  /** The binary Yes/No question that terminates the goal. */
+  successCriteria: string;
+  /** What the Judger reports after each phase. */
+  reportBrief: string;
+  /** Horizon-sized execution-task cap. Omitted → the server default (24). */
+  budget?: number;
+  /** Phase waypoints, plain titles (the kebab key is derived). */
+  phases: string[];
+  /** The paired "/loop" driver — how this goal is kept running 24/7 until its
+   *  criterion flips, expressed in the Claude-CLI /goal+/loop idiom. In cowork the
+   *  loop is the dispatcher's autonomous Achiever↔Judger drive; this field makes
+   *  that contract explicit and copy-pasteable. */
+  loop: {
+    /** When the Achiever takes its next turn (event-driven, or a checkpoint). */
+    cadence: string;
+    /** Copy-paste driver prompt — the "/loop" half of the idiom. */
+    prompt: string;
+    /** The exact condition that ENDS the loop (never a timer; only the criterion). */
+    stopWhen: string;
+  };
+}
+
 export interface GoalPhase {
   /** Stable, kebab-case, unique within the goal. Stamped on every task the
    *  phase generates as context.phaseKey. */
