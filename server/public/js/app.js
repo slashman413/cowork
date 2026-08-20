@@ -237,6 +237,25 @@ function isTaskFailed(t) {
     || (t.status === 'done' && typeof t.result === 'string' && /^FAILED\b/i.test(t.result.trim()));
 }
 
+// A `done` task CLOSED administratively without ever running a brain (a
+// superseded scheduled duplicate, a pre-empted cancel). It has no artifacts dir
+// and no result.md because it never entered the dispatcher's run path, so a
+// plain green "done" card with an empty artifacts list looks like a silent
+// failure. We badge it distinctly instead. MUST stay in lockstep with the
+// server's isClosedWithoutRunning (store.ts): (1) result opens with an
+// administrative-close marker, or (2) it was marked done at/before its own
+// scheduledAt launch time — impossible for a task that actually executed.
+function isTaskClosedNoRun(t) {
+  if (t.status !== 'done' || isTaskFailed(t)) return false;
+  const r = typeof t.result === 'string' ? t.result.trim() : '';
+  if (/^(SUPERSEDED|CLOSED|SKIPPED|CANCELL?ED|DUPLICATE|WON'?T[\s-]?FIX|NO[\s-]?OP)\b/i.test(r)) return true;
+  if (t.completedAt && t.scheduledAt) {
+    const done = Date.parse(t.completedAt), launch = Date.parse(t.scheduledAt);
+    if (Number.isFinite(done) && Number.isFinite(launch) && done <= launch) return true;
+  }
+  return false;
+}
+
 function fmtBytes(n) {
   n = Number(n) || 0;
   if (n < 1024) return `${n} B`;
@@ -1777,6 +1796,10 @@ class App {
       const arts = Array.isArray(t.artifacts) ? t.artifacts : [];
       const inputs = Array.isArray(c.inputFiles) ? c.inputFiles : [];
       const failed = isTaskFailed(t);
+      // done, but closed administratively without ever running (superseded copy,
+      // pre-empted cancel) — badged distinctly so its empty artifacts list is not
+      // mistaken for a silent failure.
+      const closedNoRun = isTaskClosedNoRun(t);
       // Files can be attached while a task is still schedulable, or to a failed one
       // (attach context, then re-run).
       const canAttach = ['pending', 'wait-input', 'scheduled'].includes(t.status) || failed;
@@ -1802,7 +1825,9 @@ class App {
       return `
       <div class="card task-card" style="margin-bottom: var(--space-md)${failed ? ';border-left:3px solid #EF4444' : ''}" data-task="${esc(t.id)}" data-title="${esc((t.title || '').toLowerCase())}">
         <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap">
-          ${failed ? badge('failed', '#EF4444') : badge(t.status, STATUS_COLORS[t.status] || '#94A3B8')}
+          ${failed ? badge('failed', '#EF4444')
+            : closedNoRun ? `<span class="badge" title="Done, but closed administratively without ever running a brain — so it has no artifacts and no result.md. The full explanation is in this task's result field below." style="background:#94A3B818; color:#94A3B8; border:1px solid #94A3B840">done · closed (never ran)</span>`
+            : badge(t.status, STATUS_COLORS[t.status] || '#94A3B8')}
           ${t.status === 'scheduled' && t.scheduledAt ? badge(`⏰ ${new Date(t.scheduledAt).toLocaleString()}`, '#6366F1') : ''}
           ${agentLabel ? badge(agentLabel, '#7C3AED') : ''}
           ${t.interaction && t.interaction.status !== 'submitted' ? badge('⌛ awaiting input', '#EAB308') : ''}

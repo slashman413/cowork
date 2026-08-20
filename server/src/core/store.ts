@@ -40,6 +40,41 @@ export function isFailedTask(task: Task): boolean {
     || (task.status === 'done' && typeof task.result === 'string' && /^FAILED\b/i.test(task.result.trim()));
 }
 
+/**
+ * A `done` task that was CLOSED ADMINISTRATIVELY without ever running a brain —
+ * e.g. a scheduled duplicate that a sibling attempt superseded, or a task
+ * cancelled before its launch time. Its status/result were set directly, so it
+ * never entered the dispatcher's execution path: no `artifacts/<id>/` dir and no
+ * `result.md` are created (those are written only by dispatcher.mkdirSync/
+ * writeFileSync when a brain actually runs). On the dashboard such a task looks
+ * identical to a real "done (ran)" card yet has an empty artifacts list, which
+ * reads like a silent failure. This classifier lets the UI badge it distinctly.
+ *
+ * Detection (either signal suffices, both grounded in the task record):
+ *  1. The result opens with an administrative-close marker an agent wrote when
+ *     it closed the copy (SUPERSEDED / CLOSED / SKIPPED / CANCELLED / DUPLICATE /
+ *     WON'T FIX / NO-OP) — mirrors the `FAILED\b` result-prefix convention.
+ *  2. Structural: the task was marked `done` AT OR BEFORE its own `scheduledAt`
+ *     launch time. A task cannot have executed before the dispatcher released it,
+ *     so `completedAt <= scheduledAt` can only mean it was closed un-run.
+ *
+ * `failed` takes precedence — a chain-exhausted task is failed, not "closed".
+ * MUST stay in lockstep with the frontend's `isTaskClosedNoRun` (app.js).
+ */
+export function isClosedWithoutRunning(task: Task): boolean {
+  if (task.status !== 'done' || isFailedTask(task)) return false;
+  const result = typeof task.result === 'string' ? task.result.trim() : '';
+  if (/^(SUPERSEDED|CLOSED|SKIPPED|CANCELL?ED|DUPLICATE|WON'?T[\s-]?FIX|NO[\s-]?OP)\b/i.test(result)) {
+    return true;
+  }
+  if (task.completedAt && task.scheduledAt) {
+    const done = Date.parse(task.completedAt);
+    const launch = Date.parse(task.scheduledAt);
+    if (Number.isFinite(done) && Number.isFinite(launch) && done <= launch) return true;
+  }
+  return false;
+}
+
 export class Store {
   private config: Config;
   private eventBus: EventBus;
