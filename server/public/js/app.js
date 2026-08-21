@@ -1004,9 +1004,42 @@ class App {
     };
     micCleanup = stopMic;
 
+    // Ask for microphone permission up front, before touching any capture API.
+    // Chrome's SpeechRecognition otherwise fails immediately (fires `onerror`
+    // 'not-allowed' or ends with no result) whenever permission has never been
+    // granted for the origin — which read to the user as "Dictate fails every
+    // time". Preflighting getUserMedia surfaces the browser's permission prompt,
+    // and once the user allows it the recognizer/recorder starts cleanly.
+    const ensureMicPermission = async () => {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        // Insecure context (http:// on a non-localhost host) or an ancient
+        // browser: the mic APIs simply aren't exposed. Say so plainly.
+        this.toast('mic unavailable', 'Microphone access needs a secure page (https or localhost). Open the dashboard over https and try again.');
+        return null;
+      }
+      micStatus.style.display = 'block';
+      micStatus.textContent = '● Requesting microphone access…';
+      try {
+        return await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch (err) {
+        setMic(false);
+        const denied = err && (err.name === 'NotAllowedError' || err.name === 'SecurityError');
+        this.toast('mic error', denied
+          ? 'Microphone permission was denied. Allow it for this site in your browser settings, then press Dictate again.'
+          : `Could not access the microphone: ${err?.message || err?.name || err}`);
+        return null;
+      }
+    };
+
     if (SpeechRec) {
-      micBtn.onclick = () => {
+      micBtn.onclick = async () => {
         if (recording) { try { recog?.stop(); } catch {} return; }
+        // Get (and confirm) permission first, then release the device so the
+        // Speech API can claim it cleanly — SpeechRecognition manages its own
+        // stream and doesn't want ours held open.
+        const permStream = await ensureMicPermission();
+        if (!permStream) return;
+        try { permStream.getTracks().forEach(t => t.stop()); } catch {}
         recog = new SpeechRec();
         recog.lang = navigator.language || 'en-US';
         recog.continuous = true;
@@ -1037,12 +1070,14 @@ class App {
       // No speech-to-text engine: record a voice note and attach it as input.
       micBtn.onclick = async () => {
         if (recording) { try { if (mediaRec && mediaRec.state !== 'inactive') mediaRec.stop(); } catch {} return; }
-        if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+        if (typeof MediaRecorder === 'undefined') {
           this.toast('unsupported', 'This browser cannot capture microphone audio.');
           return;
         }
-        try { mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
-        catch { this.toast('mic error', 'Microphone permission was denied.'); return; }
+        // Ask for permission first (shared helper), then keep the granted stream
+        // open for the recorder to capture from.
+        mediaStream = await ensureMicPermission();
+        if (!mediaStream) return;
         micAborted = false;
         mediaChunks = [];
         mediaRec = new MediaRecorder(mediaStream);
