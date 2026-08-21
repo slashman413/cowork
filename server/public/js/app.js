@@ -301,17 +301,34 @@ function mdViewer(text, label, opts = {}) {
   </div>`;
 }
 
-// One artifact chip. Markdown files (.md / .markdown) open in the in-app popup
-// viewer (a button wired to App.openMarkdownModal via the delegated .md-artifact
-// handler) so they can be read without leaving the dashboard; every other file
-// type stays a plain download link. Shared by the Inbox and the Workflow-run
-// drawer so both artifact lists stay visually identical.
-function artifactChip(taskId, f, fontSize = '0.9rem') {
+// Media type detection for in-app viewers, keyed off the file extension. Images,
+// video and audio all render inline in an <img>/<video>/<audio> element, which
+// the browser honours regardless of the download route's Content-Disposition, so
+// no server change is needed to preview them.
+const MEDIA_KIND = [
+  { type: 'image', icon: 'image', re: /\.(png|jpe?g|gif|webp|avif|bmp|ico|svg)$/i },
+  { type: 'video', icon: 'film',  re: /\.(mp4|webm|mov|m4v|ogv)$/i },
+  { type: 'audio', icon: 'music', re: /\.(mp3|wav|ogg|oga|m4a|aac|flac)$/i },
+];
+function mediaKindFor(f) { return MEDIA_KIND.find(k => k.re.test(f)) || null; }
+
+// One file chip for a task's ARTIFACTS or INPUTS list (`kind` picks the API
+// route). Markdown files (.md / .markdown) open in the in-app markdown viewer and
+// images / video / audio open in the in-app media viewer (buttons wired to
+// App.openMarkdownModal / App.openMediaModal via the delegated .md-artifact /
+// .media-artifact handlers) so they can be read without leaving the dashboard;
+// every other file type stays a plain download link. Shared by the Inbox and the
+// Workflow-run drawer so both file lists stay visually identical.
+function artifactChip(taskId, f, fontSize = '0.9rem', kind = 'artifacts') {
   const base = `font-size:${fontSize};margin:0;display:inline-flex;align-items:center;gap:4px`;
   if (/\.(md|markdown)$/i.test(f)) {
-    return `<button class="btn md-artifact" data-md-task="${esc(taskId)}" data-md-file="${esc(f)}" title="Open “${esc(f)}” in the markdown viewer" style="${base}"><i data-lucide="book-open" style="width:12px;height:12px"></i>${esc(f)}</button>`;
+    return `<button class="btn md-artifact" data-md-task="${esc(taskId)}" data-md-file="${esc(f)}" data-md-kind="${esc(kind)}" title="Open “${esc(f)}” in the markdown viewer" style="${base}"><i data-lucide="book-open" style="width:12px;height:12px"></i>${esc(f)}</button>`;
   }
-  return `<a href="/api/artifacts/${encodeURIComponent(taskId)}/${encodeURIComponent(f)}" download class="btn" style="${base}"><i data-lucide="download" style="width:12px;height:12px"></i>${esc(f)}</a>`;
+  const media = mediaKindFor(f);
+  if (media) {
+    return `<button class="btn media-artifact" data-media-task="${esc(taskId)}" data-media-file="${esc(f)}" data-media-type="${media.type}" data-media-kind="${esc(kind)}" title="Preview “${esc(f)}” in the ${media.type} viewer" style="${base}"><i data-lucide="${media.icon}" style="width:12px;height:12px"></i>${esc(f)}</button>`;
+  }
+  return `<a href="/api/${kind}/${encodeURIComponent(taskId)}/${encodeURIComponent(f)}" download class="btn" style="${base}"><i data-lucide="download" style="width:12px;height:12px"></i>${esc(f)}</a>`;
 }
 
 /** Brain chip accent (translucent bg / border / text share one hue). */
@@ -426,7 +443,18 @@ class App {
       if (!btn) return;
       e.preventDefault();
       e.stopPropagation();
-      this.openMarkdownModal(btn.dataset.mdTask, btn.dataset.mdFile);
+      this.openMarkdownModal(btn.dataset.mdTask, btn.dataset.mdFile, btn.dataset.mdKind || 'artifacts');
+    });
+    // Delegated: image / video / audio artifacts (and inputs) open in the in-app
+    // media viewer instead of downloading. Same document-level rationale as the
+    // markdown handler above — the Inbox cards and Workflow-run drawer re-render
+    // in place, so a delegated handler avoids stale per-node listeners.
+    document.addEventListener('click', (e) => {
+      const btn = e.target.closest('.media-artifact');
+      if (!btn) return;
+      e.preventDefault();
+      e.stopPropagation();
+      this.openMediaModal(btn.dataset.mediaTask, btn.dataset.mediaFile, btn.dataset.mediaType, btn.dataset.mediaKind || 'artifacts');
     });
     // Delegated open/delete for the Chat view's recent-sessions strip (the chips
     // are re-rendered in place, so a document-level handler avoids stale listeners).
@@ -609,13 +637,13 @@ class App {
    * #modal-container. fetch() ignores the download route's Content-Disposition,
    * so we get the raw text back; agent output is untrusted → md() sanitizes it
    * (DOMPurify). Non-markdown artifacts never reach here — they stay download
-   * links (see artifactChip).
+   * links (see artifactChip). `kind` picks the ARTIFACTS vs INPUTS API route.
    */
-  async openMarkdownModal(taskId, file) {
+  async openMarkdownModal(taskId, file, kind = 'artifacts') {
     const container = document.getElementById('modal-container');
     const content = document.getElementById('modal-content');
     if (!container || !content) return;
-    const url = `/api/artifacts/${encodeURIComponent(taskId)}/${encodeURIComponent(file)}`;
+    const url = `/api/${kind}/${encodeURIComponent(taskId)}/${encodeURIComponent(file)}`;
     const barBtn = 'font-size:0.75rem;padding:3px 8px;display:inline-flex;align-items:center;gap:4px';
     content.classList.add('modal-md');
     content.innerHTML = `
@@ -672,6 +700,67 @@ class App {
       toggle.textContent = showRaw ? 'Rendered' : 'Raw';
     };
     createIcons();
+  }
+
+  /**
+   * Open a task's image / video / audio file (from ARTIFACTS or INPUTS) in a
+   * popup viewer with a Download fallback, instead of downloading it. Reuses the
+   * shared #modal-container. The <img>/<video>/<audio> element loads the file
+   * straight from the download route — the browser renders it inline regardless
+   * of the route's Content-Disposition, so no server change is needed. `type` is
+   * one of 'image' | 'video' | 'audio'; `kind` picks the ARTIFACTS vs INPUTS
+   * route. Non-media files never reach here — they stay download links (see
+   * artifactChip).
+   */
+  openMediaModal(taskId, file, type, kind = 'artifacts') {
+    const container = document.getElementById('modal-container');
+    const content = document.getElementById('modal-content');
+    if (!container || !content) return;
+    const url = `/api/${kind}/${encodeURIComponent(taskId)}/${encodeURIComponent(file)}`;
+    const barBtn = 'font-size:0.75rem;padding:3px 8px;display:inline-flex;align-items:center;gap:4px';
+    const icon = (MEDIA_KIND.find(k => k.type === type) || {}).icon || 'file';
+    // The media element itself. src is the (path-guarded) file route; a load
+    // error swaps in a message + download link rather than a broken icon.
+    let mediaEl;
+    if (type === 'video') {
+      mediaEl = `<video class="mdm-media" src="${url}" controls playsinline style="max-width:100%;max-height:72vh;display:block;margin:0 auto;border-radius:8px;background:#000"></video>`;
+    } else if (type === 'audio') {
+      mediaEl = `<audio class="mdm-media" src="${url}" controls style="width:100%;display:block;margin:12px 0"></audio>`;
+    } else {
+      mediaEl = `<img class="mdm-media" src="${url}" alt="${esc(file)}" style="max-width:100%;max-height:72vh;display:block;margin:0 auto;border-radius:8px;background:var(--bg-tertiary)">`;
+    }
+    content.classList.add('modal-md');
+    content.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin:0 0 12px">
+        <h3 style="margin:0;font-size:1.02rem;display:flex;align-items:center;gap:6px;min-width:0">
+          <i data-lucide="${icon}" style="width:16px;height:16px;flex:0 0 auto"></i>
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(file)}</span>
+        </h3>
+        <div style="display:flex;gap:6px;flex:0 0 auto">
+          <a class="btn" href="${url}" download title="Download this file" style="${barBtn}"><i data-lucide="download" style="width:13px;height:13px"></i></a>
+          <button class="btn mdm-close" title="Close" style="${barBtn}"><i data-lucide="x" style="width:14px;height:14px"></i></button>
+        </div>
+      </div>
+      <div class="mdm-media-wrap" style="text-align:center">${mediaEl}</div>`;
+    container.classList.remove('hidden');
+    createIcons();
+
+    const close = () => {
+      container.classList.add('hidden');
+      content.classList.remove('modal-md');
+      content.innerHTML = '';
+      document.removeEventListener('keydown', onKey);
+    };
+    const onKey = (ev) => { if (ev.key === 'Escape') close(); };
+    document.addEventListener('keydown', onKey);
+    content.querySelector('.mdm-close').onclick = close;
+    container.querySelector('.modal-backdrop').onclick = close;
+
+    const el = content.querySelector('.mdm-media');
+    if (el) el.addEventListener('error', () => {
+      const wrap = content.querySelector('.mdm-media-wrap');
+      if (wrap) wrap.innerHTML = `<p style="color:#EF4444">Could not preview <strong>${esc(file)}</strong>. <a href="${url}" download>Download instead</a>.</p>`;
+    });
   }
 
   /**
@@ -1862,7 +1951,7 @@ class App {
           ${arts.map(f => artifactChip(t.id, f, '0.9rem')).join('')}</div>` : ''}
         ${(inputs.length || canAttach) ? `<div class="task-inputs" style="display:flex; flex-wrap:wrap; align-items:center; gap:4px; padding:6px 0 2px">
           <span style="font-size:0.72rem; color:var(--text-muted); margin-right:2px; text-transform:uppercase; letter-spacing:.03em">Inputs</span>
-          ${inputs.map(f => `<a href="/api/inputs/${encodeURIComponent(t.id)}/${encodeURIComponent(f)}" download class="btn" style="font-size:0.78rem;margin:0;display:inline-flex;align-items:center;gap:4px"><i data-lucide="paperclip" style="width:12px;height:12px"></i>${esc(f)}</a>`).join('')}
+          ${inputs.map(f => artifactChip(t.id, f, '0.78rem', 'inputs')).join('')}
           ${canAttach ? `<input type="file" data-attach-files="${esc(t.id)}" multiple style="display:none">
           <button class="btn" data-attach-input="${esc(t.id)}" title="Attach files for the brain to read" style="font-size:0.75rem;margin:0">＋ Attach files</button>` : ''}</div>` : ''}
         <div class="task-detail"${this.openTasks.has(t.id) ? ' style="display:block"' : ''}>
