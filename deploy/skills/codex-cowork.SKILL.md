@@ -1,6 +1,6 @@
 ---
 name: cowork
-description: Coordinate with other AI agents through the Cowork MCP server: inspect the shared dashboard and inbox, dispatch, schedule, or claim tasks, search the roster, and deliver task artifacts. Use when the user asks to delegate work, check Cowork task status, or coordinate with another platform.
+description: Coordinate with other AI agents through the Cowork MCP server: inspect the shared dashboard and inbox, dispatch, schedule, or claim tasks, search the Agencies, and deliver task artifacts. Use when the user asks to delegate work, check Cowork task status, or coordinate with another platform.
 ---
 
 # Cowork — Multi-Agent Coordination
@@ -39,7 +39,7 @@ journalctl --user -u cowork-local-brain@codex.service -n 100 --no-pager
 3. Check `get_dashboard()` or `list_inbox(status: "pending")` before creating work,
    to avoid duplicate tasks.
 4. Dispatch with `create_task`. Supply a complete description, origin identity, and
-   `context.role` for automatic roster routing. Pin `context.brain` only when a
+   `context.role` for automatic routing. Pin `context.brain` only when a
    specific execution identity is required. Pass `scheduled_at` (ISO 8601) to park the
    task until a launch time, or an `interaction` packet to collect answers from a person
    first (the task waits on `wait-input` until they reply).
@@ -50,8 +50,8 @@ journalctl --user -u cowork-local-brain@codex.service -n 100 --no-pager
 ## Routing
 
 - `context: {"role": "orchestrator"}` starts the two-stage dispatcher: it selects a
-  division, then a roster persona and its brain fallback chain.
-- `context: {"agent": "<roster-slug>"}` targets one roster persona.
+  division, then an agent persona and its brain fallback chain.
+- `context: {"agent": "<agent-slug>"}` targets one agent persona.
 - `context: {"brain": "local-codex-default"}` pins a task to the Codex worker.
 - A `manual` tag prevents automatic dispatch.
 - A failed brain rung hands the task to the next rung. Do not duplicate the task while

@@ -125,7 +125,7 @@
         ]
       },
       "generalist": {
-        "description": "Fallback when the router can't classify or a roster agent fails through its chain",
+        "description": "Fallback when the router can't classify or an agent fails through its chain",
         "brains": [
           "local-ha-qwen35b",
           "local-ha-deepseek-v4-pro",

@@ -1,6 +1,6 @@
 ---
 name: cowork
-description: Coordinate with other AI agents (Hermes, Antigravity/Gemini, Codex, other Claude sessions) via the Cowork MCP server — register presence and brains, dispatch/schedule cross-platform tasks, work the shared inbox, run workflows, browse the 285-agent roster, and collect artifacts. Use when the user wants to dispatch work to another agent/platform, check the shared task inbox, see which agents/brains are active, run a cowork workflow, or when you are executing a cowork task yourself.
+description: Coordinate with other AI agents (Hermes, Antigravity/Gemini, Codex, other Claude sessions) via the Cowork MCP server — register presence and brains, dispatch/schedule cross-platform tasks, work the shared inbox, run workflows, browse the Agencies, and collect artifacts. Use when the user wants to dispatch work to another agent/platform, check the shared task inbox, see which agents/brains are active, run a cowork workflow, or when you are executing a cowork task yourself.
 ---
 
 # Cowork — Multi-Agent Coordination
@@ -66,14 +66,14 @@ Resources: `cowork://status`, `cowork://roster`.
 
 | Field | Effect |
 |-------|--------|
-| `agent` (or `role`, alias) | A roster slug or special-executor name → **skips the classifier** |
+| `agent` (or `role`, alias) | An agent slug or special-executor name → **skips the classifier** |
 | `division` | Force the division; the router still picks the persona |
 | `brain` | Pin one brain id → overrides the whole chain |
 | `dependsOn: [taskIds]` | Gate until those finish, then inject their results into the brief |
 | `humanInput` | Answers from a human-in-the-loop round (server-written, read-only to you) |
 
 With none of these set, an **LLM router** runs two stages: pick 1 of 19 **divisions**,
-then 1 of ~285 **roster agents** in it; that agent's full `.md` persona becomes the
+then 1 of ~285 **agents** in it; that agent's full `.md` persona becomes the
 system prompt. Tag a task `manual` to skip routing and dispatch entirely.
 
 Special executors (`orchestration.agents`): `orchestrator`, `generalist`, `video` only.
@@ -266,6 +266,6 @@ cd ~/workspace/github/slashman413/cowork/server && npm test   # engine tests
 
 Pitfalls: `/mcp` is MCP, `/api` is REST — don't mix. If `server.apiKey` is set every
 request needs `Authorization: Bearer …`. Port is 6868. A missing `agency-agents`
-submodule makes the roster empty (`git submodule update --init`). Canonical copies of
+submodule makes the Agencies empty (`git submodule update --init`). Canonical copies of
 this skill live in `deploy/skills/` — edit there and re-run `deploy/install-skill.sh`,
 or keep both in sync by hand.

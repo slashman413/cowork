@@ -897,7 +897,7 @@ class App {
       <input id="nt-title" style="${fieldStyle}; margin-bottom:12px" placeholder="Short imperative title…">
       <label style="${labelStyle}">Brief (markdown)</label>
       <textarea id="nt-desc" rows="6" style="${fieldStyle}; margin-bottom:12px; resize:vertical" placeholder="What should the agent do? Include acceptance criteria."></textarea>
-      <label style="${labelStyle}">Agent <span style="text-transform:none; letter-spacing:0">(optional — pick a division, then the roster agent that studies the files & does the work)</span></label>
+      <label style="${labelStyle}">Agent <span style="text-transform:none; letter-spacing:0">(optional — pick a division, then the agent that studies the files & does the work)</span></label>
       <div style="display:flex; gap:8px; margin-bottom:12px">
         <select id="nt-div" style="${fieldStyle}; flex:1">${divOpts}</select>
         <select id="nt-agent" style="${fieldStyle}; flex:1" disabled><option value="">— none —</option></select>
@@ -1025,7 +1025,7 @@ class App {
     });
     const titles = {
       dashboard: 'Dashboard', chat: 'Chat', portal: 'Portal', connections: 'Connections', inbox: 'Task Inbox',
-      workflows: 'Workflows', team: 'Agents', brains: 'Brains', roster: 'Agent Roster', config: 'Configuration'
+      workflows: 'Workflows', team: 'Agents', brains: 'Brains', roster: 'Agencies', config: 'Configuration'
     };
     this.viewTitleEl.textContent = titles[this.currentView] || 'Dashboard';
     this.renderCurrentView();
@@ -1112,7 +1112,7 @@ class App {
         ${stat('bot', status.activeAgents, 'Active Agents')}
         ${stat('inbox', status.inboxSummary.pending + status.inboxSummary.inProgress,
                `Open Tasks (${status.inboxSummary.completed - (status.inboxSummary.failed || 0)} done${status.inboxSummary.failed ? `, ${status.inboxSummary.failed} failed` : ''}${status.inboxSummary.scheduled ? `, ${status.inboxSummary.scheduled} scheduled` : ''}${status.inboxSummary.waitingInput ? `, ${status.inboxSummary.waitingInput} wait input` : ''})`)}
-        ${stat('users', status.rosterCount, 'Agent Roster')}
+        ${stat('users', status.rosterCount, 'Agencies')}
       </div>
       <div class="grid-2" style="margin-bottom: var(--space-xl)">
         <div class="card">
@@ -2966,7 +2966,7 @@ class App {
     const notInChain = Object.keys(brains).filter(b => !(chains.defaultChain || []).includes(b));
     const defaultChainCard = `
       <div class="card" style="margin-bottom:var(--space-lg)">
-        <div style="font-size:0.9rem;font-weight:600">Default fallback chain <span style="font-size:0.72rem;color:var(--text-muted);font-weight:400">— drag to reorder; roster agents use this unless their division overrides it</span></div>
+        <div style="font-size:0.9rem;font-weight:600">Default fallback chain <span style="font-size:0.72rem;color:var(--text-muted);font-weight:400">— drag to reorder; agents use this unless their division overrides it</span></div>
         <div id="dchain" style="margin:8px 0;min-height:34px">${chainChips}</div>
         <select id="dchain-add" style="padding:5px;background:var(--bg-tertiary);border:1px solid var(--bg-tertiary);border-radius:8px;color:inherit;font-size:0.8rem"><option value="">+ add to chain…</option>${notInChain.map(b => `<option value="${esc(b)}">${esc(b)}</option>`).join('')}</select>
       </div>`;

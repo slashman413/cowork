@@ -1,7 +1,7 @@
 {
   "id": "plan-execution",
   "name": "Plan Execution (orchestrator-driven, actually runs the jobs)",
-  "description": "An ORCHESTRATED workflow that doesn't just plan — it EXECUTES. It turns a plan into concrete jobs, then the orchestrator brain drives them to completion: after each step it reads the goal + the results produced so far and picks the next step (or declares DONE). One step hands off to the 'orchestrator' agent, which dispatches the real jobs to the specialist roster and wires each downstream job to the OUTPUTS of the jobs it depends on. Every step declares dependsOn so the agent running it is actually handed the results of the steps it builds on. Ends only when the plan's goal is achieved and every requirement passes verification.",
+  "description": "An ORCHESTRATED workflow that doesn't just plan — it EXECUTES. It turns a plan into concrete jobs, then the orchestrator brain drives them to completion: after each step it reads the goal + the results produced so far and picks the next step (or declares DONE). One step hands off to the 'orchestrator' agent, which dispatches the real jobs to the specialist agents and wires each downstream job to the OUTPUTS of the jobs it depends on. Every step declares dependsOn so the agent running it is actually handed the results of the steps it builds on. Ends only when the plan's goal is achieved and every requirement passes verification.",
   "mode": "orchestrated",
   "goal": "Fully EXECUTE the plan end-to-end — dispatch the real work to specialist agents, feed each job the outputs of the jobs it depends on, then verify — until the plan's GOAL is achieved and every REQUIREMENT is satisfied. The plan to execute: {{plan}}",
   "params": ["plan"],
@@ -22,7 +22,7 @@
     {
       "key": "orchestrate-execution",
       "title": "Dispatch and manage the real jobs",
-      "description": "You are managing execution of the plan. Take the job list and the wiring strategy provided above and ACTUALLY dispatch each job as a real subtask to the company roster — one POST per job — leaving the agent unassigned so the router picks the best specialist, or pinning context.division / context.agent when the analysis already named one. For every job that is based on another job's output, set its context.dependsOn to the task id(s) of those upstream jobs so the specialist is handed its inputs. Include a final integration subtask that dependsOn all the leaf jobs. After dispatching, output a summary mapping each job -> task id -> its dependencies.",
+      "description": "You are managing execution of the plan. Take the job list and the wiring strategy provided above and ACTUALLY dispatch each job as a real subtask to the company's agents — one POST per job — leaving the agent unassigned so the router picks the best specialist, or pinning context.division / context.agent when the analysis already named one. For every job that is based on another job's output, set its context.dependsOn to the task id(s) of those upstream jobs so the specialist is handed its inputs. Include a final integration subtask that dependsOn all the leaf jobs. After dispatching, output a summary mapping each job -> task id -> its dependencies.",
       "agent": "orchestrator",
       "dependsOn": ["analyze-plan", "execution-strategy"]
     },

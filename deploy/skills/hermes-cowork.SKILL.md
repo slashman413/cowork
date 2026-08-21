@@ -2,7 +2,7 @@
 name: cowork
 description: >-
   Multi-agent Cowork MCP framework: register agents with brains, dispatch and
-  schedule tasks, heartbeat, roster, inbox, artifacts, dashboard. Local MCP
+  schedule tasks, heartbeat, agencies, inbox, artifacts, dashboard. Local MCP
   server at :6868.
 version: 1.0.0
 author: Hermes
@@ -16,7 +16,7 @@ metadata:
 
 Multi-agent coordination framework (slashman413/cowork) running as a local MCP server
 on `http://localhost:6868`. Agents register with capabilities AND brains (model specs),
-dispatch cross-platform tasks, heartbeat, and query roster/inbox.
+dispatch cross-platform tasks, heartbeat, and query agencies/inbox.
 
 > **There is no report store.** `file_report` and `complete_task(report_path:)` were
 > removed. A task's complete record is `task.result` + `artifacts/<task-id>/`.
@@ -28,7 +28,7 @@ dispatch cross-platform tasks, heartbeat, and query roster/inbox.
 ## When to Use
 
 - "Dispatch a task to Claude for code review" / "create a task for another agent"
-- "Show me the agent roster" / "what agents are available"
+- "Show me the agencies" / "what agents are available"
 - "Check my inbox" / "list pending tasks"
 - "Schedule this for 9am tomorrow" (`create_task(scheduled_at: …)`)
 - "Show the dashboard" / "what's happening across agents"
@@ -79,8 +79,8 @@ dispatch cross-platform tasks, heartbeat, and query roster/inbox.
 |--------|------|-------------|
 | GET | `/api/status` | Dashboard overview (activeAgents, inboxSummary, uptime) |
 | GET | `/api/connections` | Live MCP clients (heartbeat) + per-brain ran/submitted counters |
-| GET | `/api/roster` | Agent roster (filterable by division/search/category) |
-| GET | `/api/roster-divisions` | Roster grouped by division (for the Agents view) |
+| GET | `/api/roster` | Agencies (filterable by division/search/category) |
+| GET | `/api/roster-divisions` | Agencies grouped by division (for the Agents view) |
 | GET | `/api/dispatcher` | Special agents + brains + defaultChain + divisionChains + running |
 | GET / PUT | `/api/chains`, `/api/chains/default`, `/api/chains/division/:div` | Read / edit brain fallback chains |
 | GET / PUT / DELETE | `/api/brains`, `/api/brains/:id` | Brain registry (cascades on delete) |
@@ -101,7 +101,7 @@ SSE event types are camelCase: `agentRegistered`, `taskCreated`, `taskClaimed`,
 ### Web Dashboard
 
 - `http://localhost:6868/` — Web UI (dashboard, Connections, inbox, Agents, Brains,
-  roster, workflows, chat) with a raw/rendered markdown viewer and artifact downloads
+  agencies, workflows, chat) with a raw/rendered markdown viewer and artifact downloads
 
 ### MCP Inspector (debugging)
 
@@ -165,7 +165,7 @@ When the user shares a business idea or multi-part request:
 
 2. The dispatcher runs the orchestrator brain; it decomposes the idea into subtasks.
    Each unassigned subtask is **routed in two stages** — an orchestrator/classifier
-   brain (default qwen35b) picks a **division** (1 of 19), then a **roster agent**
+   brain (default qwen35b) picks a **division** (1 of 19), then an **agent**
    (1 of 285) whose `.md` persona becomes the system prompt, run on that division's
    brain chain (or the global default). Target directly with `context.agent: "<slug>"`.
 
@@ -175,14 +175,14 @@ When the user shares a business idea or multi-part request:
 ### Routing model (config.json orchestration)
 
 There is **no fixed role→brain table** anymore. Only three **special executors** carry
-their own chains; everything else routes through the 285-agent roster:
+their own chains; everything else routes through the Agencies:
 
 | Executor | Kind | Brain chain source |
 |----------|------|--------------------|
 | orchestrator | special | `orchestration.agents.orchestrator.brains` |
 | generalist | special | `orchestration.agents.generalist.brains` |
 | video | special | `orchestration.agents.video.brains` (LTX only — never Wan/Hunyuan) |
-| any of 285 roster agents | roster | `orchestration.divisionChains[<division>]` if set, else `orchestration.defaultChain` |
+| any of 285 agents | Agencies | `orchestration.divisionChains[<division>]` if set, else `orchestration.defaultChain` |
 
 - **Global default chain**: `orchestration.defaultChain` — drag-reorder in the Brains
   view (`PUT /api/chains/default`).
@@ -313,7 +313,7 @@ parks the task on `wait-input` and re-dispatches it once the user answers (their
 arrive on `context.humanInput`). Never emit a rate-limit or quota notice as the
 deliverable — the verifier rejects those and hands the task to the next brain in the chain.
 
-### 7. Query Roster
+### 7. Query Agencies
 
 ```
 get_roster(category="engineering", search="keyword", active_only=true)
@@ -385,7 +385,7 @@ The flat `from_platform` / `from_agent` / `to_platform` / `to_agent` form is the
   `/api/brains` are applied live AND persisted to config.json (no restart). Only manual
   hand-edits of config.json require a restart.
 - Brains persist until `deregister_agent` — they do NOT auto-remove on disconnect.
-- If `agency-agents` repo is missing/misconfigured, roster queries return empty.
+- If `agency-agents` repo is missing/misconfigured, Agencies queries return empty.
 - Port is 6868, NOT 4200.
 
 ## Verification

@@ -17,7 +17,7 @@
     { "id": "rest", "type": "backend", "label": "REST Mirror", "sublabel": "/api · SSE events", "pos": [300, 120], "size": [150, 66] },
     { "id": "mcp", "type": "backend", "label": "MCP Endpoint", "sublabel": "/mcp · 9 tools", "pos": [300, 380], "size": [150, 66] },
     { "id": "inbox", "type": "messagebus", "label": "Task Inbox", "sublabel": "pending → done", "tag": "atomic claim", "pos": [560, 380], "size": [150, 66] },
-    { "id": "roster", "type": "database", "label": "Agent Roster", "sublabel": "~285 persona files", "pos": [820, 120], "size": [150, 66] },
+    { "id": "roster", "type": "database", "label": "Agencies", "sublabel": "~285 persona files", "pos": [820, 120], "size": [150, 66] },
     { "id": "router", "type": "backend", "label": "LLM Router", "sublabel": "two-stage classifier", "pos": [820, 380], "size": [150, 66] },
     { "id": "config", "type": "database", "label": "Live Config", "sublabel": "~/.cowork/config.json", "tag": "chains + brains", "pos": [820, 640], "size": [150, 66] },
     { "id": "verifier", "type": "security", "label": "Verifier", "sublabel": "accept or reject result", "pos": [1080, 120], "size": [150, 66] },

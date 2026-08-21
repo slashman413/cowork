@@ -41,7 +41,7 @@
     {
       "key": "build",
       "title": "Build & ship {{idea}} (dispatch engineers, push to GitHub)",
-      "description": "You are managing execution of the build. Take the architecture plan and PRD provided and ACTUALLY dispatch the build to the engineering roster — one POST per increment to the Cowork REST API — wiring each job's context.dependsOn to the increments it builds on so every engineer is handed its inputs. The work must produce a REAL, running product: source code in a git repo, a GitHub Actions workflow that lints/tests/builds on push, and a passing pipeline. Include a final job that opens/pushes the branch and confirms the GH Actions run is green. After dispatching, output a manifest mapping each increment -> task id -> dependencies -> where the code lives. Leave routing to the engineering division so brain chains stay UI-controlled.",
+      "description": "You are managing execution of the build. Take the architecture plan and PRD provided and ACTUALLY dispatch the build to the engineering agents — one POST per increment to the Cowork REST API — wiring each job's context.dependsOn to the increments it builds on so every engineer is handed its inputs. The work must produce a REAL, running product: source code in a git repo, a GitHub Actions workflow that lints/tests/builds on push, and a passing pipeline. Include a final job that opens/pushes the branch and confirms the GH Actions run is green. After dispatching, output a manifest mapping each increment -> task id -> dependencies -> where the code lives. Leave routing to the engineering division so brain chains stay UI-controlled.",
       "agent": "orchestrator",
       "dependsOn": ["prd", "architecture"]
     },

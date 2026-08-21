@@ -13,7 +13,7 @@ So the design rule for everything below is:
 
 - **Detection is deterministic** (event-driven, inside the existing task lifecycle — no scheduler, no autonomous agent loop).
 - **Decisions are human-gated** (proposals surface through the mechanism cowork already has for exactly this: `wait-input` interaction packets).
-- **Application is data, not code** (approved lessons become injected prompt text / routing metadata, the same way `CONVENTIONS.md` and roster personas are already injected — nothing self-modifies).
+- **Application is data, not code** (approved lessons become injected prompt text / routing metadata, the same way `CONVENTIONS.md` and agent personas are already injected — nothing self-modifies).
 
 No cron. No agent that "wakes up and decides". The trigger for every improvement action is a *task finishing* — an event the server already handles.
 
@@ -31,7 +31,7 @@ The good news: ~70% of the self-improvement loop already exists as disconnected 
 | `wait-input` parking | `result-verifier.ts` `detectInputRequest` + dispatcher precedence gate | The **human-in-the-loop primitive** — a task that becomes a question is held for a person, never auto-scheduled |
 | Fallback chains + handover | `dispatcher.ts` `chainFor`/`verifyReportedCompletion` | Automatic retry routing (already "improvement at runtime", just memoryless) |
 | CONVENTIONS.md prompt injection | `remote-brain-client.mjs:46-49` + dispatcher prompt builder | A **rules file injected into every prompt** — the natural home for learned rules (rule #6, the Inc-6 credential-routing rule, was exactly this: an incident distilled into an injected rule, by hand) |
-| Roster personas | `context.persona` stamped by dispatcher | Per-agent prompt layer → natural home for per-agent playbooks |
+| Agent personas | `context.persona` stamped by dispatcher | Per-agent prompt layer → natural home for per-agent playbooks |
 | `paths.decisions` (`decisions/`) | `config.ts:53`, created by `store.ts:46` | A directory that exists, is server-owned, and is **currently written by nothing** — free real estate for the lesson ledger |
 | Per-task inputs channel | `inputs/<task-id>/` + client `downloadInputs()` | An existing server→brain file-push mechanism (reusable for env bundles) |
 | Brains registry via handshake | `register_agent {brains:[{id, exec, model, host, location}]}` | The registration payload is already extensible — capability facts can ride it |
@@ -101,7 +101,7 @@ Three application surfaces, all already-injected prompt/config layers, in order 
 | Surface | Mechanism | When to use |
 |---|---|---|
 | **Routing metadata** | `decisions/routing-rules.json` — `{match: {requires|titlePattern|tags}, deny: [brainGlob], preferChain: [...]}`; consulted by `chainFor()`/`planFor()` before selecting a rung | Environment-shaped lessons (the majority). Structural fix — the failure becomes *impossible*, not just warned about |
-| **`decisions/playbooks/<agent>.md`** | Injected into the prompt after the persona, same as `CONVENTIONS.md` is today (client `buildPrompt()` + dispatcher prompt builder each gain ~3 lines) | Behavioral lessons scoped to one roster agent ("always emit merge scripts as artifacts; wayne-host applies them") |
+| **`decisions/playbooks/<agent>.md`** | Injected into the prompt after the persona, same as `CONVENTIONS.md` is today (client `buildPrompt()` + dispatcher prompt builder each gain ~3 lines) | Behavioral lessons scoped to one agent ("always emit merge scripts as artifacts; wayne-host applies them") |
 | **`CONVENTIONS.md` edit** | The proposal task's artifact contains the drafted diff; human applies via normal git flow | Network-wide rules (rare; keep this file short — it's prepended to *every* prompt) |
 
 The first two are hot-reloaded data files — no rebuild, no restart, no self-modifying code. The dispatcher reads them fresh per tick (it already re-reads config-adjacent state per tick).
@@ -112,7 +112,7 @@ The config-gated LLM verifier (`buildVerifierPrompt`) already reads task + resul
 
 ### A5. What NOT to build
 
-- No "self-improvement agent" persona in the roster. An agent whose job is to improve the system recreates the Hermes-cron problem with extra steps.
+- No "self-improvement agent" persona in the Agencies. An agent whose job is to improve the system recreates the Hermes-cron problem with extra steps.
 - No auto-editing of CONVENTIONS.md / config.json by any brain (CONVENTIONS §2 already forbids it; keep it that way).
 - No feedback loop where lessons alter *verifier* patterns automatically — a bad learned pattern would silently reject good work. Verifier pattern changes stay code-reviewed.
 

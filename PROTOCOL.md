@@ -113,7 +113,7 @@ The Cowork MCP Server exposes these tools via Streamable HTTP at `/mcp`:
 | `register_agent` | Register an agent session; optionally DECLARE runnable `brains` |
 | `deregister_agent` | Remove the agent and cascade-remove every brain it registered |
 | `heartbeat` | Update agent status; may carry `usage` — the client's self-measured rate-limit snapshot per brain (`{ exec, windows: [{ label, usedPct, resetsAt }], at }`), shown as meters on the Connections cards. Only metered execs (claude/codex) report; hermes/ollama/script have no quota and send nothing |
-| `get_roster` | Query agent roster (~285 agents across 19 divisions) |
+| `get_roster` | Query the Agencies (~285 agents across 19 divisions) |
 | `create_task` | Create a cross-platform task; optional `scheduled_at` (ISO 8601) parks it as `scheduled` until launch time (default: run now) |
 | `claim_task` | Claim a pending task |
 | `complete_task` | Mark task as done |
@@ -121,10 +121,10 @@ The Cowork MCP Server exposes these tools via Streamable HTTP at `/mcp`:
 | `get_dashboard` | Get aggregated dashboard data |
 
 **Routing context** — the dispatcher reads these `task.context` fields:
-`agent` (a roster slug or special-executor name → skip the classifier),
+`agent` (an agent slug or special-executor name → skip the classifier),
 `brain` (pin one brain id; the dispatcher also *publishes* the target remote brain
 here so its client can claim the task), and `division` (override the routed
-division). With none set, the two-stage router picks division → roster agent.
+division). With none set, the two-stage router picks division → agent.
 
 ## 4. SSE Events
 
@@ -154,7 +154,7 @@ no `agent_disconnected` event — a client that stops heartbeating is pruned sil
 | GET | `/api/inbox` | Task list (query: status, platform, limit) |
 | POST | `/api/inbox` | Create task |
 | PATCH | `/api/inbox/:id` | Claim or complete task |
-| GET | `/api/roster` | Agent roster (query: division, search) |
+| GET | `/api/roster` | Agencies (query: division, search) |
 | GET | `/api/roster/divisions` | Division metadata |
 | GET | `/api/config` | Current configuration |
 | GET | `/api/events` | SSE event stream |

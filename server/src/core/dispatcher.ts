@@ -1028,7 +1028,7 @@ export class Dispatcher {
     if (role === 'orchestrator') {
       lines.push(
         `# Orchestrator instructions`,
-        `Decompose this request into concrete subtasks and dispatch them to the company via the Cowork REST API — one POST per subtask. Leave the agent UNASSIGNED and the company's router will pick the best specialist from its 250-agent roster automatically (or set context.division/context.agent yourself if you know exactly who should do it):`,
+        `Decompose this request into concrete subtasks and dispatch them to the company via the Cowork REST API — one POST per subtask. Leave the agent UNASSIGNED and the company's router will pick the best specialist from its 250-agent Agencies automatically (or set context.division/context.agent yourself if you know exactly who should do it):`,
         '```bash',
         `curl -s -X POST http://localhost:${port}/api/inbox -H 'Content-Type: application/json' -d '{"title":"...","description":"...(full standalone instructions)...","from":{"platform":"claude","agent":"orchestrator"},"to":{},"priority":"normal"}'`,
         '```',

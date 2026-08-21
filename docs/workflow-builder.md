@@ -106,7 +106,7 @@ Each **step** (`WorkflowStep`) is a task template:
 | `key`         | string     | **Required.** Unique-within-the-template node id. Other steps reference it in `dependsOn`; it becomes `context.stepKey`. |
 | `title`       | string     | Task title. `{{param}}` placeholders are filled at run time. Falls back to `key` if omitted. |
 | `description` | string     | The **standalone brief** the executing agent sees. Falls back to `title`, then `key`. |
-| `agent`       | string     | Pin a specific roster/special agent (`context.agent`). |
+| `agent`       | string     | Pin a specific Agencies/special agent (`context.agent`). |
 | `division`    | string     | Pin a division so the router only picks within it (`context.division`). |
 | `brain`       | string     | Pin an exact execution brain (`context.brain`). |
 | `priority`    | enum       | `low` \| `normal` \| `high` \| `urgent`. Default `normal`. |
@@ -422,7 +422,7 @@ Run views are reconstructed on demand:
 
 Each step can pin **where** it runs, or leave it to the router:
 
-- **`agent`** → `context.agent`: a specific roster or special agent.
+- **`agent`** → `context.agent`: a specific Agencies or special agent.
 - **`division`** → `context.division`: constrain routing to one division; the
   router picks the best specialist within it.
 - **`brain`** → `context.brain`: an exact execution identity
@@ -433,7 +433,7 @@ Each step can pin **where** it runs, or leave it to the router:
 **House rule for shipped templates:** pin a `division` or `agent`, **never a
 `brain`.** That keeps the *brain fallback chain* for every role editable live from
 the dashboard's **Agents** view (`orchestration.agents[*].brains` for special
-agents; `divisionChains[*]` / `defaultChain` for roster agents) — so you can
+agents; `divisionChains[*]` / `defaultChain` for agents) — so you can
 change *who* runs a step without touching the template. Pin a `brain` only for a
 deliberately hardware- or credential-specific step (e.g. a local media pipeline or
 a task that needs a credential only one host holds).

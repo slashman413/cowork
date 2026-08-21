@@ -16,7 +16,7 @@ Nav order and labels (from `server/public/index.html`):
 | [Workflows](#workflows) | Workflows | `GET /api/workflows*`, `POST /api/workflows/:id/run`, `GET /api/workflow-runs*` |
 | [Agents](#agents) | Agents | `GET/PUT /api/agents-config`, `/api/chains*` |
 | [Brains](#brains) | Brains | `GET/PUT/DELETE /api/brains*` |
-| [Agent Roster](#agent-roster) | Agent Roster | `GET /api/roster`, `/api/roster-divisions` |
+| [Agencies](#agencies) | Agencies | `GET /api/roster`, `/api/roster-divisions` |
 | [Connections](#connections) | Connections | `GET /api/connections` |
 | [Configuration](#configuration) | Configuration | `GET /api/config` |
 
@@ -34,7 +34,7 @@ The at-a-glance overview (`GET /api/status` → `DashboardData`):
   `inProgress`, `completed`, and `failed` (tasks that exhausted their fallback
   chain).
 - **Platform status** — per-platform up/down.
-- **Roster count** and **uptime**.
+- **Agencies count** and **uptime**.
 
 Use it to confirm the server is live and to see the shape of the queue before
 diving into the Inbox.
@@ -129,11 +129,11 @@ Backing endpoints: `GET /api/workflows`, `/api/workflows/:id`,
 
 Edit **who runs what** without touching code. Two kinds of worker:
 
-- **Special (non-roster) executors** — `orchestrator` (router/decomposer),
+- **Special (non-Agencies) executors** — `orchestrator` (router/decomposer),
   `generalist` (fallback), `video` (media pipeline). Each has its own ordered
   **brain fallback chain** (`orchestration.agents[*].brains`), edited here
   (`GET/PUT/DELETE /api/agents-config`).
-- **Roster agents** — resolved through **chains**: the global `defaultChain`, a
+- **Agencies agents** — resolved through **chains**: the global `defaultChain`, a
   per-division override (`divisionChains[*]`), or a per-agent override
   (`agentChains[*]`, highest precedence). Edited via `GET/PUT /api/chains`,
   `/chains/default`, `/chains/division/:div`.
@@ -165,7 +165,7 @@ that referenced it.
 
 ---
 
-## Agent Roster
+## Agencies
 
 The full catalog of specialist agents (`GET /api/roster`, filterable by division;
 `GET /api/roster-divisions` groups them for this view). Each `AgentCard` carries a

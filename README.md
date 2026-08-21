@@ -17,7 +17,7 @@ pane of glass.
 ## Screenshots
 
 One dark-themed **single pane of glass** for the whole operation: live host metrics
-(CPU / GPU / memory / temp), open-task and roster counters, the dispatcher's current
+(CPU / GPU / memory / temp), open-task and Agencies counters, the dispatcher's current
 role → model chains, and a real-time activity feed.
 
 ![Cowork dashboard — metrics, counters, dispatcher chains, and live activity](docs/images/cowork-dashboard.png)
@@ -49,7 +49,7 @@ shown in context throughout this README.
 - **Node.js** ≥ 20 (tested with v22)
 - **npm** ≥ 10
 - The [agency-agents](./agency-agents) repo — bundled as a **git submodule** at
-  `cowork/agency-agents` (the 285-agent roster). Clone with submodules:
+  `cowork/agency-agents` (the Agencies — 285 agents). Clone with submodules:
 
   ```bash
   git clone --recurse-submodules https://github.com/slashman413/cowork
@@ -150,7 +150,7 @@ You should see:
    MCP endpoint: http://0.0.0.0:6868/mcp
    Web Dashboard: http://0.0.0.0:6868/
    REST API: http://0.0.0.0:6868/api/
-   Roster loaded: 285 agents across 19 divisions
+   Agencies loaded: 285 agents across 19 divisions
 ```
 
 ### 4. Open the Dashboard
@@ -162,10 +162,10 @@ Open **http://localhost:6868** in your browser.
 ## Connecting AI Agents
 
 The fastest way to talk to any connected model is the dashboard's **Chat** view: pick a
-brain, optionally scope it to a division and a specific roster agent, and your message is
+brain, optionally scope it to a division and a specific agent, and your message is
 dispatched as a task — the reply is the task result.
 
-| Pick a division | …then a roster persona |
+| Pick a division | …then an agent persona |
 |---|---|
 | ![Chat — choose a division](docs/images/cowork-chat.png) | ![Chat — choose an agent within the division](docs/images/cowork-chat-agents.png) |
 
@@ -250,26 +250,26 @@ brain it ran on, with its output artifacts attached and filterable by status
 
 ![Task Inbox — tasks tagged with division/agent, brain, and downloadable artifacts](docs/images/cowork-tasks.png)
 
-### Two-stage roster routing
+### Two-stage routing
 
 An unassigned task is routed in **two stages** by an orchestrator/classifier brain
 (default `Qwen3.6-35B-A3B`, `orchestration.classifier`):
 
 1. **Division** — pick 1 of 19 divisions (testing, engineering, security, …).
-2. **Agent** — pick 1 of ~285 roster agents in that division. The chosen agent's
+2. **Agent** — pick 1 of ~285 agents in that division. The chosen agent's
    full `.md` **persona** becomes the system prompt.
 
 The agent then runs on a **brain fallback chain** (below). Skip the classifier by
-targeting directly: `context.agent: "<roster-slug>"` or a special-executor name.
+targeting directly: `context.agent: "<agent-slug>"` or a special-executor name.
 Tag a task `manual` to never auto-execute.
 
-### Executors: special agents + the 285-agent roster
+### Executors: special agents + the Agencies
 
 - **Special executors** (`config.json → orchestration.agents`) — only
   `orchestrator`, `generalist`, `video`; each is `{description, brains: [...]}`
   with its own chain. `video` runs the ComfyUI **LTX** pipeline
   (`deploy/video-pipeline.sh`; LTX only — never Wan/Hunyuan/SVD).
-- **Roster agents** — the ~285 personas in the `agency-agents` submodule, grouped
+- **Agencies agents** — the ~285 personas in the `agency-agents` submodule, grouped
   into 19 divisions. They have no chain of their own; they run on the division's
   chain if one is set, else the global default.
 
@@ -398,7 +398,7 @@ while running.
 
 CEO flow: tell Hermes (e.g. via Discord) an idea → Hermes creates ONE task with
 `context.agent: "orchestrator"` → the orchestrator decomposes it into subtasks via
-`POST /api/inbox` → each subtask is two-stage-routed to a roster agent on its brain
+`POST /api/inbox` → each subtask is two-stage-routed to an agent on its brain
 chain → results and artifacts appear live on the dashboard.
 
 ### LLM classifier — no task left behind
@@ -406,7 +406,7 @@ chain → results and artifacts appear live on the dashboard.
 An unassigned task (e.g. a free-text idea filed straight from Discord) no longer
 stalls: the dispatcher runs the **two-stage LLM router** (default Qwen3.6-35B-A3B
 via Hermes, `orchestration.classifier` in config.json) that reads the task, picks
-a division, then a roster agent, which then dispatches normally on that agent's
+a division, then an agent, which then dispatches normally on that agent's
 brain chain. Tag a task `manual` to skip both routing and dispatch.
 
 ### Stale-claim reclaim
@@ -589,7 +589,7 @@ The `workflows/` directory ships a set of realistic, cross-functional company
 pipelines. Each step pins a **`division`** or **`agent`** (never a `brain`), so
 the brain **fallback chain for every role stays editable from the dashboard's
 Agents view** (`orchestration.agents[*].brains` for special agents;
-`divisionChains[*]` / `defaultChain` for roster agents) — change who runs a step
+`divisionChains[*]` / `defaultChain` for agents) — change who runs a step
 without touching the template.
 
 | Workflow | Mode | What it does |
@@ -632,8 +632,8 @@ The Web UI uses these endpoints (also available for scripts/integrations):
 | `GET` | `/api/workflows-invalid` | Templates that failed to load, with the reason (JSON/validation errors) |
 | `POST` | `/api/workflows/:id/run` | Start a run: expand a DAG template into tasks, or begin an orchestrated run; `{ params, dryRun }` |
 | `GET` | `/api/workflow-runs` / `/api/workflow-runs/:runId` | Runs for the run view (DAG grouped from tasks; orchestrated from run records + decision log) |
-| `GET` | `/api/roster?division=engineering` | Agent roster (filterable) |
-| `GET` | `/api/roster-divisions` | Roster grouped by division (for the Agents view) |
+| `GET` | `/api/roster?division=engineering` | Agencies (filterable) |
+| `GET` | `/api/roster-divisions` | Agencies grouped by division (for the Agents view) |
 | `GET` | `/api/dispatcher` | Special agents + brains + defaultChain + divisionChains + running |
 | `GET`/`PUT` | `/api/chains`, `/chains/default`, `/chains/division/:div` | Read/edit brain fallback chains |
 | `GET`/`PUT`/`DELETE` | `/api/brains`, `/api/brains/:id` | Brain registry (cascades on delete) |
@@ -652,7 +652,7 @@ cowork/
 ├── README.md                # This file
 ├── PROTOCOL.md              # Protocol specification
 ├── JOIN-AS-A-BRAIN.md       # Onboarding for a remote brain client
-├── agency-agents/           # git SUBMODULE — the ~285-agent roster
+├── agency-agents/           # git SUBMODULE — the Agencies (~285 agents)
 ├── workflows/               # Workflow templates (*.json) — DAG + orchestrated
 ├── workflow-runs/           # Orchestrated run records + decision logs (gitignored)
 ├── server/                  # MCP Server + Web UI
@@ -693,7 +693,7 @@ curl http://localhost:6868/api/agents | jq
 # List pending inbox tasks
 curl "http://localhost:6868/api/inbox?status=pending" | jq
 
-# Browse engineering agents in roster
+# Browse engineering agents in Agencies
 curl "http://localhost:6868/api/roster?division=engineering" | jq
 
 # Watch real-time events
@@ -798,7 +798,7 @@ without editing any file):
 COWORK_CONFIG=~/.cowork/config.staging.json COWORK_PORT=6900 npm start
 ```
 
-The roster is cached in memory and rescanned at most once per `COWORK_ROSTER_TTL_MS`
+The Agencies catalog is cached in memory and rescanned at most once per `COWORK_ROSTER_TTL_MS`
 (default 30000). New agents / a submodule bump propagate within that window with no
 restart; set `0` to rescan on every query, or a larger value to reduce disk work.
 

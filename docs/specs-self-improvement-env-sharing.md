@@ -95,7 +95,7 @@ FAILURE(concurrent write): single-process server, `appendFileSync` under PIPE_BU
 
 ```json
 {"at":"ISO-8601","kind":"verify-fail|wait-input","task":"<id>","titleSlug":"<kebab of title, first 6 words>",
- "agent":"<roster slug>","brain":"<brain id>","brainFamily":"<brain id with last -segment dropped>",
+ "agent":"<agent slug>","brain":"<brain id>","brainFamily":"<brain id with last -segment dropped>",
  "attempt":1,"reason":"<truncated 500>","requiresGuess":["path:/home/wayne"],"questions":["..."]}
 ```
 

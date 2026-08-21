@@ -1,7 +1,7 @@
 {
   "id": "build-and-ship",
   "name": "Build & Ship (engineers → GitHub + GH Actions)",
-  "description": "Take a product spec and actually build the product: architect it, dispatch engineers to write real code, wire a GitHub Actions CI pipeline, code-review it, push, and verify the pipeline is green. This is the 'executioners build the real product and push to GitHub with GHAs' pipeline as a standalone run. The build step hands off to the orchestrator, which dispatches the real engineering jobs to the roster; every role is pinned to an engineering agent so brain fallback chains stay UI-controlled.",
+  "description": "Take a product spec and actually build the product: architect it, dispatch engineers to write real code, wire a GitHub Actions CI pipeline, code-review it, push, and verify the pipeline is green. This is the 'executioners build the real product and push to GitHub with GHAs' pipeline as a standalone run. The build step hands off to the orchestrator, which dispatches the real engineering jobs to the agents; every role is pinned to an engineering agent so brain fallback chains stay UI-controlled.",
   "params": ["spec"],
   "steps": [
     {
@@ -13,7 +13,7 @@
     {
       "key": "build",
       "title": "Dispatch engineers to build the real product",
-      "description": "You are managing the build. Take the architecture plan provided and ACTUALLY dispatch each increment as a real subtask to the engineering roster via the Cowork REST API — one POST per increment — wiring context.dependsOn so each job receives the outputs of the increments it builds on. The work must produce REAL running code committed to a git repo, plus a .github/workflows CI pipeline that lints/tests/builds on push. Include a final integration job that dependsOn all increments. After dispatching, output a manifest: increment -> task id -> dependencies -> where the code lives. Leave routing to the engineering division so brain chains stay UI-controlled.",
+      "description": "You are managing the build. Take the architecture plan provided and ACTUALLY dispatch each increment as a real subtask to the engineering agents via the Cowork REST API — one POST per increment — wiring context.dependsOn so each job receives the outputs of the increments it builds on. The work must produce REAL running code committed to a git repo, plus a .github/workflows CI pipeline that lints/tests/builds on push. Include a final integration job that dependsOn all increments. After dispatching, output a manifest: increment -> task id -> dependencies -> where the code lives. Leave routing to the engineering division so brain chains stay UI-controlled.",
       "agent": "orchestrator",
       "dependsOn": ["architecture"]
     },

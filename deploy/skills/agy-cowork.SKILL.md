@@ -21,7 +21,7 @@ glass.
 ## When to Use
 
 - "Dispatch a task to Claude / Hermes for code review" / "create a task for another agent"
-- "Show me the agent roster" / "what agents are available"
+- "Show me the agencies" / "what agents are available"
 - "Check my inbox" / "list pending tasks"
 - "Schedule this for 9am tomorrow" (`create_task(scheduled_at: …)`)
 - "Show the dashboard" / "what's happening across agents"
@@ -102,11 +102,11 @@ run now. `interaction` (`{prompt?, fields:[{id,label,type?,options?,required?}]}
 a form on the Inbox card and holds the task on `wait-input` until a person answers; their
 replies arrive on `context.humanInput`.
 
-### Roster & Intelligence
+### Agencies & Intelligence
 
 | Tool | Purpose | Key Arguments |
 |------|---------|---------------|
-| `get_roster` | Search the ~285-agent roster | `division`, `search`, `limit` |
+| `get_roster` | Search the Agencies (~285 agents) | `division`, `search`, `limit` |
 | `get_dashboard` | Full dashboard snapshot | _(none)_ |
 
 ---
@@ -172,30 +172,30 @@ When declaring brains in `register_agent`, each brain object supports an optiona
 
 ---
 
-## Dispatcher — Automatic Execution (Two-Stage Roster Routing)
+## Dispatcher — Automatic Execution (Two-Stage Routing)
 
 The always-on coordinator (shown in **Connections** as `cowork/orchestrator`) polls the
 inbox and executes any task that resolves to an executor. Routing is **two-stage**:
 an orchestrator/classifier brain (default Qwen3.6-35B-A3B) first picks a **division**
-(1 of 19), then picks a **roster agent** (1 of 285) inside it. The chosen agent's full
+(1 of 19), then picks an **agent** (1 of 285) inside it. The chosen agent's full
 `.md` persona (from the `agency-agents` repo) becomes the system prompt, run on the
-division's brain chain. You can also target directly: `context.agent: "<roster-slug>"`
+division's brain chain. You can also target directly: `context.agent: "<agent-slug>"`
 or a special-executor name skips classification.
 
-### Executors: Special Agents + the 285-Agent Roster
+### Executors: Special Agents + the Agencies
 
 - **Special executors** live in `config.json → orchestration.agents` (only
   `orchestrator`, `generalist`, `video`) — each is `{description, brains: [...]}` with
   its own chain. Edit in the dashboard **Agents** view → *Special executors*
   (or `PUT /api/agents-config/:name`).
-- **Roster agents** are the 285 personas in `agency-agents`, grouped into 19 divisions
+- **Agencies agents** are the 285 personas in `agency-agents`, grouped into 19 divisions
   (`GET /api/roster-divisions`). They don't carry their own chain — they run on the
   **division chain** if one is set, else the **global default chain**.
 
 ### Brain Fallback Chains (Global Default + Per-Division Override)
 
 - **Global default**: `config.json → orchestration.defaultChain` — the fallback chain
-  every roster agent uses unless its division overrides it. Reorder by **drag & drop**
+  every agent uses unless its division overrides it. Reorder by **drag & drop**
   in the dashboard **Brains** view (`PUT /api/chains/default`).
 - **Per-division override**: `orchestration.divisionChains[<division>]` — set/clear in
   the **Agents** view per division (`PUT /api/chains/division/:division`; empty body
@@ -313,7 +313,7 @@ create_task(
 ```
 
 Add `context: {"role": "<role>"}` to have the server execute it automatically via the
-dispatcher. For direct targeting: `context: {"agent": "<roster-slug>"}` or
+dispatcher. For direct targeting: `context: {"agent": "<agent-slug>"}` or
 `context: {"brain": "<brain-id>"}`.
 
 ### 4. Check Inbox
@@ -344,7 +344,7 @@ parks the task on `wait-input` and re-dispatches it once the user answers. Never
 rate-limit or quota notice as the deliverable — the verifier rejects those and hands the
 task to the next brain in the chain.
 
-### 7. Query Roster
+### 7. Query Agencies
 
 ```
 get_roster(division="engineering", search="keyword")
@@ -486,8 +486,8 @@ way; copy that shape rather than writing a bare metric.
 | `GET` | `/api/status` | Dashboard overview (activeAgents, inboxSummary, uptime) |
 | `GET` | `/api/agents` | Active agents |
 | `GET` | `/api/connections` | Live MCP clients with per-brain stats |
-| `GET` | `/api/roster` | Agent roster (filterable by division/search) |
-| `GET` | `/api/roster-divisions` | Roster grouped by division |
+| `GET` | `/api/roster` | Agencies (filterable by division/search) |
+| `GET` | `/api/roster-divisions` | Agencies grouped by division |
 | `GET` | `/api/dispatcher` | Special agents + brains + defaultChain + divisionChains + running |
 | `GET/PUT` | `/api/chains/default` | Global default chain |
 | `GET/PUT` | `/api/chains/division/:div` | Per-division chain |
@@ -514,7 +514,7 @@ way; copy that shape rather than writing a bare metric.
 ### Web Dashboard
 
 - `http://localhost:6868/` — Web UI (dashboard, Connections, inbox, reports, Agents,
-  Brains, roster) with raw/rendered markdown viewer and artifact downloads
+  Brains, Agencies) with raw/rendered markdown viewer and artifact downloads
 - **Inbox UX**: Real-time SSE updates preserve card expansion and scroll position; status pills display live counts; and a **+ New task** toolbar button lets you create and dispatch tasks with title, brief, priority, and target brain directly from the Inbox without routing through Chat.
 
 ---
@@ -612,5 +612,5 @@ or `GET /api/artifacts/:taskId/:file`.
   `/api/brains` are applied live AND persisted to config.json (no restart). Only manual
   hand-edits of config.json require a restart.
 - Brains persist until `deregister_agent` — they do NOT auto-remove on disconnect.
-- If `agency-agents` repo is missing/misconfigured, roster queries return empty.
+- If `agency-agents` repo is missing/misconfigured, Agencies queries return empty.
 - Port is 6868, NOT 4200.
