@@ -1013,8 +1013,10 @@ class App {
     const ensureMicPermission = async () => {
       if (!navigator.mediaDevices?.getUserMedia) {
         // Insecure context (http:// on a non-localhost host) or an ancient
-        // browser: the mic APIs simply aren't exposed. Say so plainly.
-        this.toast('mic unavailable', 'Microphone access needs a secure page (https or localhost). Open the dashboard over https and try again.');
+        // browser: the mic APIs simply aren't exposed. Say so plainly and point
+        // at the fix — serving the dashboard over https (see server/gen-tls-cert.sh
+        // and the server.tls config), or opening it via http://localhost.
+        this.toast('mic needs https', 'Microphone access needs a secure page. Open the dashboard over https:// (or http://localhost) — see server.tls / gen-tls-cert.sh to enable https.');
         return null;
       }
       micStatus.style.display = 'block';

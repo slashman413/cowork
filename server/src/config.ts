@@ -42,7 +42,8 @@ const defaultConfig: Config = {
     name: 'cowork-mcp',
     version: '1.0.0',
     apiKey: null,
-    corsOrigin: '*'
+    corsOrigin: '*',
+    tls: null
   },
   paths: {
     agencyAgents: './agency-agents',
@@ -144,6 +145,16 @@ export function loadConfig(): Config {
 
   for (const key of Object.keys(config.paths) as (keyof Config['paths'])[]) {
     config.paths[key] = resolvePath(config.paths[key]);
+  }
+
+  // Resolve TLS cert/key like the other paths so `~` and repo-relative forms work.
+  if (config.server.tls?.certFile && config.server.tls?.keyFile) {
+    config.server.tls = {
+      certFile: resolvePath(config.server.tls.certFile),
+      keyFile: resolvePath(config.server.tls.keyFile)
+    };
+  } else {
+    config.server.tls = null;
   }
 
   return config;

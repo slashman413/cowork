@@ -5,7 +5,8 @@
     "host": "127.0.0.1",
     "name": "cowork-mcp",
     "version": "1.0.0",
-    "apiKey": null
+    "apiKey": null,
+    "tls": null
   },
   "paths": {
     "agencyAgents": "./agency-agents",

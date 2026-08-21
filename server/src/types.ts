@@ -251,6 +251,12 @@ export interface Config {
     version: string;
     apiKey: string | null;
     corsOrigin: string;
+    /** Optional TLS. When both files exist the server binds https:// instead of
+     *  http://. Browsers only grant microphone (and clipboard) access on a
+     *  "secure context" — https:// or localhost — so a LAN/Tailscale IP served
+     *  over plain http:// can never run the New-task Dictate button. Point these
+     *  at a cert (self-signed is fine) to unlock it. */
+    tls?: { certFile: string; keyFile: string } | null;
   };
   paths: {
     agencyAgents: string;

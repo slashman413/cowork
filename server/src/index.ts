@@ -1,6 +1,8 @@
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
+import http from 'http';
+import https from 'https';
 import { loadConfig, persistRegistries, removeBrainCascade, restoreClientBrains } from './config.js';
 import { EventBus } from './core/events.js';
 import { Store } from './core/store.js';
@@ -127,14 +129,39 @@ async function main() {
     console.warn(`Public dir ${publicDir} not found, skipping static file serving.`);
   }
 
-  const httpServer = app.listen(config.server.port, config.server.host, () => {
+  // Serve over HTTPS when server.tls is configured and the cert/key are present.
+  // A secure context (https:// or localhost) is what unlocks the browser mic API,
+  // so the New-task Dictate button only works over http:// on localhost — on a
+  // LAN/Tailscale IP it needs this. Falls back to plain http:// otherwise.
+  let scheme = 'http';
+  const tls = config.server.tls;
+  if (tls) {
+    if (fs.existsSync(tls.certFile) && fs.existsSync(tls.keyFile)) {
+      scheme = 'https';
+    } else {
+      console.warn(
+        `server.tls is set but the cert/key were not found ` +
+        `(${tls.certFile}, ${tls.keyFile}); falling back to http:// — the New-task ` +
+        `Dictate button will only work on localhost.`
+      );
+    }
+  }
+
+  const onListen = () => {
     console.log(`=========================================`);
     console.log(` Multi-Agent Cowork MCP Server Started`);
-    console.log(` HTTP API: http://${config.server.host}:${config.server.port}/api`);
-    console.log(` MCP Endpoint: http://${config.server.host}:${config.server.port}/mcp`);
-    console.log(` SSE Stream: http://${config.server.host}:${config.server.port}/api/events`);
+    console.log(` HTTP API: ${scheme}://${config.server.host}:${config.server.port}/api`);
+    console.log(` MCP Endpoint: ${scheme}://${config.server.host}:${config.server.port}/mcp`);
+    console.log(` SSE Stream: ${scheme}://${config.server.host}:${config.server.port}/api/events`);
     console.log(`=========================================`);
-  });
+  };
+
+  const httpServer = scheme === 'https'
+    ? https.createServer(
+        { cert: fs.readFileSync(tls!.certFile), key: fs.readFileSync(tls!.keyFile) },
+        app
+      ).listen(config.server.port, config.server.host, onListen)
+    : http.createServer(app).listen(config.server.port, config.server.host, onListen);
 
   // Stale agent cleanup every 5 minutes, ~3 min timeout (200000ms)
   const cleanup = setInterval(() => {
