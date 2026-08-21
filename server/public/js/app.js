@@ -895,8 +895,12 @@ class App {
       <p style="font-size:0.85rem; color:var(--text-secondary); margin:0 0 16px; line-height:1.5">The task is queued as pending and dispatched by the next tick — or parked as <em>scheduled</em> until its run time if you set one.</p>
       <label style="${labelStyle}">Title</label>
       <input id="nt-title" style="${fieldStyle}; margin-bottom:12px" placeholder="Short imperative title…">
-      <label style="${labelStyle}">Brief (markdown)</label>
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin:0 0 6px">
+        <label style="${labelStyle}; margin:0">Brief (markdown)</label>
+        <button class="btn" id="nt-mic" type="button" title="Dictate the brief with your microphone" style="font-size:0.72rem; padding:3px 9px; text-transform:none; letter-spacing:0; display:inline-flex; align-items:center; gap:5px"><i data-lucide="mic" style="width:13px;height:13px"></i> <span id="nt-mic-label">Dictate</span></button>
+      </div>
       <textarea id="nt-desc" rows="6" style="${fieldStyle}; margin-bottom:12px; resize:vertical" placeholder="What should the agent do? Include acceptance criteria."></textarea>
+      <div id="nt-mic-status" style="display:none; font-size:0.72rem; color:var(--text-muted); margin:-6px 0 12px; line-height:1.4"></div>
       <label style="${labelStyle}">Agent <span style="text-transform:none; letter-spacing:0">(optional — pick a division, then the agent that studies the files & does the work)</span></label>
       <div style="display:flex; gap:8px; margin-bottom:12px">
         <select id="nt-div" style="${fieldStyle}; flex:1">${divOpts}</select>
@@ -922,7 +926,11 @@ class App {
     container.classList.remove('hidden');
     createIcons();
     content.querySelector('#nt-title').focus();
+    // Assigned by the dictation wiring below; releases the mic stream / speech
+    // recognizer so closing the modal never leaves a hot microphone behind.
+    let micCleanup = null;
     const close = () => {
+      micCleanup?.();
       container.classList.add('hidden');
       content.innerHTML = '';
       document.removeEventListener('keydown', onKey);
@@ -967,6 +975,92 @@ class App {
     };
     content.querySelector('#nt-attach').onclick = () => fileEl.click();
     fileEl.onchange = () => { staged.push(...Array.from(fileEl.files || [])); fileEl.value = ''; renderStaged(); };
+
+    // ── Voice input ────────────────────────────────────────────────────────
+    // The mic button dictates straight into the Brief via the Web Speech API
+    // (Chrome/Edge). Where that API is missing, we fall back to MediaRecorder
+    // and stage the captured audio as an input file the brain can study — so
+    // "speak your task" works everywhere, just with a different landing spot.
+    const descEl = content.querySelector('#nt-desc');
+    const micBtn = content.querySelector('#nt-mic');
+    const micLabel = content.querySelector('#nt-mic-label');
+    const micStatus = content.querySelector('#nt-mic-status');
+    const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+    let recog = null, mediaRec = null, mediaStream = null, mediaChunks = [];
+    let recording = false, micAborted = false;
+    const setMic = (on, text) => {
+      recording = on;
+      micBtn.style.color = on ? '#EF4444' : '';
+      micBtn.style.borderColor = on ? '#EF444466' : '';
+      micLabel.textContent = on ? 'Stop' : 'Dictate';
+      if (text) { micStatus.style.display = 'block'; micStatus.textContent = text; }
+      else { micStatus.style.display = 'none'; micStatus.textContent = ''; }
+    };
+    const stopMic = () => {
+      micAborted = true;
+      try { recog?.stop(); } catch { /* already stopped */ }
+      try { if (mediaRec && mediaRec.state !== 'inactive') mediaRec.stop(); } catch { /* already stopped */ }
+      try { mediaStream?.getTracks().forEach(t => t.stop()); } catch { /* no stream */ }
+    };
+    micCleanup = stopMic;
+
+    if (SpeechRec) {
+      micBtn.onclick = () => {
+        if (recording) { try { recog?.stop(); } catch {} return; }
+        recog = new SpeechRec();
+        recog.lang = navigator.language || 'en-US';
+        recog.continuous = true;
+        recog.interimResults = true;
+        // Anchor to whatever's already typed so dictation always appends: final
+        // chunks commit to `base`; the in-flight interim renders live on top.
+        let base = descEl.value;
+        recog.onstart = () => setMic(true, '● Listening… speak your brief, then press Stop.');
+        recog.onerror = (e) => {
+          setMic(false);
+          this.toast('mic error', e.error === 'not-allowed' || e.error === 'service-not-allowed'
+            ? 'Microphone permission was denied.' : `Speech recognition failed: ${e.error}`);
+        };
+        recog.onend = () => { base = descEl.value; setMic(false); };
+        recog.onresult = (ev) => {
+          let interim = '', final = '';
+          for (let i = ev.resultIndex; i < ev.results.length; i++) {
+            const t = ev.results[i][0].transcript;
+            if (ev.results[i].isFinal) final += t; else interim += t;
+          }
+          if (final) base = (base.replace(/\s*$/, '') + (base.trim() ? ' ' : '') + final.trim());
+          descEl.value = base + (interim ? (base.trim() ? ' ' : '') + interim : '');
+          descEl.style.borderColor = '';
+        };
+        try { recog.start(); } catch { /* guard against a double-start */ }
+      };
+    } else {
+      // No speech-to-text engine: record a voice note and attach it as input.
+      micBtn.onclick = async () => {
+        if (recording) { try { if (mediaRec && mediaRec.state !== 'inactive') mediaRec.stop(); } catch {} return; }
+        if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+          this.toast('unsupported', 'This browser cannot capture microphone audio.');
+          return;
+        }
+        try { mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+        catch { this.toast('mic error', 'Microphone permission was denied.'); return; }
+        micAborted = false;
+        mediaChunks = [];
+        mediaRec = new MediaRecorder(mediaStream);
+        mediaRec.ondataavailable = (e) => { if (e.data && e.data.size) mediaChunks.push(e.data); };
+        mediaRec.onstop = () => {
+          try { mediaStream?.getTracks().forEach(t => t.stop()); } catch {}
+          setMic(false);
+          if (micAborted) return;   // modal was closed mid-record → discard
+          const blob = new Blob(mediaChunks, { type: mediaRec.mimeType || 'audio/webm' });
+          const ext = ((blob.type.split('/')[1] || 'webm').split(';')[0]) || 'webm';
+          staged.push(new File([blob], `voice-note-${Date.now()}.${ext}`, { type: blob.type }));
+          renderStaged();
+          this.toast('voice note attached', 'Speech-to-text is unavailable here, so your recording was attached as an input file for the brain to study.');
+        };
+        mediaRec.start();
+        setMic(true, '● Recording… speech-to-text is unavailable, so this will attach as a voice-note file.');
+      };
+    }
 
     content.querySelector('#nt-ok').onclick = async () => {
       const title = content.querySelector('#nt-title').value.trim();
