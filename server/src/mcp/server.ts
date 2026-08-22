@@ -234,7 +234,7 @@ function buildServer(config: Config, store: Store, eventBus: EventBus, goals?: G
     'Create a cross-platform task. Launches now by default; pass scheduled_at ' +
     '(an ISO 8601 date-time, e.g. "2026-08-08T09:00:00+08:00") to schedule it for ' +
     'later — the task parks in the "scheduled" inbox category and the dispatcher ' +
-    'launches it when its time arrives.',
+    'launches it when its time arrives. Pass loop_interval_hours to make the task recur.',
     {
       title: z.string(),
       description: z.string(),
@@ -250,6 +250,9 @@ function buildServer(config: Config, store: Store, eventBus: EventBus, goals?: G
       // immediately). A future time parks the task on the `scheduled` status
       // until the dispatcher releases it at launch time.
       scheduled_at: z.string().optional(),
+      // Recurring loop interval in hours. If set, when this task completes, a
+      // clone of it will be automatically created and scheduled for `now + interval`.
+      loop_interval_hours: z.number().optional(),
       // Human-in-the-loop: request questions/checklist a person answers from the
       // Inbox card before/while the task runs. Their answers reach the executor
       // via context.humanInput.
@@ -277,7 +280,8 @@ function buildServer(config: Config, store: Store, eventBus: EventBus, goals?: G
           context: args.context,
           tags: args.tags,
           interaction: args.interaction as any,
-          scheduledAt: args.scheduled_at
+          scheduledAt: args.scheduled_at,
+          loopIntervalHours: args.loop_interval_hours
         });
         return { content: [{ type: 'text', text: JSON.stringify(task) }] };
       } catch (e: any) {

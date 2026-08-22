@@ -799,7 +799,9 @@ class App {
       <button class="btn" id="brain-attach" type="button" style="font-size:0.8rem; margin:0 0 20px; display:inline-flex; align-items:center; gap:6px"><i data-lucide="paperclip" style="width:14px;height:14px"></i> Attach files</button>` : '';
     const scheduleBlock = withSchedule ? `
       <label style="${labelStyle}">Run scheduled <span style="text-transform:none; letter-spacing:0">(optional — leave blank to run now)</span></label>
-      <input id="brain-when" type="datetime-local" style="${fieldStyle}; margin-bottom:16px">` : '';
+      <input id="brain-when" type="datetime-local" style="${fieldStyle}; margin-bottom:12px">
+      <label style="${labelStyle}">Loop interval <span style="text-transform:none; letter-spacing:0">(optional — hours to wait before recurring)</span></label>
+      <input id="brain-loop" type="number" min="1" step="any" style="${fieldStyle}; margin-bottom:16px" placeholder="e.g. 1 for every hour">` : '';
     content.innerHTML = `
       <h3 style="margin:0 0 8px; font-size:1.05rem">${esc(title)}</h3>
       <p style="font-size:0.85rem; color:var(--text-secondary); margin:0 0 16px; line-height:1.5">${body}</p>
@@ -852,15 +854,19 @@ class App {
       document.addEventListener('keydown', onKey);
       content.querySelector('#brain-ok').onclick = () => {
         let when = '';
+        let loopHours = undefined;
         if (withSchedule) {
           const val = content.querySelector('#brain-when').value;
           if (val) when = new Date(val).toISOString();
+          const loopVal = content.querySelector('#brain-loop').value;
+          if (loopVal) loopHours = parseFloat(loopVal);
         }
         close({
           brain: content.querySelector('#brain-pick').value,
           prompt: withInputs ? content.querySelector('#brain-prompt').value.trim() : '',
           files: staged.slice(),
-          scheduledAt: when
+          scheduledAt: when,
+          loopIntervalHours: loopHours
         });
       };
       content.querySelector('#brain-cancel').onclick = () => close(null);
@@ -913,6 +919,8 @@ class App {
       </select>
       <label style="${labelStyle}">Run at <span style="text-transform:none; letter-spacing:0">(optional — leave empty to run now)</span></label>
       <input id="nt-when" type="datetime-local" style="${fieldStyle}; margin-bottom:12px">
+      <label style="${labelStyle}">Loop interval <span style="text-transform:none; letter-spacing:0">(optional — hours to wait before recurring)</span></label>
+      <input id="nt-loop" type="number" min="1" step="any" style="${fieldStyle}; margin-bottom:12px" placeholder="e.g. 1 for every hour">
       <label style="${labelStyle}">Brain to claim this task</label>
       <select id="nt-brain" style="${fieldStyle}; margin-bottom:12px">${opts}</select>
       <label style="${labelStyle}">Input files <span style="text-transform:none; letter-spacing:0">(optional — attached for the agent/brain to study)</span></label>
@@ -1110,6 +1118,8 @@ class App {
       // datetime-local gives a LOCAL wall-clock string; toISOString converts it
       // to the UTC instant the server schedules on. Empty = run now (default).
       const when = content.querySelector('#nt-when').value;
+      const loopStr = content.querySelector('#nt-loop').value;
+      const loopIntervalHours = loopStr ? parseFloat(loopStr) : undefined;
       // Context mirrors Chat: a named agent wins (dispatcher derives its division
       // + persona); otherwise a bare division scopes the router. Brain pins on top.
       const context = {};
@@ -1126,7 +1136,8 @@ class App {
           priority: content.querySelector('#nt-priority').value,
           context,
           ...(inputs.length ? { inputs } : {}),
-          ...(when ? { scheduledAt: new Date(when).toISOString() } : {})
+          ...(when ? { scheduledAt: new Date(when).toISOString() } : {}),
+          ...(loopIntervalHours ? { loopIntervalHours } : {})
         };
         await this.api.post('/inbox', body);
         close();
@@ -2049,6 +2060,7 @@ class App {
             : closedNoRun ? `<span class="badge" title="Done, but closed administratively without ever running a brain — so it has no artifacts and no result.md. The full explanation is in this task's result field below." style="background:#94A3B818; color:#94A3B8; border:1px solid #94A3B840">done · closed (never ran)</span>`
             : badge(t.status, STATUS_COLORS[t.status] || '#94A3B8')}
           ${t.status === 'scheduled' && t.scheduledAt ? badge(`⏰ ${new Date(t.scheduledAt).toLocaleString()}`, '#6366F1') : ''}
+          ${t.loopIntervalHours ? badge(`🔁 every ${t.loopIntervalHours}h`, '#3B82F6') : ''}
           ${agentLabel ? badge(agentLabel, '#7C3AED') : ''}
           ${t.interaction && t.interaction.status !== 'submitted' ? badge('⌛ awaiting input', '#EAB308') : ''}
           ${t.interaction && t.interaction.status === 'submitted' ? badge('✓ input received', '#22C55E') : ''}
