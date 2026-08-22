@@ -524,6 +524,34 @@ export class Store {
     fs.writeFileSync(taskPath, JSON.stringify(task, null, 2));
 
     this.eventBus.emitTaskCompleted(task);
+    
+    // Automatically schedule the next iteration if this is a looping task
+    if (task.loopIntervalHours && task.loopIntervalHours > 0) {
+      const nextContext = { ...(task.context || {}) };
+      delete nextContext.failedBrains;
+      const existingPin = nextContext.brainAuto ? undefined : nextContext.brain;
+      if (existingPin) nextContext.brain = existingPin; else delete nextContext.brain;
+      delete nextContext.brainAuto;
+      delete nextContext.claimCount; delete nextContext.lastClaimAt; delete nextContext.failedCount;
+      delete nextContext.remoteWaitSince;
+      delete nextContext.ranAgent; delete nextContext.ranDivision; delete nextContext.ranBrain; delete nextContext.isRoster;
+
+      // Create a fresh task matching the original parameters
+      this.createTask({
+        title: task.title,
+        description: task.description,
+        from: task.from,
+        to: task.to,
+        priority: task.priority,
+        skill: task.skill,
+        context: nextContext,
+        tags: task.tags,
+        interaction: task.interaction,
+        scheduledAt: new Date(Date.now() + task.loopIntervalHours * 3600 * 1000).toISOString(),
+        loopIntervalHours: task.loopIntervalHours
+      });
+    }
+    
     return task;
   }
 

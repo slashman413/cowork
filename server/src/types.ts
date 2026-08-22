@@ -381,6 +381,7 @@ export interface Task {
    *  task on the `scheduled` status until the dispatcher releases it (see
    *  Store.releaseDueScheduled). Normalized to UTC ISO form at creation. */
   scheduledAt?: string;
+  loopIntervalHours?: number;
   createdAt: string;
   claimedAt?: string;
   claimedBy?: string;
