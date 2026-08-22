@@ -64,6 +64,10 @@
       "url": "http://localhost:8000/v1",
       "enabled": false
     },
+    "comfyui": {
+      "url": "http://localhost:8188",
+      "enabled": true
+    },
     "vllm27b": {
       "url": "http://localhost:8001/v1",
       "enabled": false
