@@ -62,7 +62,7 @@
     },
     "vllm35b": {
       "url": "http://localhost:8000/v1",
-      "enabled": false
+      "enabled": true
     },
     "comfyui": {
       "url": "http://localhost:8188",
