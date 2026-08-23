@@ -480,7 +480,8 @@ export class Store {
     task.claimedAt = new Date().toISOString();
     task.claimedBy = params.agentId;
     
-    const taskPath = path.join(this.config.paths.inbox, `${task.id}.json`);
+    const taskFile = this.resolveTaskFile(task.id) || `${task.id}.json`;
+    const taskPath = path.join(this.config.paths.inbox, taskFile);
     fs.writeFileSync(taskPath, JSON.stringify(task, null, 2));
     
     this.eventBus.emitTaskClaimed(task, params.agentId);
@@ -520,7 +521,8 @@ export class Store {
     // — because both finalise here with the same "FAILED after N attempt(s)…" text.
     task.failed = (typeof result === 'string' && /^FAILED after \d+ attempt/i.test(result.trim())) || undefined;
 
-    const taskPath = path.join(this.config.paths.inbox, `${task.id}.json`);
+    const taskFile = this.resolveTaskFile(task.id) || `${task.id}.json`;
+    const taskPath = path.join(this.config.paths.inbox, taskFile);
     fs.writeFileSync(taskPath, JSON.stringify(task, null, 2));
 
     this.eventBus.emitTaskCompleted(task);
@@ -803,7 +805,8 @@ export class Store {
       try { fs.rmSync(inDir, { recursive: true, force: true }); } catch { /* ignore */ }
     }
 
-    fs.rmSync(path.join(this.config.paths.inbox, `${fullId}.json`), { force: true });
+    const taskFile = this.resolveTaskFile(fullId) || `${fullId}.json`;
+    fs.rmSync(path.join(this.config.paths.inbox, taskFile), { force: true });
     return { deleted: true, artifacts };
   }
 
@@ -843,7 +846,8 @@ export class Store {
 
   /** Persist arbitrary task mutations (handover, retries). */
   public saveTask(task: Task): void {
-    const taskPath = path.join(this.config.paths.inbox, `${task.id}.json`);
+    const file = this.resolveTaskFile(task.id) || `${task.id}.json`;
+    const taskPath = path.join(this.config.paths.inbox, file);
     fs.writeFileSync(taskPath, JSON.stringify(task, null, 2));
   }
 
@@ -995,10 +999,34 @@ export class Store {
    */
   private resolveTaskFile(id: string): string | null {
     if (!id || /[\\/]/.test(id)) return null;
+
+    // Fast path: exact canonical filename
+    if (fs.existsSync(path.join(this.config.paths.inbox, `${id}.json`))) {
+      return `${id}.json`;
+    }
+
     // Only treat plausible id fragments as prefixes (hex + dashes).
-    if (!/^[0-9a-fA-F-]+$/.test(id)) return null;
-    const matches = globSync(`${id}*.json`, { cwd: this.config.paths.inbox });
-    return matches.length === 1 ? matches[0] : null;
+    if (/^[0-9a-fA-F-]+$/.test(id)) {
+      const matches = globSync(`${id}*.json`, { cwd: this.config.paths.inbox });
+      if (matches.length === 1) return matches[0];
+    }
+
+    // Fallback: if the filename doesn't match the ID (e.g. manually created test files),
+    // we must scan the tasks to find which file holds this ID.
+    // Calling listTasks() ensures the cache is hot.
+    this.listTasks();
+    let shortIdMatch: string | null = null;
+    let shortIdMatches = 0;
+    
+    for (const [file, hit] of this.taskCache.entries()) {
+      if (hit.task?.id === id) return file;
+      if (hit.task?.id.startsWith(id)) {
+        shortIdMatch = file;
+        shortIdMatches++;
+      }
+    }
+    
+    return shortIdMatches === 1 ? shortIdMatch : null;
   }
 
   public listTasks(filters?: { status?: string; platform?: string; agent?: string; limit?: number }): Task[] {

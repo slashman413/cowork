@@ -131,6 +131,9 @@ if (process.env.PRESET) {
 }
 const BRAIN = Object.fromEntries(BRAINS.map(b => [b.id, {
   id: b.id, exec: b.exec || EXEC_DEFAULT, model: b.model || '',
+  // Optional codex profile (~/.codex/config.toml) — pins model + custom model_provider
+  // so a brain can target a local vLLM endpoint or a non-default cloud provider.
+  profile: b.profile || '',
   location: b.location || 'remote', host: b.host || HOST
 }]));
 const MY_IDS = new Set(Object.keys(BRAIN));
@@ -490,7 +493,7 @@ function runModel(brain, prompt, artDir) {
   const argv = brain.exec === 'claude' ? ['claude', '-p', prompt, ...(brain.model ? ['--model', brain.model] : []), '--dangerously-skip-permissions']
     : brain.exec === 'hermes' ? ['hermes', ...(brain.model ? ['-m', brain.model] : []), '-z', prompt]
     : brain.exec === 'agy' ? ['agy', '-p', prompt]
-    : brain.exec === 'codex' ? ['codex', 'exec', '--skip-git-repo-check', '--dangerously-bypass-approvals-and-sandbox', ...(brain.model ? ['-m', brain.model] : []), prompt]
+    : brain.exec === 'codex' ? ['codex', 'exec', '--skip-git-repo-check', '--dangerously-bypass-approvals-and-sandbox', ...(brain.profile ? ['--profile', brain.profile] : []), ...(brain.model ? ['-m', brain.model] : []), prompt]
     : brain.exec === 'ollama' ? (brain.model ? ['ollama', 'run', brain.model, prompt] : null)
     : null;
   if (!argv) return Promise.resolve({ ok: false, text: `unknown/misconfigured exec ${brain.exec}` });
