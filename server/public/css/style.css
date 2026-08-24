@@ -334,6 +334,21 @@ a { color: inherit; text-decoration: none; }
   transition: background-color 0.3s ease;
 }
 
+/* Inbox filters + actions + search: pinned to the top of the scroll area so
+   they stay reachable while scrolling the task list. Full-bleed to the content
+   edges; the negative margins + top offset mirror `.content-area`'s padding at
+   each breakpoint (2rem / 1.5rem / 1rem), so the bar pins flush against the top
+   of the scrollport instead of leaving the padding-gap where rows peek through. */
+#inbox-sticky {
+  position: sticky;
+  top: calc(-1 * var(--space-xl));
+  z-index: 20;
+  background: var(--bg-primary);
+  margin: 0 calc(-1 * var(--space-xl)) var(--space-md);
+  padding: var(--space-md) var(--space-xl) var(--space-sm);
+  border-bottom: 1px solid var(--border-color);
+}
+
 /* ===== Cards ===== */
 .card {
   background-color: var(--card-bg);
@@ -986,6 +1001,11 @@ a { color: inherit; text-decoration: none; }
   .grid-3 { grid-template-columns: repeat(2, 1fr); }  /* pad/tablet: 2-up cards */
   .grid-2 { grid-template-columns: 1fr; }
   .content-area { padding: var(--space-lg); }
+  #inbox-sticky {
+    top: calc(-1 * var(--space-lg));
+    margin: 0 calc(-1 * var(--space-lg)) var(--space-md);
+    padding: var(--space-md) var(--space-lg) var(--space-sm);
+  }
 }
 
 /* ===== Responsive: Mobile ===== */
@@ -1025,6 +1045,11 @@ a { color: inherit; text-decoration: none; }
   }
   .logo-area { justify-content: center; padding: 0; }
   .content-area { padding: var(--space-md); }
+  #inbox-sticky {
+    top: calc(-1 * var(--space-md));
+    margin: 0 calc(-1 * var(--space-md)) var(--space-md);
+    padding: var(--space-md) var(--space-md) var(--space-sm);
+  }
   .grid-4 { grid-template-columns: repeat(2, 1fr); gap: var(--space-md); }
   .grid-3 { grid-template-columns: 1fr; gap: var(--space-md); }
   .grid-2 { grid-template-columns: 1fr; gap: var(--space-md); }

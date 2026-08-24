@@ -2134,6 +2134,7 @@ class App {
       ? `<span class="badge" style="background:var(--bg-tertiary); color:var(--text-muted); border:1px solid var(--border-hover)">${esc(this.inboxFilter)}</span>`
       : '';
     this.contentEl.innerHTML = `
+      <div id="inbox-sticky">
       <div style="display:flex; gap:8px; margin-bottom:10px; align-items:center; flex-wrap:wrap">
         <button class="btn" id="inbox-controls-toggle" title="Show or hide the status filters, New-task and Purge controls"
           style="font-size:0.78rem; display:inline-flex; align-items:center; gap:6px">
@@ -2153,7 +2154,8 @@ class App {
         </span>
       </div>
       <input id="inbox-search" type="search" placeholder="Search titles…" value="${esc(this.inboxSearch || '')}"
-        style="width:100%; margin-bottom: var(--space-lg); padding:8px 12px; background:var(--bg-tertiary); border:1px solid var(--bg-tertiary); border-radius:10px; color:inherit; font:inherit; font-size:0.85rem">
+        style="width:100%; margin-bottom:0; padding:8px 12px; background:var(--bg-tertiary); border:1px solid var(--bg-tertiary); border-radius:10px; color:inherit; font:inherit; font-size:0.85rem">
+      </div>
       <div id="inbox-nomatch" style="display:none; color:var(--text-muted); font-size:0.85rem; padding:8px 0">No task titles match your search.</div>
       ${rows}
       ${hasMore ? `<div id="inbox-load-more" style="text-align:center; margin-top:20px; margin-bottom:20px; color:var(--text-muted); font-size:0.85rem;">Loading more tasks...</div>` : ''}`;
