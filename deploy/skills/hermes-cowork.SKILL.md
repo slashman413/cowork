@@ -43,7 +43,7 @@ dispatch cross-platform tasks, heartbeat, and query agencies/inbox.
   - Port: 6868, no API key required
 - `agency-agents` — a git submodule at `./agency-agents` (init: `git submodule update --init`)
 - Hermes MCP endpoint: `mcp_endpoints: { cowork: "http://localhost:6868/mcp" }`
-- Hermes model CLIs: `hermes` (qwen35b/qwen27b/deepseek/deepseek-v4-pro), optional `claude`, `agy`, `codex`, `ollama`
+- Hermes model CLIs: `hermes` (qwen35b/deepseek/deepseek-v4-pro), optional `claude`, `agy`, `codex`, `ollama`
 
 ## Key Paths
 
@@ -52,7 +52,7 @@ dispatch cross-platform tasks, heartbeat, and query agencies/inbox.
 - `artifacts/` — Per-task output files (audio/video/md), downloadable from the Inbox
 - `.status/` — Runtime state (auto-managed)
 - `deploy/remote-brain-client.mjs` — Remote brain registration script (zero-config)
-- `deploy/presets/hermes.json` — Hermes preset: qwen35b, qwen27b, deepseek, deepseek-v4-pro
+- `deploy/presets/hermes.json` — Hermes preset: qwen35b, deepseek, deepseek-v4-pro
 - `deploy/presets/claude.json` — Claude preset: opus, sonnet, fable, default
 
 ## Quick Reference
@@ -121,7 +121,6 @@ register_agent(
   current_task="Working on X",
   brains=[
     {"id": "local-ha-qwen35b",  "location": "local", "exec": "hermes", "model": "nvidia/Qwen3.6-35B-A3B-NVFP4"},
-    {"id": "local-ha-qwen27b",  "location": "local", "exec": "hermes", "model": "nvidia/Qwen3.6-27B-NVFP4"},
     {"id": "local-ha-deepseek-v4-pro", "location": "local", "exec": "hermes", "model": "deepseek-ai/deepseek-v4-pro"},
     {"id": "local-ha-deepseek", "location": "local", "exec": "hermes", "model": "deepseek:deepseek-v4-flash"}
   ]

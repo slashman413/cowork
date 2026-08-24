@@ -1,6 +1,5 @@
 [
   { "id": "remote-{HOST}-ha-qwen35b",  "exec": "hermes", "model": "nvidia/Qwen3.6-35B-A3B-NVFP4" },
-  { "id": "remote-{HOST}-ha-qwen27b",  "exec": "hermes", "model": "nvidia/Qwen3.6-27B-NVFP4" },
   { "id": "remote-{HOST}-ha-deepseek-v4-pro", "exec": "hermes", "model": "deepseek-ai/deepseek-v4-pro" },
   { "id": "remote-{HOST}-ha-deepseek", "exec": "hermes", "model": "deepseek:deepseek-v4-flash" }
 ]

@@ -68,10 +68,6 @@
       "url": "http://localhost:8188",
       "enabled": true
     },
-    "vllm27b": {
-      "url": "http://localhost:8001/v1",
-      "enabled": false
-    },
     "firecrawl": {
       "url": "http://localhost:3002",
       "enabled": false

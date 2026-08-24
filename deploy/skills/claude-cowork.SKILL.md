@@ -134,7 +134,7 @@ When *you* are the brain running a dispatched task:
 ## Brains, chains, and the verifier
 
 **Brain = model × exec × location.** `exec` ∈ `claude | hermes | agy | codex | ollama | script`.
-On this box today: `local-ha-*` (Hermes: qwen35b/qwen27b/deepseek/deepseek-v4-pro),
+On this box today: `local-ha-*` (Hermes: qwen35b/deepseek/deepseek-v4-pro),
 `local-agy-*` (Antigravity: gemini-3.x, claude-opus-4-6-thinking, gpt-oss-120b),
 `local-cc-*` (Claude Code), `local-codex-*`, `local-comfy-ltx` (LTX video — never
 Wan/Hunyuan), `remote-ai-code-gen-cc-*`. Read the live set with `GET /api/brains`;

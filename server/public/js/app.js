@@ -369,7 +369,6 @@ const PORTAL_CATALOG = {
   firecrawl:   { label: 'Firecrawl',   icon: 'flame',       category: 'APIs & MCP', description: 'Web scraping / crawling API for LLM pipelines.' },
   vllm35b:     { label: 'vLLM 35B',    icon: 'cpu',         category: 'APIs & MCP', description: 'Local vLLM OpenAI-compatible inference server (35B).' },
   comfyui:     { label: 'ComfyUI',     icon: 'image',       category: 'APIs & MCP', description: 'Local ComfyUI node-based image-generation server.' },
-  vllm27b:     { label: 'vLLM 27B',    icon: 'cpu',         category: 'APIs & MCP', description: 'Local vLLM OpenAI-compatible inference server (27B).' },
   grafana:     { label: 'Grafana',     icon: 'gauge',       category: 'Ops',       description: 'Metrics dashboards and observability.' },
   portainer:   { label: 'Portainer',   icon: 'container',   category: 'Ops',       description: 'Docker / container management UI.' },
   n8n:         { label: 'n8n',         icon: 'workflow',    category: 'Automation', description: 'Workflow automation and integrations.' },
