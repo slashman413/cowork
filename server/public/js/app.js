@@ -1044,12 +1044,20 @@ class App {
     if (SpeechRec) {
       micBtn.onclick = async () => {
         if (recording) { try { recog?.stop(); } catch {} return; }
-        // Get (and confirm) permission first, then release the device so the
-        // Speech API can claim it cleanly — SpeechRecognition manages its own
-        // stream and doesn't want ours held open.
-        const permStream = await ensureMicPermission();
-        if (!permStream) return;
-        try { permStream.getTracks().forEach(t => t.stop()); } catch {}
+        // The Web Speech API only works in a secure context (https:// or
+        // localhost). In an insecure one the recognizer object still exists but
+        // start() fails instantly with no visible effect — which read to the user
+        // as "Dictate does nothing at all". Say why up front instead.
+        if (!window.isSecureContext) {
+          this.toast('mic needs https', 'Speech-to-text needs a secure page. Open the dashboard over https:// (or http://localhost) — see server.tls / gen-tls-cert.sh to enable https.');
+          return;
+        }
+        // Start the recognizer directly — do NOT preflight getUserMedia here.
+        // SpeechRecognition raises its own mic-permission prompt and manages its
+        // own audio stream; grabbing a getUserMedia stream and releasing it right
+        // before start() races Chrome's speech service and makes recognition abort
+        // with no result (that was the "doesn't work even when mic is allowed"
+        // bug). A denied permission surfaces cleanly through onerror below.
         recog = new SpeechRec();
         recog.lang = navigator.language || 'en-US';
         recog.continuous = true;
@@ -1061,7 +1069,8 @@ class App {
         recog.onerror = (e) => {
           setMic(false);
           this.toast('mic error', e.error === 'not-allowed' || e.error === 'service-not-allowed'
-            ? 'Microphone permission was denied.' : `Speech recognition failed: ${e.error}`);
+            ? 'Microphone permission was denied. Allow it for this site in your browser, then press Dictate again.'
+            : `Speech recognition failed: ${e.error}`);
         };
         recog.onend = () => { base = descEl.value; setMic(false); };
         recog.onresult = (ev) => {
@@ -1974,6 +1983,10 @@ class App {
 
   async renderInbox() {
     this.inboxLimit = this.inboxLimit || 50;
+    // Filters + New-task + Purge collapse into a single toggle so the task list
+    // stays reachable on small viewports. Default open on wide screens, collapsed
+    // on narrow ones; the toggle then persists the choice for the session.
+    if (this.inboxControlsOpen === undefined) this.inboxControlsOpen = window.innerWidth >= 640;
     const filter = this.inboxFilter;
     const fetchLimit = this.inboxLimit + 1;
     const q = filter ? `?status=${filter}&limit=${fetchLimit}` : `?limit=${fetchLimit}`;
@@ -2109,9 +2122,24 @@ class App {
     // #content is the scroll container — preserve the reading position across
     // SSE-driven re-renders instead of snapping back to the top.
     const scrollY = this.contentEl.scrollTop;
+    const open = this.inboxControlsOpen;
+    // Compact chip echoing the active status filter while controls are collapsed,
+    // so the current view is still legible without expanding the panel.
+    const activeChip = (!open && this.inboxFilter)
+      ? `<span class="badge" style="background:var(--bg-tertiary); color:var(--text-muted); border:1px solid var(--border-hover)">${esc(this.inboxFilter)}</span>`
+      : '';
     this.contentEl.innerHTML = `
-      <div style="display:flex; gap:8px; margin-bottom:10px; align-items:center; flex-wrap:wrap">${pills}
-        <span style="margin-left:auto; display:flex; gap:6px; align-items:center">
+      <div style="display:flex; gap:8px; margin-bottom:10px; align-items:center; flex-wrap:wrap">
+        <button class="btn" id="inbox-controls-toggle" title="Show or hide the status filters, New-task and Purge controls"
+          style="font-size:0.78rem; display:inline-flex; align-items:center; gap:6px">
+          <i data-lucide="sliders-horizontal" style="width:14px;height:14px"></i>
+          <span>Filters &amp; actions</span>
+          <span class="ctrl-caret" style="color:var(--text-muted)">${open ? '▾' : '▸'}</span>
+        </button>
+        ${activeChip}
+      </div>
+      <div id="inbox-controls" style="display:flex; gap:8px; margin-bottom:10px; align-items:center; flex-wrap:wrap;${open ? '' : ' display:none;'}">${pills}
+        <span style="margin-left:auto; display:flex; gap:6px; align-items:center; flex-wrap:wrap">
           <button class="btn" id="new-task-btn" title="Create and dispatch a new task" style="font-size:0.78rem; color:#22C55E; border-color:#22C55E66">＋ New task</button>
           <span style="font-size:0.75rem;color:var(--text-muted)">purge done &gt;</span>
           <input id="purge-days" type="number" min="0" value="30" style="width:58px;padding:4px 6px;background:var(--bg-tertiary);border:1px solid var(--bg-tertiary);border-radius:8px;color:inherit;font-size:0.78rem">
@@ -2128,6 +2156,16 @@ class App {
 
     this.contentEl.querySelectorAll('[data-filter]').forEach(b =>
       b.addEventListener('click', () => { this.inboxLimit = 50; this.inboxFilter = b.dataset.filter; this.renderInbox(); }));
+
+    // Collapse/expand the filters + actions panel (toggled in place, no refetch).
+    const ctrlToggle = this.contentEl.querySelector('#inbox-controls-toggle');
+    ctrlToggle?.addEventListener('click', () => {
+      this.inboxControlsOpen = !this.inboxControlsOpen;
+      const panel = this.contentEl.querySelector('#inbox-controls');
+      if (panel) panel.style.display = this.inboxControlsOpen ? 'flex' : 'none';
+      const caret = ctrlToggle.querySelector('.ctrl-caret');
+      if (caret) caret.textContent = this.inboxControlsOpen ? '▾' : '▸';
+    });
       
     const loadMoreEl = this.contentEl.querySelector('#inbox-load-more');
     if (loadMoreEl) {

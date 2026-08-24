@@ -327,6 +327,17 @@ async function main() {
   // List / download a task's attached input files (path-guarded in the store).
   app.get('/api/inputs/:taskId', (req, res) => res.json(store.listInputs(req.params.taskId)));
   app.get('/api/inputs/:taskId/:file', (req, res) => {
+    // The dashboard opens a task's own brief in the markdown viewer via the
+    // inputs route with the synthetic name "description.md" — serve it straight
+    // from the task record rather than requiring a real file on disk.
+    if (req.params.file === 'description.md') {
+      const task = store.getTask(req.params.taskId);
+      if (task && task.description) {
+        res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
+        res.setHeader('Content-Disposition', 'attachment; filename="description.md"');
+        return res.send(task.description);
+      }
+    }
     const file = store.inputFilePath(req.params.taskId, req.params.file);
     if (!file) return res.status(404).json({ error: 'not found' });
     res.download(file);

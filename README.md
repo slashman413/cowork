@@ -442,6 +442,80 @@ With `server.host: "0.0.0.0"` the dashboard is reachable from other machines at
 address, not a URL). Set `server.apiKey` (or `COWORK_API_KEY`) if the host is
 reachable beyond trusted networks.
 
+### Switching from HTTP to HTTPS
+
+By default the server listens over plain `http://`. That is fine over `localhost`,
+but a browser only exposes the **microphone** (the New-task *Dictate* speech-to-text
+button) in a **secure context** — `https://` or `http://localhost`. Reach the
+dashboard over `http://<lan-or-tailscale-ip>:6868` and `navigator.mediaDevices` is
+undefined, so Dictate can't start. Serving over HTTPS fixes it.
+
+The server serves HTTPS automatically once `server.tls` points at a cert/key pair
+that exists on disk; if the files are missing it logs a warning and falls back to
+`http://`. Migrate in this order — **do the cutover deliberately, because every MCP
+client and skill still pointing at `http://…:6868/mcp` breaks the moment the scheme
+flips**:
+
+1. **Generate a cert/key** (self-signed is fine for a LAN/tailnet). Include every
+   hostname/IP you'll browse to as SANs:
+
+   ```bash
+   server/gen-tls-cert.sh ~/.cowork/tls cowork-host 100.80.243.33 cowork.tailXXXX.ts.net
+   ```
+
+   For a warning-free cert on a Tailscale tailnet, prefer `tailscale serve` (real
+   Let's Encrypt cert) over a self-signed one.
+
+2. **Point the config at the files.** Add a `tls` block under `server` in
+   `~/.cowork/config.json` (the live config — the repo `config.json` is only the
+   default template and ships `"tls": null`):
+
+   ```jsonc
+   "server": {
+     "host": "0.0.0.0",
+     "port": 6868,
+     "tls": { "certFile": "~/.cowork/tls/cert.pem", "keyFile": "~/.cowork/tls/key.pem" }
+   }
+   ```
+
+   `~` and repo-relative paths are resolved for you. **This is the step most often
+   missed:** generating the cert alone does nothing — without this block the server
+   stays on `http://`.
+
+3. **Restart the server so the new scheme takes effect.** A plain
+   `systemctl --user restart cowork-mcp` run *from inside a task* SIGKILLs that task
+   (it is a child of the unit it's restarting), so use the idle-safe redeploy, which
+   waits until no task is in flight:
+
+   ```bash
+   systemd-run --user --collect --unit=cowork-server-redeploy \
+     deploy/redeploy-server-when-idle.sh
+   ```
+
+   Confirm it came up on HTTPS:
+
+   ```bash
+   journalctl --user -u cowork-mcp -n 5 | grep 'API:'   # should read  https://…
+   curl -k https://localhost:6868/api/status | jq .uptime   # HTTPS handshake + a live number
+   ```
+
+4. **Repoint every client to `https://`.** Re-run the installer with an `https` URL
+   so each client's `mcpServers.cowork` entry and skill are updated, then restart the
+   clients:
+
+   ```bash
+   deploy/install-skill.sh --client all --url https://cowork-host:6868
+   ```
+
+   Remote brain clients started with `COWORK_URL=http://…` must be relaunched with
+   `COWORK_URL=https://…`. A self-signed cert triggers a one-time browser warning
+   ("Proceed to site") — once you proceed, the origin is a secure context and Dictate
+   works. Node clients hitting a self-signed cert may need the CA trusted (or, for a
+   private tailnet only, `NODE_TLS_REJECT_UNAUTHORIZED=0`).
+
+To roll back, set `server.tls` to `null` (or remove the block) and redeploy — the
+server returns to `http://`.
+
 ## MCP Tools Reference
 
 Once connected, agents have access to these tools:
