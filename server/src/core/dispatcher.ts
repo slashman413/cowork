@@ -969,6 +969,12 @@ export class Dispatcher {
 
   private buildPrompt(task: Task, plan: { agent: string; division?: string; isRoster: boolean }): string {
     const port = this.config.server.port;
+    // Self-referential API base for orchestrator subtask dispatch. Follows the
+    // server's own scheme: when server.tls is set the server binds https://, so
+    // these localhost calls must too. -k lets curl accept the self-signed cert
+    // on localhost (no-op over http).
+    const selfBase = `${this.config.server.tls ? 'https' : 'http'}://localhost:${port}`;
+    const curlFlags = this.config.server.tls ? '-sk' : '-s';
     const role = plan.agent;
     const artifactsDir = this.artifactsDir(task.id);
     const lines: string[] = [];
@@ -1030,11 +1036,11 @@ export class Dispatcher {
         `# Orchestrator instructions`,
         `Decompose this request into concrete subtasks and dispatch them to the company via the Cowork REST API — one POST per subtask. Leave the agent UNASSIGNED and the company's router will pick the best specialist from its 250-agent Agencies automatically (or set context.division/context.agent yourself if you know exactly who should do it):`,
         '```bash',
-        `curl -s -X POST http://localhost:${port}/api/inbox -H 'Content-Type: application/json' -d '{"title":"...","description":"...(full standalone instructions)...","from":{"platform":"claude","agent":"orchestrator"},"to":{},"priority":"normal"}'`,
+        `curl ${curlFlags} -X POST ${selfBase}/api/inbox -H 'Content-Type: application/json' -d '{"title":"...","description":"...(full standalone instructions)...","from":{"platform":"claude","agent":"orchestrator"},"to":{},"priority":"normal"}'`,
         '```',
         `Each subtask description must be fully standalone — the executing specialist sees ONLY that description.`,
         `To make a subtask wait for others (e.g. a final synthesis step), add their task ids to its context: {"dependsOn":["<id1>","<id2>"]} — the API response to each POST gives the created task's id; dependencies' results are shown to the dependent agent.`,
-        `After dispatching, output a summary of the plan. Check existing tasks first: curl -s http://localhost:${port}/api/inbox?limit=20`,
+        `After dispatching, output a summary of the plan. Check existing tasks first: curl ${curlFlags} ${selfBase}/api/inbox?limit=20`,
         ``
       );
     }
@@ -1368,8 +1374,13 @@ export class Dispatcher {
           COWORK_TASK_TITLE: task.title,
           COWORK_TASK_DESCRIPTION: task.description,
           COWORK_TASK_CONTEXT: JSON.stringify(task.context || {}),
-          COWORK_API: `http://localhost:${this.config.server.port}/api`,
-          COWORK_ARTIFACTS_DIR: artDir
+          COWORK_API: `${this.config.server.tls ? 'https' : 'http'}://localhost:${this.config.server.port}/api`,
+          COWORK_ARTIFACTS_DIR: artDir,
+          // When the server runs https with a self-signed cert, node-based child
+          // brains (claude CLI, exec:script pipelines) must trust it to reach
+          // COWORK_API — add the cert as an extra CA rather than disabling
+          // verification. Harmless when tls is off.
+          ...(this.config.server.tls ? { NODE_EXTRA_CA_CERTS: this.config.server.tls.certFile } : {})
         },
         stdio: ['ignore', 'pipe', 'pipe']
       });

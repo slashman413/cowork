@@ -510,8 +510,27 @@ flips**:
    Remote brain clients started with `COWORK_URL=http://…` must be relaunched with
    `COWORK_URL=https://…`. A self-signed cert triggers a one-time browser warning
    ("Proceed to site") — once you proceed, the origin is a secure context and Dictate
-   works. Node clients hitting a self-signed cert may need the CA trusted (or, for a
-   private tailnet only, `NODE_TLS_REJECT_UNAUTHORIZED=0`).
+   works.
+
+   **Node clients must trust the self-signed cert**, or their MCP handshake fails
+   with `SELF_SIGNED_CERT_IN_CHAIN`. Point them at the cert as an extra CA in the
+   environment that launches the client (e.g. the shell running `claude`, or the
+   remote-brain client's env):
+
+   ```bash
+   export NODE_EXTRA_CA_CERTS=~/.cowork/tls/cert.pem
+   ```
+
+   Prefer this over `NODE_TLS_REJECT_UNAUTHORIZED=0` (which disables verification
+   entirely); only fall back to it on a private tailnet if trusting the CA is
+   impractical.
+
+> **Server-side self-dispatch is already scheme-aware** — you don't configure it.
+> The dispatcher builds the orchestrator's `curl` commands and the child-brain
+> `COWORK_API` env from `server.tls`, so when TLS is on they point at
+> `https://localhost:6868` (curl with `-k`, node children get
+> `NODE_EXTRA_CA_CERTS` injected automatically). No repo `http://localhost:6868`
+> is left hardcoded across the flip.
 
 To roll back, set `server.tls` to `null` (or remove the block) and redeploy — the
 server returns to `http://`.
