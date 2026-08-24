@@ -1072,15 +1072,16 @@ class App {
             ? 'Microphone permission was denied. Allow it for this site in your browser, then press Dictate again.'
             : `Speech recognition failed: ${e.error}`);
         };
-        recog.onend = () => { base = descEl.value; setMic(false); };
+        recog.onend = () => { setMic(false); };
         recog.onresult = (ev) => {
-          let interim = '', final = '';
-          for (let i = ev.resultIndex; i < ev.results.length; i++) {
+          let sessionFinal = '', sessionInterim = '';
+          for (let i = 0; i < ev.results.length; i++) {
             const t = ev.results[i][0].transcript;
-            if (ev.results[i].isFinal) final += t; else interim += t;
+            if (ev.results[i].isFinal) sessionFinal += t; else sessionInterim += t;
           }
-          if (final) base = (base.replace(/\s*$/, '') + (base.trim() ? ' ' : '') + final.trim());
-          descEl.value = base + (interim ? (base.trim() ? ' ' : '') + interim : '');
+          let combined = base.replace(/\s*$/, '');
+          if (sessionFinal) combined += (combined ? ' ' : '') + sessionFinal.trim();
+          descEl.value = combined + (sessionInterim ? (combined ? ' ' : '') + sessionInterim.trim() : '');
           descEl.style.borderColor = '';
         };
         try { recog.start(); } catch { /* guard against a double-start */ }
