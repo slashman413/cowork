@@ -283,6 +283,19 @@ async function main() {
   app.get('/api/artifacts/:taskId/:file', (req, res) => {
     // basename() on both segments blocks path traversal.
     const file = path.join(artifactsRoot, path.basename(req.params.taskId), path.basename(req.params.file));
+    // The dashboard opens a task's RESULT in the markdown viewer via the artifacts
+    // route with the synthetic name "result.md". The local dispatcher writes a real
+    // result.md to the artifacts dir, so prefer that on disk; but for tasks with no
+    // file (remote brains, older runs) fall back to the task record's result text
+    // rather than 404ing the chip.
+    if (req.params.file === 'result.md' && !fs.existsSync(file)) {
+      const task = store.getTask(path.basename(req.params.taskId));
+      if (task && task.result) {
+        res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
+        res.setHeader('Content-Disposition', 'attachment; filename="result.md"');
+        return res.send(`# ${task.title || task.id}\n\n${task.result}\n`);
+      }
+    }
     if (!file.startsWith(artifactsRoot) || !fs.existsSync(file)) return res.status(404).json({ error: 'not found' });
     res.download(file);
   });

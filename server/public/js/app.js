@@ -402,7 +402,7 @@ class App {
     this.inboxFilter = '';
     this.inboxSearch = '';     // Task Inbox title search (client-side, on top of the status filter)
     this.inboxLimit = 50;
-    this.openTasks = new Set();  // ids of expanded task cards — survives SSE-driven re-renders
+    this.openTasks = new Set();  // retained (task cards no longer expand); harmless legacy state
     this.agents = new Map();   // agent UUID → { name, platform } for human-readable labels
     this.chatMessages = [];    // Chat view conversation state (persists across nav within a session)
     this.chatSel = { brain: '', division: '', agent: '' };
@@ -2037,13 +2037,23 @@ class App {
       const brainLabel = c.ranBrain || c.brain || '';
       // Fallback trail: brains that failed verification and were handed over.
       const failedBrains = Array.isArray(c.failedBrains) ? c.failedBrains : [];
-      const arts = Array.isArray(t.artifacts) ? t.artifacts : [];
-      const inputs = Array.isArray(c.inputFiles) ? c.inputFiles : [];
       const failed = isTaskFailed(t);
       // done, but closed administratively without ever running (superseded copy,
       // pre-empted cancel) — badged distinctly so its empty artifacts list is not
       // mistaken for a silent failure.
       const closedNoRun = isTaskClosedNoRun(t);
+      // The card no longer expands to show RESULT / DESCRIPTION inline. Instead the
+      // run's RESULT is a first-class `result.md` chip under ARTIFACTS and the brief
+      // is a `description.md` chip under INPUTS — both open in the markdown viewer
+      // modal. The dispatcher writes the real result.md for local runs; the server
+      // also serves both names synthetically from task.result / task.description, so
+      // the chips work even when no file is on disk (remote / older tasks).
+      const artsRaw = Array.isArray(t.artifacts) ? t.artifacts : [];
+      const arts = (t.result && !closedNoRun && !artsRaw.includes('result.md'))
+        ? ['result.md', ...artsRaw] : artsRaw;
+      const inputsRaw = Array.isArray(c.inputFiles) ? c.inputFiles : [];
+      const inputs = (t.description && !inputsRaw.includes('description.md'))
+        ? ['description.md', ...inputsRaw] : inputsRaw;
       // Files can be attached while a task is still schedulable, or to a failed one
       // (attach context, then re-run).
       const canAttach = ['pending', 'wait-input', 'scheduled'].includes(t.status) || failed;
@@ -2077,12 +2087,11 @@ class App {
           ${agentLabel ? badge(agentLabel, '#7C3AED') : ''}
           ${t.interaction && t.interaction.status !== 'submitted' ? badge('⌛ awaiting input', '#EAB308') : ''}
           ${t.interaction && t.interaction.status === 'submitted' ? badge('✓ input received', '#22C55E') : ''}
-          ${inputs.length ? badge(`📎 ${inputs.length}`, '#0EA5E9') : ''}
+          ${inputsRaw.length ? badge(`📎 ${inputsRaw.length}`, '#0EA5E9') : ''}
           ${t.priority && t.priority !== 'normal' ? badge(t.priority, t.priority === 'urgent' ? '#EF4444' : (t.priority === 'high' ? '#EAB308' : '#94A3B8')) : ''}
           ${(Array.isArray(t.tags) ? t.tags : []).filter(tag => tag !== 'chat').map(tag => badge('#' + tag, '#64748B')).join('')}
-          <span class="task-caret" style="margin-left:auto; color:var(--text-muted); font-size:0.72rem; user-select:none">${this.openTasks.has(t.id) ? '▾' : '▸'}</span>
           <button class="btn-icon task-del" data-del-task="${esc(t.id)}" title="Delete this task, its reports and artifacts"
-            style="margin-left:2px; padding:4px; background:none; border:none; cursor:pointer; line-height:0"><i data-lucide="trash-2" style="width:14px;height:14px;color:var(--text-muted)"></i></button>
+            style="margin-left:auto; padding:4px; background:none; border:none; cursor:pointer; line-height:0"><i data-lucide="trash-2" style="width:14px;height:14px;color:var(--text-muted)"></i></button>
         </div>
         <div style="margin:7px 0 3px"><strong style="font-size:1.02rem">${esc(t.title)}</strong></div>
         ${chainHtml}
@@ -2110,12 +2119,8 @@ class App {
           ${inputs.map(f => artifactChip(t.id, f, '0.78rem', 'inputs')).join('')}
           ${canAttach ? `<input type="file" data-attach-files="${esc(t.id)}" multiple style="display:none">
           <button class="btn" data-attach-input="${esc(t.id)}" title="Attach files for the brain to read" style="font-size:0.75rem;margin:0">＋ Attach files</button>` : ''}</div>` : ''}
-        <div class="task-detail"${this.openTasks.has(t.id) ? ' style="display:block"' : ''}>
-          ${mdViewer(t.description, 'DESCRIPTION', { big: true })}
-          ${this.interactionBlock(t)}
-          ${t.result ? `<div style="margin-top:12px">${mdViewer(t.result, 'RESULT', { big: true })}</div>` : ''}
-          ${t.claimedBy ? `<p style="font-size:0.8rem; color:var(--text-muted); margin-top:8px">Claimed by ${esc(this.agentLabel(t.claimedBy))}${t.completedAt ? ` · completed <span title="${esc(t.completedAt)}">${timeAgo(t.completedAt)}</span>` : ''}</p>` : ''}
-        </div>
+        ${this.interactionBlock(t)}
+        ${t.claimedBy ? `<p style="font-size:0.8rem; color:var(--text-muted); margin-top:8px">Claimed by ${esc(this.agentLabel(t.claimedBy))}${t.completedAt ? ` · completed <span title="${esc(t.completedAt)}">${timeAgo(t.completedAt)}</span>` : ''}</p>` : ''}
       </div>`;
     }).join('') : `<div class="empty-state"><p>No tasks${this.inboxFilter ? ` with status "${esc(this.inboxFilter)}"` : ''}.</p></div>`;
 
@@ -2350,25 +2355,16 @@ class App {
         else this.toast('copy failed', text);
       }));
 
-    this.contentEl.querySelectorAll('[data-task]').forEach(card =>
-      card.addEventListener('click', (e) => {
-        if (e.target.closest('pre, .md-block, a, button, input, textarea, select, label, .task-interaction, .copyable')) return;   // don't toggle when interacting with content
-        const d = card.querySelector('.task-detail');
-        const open = !(d.style.display === 'block');
-        d.style.display = open ? 'block' : 'none';
-        // Remember which cards are open so SSE-driven re-renders don't collapse them.
-        if (open) this.openTasks.add(card.dataset.task); else this.openTasks.delete(card.dataset.task);
-        const caret = card.querySelector('.task-caret');
-        if (caret) caret.textContent = open ? '▾' : '▸';
-        createIcons();
-      }));
+    // Task cards no longer expand on click — RESULT and DESCRIPTION now live as
+    // result.md / description.md chips (opened in the markdown viewer), so there is
+    // no detail panel to toggle.
 
     this.applyInboxSearch();
     if (this.pendingTask) this.focusInboxTask();
   }
 
-  // Deep-link target from a workflow run's OUTPUT panel (#inbox/<taskId>): expand
-  // that task, scroll it into view and flash it. If it's not on the current page
+  // Deep-link target from a workflow run's OUTPUT panel (#inbox/<taskId>): scroll
+  // that task into view and flash it. If it's not on the current page
   // (older than the loaded window, or hidden by a status filter), widen the net
   // once — clear the filter and raise the limit — then retry.
   focusInboxTask() {
@@ -2379,11 +2375,6 @@ class App {
       this.pendingTask = null;
       this._focusRetried = false;
       card.style.display = '';                 // in case a stale search hid it
-      const d = card.querySelector('.task-detail');
-      if (d) d.style.display = 'block';
-      this.openTasks.add(id);
-      const caret = card.querySelector('.task-caret');
-      if (caret) caret.textContent = '▾';
       card.scrollIntoView({ behavior: 'smooth', block: 'center' });
       card.classList.add('task-flash');
       setTimeout(() => card.classList.remove('task-flash'), 2200);
