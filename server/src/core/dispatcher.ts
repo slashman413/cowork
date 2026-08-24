@@ -1068,7 +1068,16 @@ export class Dispatcher {
         // leaving planning narration with no deliverable (verifier then rejected
         // it). Pin agy's print timeout to cowork's task budget so the dispatcher's
         // SIGTERM at taskTimeoutMs stays the single authority.
-        return ['agy', '-p', prompt, '--print-timeout', `${this.config.orchestration.taskTimeoutMs}ms`, '--dangerously-skip-permissions'];
+        //
+        // --model: pin the model the brain ID names. Without it, EVERY local-agy-*
+        // brain ran on agy's default model regardless of its configured `model`
+        // (e.g. local-agy-gemini-3.1-pro-high and local-agy-claude-opus-4-6-thinking
+        // both silently executed on the same default). The brain IDs already carry
+        // the exact agy model slug (effort baked in, e.g. `gemini-3.6-flash-high`),
+        // so we forward it verbatim. Only pass the flag when set — an empty model
+        // would make agy reject `--model ''` instead of falling back to its default.
+        return ['agy', '-p', prompt, '--print-timeout', `${this.config.orchestration.taskTimeoutMs}ms`,
+          ...(roleCfg.model ? ['--model', roleCfg.model] : []), '--dangerously-skip-permissions'];
       case 'codex':
         // OpenAI Codex CLI, non-interactive.
         //  --skip-git-repo-check: we spawn codex with cwd = the task's artifacts
