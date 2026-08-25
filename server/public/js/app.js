@@ -263,6 +263,24 @@ function fmtBytes(n) {
   return `${(n / 1048576).toFixed(1)} MB`;
 }
 
+// A task's parameters are editable only when it is NEITHER running NOR pending —
+// i.e. scheduled / wait-input / done / rejected / failed. A pending/claimed/
+// in-progress task is (about to be) executing, so editing it would race the
+// dispatcher; the server enforces the same rule in Store.updateTask.
+function isTaskEditable(t) {
+  return t && !['pending', 'claimed', 'in-progress'].includes(t.status);
+}
+
+// Convert a stored UTC ISO instant to the local wall-clock string a
+// <input type="datetime-local"> expects ("YYYY-MM-DDTHH:MM"), so editing a
+// scheduled task shows the SAME local time the user originally picked.
+function isoToLocalInput(iso) {
+  const d = iso ? new Date(iso) : null;
+  if (!d || isNaN(d.getTime())) return '';
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
 const STATUS_COLORS = {
   'wait-input': '#A855F7', scheduled: '#6366F1', pending: '#EAB308', claimed: '#0EA5E9', 'in-progress': '#0EA5E9',
   done: '#22C55E', rejected: '#EF4444',
@@ -1155,6 +1173,129 @@ class App {
         const routeNote = brain ? `pinned to ${brain}` : target ? `routed to ${target}` : 'auto-routed via the brain chain';
         const fileNote = inputs.length ? ` · ${inputs.length} file(s) attached` : '';
         this.toast('task created', `${when ? `Scheduled for ${new Date(when).toLocaleString()}` : 'Queued'} — ${routeNote}${fileNote}.`);
+        if (this.currentView === 'inbox') this.renderInbox();
+      } catch (err) {
+        okBtn.disabled = false;
+        this.toast('error', err.message);
+      }
+    };
+  }
+
+  /**
+   * "✎ Edit" modal — load an existing task's parameters into the same fields as
+   * the New-task composer, let the user change its title, brief, routing, schedule
+   * and loop interval, and save via POST /inbox/:id/edit. Only offered for tasks
+   * that are not running or pending (see isTaskEditable); the server enforces the
+   * same rule. Rescheduling a finished task (setting a future run time) re-arms it
+   * to run again.
+   */
+  async editTaskModal(taskId) {
+    const container = document.getElementById('modal-container');
+    const content = document.getElementById('modal-content');
+    if (!container || !content) return;
+    let task = null;
+    try { task = await this.api.get(`/inbox/${encodeURIComponent(taskId)}`); }
+    catch (err) { this.toast('error', err.message); return; }
+    if (!task) { this.toast('error', 'Task not found'); return; }
+    if (!isTaskEditable(task)) { this.toast('cannot edit', `Task is ${task.status} — only tasks that are not running or pending can be edited.`); return; }
+    let brains = {}, divisions = {};
+    try { brains = await this.api.get('/brains'); } catch { /* Auto only */ }
+    try { divisions = await this.api.get('/roster-divisions'); } catch { /* no agent picker */ }
+    const ctx = task.context || {};
+    const curBrain = ctx.brainAuto ? '' : (ctx.brain || '');
+    const curDivision = ctx.division || '';
+    const curAgent = ctx.agent || '';
+    const brainOpts = [`<option value=""${curBrain ? '' : ' selected'}>🧠 Auto — route via the agent's brain chain</option>`]
+      .concat(Object.keys(brains).sort().map(b => `<option value="${esc(b)}"${b === curBrain ? ' selected' : ''}>${esc(b)}</option>`)).join('');
+    const divOpts = [`<option value=""${curDivision ? '' : ' selected'}>🤖 Auto — let the router pick the agent</option>`]
+      .concat(Object.entries(divisions).sort().map(([d, i]) => `<option value="${esc(d)}"${d === curDivision ? ' selected' : ''}>${esc(i.label || d)} (${i.agents.length})</option>`)).join('');
+    const prioOpts = ['normal', 'low', 'high', 'urgent']
+      .map(p => `<option value="${p}"${(task.priority || 'normal') === p ? ' selected' : ''}>${p}</option>`).join('');
+    const fieldStyle = 'width:100%; padding:9px 10px; background:var(--bg-tertiary); border:1px solid var(--border-color); border-radius:8px; color:inherit; font:inherit; font-size:0.9rem';
+    const labelStyle = 'display:block; font-size:0.72rem; text-transform:uppercase; letter-spacing:.04em; color:var(--text-muted); margin:0 0 6px';
+    const finished = task.status === 'done' || task.status === 'rejected' || isTaskFailed(task);
+    content.innerHTML = `
+      <h3 style="margin:0 0 8px; font-size:1.05rem">Edit task <span style="font-size:0.8rem;color:var(--text-muted)">· ${esc(task.status)}</span></h3>
+      <p style="font-size:0.85rem; color:var(--text-secondary); margin:0 0 16px; line-height:1.5">${finished
+        ? 'This task has finished. Setting a <strong>future</strong> run time below re-arms it to run again with your edits; leaving it blank just saves the changes.'
+        : 'Change any parameters and save. A future run time keeps it <em>scheduled</em>; clearing the time releases it to run now.'}</p>
+      <label style="${labelStyle}">Title</label>
+      <input id="et-title" style="${fieldStyle}; margin-bottom:12px" value="${esc(task.title || '')}">
+      <label style="${labelStyle}">Brief / requirements (markdown)</label>
+      <textarea id="et-desc" rows="7" style="${fieldStyle}; margin-bottom:12px; resize:vertical">${esc(task.description || '')}</textarea>
+      <label style="${labelStyle}">Agent <span style="text-transform:none; letter-spacing:0">(optional — division, then agent)</span></label>
+      <div style="display:flex; gap:8px; margin-bottom:12px">
+        <select id="et-div" style="${fieldStyle}; flex:1">${divOpts}</select>
+        <select id="et-agent" style="${fieldStyle}; flex:1"><option value="">— none —</option></select>
+      </div>
+      <label style="${labelStyle}">Priority</label>
+      <select id="et-priority" style="${fieldStyle}; margin-bottom:12px">${prioOpts}</select>
+      <label style="${labelStyle}">Run at <span style="text-transform:none; letter-spacing:0">(optional — ${finished ? 'set a future time to re-run; ' : ''}leave empty to run now)</span></label>
+      <input id="et-when" type="datetime-local" style="${fieldStyle}; margin-bottom:12px" value="${esc(isoToLocalInput(task.scheduledAt))}">
+      <label style="${labelStyle}">Loop interval <span style="text-transform:none; letter-spacing:0">(optional — hours to wait before recurring)</span></label>
+      <input id="et-loop" type="number" min="1" step="any" style="${fieldStyle}; margin-bottom:12px" value="${task.loopIntervalHours != null ? esc(String(task.loopIntervalHours)) : ''}" placeholder="e.g. 1 for every hour">
+      <label style="${labelStyle}">Brain to claim this task</label>
+      <select id="et-brain" style="${fieldStyle}; margin-bottom:20px">${brainOpts}</select>
+      <div style="display:flex; gap:8px; justify-content:flex-end">
+        <button class="btn" id="et-cancel" style="font-size:0.85rem">Cancel</button>
+        <button class="btn" id="et-ok" style="font-size:0.85rem; color:#0EA5E9; border-color:#0EA5E966">💾 Save</button>
+      </div>`;
+    container.classList.remove('hidden');
+    createIcons();
+
+    const close = () => {
+      container.classList.add('hidden');
+      content.innerHTML = '';
+      document.removeEventListener('keydown', onKey);
+    };
+    const onKey = (ev) => { if (ev.key === 'Escape') close(); };
+    document.addEventListener('keydown', onKey);
+    content.querySelector('#et-cancel').onclick = close;
+    container.querySelector('.modal-backdrop').onclick = close;
+
+    // Division → agent (scoped list), pre-selecting the task's current agent.
+    const divEl = content.querySelector('#et-div');
+    const agentEl = content.querySelector('#et-agent');
+    const fillAgents = (selectSlug) => {
+      const info = divEl.value ? divisions[divEl.value] : null;
+      const agentOpts = info ? info.agents.slice().sort((a, b) => a.name.localeCompare(b.name))
+        .map(a => `<option value="${esc(a.slug)}"${a.slug === selectSlug ? ' selected' : ''}>${esc(a.name)}</option>`).join('') : '';
+      agentEl.innerHTML = `<option value="">— any agent in this division —</option>${agentOpts}`;
+      agentEl.disabled = !info;
+    };
+    fillAgents(curAgent);
+    divEl.onchange = () => fillAgents('');
+
+    content.querySelector('#et-ok').onclick = async () => {
+      const title = content.querySelector('#et-title').value.trim();
+      const description = content.querySelector('#et-desc').value.trim();
+      if (!title) { content.querySelector('#et-title').style.borderColor = '#EF4444'; return; }
+      if (!description) { content.querySelector('#et-desc').style.borderColor = '#EF4444'; return; }
+      const brain = content.querySelector('#et-brain').value;
+      const division = divEl.value;
+      const agent = agentEl.value;
+      const when = content.querySelector('#et-when').value;
+      const loopStr = content.querySelector('#et-loop').value;
+      const okBtn = content.querySelector('#et-ok');
+      okBtn.disabled = true;
+      // context mirrors createTask: a named agent wins (dispatcher derives its
+      // division); otherwise a bare division scopes the router. '' clears a pin.
+      const context = { brain, agent: agent || '', division: agent ? '' : division };
+      const body = {
+        title, description,
+        priority: content.querySelector('#et-priority').value,
+        context,
+        // Always send the schedule keys so a cleared field clears the value.
+        scheduledAt: when ? new Date(when).toISOString() : '',
+        loopIntervalHours: loopStr ? parseFloat(loopStr) : null
+      };
+      try {
+        const updated = await this.api.post(`/inbox/${encodeURIComponent(taskId)}/edit`, body);
+        close();
+        const timing = updated.status === 'scheduled' && updated.scheduledAt
+          ? `Scheduled for ${new Date(updated.scheduledAt).toLocaleString()}`
+          : `Saved — now ${updated.status}`;
+        this.toast('task updated', timing + '.');
         if (this.currentView === 'inbox') this.renderInbox();
       } catch (err) {
         okBtn.disabled = false;
@@ -2105,7 +2246,9 @@ class App {
             ? `<button class="btn" disabled title="Already continued — a follow-up task was spawned from this run"
             style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#22C55E99;border-color:#22C55E33;opacity:.6;cursor:default">✓ Continued</button>`
             : `<button class="btn" data-continue-task="${esc(t.id)}" data-brain="${esc(brainLabel)}" title="Continue this task — spawn a follow-up seeded with this run's outputs; pick which brain claims it"
-            style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#22C55E;border-color:#22C55E66">▸ Continue</button>`) : ''}</div>
+            style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#22C55E;border-color:#22C55E66">▸ Continue</button>`) : ''}
+          ${isTaskEditable(t) ? `<button class="btn" data-edit-task="${esc(t.id)}" title="Edit this task — change its title, brief, agent/brain, schedule and loop interval, then save"
+            style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#0EA5E9;border-color:#0EA5E966">✎ Edit</button>` : ''}</div>
         <div class="task-ids" style="display:flex; flex-wrap:wrap; align-items:center; gap:12px; padding:4px 0 2px; font-size:0.72rem; color:var(--text-muted)">
           <span class="copyable" data-copy="${esc(t.id)}" title="Task ID — click to copy" style="cursor:pointer; font-family:ui-monospace,SFMono-Regular,Menlo,monospace">
             <i data-lucide="hash" style="width:11px;height:11px;vertical-align:-1px"></i>${esc(t.id)}</span>
@@ -2245,6 +2388,13 @@ class App {
             : 'Released to pending — dispatched by the next tick.');
           this.renderInbox();
         } catch (err) { this.toast('error', err.message); b.disabled = false; }
+      }));
+
+    // Edit a task (not running / not pending) — load its params into a modal and save.
+    this.contentEl.querySelectorAll('[data-edit-task]').forEach(b =>
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.editTaskModal(b.dataset.editTask);
       }));
 
     // Continue a done task — pick which brain claims the follow-up.

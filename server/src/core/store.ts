@@ -609,6 +609,131 @@ export class Store {
     return task;
   }
 
+  /**
+   * EDIT a task's parameters in place — the counterpart to the New-task composer,
+   * but with the existing task's fields loaded and saved back. Only a task that is
+   * NEITHER running NOR pending is editable: a `pending`/`claimed`/`in-progress`
+   * task is (or is about to be) executing, so mutating its brief mid-flight would
+   * race the dispatcher. Editable states are therefore `scheduled`, `wait-input`,
+   * `done`, `rejected`, and chain-exhausted `failed`.
+   *
+   * Every field in `patch` is optional; only provided keys are touched. Scheduling
+   * follows the same rules as {@link createTask}: a FUTURE `scheduledAt` parks the
+   * task on `scheduled`; an empty/past one releases it into the pending pool (or
+   * `wait-input` when it still carries unanswered questions). Re-arming a FINISHED
+   * task (giving a done/rejected/failed task a fresh run time, or a past time to
+   * "run now") clears its previous result/claim/completion and resets the chain
+   * bookkeeping so it re-dispatches cleanly from the top — matching the "edit it
+   * like a new task and save" intent. Returns null when the task is gone; throws
+   * when it is running/pending or the patch is invalid.
+   */
+  public updateTask(taskId: string, patch: {
+    title?: string;
+    description?: string;
+    priority?: Task['priority'];
+    tags?: string[];
+    agent?: string | null;
+    division?: string | null;
+    brain?: string | null;
+    scheduledAt?: string | null;
+    loopIntervalHours?: number | null;
+  }): Task | null {
+    const task = this.getTask(taskId);
+    if (!task) return null;
+    if (task.status === 'pending' || task.status === 'in-progress' || task.status === 'claimed') {
+      throw new Error(`Task is ${task.status} — only tasks that are not running or pending can be edited`);
+    }
+
+    if (typeof patch.title === 'string') {
+      if (!patch.title.trim()) throw new Error('title cannot be empty');
+      task.title = patch.title;
+    }
+    if (typeof patch.description === 'string') task.description = patch.description;
+    if (patch.priority && ['low', 'normal', 'high', 'urgent'].includes(patch.priority)) {
+      task.priority = patch.priority;
+    }
+    if (Array.isArray(patch.tags)) task.tags = patch.tags;
+
+    // Routing context — agent / division / brain pin. An empty string clears the
+    // key (back to Auto), a non-empty value sets it, undefined leaves it as-is.
+    const ctx: Record<string, any> = { ...(task.context || {}) };
+    const setCtx = (key: string, val: string | null | undefined) => {
+      if (val === undefined) return;
+      if (val === null || val === '') delete ctx[key]; else ctx[key] = val;
+    };
+    setCtx('agent', patch.agent);
+    setCtx('division', patch.division);
+    if (patch.brain !== undefined) {
+      // A pinned brain must exist in the registry (mirrors resolveBrainOverride),
+      // else the task would target a brain that can never claim it.
+      if (patch.brain && patch.brain.trim()) {
+        const brains = this.config.orchestration?.brains || {};
+        if (!brains[patch.brain]) throw new Error(`Unknown brain "${patch.brain}" — not in the registry`);
+        ctx.brain = patch.brain;
+        delete ctx.brainAuto;   // an explicit edit is a USER pin, not a dispatcher-published one
+      } else {
+        delete ctx.brain;
+        delete ctx.brainAuto;
+      }
+    }
+    task.context = ctx;
+
+    if (patch.loopIntervalHours !== undefined) {
+      if (patch.loopIntervalHours && patch.loopIntervalHours > 0) task.loopIntervalHours = patch.loopIntervalHours;
+      else delete task.loopIntervalHours;
+    }
+
+    // Scheduling. Only touched when the caller included the `scheduledAt` key.
+    if (patch.scheduledAt !== undefined) {
+      const finished = task.status === 'done' || task.status === 'rejected' || isFailedTask(task);
+      // Clear a finished run's completion + chain bookkeeping so a re-armed task
+      // dispatches fresh from the top of its chain (shared by both branches below).
+      const rearmFinished = () => {
+        const c: Record<string, any> = { ...(task.context || {}) };
+        c.attempts = 0;
+        c.dispatched = false;
+        delete c.failedBrains;
+        delete c.brainAuto;
+        delete c.remoteWaitSince;
+        delete c.ranAgent; delete c.ranDivision; delete c.ranBrain; delete c.isRoster;
+        task.context = c;
+        delete task.failed;
+        delete task.result;
+        delete task.claimedAt;
+        delete task.claimedBy;
+        delete task.completedAt;
+      };
+      const awaiting = task.interaction && Array.isArray(task.interaction.fields)
+        && task.interaction.fields.length > 0 && task.interaction.status !== 'submitted';
+
+      if (patch.scheduledAt === null || patch.scheduledAt === '') {
+        // Cleared: drop the launch time. A parked `scheduled` task releases into the
+        // pending pool now (or wait-input if unanswered). A finished task keeps its
+        // finished status — clearing the schedule is a metadata edit, not a re-run.
+        delete task.scheduledAt;
+        if (task.status === 'scheduled') task.status = awaiting ? 'wait-input' : 'pending';
+      } else {
+        const at = Date.parse(String(patch.scheduledAt));
+        if (!Number.isFinite(at)) {
+          throw new Error(`Invalid scheduledAt "${patch.scheduledAt}" — use an ISO 8601 date-time (e.g. 2026-08-08T09:00:00+08:00)`);
+        }
+        task.scheduledAt = new Date(at).toISOString();
+        if (finished) rearmFinished();
+        if (at > Date.now()) {
+          task.status = 'scheduled';
+        } else {
+          // A past/now time means "run now": release it (finished tasks were just
+          // re-armed above, so this re-runs them).
+          task.status = awaiting ? 'wait-input' : 'pending';
+        }
+      }
+    }
+
+    this.saveTask(task);
+    this.eventBus.emitTaskCreated(task);   // nudge live dashboards to refresh
+    return task;
+  }
+
   /** Persistent per-task artifacts dir. */
   private artifactsDir(taskId: string): string {
     return path.join(this.config.paths.artifacts, path.basename(taskId));
@@ -1020,7 +1145,12 @@ export class Store {
     
     for (const [file, hit] of this.taskCache.entries()) {
       if (hit.task?.id === id) return file;
-      if (hit.task?.id.startsWith(id)) {
+      // Guard the .startsWith on a cached task whose `id` is undefined (a
+      // malformed / hand-created inbox file): `hit.task?.id.startsWith` only
+      // short-circuits on a null task, not a null id, so an id-less cached task
+      // would throw here and abort whatever lookup is in flight (observed failing
+      // a live dispatch). `?.startsWith` makes the miss a clean no-match instead.
+      if (hit.task?.id?.startsWith(id)) {
         shortIdMatch = file;
         shortIdMatches++;
       }

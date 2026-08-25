@@ -495,8 +495,8 @@ flips**:
    Confirm it came up on HTTPS:
 
    ```bash
-   journalctl --user -u cowork-mcp -n 5 | grep 'API:'   # should read  https://…
-   curl -k https://localhost:6868/api/status | jq .uptime   # HTTPS handshake + a live number
+   journalctl --user -u cowork-mcp -n 5 | grep 'API:'
+   curl --cacert ~/.cowork/tls/cert.pem https://localhost:6868/api/status | jq .uptime   # HTTPS handshake + a live number
    ```
 
 4. **Repoint every client to `https://`.** Re-run the installer with an `https` URL
@@ -528,7 +528,7 @@ flips**:
 > **Server-side self-dispatch is already scheme-aware** — you don't configure it.
 > The dispatcher builds the orchestrator's `curl` commands and the child-brain
 > `COWORK_API` env from `server.tls`, so when TLS is on they point at
-> `https://localhost:6868` (curl with `-k`, node children get
+> `https://localhost:6868` (curl with `--cacert`, node children get
 > `NODE_EXTRA_CA_CERTS` injected automatically). No repo `http://localhost:6868`
 > is left hardcoded across the flip.
 

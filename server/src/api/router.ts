@@ -146,6 +146,41 @@ export function createApiRouter(store: Store, eventBus: EventBus): Router {
     }
   });
 
+  // Edit an EXISTING task's parameters (the counterpart to POST /inbox — the New
+  // task composer, but with the task's fields loaded and saved back). Only tasks
+  // that are NOT running or pending are editable (scheduled / wait-input / done /
+  // rejected / failed); the store rejects the rest. Body mirrors POST /inbox:
+  // { title?, description?, priority?, tags?, context?:{agent,division,brain},
+  //   scheduledAt?, loopIntervalHours? }. Returns the updated task.
+  router.post('/inbox/:id/edit', (req, res) => {
+    try {
+      const b = req.body || {};
+      const c = b.context && typeof b.context === 'object' ? b.context : {};
+      const patch: any = {};
+      if (typeof b.title === 'string') patch.title = b.title;
+      if (typeof b.description === 'string') patch.description = b.description;
+      if (typeof b.priority === 'string') patch.priority = b.priority;
+      if (Array.isArray(b.tags)) patch.tags = b.tags;
+      // Routing pins: accept both a flat body and a { context } object. A key set
+      // to '' (or null) clears that pin (back to Auto); omitting it leaves it as-is.
+      if ('agent' in c) patch.agent = c.agent;
+      if ('division' in c) patch.division = c.division;
+      if ('brain' in c) patch.brain = c.brain;
+      // Scheduling. Accept scheduledAt/scheduled_at; '' or null clears it.
+      if ('scheduledAt' in b) patch.scheduledAt = b.scheduledAt;
+      else if ('scheduled_at' in b) patch.scheduledAt = b.scheduled_at;
+      if ('loopIntervalHours' in b) {
+        patch.loopIntervalHours = b.loopIntervalHours === null || b.loopIntervalHours === ''
+          ? null : Number(b.loopIntervalHours);
+      }
+      const task = store.updateTask(req.params.id, patch);
+      if (!task) return res.status(404).json({ error: 'Task not found' });
+      res.json(task);
+    } catch (e: any) {
+      res.status(400).json({ error: e.message });
+    }
+  });
+
   // Continue a DONE (successful) task — spawn a follow-up task seeded with the
   // finished run's OUTPUT files + result as inputs, pinned to the same executor,
   // so the work carries forward. The dashboard shows this as a "Continue" button

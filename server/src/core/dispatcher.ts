@@ -126,6 +126,14 @@ export class Dispatcher {
     // the same verifier and hands such results to the next fallback brain.
     this.store.setCompletionGuard((t, r) => this.verifyReportedCompletion(t, r));
     this.timer = setInterval(() => this.tick(), orch.pollIntervalMs);
+    // Catch-up tick right now instead of waiting a full pollIntervalMs. Server
+    // restarts are frequent (redeploys), and setInterval fires its FIRST callback
+    // only after one interval — so a scheduled task that came due while the process
+    // was down would otherwise sit un-launched for up to pollIntervalMs after every
+    // restart (and, if restarts churn faster than the interval, be deferred each
+    // time). Running one tick immediately releases any already-due scheduled tasks
+    // straight away. Deferred to the next microtask so `start()` finishes first.
+    queueMicrotask(() => this.tick());
     const clsMsg = orch.classifier?.enabled ? `classifier ${orch.classifier.model}` : 'classifier off';
     console.log(`Dispatcher: started (agents: ${agentNames.join(', ')}; max ${orch.maxConcurrent} concurrent; ${clsMsg}; staleClaim ${orch.staleClaimMs ?? 0}ms)`);
   }
@@ -257,24 +265,37 @@ export class Dispatcher {
       }
     }
 
-    // Rescue tasks orphaned by a crashed/exited agent (runs every tick, cheap).
-    this.reclaimStaleClaims();
+    // Each phase below is isolated in its own try/catch. Previously a throw in
+    // any one (e.g. a malformed task crashing reclaimStaleClaims) aborted the rest
+    // of the tick — so `releaseDueScheduled` never ran and every scheduled task due
+    // that tick was silently stranded until the offending state cleared. Isolating
+    // the phases guarantees scheduled releases and the pending dispatch still run
+    // even when an auxiliary phase fails.
 
     // Launch scheduled tasks whose time has come: releaseDueScheduled flips each
     // due task into the pending pool (or onto wait-input if it still needs a
     // person's answers) BEFORE the pending scan below, so a just-due task is
-    // dispatched on this very tick rather than the next one.
-    for (const t of this.store.releaseDueScheduled()) {
-      console.log(`Dispatcher: scheduled task ${t.id} is due (${t.scheduledAt}) — released to ${t.status} — ${t.title}`);
-    }
+    // dispatched on this very tick rather than the next one. Runs FIRST so nothing
+    // upstream can defer a due task.
+    try {
+      for (const t of this.store.releaseDueScheduled()) {
+        console.log(`Dispatcher: scheduled task ${t.id} is due (${t.scheduledAt}) — released to ${t.status} — ${t.title}`);
+      }
+    } catch (e) { console.error('Dispatcher: releaseDueScheduled failed this tick:', e); }
+
+    // Rescue tasks orphaned by a crashed/exited agent (runs every tick, cheap).
+    try { this.reclaimStaleClaims(); }
+    catch (e) { console.error('Dispatcher: reclaimStaleClaims failed this tick:', e); }
 
     // Advance any orchestrated workflow runs: for each run awaiting a decision,
     // the orchestrator brain picks the next step (or finishes the run).
-    this.driveWorkflows();
+    try { this.driveWorkflows(); }
+    catch (e) { console.error('Dispatcher: driveWorkflows failed this tick:', e); }
 
     // Advance any active Goals: for each goal whose work has finished (quiescent),
     // the Achiever brain takes one evaluate/plan/emit turn toward the criterion.
-    this.driveGoals();
+    try { this.driveGoals(); }
+    catch (e) { console.error('Dispatcher: driveGoals failed this tick:', e); }
 
     if (this.running.size >= orch.maxConcurrent) return;
 
@@ -284,29 +305,34 @@ export class Dispatcher {
     for (const task of pending) {
       if (this.running.size >= orch.maxConcurrent) break;
       if (this.running.has(task.id)) continue;
-      // Human-in-the-loop gate (defense-in-depth): a task awaiting a person's
-      // answers is parked on the `wait-input` category, so it never appears in the
-      // `pending` pool above and is thus never scheduled OR reassigned. This guard
-      // stays as a backstop in case a task ever reaches `pending` with its
-      // interaction still unanswered — running it now would leave context.humanInput
-      // empty, defeating the "supply information in advance" purpose.
-      if (this.awaitingHumanInput(task)) continue;
-      const plan = this.planFor(task);
-      switch (plan.action) {
-        case 'skip': continue;               // manual, or unknown target
-        case 'remote': this.handleRemoteRung(task, plan.exec); continue;
-        case 'route': this.route(task); continue;
-        case 'execute':
-          if (!this.depsSatisfied(task)) continue;
-          // Per-brain concurrency: if this brain is already at its capacity, skip
-          // THIS task (don't break) so a task bound to a different, free brain can
-          // still launch this tick. A brain with spare room runs the task
-          // concurrently on the same instance. selectRung already steered fresh
-          // dispatches toward free rungs; this backstops a pinned task or a fully
-          // saturated chain.
-          if (this.brainLoad(plan.exec.brainId) >= this.brainCap(plan.exec.brainId)) continue;
-          this.execute(task, plan.exec).catch(e => console.error(`Dispatcher: task ${task.id} failed:`, e));
-      }
+      // Per-task planning is isolated: a throw while planning/routing ONE task
+      // (e.g. a malformed context) must not abort the loop and strand every later
+      // pending task — including scheduled tasks just released this tick.
+      try {
+        // Human-in-the-loop gate (defense-in-depth): a task awaiting a person's
+        // answers is parked on the `wait-input` category, so it never appears in the
+        // `pending` pool above and is thus never scheduled OR reassigned. This guard
+        // stays as a backstop in case a task ever reaches `pending` with its
+        // interaction still unanswered — running it now would leave context.humanInput
+        // empty, defeating the "supply information in advance" purpose.
+        if (this.awaitingHumanInput(task)) continue;
+        const plan = this.planFor(task);
+        switch (plan.action) {
+          case 'skip': continue;               // manual, or unknown target
+          case 'remote': this.handleRemoteRung(task, plan.exec); continue;
+          case 'route': this.route(task); continue;
+          case 'execute':
+            if (!this.depsSatisfied(task)) continue;
+            // Per-brain concurrency: if this brain is already at its capacity, skip
+            // THIS task (don't break) so a task bound to a different, free brain can
+            // still launch this tick. A brain with spare room runs the task
+            // concurrently on the same instance. selectRung already steered fresh
+            // dispatches toward free rungs; this backstops a pinned task or a fully
+            // saturated chain.
+            if (this.brainLoad(plan.exec.brainId) >= this.brainCap(plan.exec.brainId)) continue;
+            this.execute(task, plan.exec).catch(e => console.error(`Dispatcher: task ${task.id} failed:`, e));
+        }
+      } catch (e) { console.error(`Dispatcher: planning task ${task.id} failed:`, e); }
     }
   }
 
@@ -971,10 +997,10 @@ export class Dispatcher {
     const port = this.config.server.port;
     // Self-referential API base for orchestrator subtask dispatch. Follows the
     // server's own scheme: when server.tls is set the server binds https://, so
-    // these localhost calls must too. -k lets curl accept the self-signed cert
-    // on localhost (no-op over http).
+    // these localhost calls must too. We pass the CA cert to curl to verify the
+    // self-signed cert on localhost.
     const selfBase = `${this.config.server.tls ? 'https' : 'http'}://localhost:${port}`;
-    const curlFlags = this.config.server.tls ? '-sk' : '-s';
+    const curlFlags = this.config.server.tls ? `-s --cacert "${this.config.server.tls.certFile}"` : '-s';
     const role = plan.agent;
     const artifactsDir = this.artifactsDir(task.id);
     const lines: string[] = [];
