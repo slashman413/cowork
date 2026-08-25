@@ -17,6 +17,7 @@ import { Goals } from './core/goals.js';
 import { SystemMetrics } from './core/system-metrics.js';
 import { UsagePoller, isMeteredExec } from './core/usage-probe.js';
 import { probeServices } from './core/service-probe.js';
+import { getObsidianVault } from './core/obsidian.js';
 
 async function main() {
   const config = loadConfig();
@@ -248,10 +249,49 @@ async function main() {
   // ── Service reachability for the Portal (probed from the host) ─────────────
   app.get('/api/services', async (_req, res) => {
     try {
-      res.json(await probeServices(config.services));
+      const status = await probeServices(config.services);
+      // The Obsidian card is served by THIS server (not a separate port), so its
+      // "online" is simply whether the configured vault exists on disk — fold a
+      // synthetic status in so the Portal dot reflects reality without an HTTP probe.
+      const vault = getObsidianVault(config.obsidian);
+      if (vault) {
+        const ok = vault.available();
+        status.obsidian = { key: 'obsidian', enabled: true, online: ok, code: null, ms: null, ...(ok ? {} : { reason: 'vault not found' }) };
+      }
+      res.json(status);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
+  });
+
+  // ── Obsidian Vault: shared knowledge base (read-only) ──────────────────────
+  // Every brain queries the vault here; local brains may also read config.obsidian
+  // .vaultPath off disk directly (reported by GET /api/obsidian). All reads are
+  // path-guarded to the vault root inside ObsidianVault.
+  app.get('/api/obsidian', (_req, res) => {
+    const vault = getObsidianVault(config.obsidian);
+    if (!vault) return res.json({ available: false, enabled: false });
+    res.json({ enabled: true, ...vault.info() });
+  });
+  app.get('/api/obsidian/notes', (req, res) => {
+    const vault = getObsidianVault(config.obsidian);
+    if (!vault || !vault.available()) return res.status(404).json({ error: 'obsidian vault unavailable' });
+    res.json(vault.list(typeof req.query.folder === 'string' ? req.query.folder : undefined));
+  });
+  app.get('/api/obsidian/search', (req, res) => {
+    const vault = getObsidianVault(config.obsidian);
+    if (!vault || !vault.available()) return res.status(404).json({ error: 'obsidian vault unavailable' });
+    const q = typeof req.query.q === 'string' ? req.query.q : '';
+    const limit = req.query.limit ? parseInt(String(req.query.limit), 10) : 20;
+    res.json(vault.search(q, Number.isFinite(limit) ? limit : 20));
+  });
+  app.get('/api/obsidian/note', (req, res) => {
+    const vault = getObsidianVault(config.obsidian);
+    if (!vault || !vault.available()) return res.status(404).json({ error: 'obsidian vault unavailable' });
+    const p = typeof req.query.path === 'string' ? req.query.path : '';
+    const note = vault.read(p);
+    if (!note) return res.status(404).json({ error: 'note not found' });
+    res.json(note);
   });
 
   // ── Connections: external MCP clients (heartbeat-live) + invocation counters ─

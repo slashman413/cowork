@@ -6,6 +6,7 @@ import type { Store } from '../core/store.js';
 import type { EventBus } from '../core/events.js';
 import type { Goals } from '../core/goals.js';
 import { registerBrain, removeBrainCascade } from '../config.js';
+import { getObsidianVault } from '../core/obsidian.js';
 
 // Stateless streamable-HTTP pattern: build a fresh McpServer + transport per
 // request. Sharing one McpServer across concurrent transports cross-wires
@@ -468,6 +469,75 @@ function buildServer(config: Config, store: Store, eventBus: EventBus, goals?: G
         } catch (e: any) {
           return { content: [{ type: 'text', text: e.message }], isError: true };
         }
+      }
+    );
+  }
+
+  // ── Obsidian Vault: shared knowledge base every brain can consult ──────────
+  // Backed by config.obsidian. These tools give REMOTE brains the same read
+  // access a LOCAL brain gets from the filesystem; obsidian_info reports the
+  // on-disk `vaultPath` so a local brain can also grep it directly.
+  {
+    const vaultUnavailable = () => ({
+      content: [{ type: 'text' as const, text: JSON.stringify({ available: false, note: 'Obsidian vault is not configured or is disabled (config.obsidian).' }) }]
+    });
+
+    server.tool(
+      'obsidian_info',
+      'Report the shared Obsidian knowledge base: whether it is available, its ' +
+      'on-disk vaultPath (local brains may read/grep it directly), and the note count.',
+      {},
+      async () => {
+        try {
+          const vault = getObsidianVault(config.obsidian);
+          if (!vault) return vaultUnavailable();
+          return { content: [{ type: 'text', text: JSON.stringify(vault.info()) }] };
+        } catch (e: any) { return { content: [{ type: 'text', text: e.message }], isError: true }; }
+      }
+    );
+
+    server.tool(
+      'obsidian_search',
+      'Full-text search the shared Obsidian vault. Returns the top matching notes ' +
+      'with a snippet and their vault-relative path; pass a path to obsidian_read ' +
+      'to fetch the whole note.',
+      { query: z.string(), limit: z.number().default(20) },
+      async (args) => {
+        try {
+          const vault = getObsidianVault(config.obsidian);
+          if (!vault) return vaultUnavailable();
+          return { content: [{ type: 'text', text: JSON.stringify(vault.search(args.query, args.limit)) }] };
+        } catch (e: any) { return { content: [{ type: 'text', text: e.message }], isError: true }; }
+      }
+    );
+
+    server.tool(
+      'obsidian_read',
+      'Read one note from the shared Obsidian vault by its vault-relative path ' +
+      '(the .md extension is optional). Path-guarded to the vault root.',
+      { path: z.string() },
+      async (args) => {
+        try {
+          const vault = getObsidianVault(config.obsidian);
+          if (!vault) return vaultUnavailable();
+          const note = vault.read(args.path);
+          if (!note) return { content: [{ type: 'text', text: JSON.stringify({ error: 'note not found', path: args.path }) }], isError: true };
+          return { content: [{ type: 'text', text: JSON.stringify(note) }] };
+        } catch (e: any) { return { content: [{ type: 'text', text: e.message }], isError: true }; }
+      }
+    );
+
+    server.tool(
+      'obsidian_list',
+      'List notes in the shared Obsidian vault (title, vault-relative path, size, ' +
+      'mtime), optionally restricted to a folder prefix.',
+      { folder: z.string().optional() },
+      async (args) => {
+        try {
+          const vault = getObsidianVault(config.obsidian);
+          if (!vault) return vaultUnavailable();
+          return { content: [{ type: 'text', text: JSON.stringify(vault.list(args.folder)) }] };
+        } catch (e: any) { return { content: [{ type: 'text', text: e.message }], isError: true }; }
       }
     );
   }

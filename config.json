@@ -73,6 +73,11 @@
       "enabled": false
     }
   },
+  "_obsidian_comment": "Shared knowledge base every brain can query. Local brains (same host) may read vaultPath off disk directly; remote brains use GET /api/obsidian/* and the obsidian_* MCP tools. Served read-only. The Portal shows an 'Obsidian Vault' web-viewer card when enabled.",
+  "obsidian": {
+    "vaultPath": "~/Documents/Obsidian Vault",
+    "enabled": true
+  },
   "inbox": {
     "autoArchiveDays": 30,
     "maxRetries": 3

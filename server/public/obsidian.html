@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<!--
+  Obsidian Vault — web viewer for the shared knowledge base.
+
+  Served by the cowork server itself (not a separate port), so the Portal card
+  can open it in a new window "web-viewer" style. It is a thin, read-only client
+  over the /api/obsidian/* endpoints: list + search notes on the left, render the
+  selected note (with [[wikilink]] resolution) on the right. Markdown is rendered
+  with the same marked + DOMPurify pair the dashboard already ships.
+-->
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Obsidian Vault · Cowork</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root[data-theme="dark"] {
+      --bg: #0b0f17; --panel: #121826; --panel-2: #0e1320; --border: #232c3d;
+      --text: #e6edf7; --muted: #8b98ad; --accent: #7c5cff; --accent-soft: #7c5cff22;
+      --hit: #f0b90b;
+    }
+    :root[data-theme="light"] {
+      --bg: #f6f8fc; --panel: #ffffff; --panel-2: #eef2f8; --border: #dbe2ee;
+      --text: #1a2130; --muted: #5b6779; --accent: #6b46e5; --accent-soft: #6b46e514;
+      --hit: #b8860b;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      font-family: 'Inter', system-ui, sans-serif; background: var(--bg); color: var(--text);
+      display: grid; grid-template-rows: auto 1fr; height: 100vh; overflow: hidden;
+    }
+    header {
+      display: flex; align-items: center; gap: 14px; padding: 12px 18px;
+      border-bottom: 1px solid var(--border); background: var(--panel);
+    }
+    header .brand { display: flex; align-items: center; gap: 9px; font-weight: 650; }
+    header .brand .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 12px var(--accent); }
+    header .count { color: var(--muted); font-size: .82rem; }
+    header .spacer { flex: 1; }
+    header a.link, header button {
+      color: var(--muted); text-decoration: none; font-size: .85rem; background: none;
+      border: 1px solid var(--border); border-radius: 8px; padding: 6px 11px; cursor: pointer; font-family: inherit;
+    }
+    header a.link:hover, header button:hover { color: var(--text); border-color: var(--accent); }
+    #search {
+      flex: 0 1 340px; padding: 8px 12px; border-radius: 9px; border: 1px solid var(--border);
+      background: var(--panel-2); color: var(--text); font-family: inherit; font-size: .9rem;
+    }
+    #search:focus { outline: none; border-color: var(--accent); }
+    main { display: grid; grid-template-columns: 320px 1fr; min-height: 0; }
+    #list { border-right: 1px solid var(--border); overflow-y: auto; background: var(--panel-2); }
+    #list .folder { padding: 12px 16px 4px; font-size: .7rem; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+    #list .note {
+      padding: 8px 16px; cursor: pointer; font-size: .88rem; border-left: 2px solid transparent;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    #list .note:hover { background: var(--accent-soft); }
+    #list .note.active { background: var(--accent-soft); border-left-color: var(--accent); color: var(--accent); }
+    #list .note .snip { display: block; color: var(--muted); font-size: .76rem; margin-top: 2px; white-space: normal; }
+    #list .note .snip mark { background: transparent; color: var(--hit); font-weight: 600; }
+    #doc { overflow-y: auto; padding: 34px 46px 80px; max-width: 900px; margin: 0 auto; width: 100%; line-height: 1.65; }
+    #doc.empty { display: flex; align-items: center; justify-content: center; color: var(--muted); }
+    #doc h1, #doc h2, #doc h3 { line-height: 1.3; }
+    #doc h1 { border-bottom: 1px solid var(--border); padding-bottom: .3em; }
+    #doc a { color: var(--accent); }
+    #doc a.wikilink { text-decoration: none; border-bottom: 1px dashed var(--accent); }
+    #doc code { background: var(--panel-2); padding: .15em .4em; border-radius: 5px; font-size: .88em; }
+    #doc pre { background: var(--panel-2); padding: 14px 16px; border-radius: 10px; overflow-x: auto; border: 1px solid var(--border); }
+    #doc pre code { background: none; padding: 0; }
+    #doc blockquote { border-left: 3px solid var(--accent); margin: 1em 0; padding: .2em 1em; color: var(--muted); }
+    #doc table { border-collapse: collapse; } #doc th, #doc td { border: 1px solid var(--border); padding: 6px 10px; }
+    #doc img { max-width: 100%; }
+    #doc .doc-path { color: var(--muted); font-size: .78rem; margin-bottom: 18px; }
+    .muted { color: var(--muted); }
+  </style>
+</head>
+<body>
+  <header>
+    <span class="brand"><span class="dot"></span> Obsidian Vault</span>
+    <span class="count" id="count"></span>
+    <span class="spacer"></span>
+    <input id="search" type="search" placeholder="Search the vault…" autocomplete="off">
+    <button id="theme" title="Toggle theme">🌗</button>
+    <a class="link" href="/#portal">← Cowork</a>
+  </header>
+  <main>
+    <aside id="list"><div class="folder" style="padding:16px">Loading…</div></aside>
+    <article id="doc" class="empty">Select a note to read it.</article>
+  </main>
+
+  <script src="js/marked.min.js"></script>
+  <script src="js/purify.min.js"></script>
+  <script>
+    const $ = (s) => document.querySelector(s);
+    const listEl = $('#list'), docEl = $('#doc'), searchEl = $('#search'), countEl = $('#count');
+    let notes = [];             // full note list {path,title,...}
+    let searchTimer = null;
+
+    // Theme mirrors the dashboard's persisted choice.
+    const theme = localStorage.getItem('cowork-theme') || 'dark';
+    document.documentElement.setAttribute('data-theme', theme);
+    $('#theme').addEventListener('click', () => {
+      const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('cowork-theme', next);
+    });
+
+    const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+    async function api(path) {
+      const r = await fetch(`/api${path}`);
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`);
+      return r.json();
+    }
+
+    // Group notes by their top-level folder for a scannable sidebar.
+    function renderList(items, { search } = {}) {
+      if (!items.length) { listEl.innerHTML = `<div class="folder" style="padding:16px">${search ? 'No matches.' : 'Empty vault.'}</div>`; return; }
+      if (search) {
+        listEl.innerHTML = items.map(h => `
+          <div class="note" data-path="${esc(h.path)}" title="${esc(h.path)}">
+            ${esc(h.title)}
+            ${h.snippet ? `<span class="snip">${highlight(h.snippet, search)}</span>` : ''}
+          </div>`).join('');
+      } else {
+        const groups = new Map();
+        for (const n of items) {
+          const top = n.path.includes('/') ? n.path.split('/')[0] : '·';
+          if (!groups.has(top)) groups.set(top, []);
+          groups.get(top).push(n);
+        }
+        listEl.innerHTML = [...groups.keys()].sort().map(g => `
+          <div class="folder">${esc(g)}</div>
+          ${groups.get(g).map(n => `<div class="note" data-path="${esc(n.path)}" title="${esc(n.path)}">${esc(n.title)}</div>`).join('')}
+        `).join('');
+      }
+      listEl.querySelectorAll('.note').forEach(el => el.addEventListener('click', () => openNote(el.dataset.path)));
+      markActive();
+    }
+
+    function highlight(text, q) {
+      const i = text.toLowerCase().indexOf(q.toLowerCase());
+      if (i < 0) return esc(text);
+      return esc(text.slice(0, i)) + '<mark>' + esc(text.slice(i, i + q.length)) + '</mark>' + esc(text.slice(i + q.length));
+    }
+
+    function markActive() {
+      const cur = decodeURIComponent(location.hash.slice(1));
+      listEl.querySelectorAll('.note').forEach(el => el.classList.toggle('active', el.dataset.path === cur));
+    }
+
+    // Resolve Obsidian [[wikilinks]] to loadable notes before markdown rendering.
+    // [[Target]] and [[Target|Alias]] both become an in-app anchor that reopens
+    // via the hash router; unresolved targets just link by title (best effort).
+    function resolveWikilinks(md) {
+      return md.replace(/\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|([^\]]+))?\]\]/g, (_m, target, alias) => {
+        const name = target.trim();
+        const hit = notes.find(n => n.title.toLowerCase() === name.toLowerCase())
+                 || notes.find(n => n.path.toLowerCase() === (name.toLowerCase().endsWith('.md') ? name.toLowerCase() : name.toLowerCase() + '.md'));
+        const label = (alias || name).trim();
+        const path = hit ? hit.path : name;
+        return `<a class="wikilink" href="#${encodeURIComponent(path)}" data-wiki="${esc(path)}">${esc(label)}</a>`;
+      });
+    }
+
+    async function openNote(path) {
+      if (!path) return;
+      if (decodeURIComponent(location.hash.slice(1)) !== path) { location.hash = encodeURIComponent(path); return; }
+      markActive();
+      docEl.className = '';
+      docEl.innerHTML = '<p class="muted">Loading…</p>';
+      try {
+        const note = await api(`/obsidian/note?path=${encodeURIComponent(path)}`);
+        const html = DOMPurify.sanitize(marked.parse(resolveWikilinks(note.content)));
+        docEl.innerHTML = `<div class="doc-path">📄 ${esc(note.path)}</div>${html}`;
+        docEl.querySelectorAll('a.wikilink').forEach(a => a.addEventListener('click', (e) => {
+          e.preventDefault(); openNote(a.dataset.wiki);
+        }));
+        docEl.scrollTop = 0;
+      } catch (e) {
+        docEl.className = 'empty';
+        docEl.textContent = `Could not open note: ${e.message}`;
+      }
+    }
+
+    searchEl.addEventListener('input', () => {
+      clearTimeout(searchTimer);
+      const q = searchEl.value.trim();
+      searchTimer = setTimeout(async () => {
+        if (!q) { renderList(notes); return; }
+        try { renderList(await api(`/obsidian/search?q=${encodeURIComponent(q)}&limit=50`), { search: q }); }
+        catch (e) { listEl.innerHTML = `<div class="folder" style="padding:16px">Search failed: ${esc(e.message)}</div>`; }
+      }, 180);
+    });
+
+    window.addEventListener('hashchange', () => { markActive(); const p = decodeURIComponent(location.hash.slice(1)); if (p) openNote(p); });
+
+    (async function init() {
+      try {
+        const info = await api('/obsidian');
+        if (!info.available) {
+          countEl.textContent = '';
+          listEl.innerHTML = '';
+          docEl.className = 'empty';
+          docEl.innerHTML = 'Obsidian vault is not configured or is unavailable.<br>Set <code>obsidian.vaultPath</code> in <code>~/.cowork/config.json</code>.';
+          return;
+        }
+        countEl.textContent = `${info.noteCount} notes`;
+        notes = await api('/obsidian/notes');
+        renderList(notes);
+        const initial = decodeURIComponent(location.hash.slice(1));
+        if (initial) openNote(initial);
+      } catch (e) {
+        docEl.className = 'empty';
+        docEl.textContent = `Failed to load vault: ${e.message}`;
+      }
+    })();
+  </script>
+</body>
+</html>

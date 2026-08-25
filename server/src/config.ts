@@ -57,6 +57,10 @@ const defaultConfig: Config = {
   },
   platforms: {},
   services: {},
+  obsidian: {
+    vaultPath: '~/Documents/Obsidian Vault',
+    enabled: true
+  },
   inbox: {
     autoArchiveDays: 30,
     maxRetries: 3
@@ -116,6 +120,9 @@ export function loadConfig(): Config {
     paths: { ...defaultConfig.paths, ...(loadedConfig.paths || {}) },
     platforms: loadedConfig.platforms || {},
     services: loadedConfig.services || {},
+    obsidian: loadedConfig.obsidian
+      ? { ...defaultConfig.obsidian!, ...loadedConfig.obsidian }
+      : defaultConfig.obsidian,
     inbox: { ...defaultConfig.inbox, ...(loadedConfig.inbox || {}) },
     orchestration: {
       ...defaultConfig.orchestration,

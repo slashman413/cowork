@@ -390,6 +390,7 @@ const PORTAL_CATALOG = {
   grafana:     { label: 'Grafana',     icon: 'gauge',       category: 'Ops',       description: 'Metrics dashboards and observability.' },
   portainer:   { label: 'Portainer',   icon: 'container',   category: 'Ops',       description: 'Docker / container management UI.' },
   n8n:         { label: 'n8n',         icon: 'workflow',    category: 'Automation', description: 'Workflow automation and integrations.' },
+  obsidian:    { label: 'Obsidian Vault', icon: 'book-open', category: 'Knowledge', description: 'Shared knowledge base — search and read the team vault in a web viewer.' },
 };
 
 // Always-present launcher tiles so the Portal is useful before any service is
@@ -399,7 +400,7 @@ const PORTAL_DEFAULTS = {
   filebrowser: { url: 'http://localhost:8082' },
 };
 
-const PORTAL_CATEGORY_ORDER = ['Marketing', 'Files', 'Dev', 'Automation', 'Ops', 'APIs & MCP', 'Other'];
+const PORTAL_CATEGORY_ORDER = ['Knowledge', 'Marketing', 'Files', 'Dev', 'Automation', 'Ops', 'APIs & MCP', 'Other'];
 const PORTAL_ACCENT = '#2563EB';
 
 // Turn a service key like "vllm35b" into a readable "Vllm35b" fallback label.
@@ -3375,6 +3376,14 @@ class App {
     const merged = {};
     for (const [key, v] of Object.entries(PORTAL_DEFAULTS)) merged[key] = { ...v };
     for (const [key, v] of Object.entries(configured)) merged[key] = { ...(merged[key] || {}), ...v };
+
+    // Obsidian Vault card — the viewer is served by THIS server (public/obsidian.html),
+    // so its URL is the dashboard's own origin, not a separate service port. Shown
+    // whenever the vault is enabled in config; its status dot is driven by the
+    // synthetic 'obsidian' entry in GET /api/services (online = vault dir exists).
+    if (config && config.obsidian && config.obsidian.enabled !== false) {
+      merged.obsidian = { url: `${window.location.origin}/obsidian.html`, enabled: true };
+    }
 
     // Services are configured with loopback URLs (localhost / 127.0.0.1)
     // because they run on this host. But the dashboard is usually opened from

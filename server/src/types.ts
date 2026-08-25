@@ -275,11 +275,24 @@ export interface Config {
   };
   platforms: Record<string, PlatformConfig>;
   services: Record<string, ServiceConfig>;
+  /** Shared Obsidian Vault — a knowledge base every brain can query. Local
+   *  brains (same host as the server) can read `vaultPath` off disk directly;
+   *  remote brains reach it through the /api/obsidian endpoints and the
+   *  obsidian_* MCP tools, which the server serves from this same path. */
+  obsidian?: ObsidianConfig;
   inbox: {
     autoArchiveDays: number;
     maxRetries: number;
   };
   orchestration: OrchestrationConfig;
+}
+
+export interface ObsidianConfig {
+  /** Absolute (or ~) path to the vault root, e.g. "~/Documents/Obsidian Vault". */
+  vaultPath: string;
+  /** When false the vault is not served: API returns 404, MCP tools report
+   *  unavailable, and the Portal card is hidden. */
+  enabled: boolean;
 }
 
 export interface AgentCard {
