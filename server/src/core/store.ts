@@ -527,7 +527,13 @@ export class Store {
 
     this.eventBus.emitTaskCompleted(task);
     
-    // Automatically schedule the next iteration if this is a looping task
+    // Automatically schedule the next iteration if this is a looping task. The
+    // just-finished run KEEPS its artifacts/result on its own card; the next
+    // iteration is a FRESH task that produces its own. To make a periodic task's
+    // outputs discoverable, we cross-link the two: the new task points back at the
+    // run that spawned it (context.periodicPrevId) and the finished run points
+    // forward (context.periodicNextId), so the dashboard can offer a "previous
+    // run" jump straight to the card whose Artifacts chips hold this cycle's files.
     if (task.loopIntervalHours && task.loopIntervalHours > 0) {
       const nextContext = { ...(task.context || {}) };
       delete nextContext.failedBrains;
@@ -537,9 +543,18 @@ export class Store {
       delete nextContext.claimCount; delete nextContext.lastClaimAt; delete nextContext.failedCount;
       delete nextContext.remoteWaitSince;
       delete nextContext.ranAgent; delete nextContext.ranDivision; delete nextContext.ranBrain; delete nextContext.isRoster;
+      // Per-run bookkeeping that must NOT bleed into the next cycle: `dispatched`
+      // (a claim marker) and `inputFiles` (names under THIS run's inputs/<id>/ that
+      // were never copied forward) would otherwise mislead the dispatcher and the
+      // executor. Prior cross-links are per-cycle too — reset them before re-linking.
+      delete nextContext.dispatched; delete nextContext.inputFiles;
+      delete nextContext.humanInput; delete nextContext.awaitingInput; delete nextContext.inputQuestions;
+      delete nextContext.attempts; delete nextContext.continuedFrom; delete nextContext.continuedInto;
+      delete nextContext.periodicPrevId; delete nextContext.periodicNextId;
+      nextContext.periodicPrevId = task.id;
 
       // Create a fresh task matching the original parameters
-      this.createTask({
+      const next = this.createTask({
         title: task.title,
         description: task.description,
         from: task.from,
@@ -552,6 +567,10 @@ export class Store {
         scheduledAt: new Date(Date.now() + task.loopIntervalHours * 3600 * 1000).toISOString(),
         loopIntervalHours: task.loopIntervalHours
       });
+      // Stamp the finished run with a forward link to the iteration it spawned, so
+      // the recurring task's history is walkable in both directions.
+      task.context = { ...(task.context || {}), periodicNextId: next.id };
+      fs.writeFileSync(taskPath, JSON.stringify(task, null, 2));
     }
     
     return task;

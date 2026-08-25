@@ -2196,6 +2196,11 @@ class App {
       const inputsRaw = Array.isArray(c.inputFiles) ? c.inputFiles : [];
       const inputs = (t.description && !inputsRaw.includes('description.md'))
         ? ['description.md', ...inputsRaw] : inputsRaw;
+      // Periodic (looping) tasks spawn a fresh task each cycle; each cycle's output
+      // lives on its OWN card. completeTask cross-links them (context.periodicPrevId
+      // / periodicNextId) so the recurring series is walkable: from a scheduled next
+      // iteration you can jump back to the completed run that holds the artifacts.
+      const periodicLink = (id, label, title) => `<a href="#inbox/${encodeURIComponent(id)}" title="${esc(title)}" style="display:inline-flex; align-items:center; gap:3px; color:#3B82F6; text-decoration:none; font-family:inherit"><i data-lucide="repeat" style="width:11px;height:11px;vertical-align:-1px"></i>${esc(label)}</a>`;
       // Files can be attached while a task is still schedulable, or to a failed one
       // (attach context, then re-run).
       const canAttach = ['pending', 'wait-input', 'scheduled'].includes(t.status) || failed;
@@ -2254,6 +2259,8 @@ class App {
             <i data-lucide="hash" style="width:11px;height:11px;vertical-align:-1px"></i>${esc(t.id)}</span>
           <span class="copyable" data-copy="artifacts/${esc(t.id)}/" title="Artifacts directory — click to copy" style="cursor:pointer; font-family:ui-monospace,SFMono-Regular,Menlo,monospace">
             <i data-lucide="folder" style="width:11px;height:11px;vertical-align:-1px"></i>artifacts/${esc(t.id)}/</span>
+          ${c.periodicPrevId ? periodicLink(c.periodicPrevId, 'previous run ↗', "Jump to the previous run in this recurring series — its Artifacts hold that cycle's output files") : ''}
+          ${c.periodicNextId ? periodicLink(c.periodicNextId, 'next run ↗', 'Jump to the next scheduled iteration this run spawned') : ''}
         </div>
         ${arts.length ? `<div class="task-artifacts" style="display:flex; flex-wrap:wrap; align-items:center; gap:4px; padding:6px 0 2px">
           <span style="font-size:0.85rem; color:var(--text-muted); margin-right:2px; text-transform:uppercase; letter-spacing:.03em">Artifacts</span>
