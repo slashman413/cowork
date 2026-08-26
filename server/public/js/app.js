@@ -281,6 +281,139 @@ function isoToLocalInput(iso) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
+/**
+ * Recurrence editor — a compact "Repeat" widget shared by the New-task composer,
+ * the Edit modal and the brain-dispatch schedule sheet. It renders a cadence
+ * <select> (none / minutes / hours / daily / weekly / monthly / cron) plus the
+ * fields each cadence needs, and reads back a `recurrence` object matching the
+ * server's core/recurrence.ts schema. Wall-clock times are the browser's local
+ * time, which the server interprets in its own (Taiwan) timezone.
+ *
+ * `p` is a unique id prefix so multiple editors can coexist on one page.
+ */
+const RECUR_TYPES = [
+  ['', 'One-off — do not repeat'],
+  ['minutes', 'Every N minutes'],
+  ['hours', 'Every N hours'],
+  ['daily', 'Daily (every N days)'],
+  ['weekly', 'Weekly / specific weekdays'],
+  ['monthly', 'Monthly (day of month)'],
+  ['cron', 'Custom (cron expression)'],
+];
+const RECUR_WD = [['1', 'Mon'], ['2', 'Tue'], ['3', 'Wed'], ['4', 'Thu'], ['5', 'Fri'], ['6', 'Sat'], ['0', 'Sun']];
+
+function recurrenceEditorHTML(p, fieldStyle, labelStyle, rec) {
+  rec = rec || {};
+  const type = rec.type || '';
+  const sel = (v) => (v === type ? ' selected' : '');
+  const typeOpts = RECUR_TYPES.map(([v, l]) => `<option value="${v}"${sel(v)}>${esc(l)}</option>`).join('');
+  const interval = rec.interval != null ? esc(String(rec.interval)) : '';
+  const atTime = rec.atTime ? esc(rec.atTime) : '';
+  const dom = rec.dayOfMonth != null ? esc(String(rec.dayOfMonth)) : '';
+  const expr = rec.expr ? esc(rec.expr) : '';
+  const wd = Array.isArray(rec.weekdays) ? rec.weekdays.map(Number) : [];
+  const wdChips = RECUR_WD.map(([v, l]) =>
+    `<label style="display:inline-flex;align-items:center;gap:4px;font-size:0.82rem;margin-right:8px">
+       <input type="checkbox" class="${p}-wd" value="${v}"${wd.includes(Number(v)) ? ' checked' : ''}> ${l}</label>`).join('');
+  const half = `${fieldStyle}; flex:1`;
+  return `
+    <label style="${labelStyle}">Repeat</label>
+    <select id="${p}-type" style="${fieldStyle}; margin-bottom:10px">${typeOpts}</select>
+    <div id="${p}-num" style="display:none; gap:8px; margin-bottom:10px; align-items:center">
+      <span style="font-size:0.82rem;color:var(--text-muted)">every</span>
+      <input id="${p}-interval" type="number" min="1" step="1" style="${fieldStyle}; width:90px" value="${interval}" placeholder="1">
+      <span id="${p}-unit" style="font-size:0.82rem;color:var(--text-muted)"></span>
+    </div>
+    <div id="${p}-wdrow" style="display:none; margin-bottom:10px">
+      <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted);margin-bottom:6px">On weekdays <span style="text-transform:none;letter-spacing:0">(none = the start day, weekly)</span></div>
+      <div>${wdChips}</div>
+    </div>
+    <div id="${p}-domrow" style="display:none; gap:8px; margin-bottom:10px; align-items:center">
+      <span style="font-size:0.82rem;color:var(--text-muted)">on day</span>
+      <input id="${p}-dom" type="number" min="1" max="31" step="1" style="${fieldStyle}; width:90px" value="${dom}" placeholder="1-31">
+      <span style="font-size:0.78rem;color:var(--text-muted)">(clamped to short months)</span>
+    </div>
+    <div id="${p}-timerow" style="display:none; gap:8px; margin-bottom:10px; align-items:center">
+      <span style="font-size:0.82rem;color:var(--text-muted)">at time</span>
+      <input id="${p}-at" type="time" style="${fieldStyle}; width:140px" value="${atTime}">
+      <span style="font-size:0.78rem;color:var(--text-muted)">(blank = the start time)</span>
+    </div>
+    <div id="${p}-cronrow" style="display:none; margin-bottom:10px">
+      <input id="${p}-expr" style="${fieldStyle}" value="${expr}" placeholder="min hour dom mon dow — e.g. 0 9 * * 1-5">
+      <div style="font-size:0.72rem;color:var(--text-muted);margin-top:4px">5-field cron in server local time. e.g. <code>*/15 9-17 * * *</code></div>
+    </div>`;
+}
+
+/** Wire the cadence <select> so only the relevant fields show. Call after insert. */
+function recurrenceEditorBind(content, p) {
+  const typeEl = content.querySelector(`#${p}-type`);
+  if (!typeEl) return;
+  const show = (id, on, disp = 'flex') => { const el = content.querySelector(`#${p}-${id}`); if (el) el.style.display = on ? disp : 'none'; };
+  const sync = () => {
+    const t = typeEl.value;
+    show('num', t === 'minutes' || t === 'hours' || t === 'daily' || t === 'weekly' || t === 'monthly');
+    show('wdrow', t === 'weekly', 'block');
+    show('domrow', t === 'monthly');
+    show('timerow', t === 'daily' || t === 'weekly' || t === 'monthly');
+    show('cronrow', t === 'cron', 'block');
+    const unit = content.querySelector(`#${p}-unit`);
+    if (unit) unit.textContent = { minutes: 'minute(s)', hours: 'hour(s)', daily: 'day(s)', weekly: 'week(s)', monthly: 'month(s)' }[t] || '';
+  };
+  typeEl.onchange = sync;
+  sync();
+}
+
+/** Read the editor back into a `recurrence` object, or null for "one-off". */
+function readRecurrence(content, p) {
+  const typeEl = content.querySelector(`#${p}-type`);
+  if (!typeEl || !typeEl.value) return null;
+  const type = typeEl.value;
+  if (type === 'cron') {
+    const expr = (content.querySelector(`#${p}-expr`).value || '').trim();
+    return expr ? { type, expr } : null;
+  }
+  const rec = { type };
+  const iv = parseInt(content.querySelector(`#${p}-interval`).value, 10);
+  rec.interval = Number.isFinite(iv) && iv >= 1 ? iv : 1;
+  if (type === 'weekly') {
+    const days = Array.from(content.querySelectorAll(`.${p}-wd`)).filter(c => c.checked).map(c => Number(c.value));
+    if (days.length) rec.weekdays = days;
+  }
+  if (type === 'monthly') {
+    const dom = parseInt(content.querySelector(`#${p}-dom`).value, 10);
+    if (Number.isFinite(dom)) rec.dayOfMonth = dom;
+  }
+  if (type === 'daily' || type === 'weekly' || type === 'monthly') {
+    const at = (content.querySelector(`#${p}-at`).value || '').trim();
+    if (at) rec.atTime = at;
+  }
+  return rec;
+}
+
+/** One-line human label for a recurrence badge (mirrors describeRecurrence). */
+function describeRecurrence(rec) {
+  if (!rec || !rec.type) return '';
+  const n = rec.interval || 1;
+  const every = (u) => (n === 1 ? `every ${u}` : `every ${n} ${u}s`);
+  const WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  switch (rec.type) {
+    case 'minutes': return every('minute');
+    case 'hours': return every('hour');
+    case 'daily': return `${every('day')}${rec.atTime ? ` at ${rec.atTime}` : ''}`;
+    case 'weekly': {
+      const days = (rec.weekdays && rec.weekdays.length) ? rec.weekdays.map(d => WD[d]).join('/') : '';
+      const base = n === 1 ? 'weekly' : `every ${n} weeks`;
+      return `${base}${days ? ` on ${days}` : ''}${rec.atTime ? ` at ${rec.atTime}` : ''}`;
+    }
+    case 'monthly': {
+      const base = n === 1 ? 'monthly' : `every ${n} months`;
+      return `${base}${rec.dayOfMonth ? ` on day ${rec.dayOfMonth}` : ''}${rec.atTime ? ` at ${rec.atTime}` : ''}`;
+    }
+    case 'cron': return `cron "${rec.expr}"`;
+    default: return '';
+  }
+}
+
 const STATUS_COLORS = {
   'wait-input': '#A855F7', scheduled: '#6366F1', pending: '#EAB308', claimed: '#0EA5E9', 'in-progress': '#0EA5E9',
   done: '#22C55E', rejected: '#EF4444',
@@ -938,8 +1071,7 @@ class App {
       </select>
       <label style="${labelStyle}">Run at <span style="text-transform:none; letter-spacing:0">(optional — leave empty to run now)</span></label>
       <input id="nt-when" type="datetime-local" style="${fieldStyle}; margin-bottom:12px">
-      <label style="${labelStyle}">Loop interval <span style="text-transform:none; letter-spacing:0">(optional — hours to wait before recurring)</span></label>
-      <input id="nt-loop" type="number" min="1" step="any" style="${fieldStyle}; margin-bottom:12px" placeholder="e.g. 1 for every hour">
+      ${recurrenceEditorHTML('nt-rec', fieldStyle, labelStyle, null)}
       <label style="${labelStyle}">Brain to claim this task</label>
       <select id="nt-brain" style="${fieldStyle}; margin-bottom:12px">${opts}</select>
       <label style="${labelStyle}">Input files <span style="text-transform:none; letter-spacing:0">(optional — attached for the agent/brain to study)</span></label>
@@ -952,6 +1084,7 @@ class App {
       </div>`;
     container.classList.remove('hidden');
     createIcons();
+    recurrenceEditorBind(content, 'nt-rec');
     content.querySelector('#nt-title').focus();
     // Assigned by the dictation wiring below; releases the mic stream / speech
     // recognizer so closing the modal never leaves a hot microphone behind.
@@ -1147,8 +1280,7 @@ class App {
       // datetime-local gives a LOCAL wall-clock string; toISOString converts it
       // to the UTC instant the server schedules on. Empty = run now (default).
       const when = content.querySelector('#nt-when').value;
-      const loopStr = content.querySelector('#nt-loop').value;
-      const loopIntervalHours = loopStr ? parseFloat(loopStr) : undefined;
+      const recurrence = readRecurrence(content, 'nt-rec');
       // Context mirrors Chat: a named agent wins (dispatcher derives its division
       // + persona); otherwise a bare division scopes the router. Brain pins on top.
       const context = {};
@@ -1166,7 +1298,7 @@ class App {
           context,
           ...(inputs.length ? { inputs } : {}),
           ...(when ? { scheduledAt: new Date(when).toISOString() } : {}),
-          ...(loopIntervalHours ? { loopIntervalHours } : {})
+          ...(recurrence ? { recurrence } : {})
         };
         await this.api.post('/inbox', body);
         close();
@@ -1233,8 +1365,7 @@ class App {
       <select id="et-priority" style="${fieldStyle}; margin-bottom:12px">${prioOpts}</select>
       <label style="${labelStyle}">Run at <span style="text-transform:none; letter-spacing:0">(optional — ${finished ? 'set a future time to re-run; ' : ''}leave empty to run now)</span></label>
       <input id="et-when" type="datetime-local" style="${fieldStyle}; margin-bottom:12px" value="${esc(isoToLocalInput(task.scheduledAt))}">
-      <label style="${labelStyle}">Loop interval <span style="text-transform:none; letter-spacing:0">(optional — hours to wait before recurring)</span></label>
-      <input id="et-loop" type="number" min="1" step="any" style="${fieldStyle}; margin-bottom:12px" value="${task.loopIntervalHours != null ? esc(String(task.loopIntervalHours)) : ''}" placeholder="e.g. 1 for every hour">
+      ${recurrenceEditorHTML('et-rec', fieldStyle, labelStyle, task.recurrence || (task.loopIntervalHours ? { type: 'hours', interval: task.loopIntervalHours } : null))}
       <label style="${labelStyle}">Brain to claim this task</label>
       <select id="et-brain" style="${fieldStyle}; margin-bottom:20px">${brainOpts}</select>
       <div style="display:flex; gap:8px; justify-content:flex-end">
@@ -1243,6 +1374,7 @@ class App {
       </div>`;
     container.classList.remove('hidden');
     createIcons();
+    recurrenceEditorBind(content, 'et-rec');
 
     const close = () => {
       container.classList.add('hidden');
@@ -1276,7 +1408,7 @@ class App {
       const division = divEl.value;
       const agent = agentEl.value;
       const when = content.querySelector('#et-when').value;
-      const loopStr = content.querySelector('#et-loop').value;
+      const recurrence = readRecurrence(content, 'et-rec');
       const okBtn = content.querySelector('#et-ok');
       okBtn.disabled = true;
       // context mirrors createTask: a named agent wins (dispatcher derives its
@@ -1288,7 +1420,9 @@ class App {
         context,
         // Always send the schedule keys so a cleared field clears the value.
         scheduledAt: when ? new Date(when).toISOString() : '',
-        loopIntervalHours: loopStr ? parseFloat(loopStr) : null
+        // null clears the cadence; a spec sets it. Send it every save so switching
+        // back to "One-off" actually removes a previous recurrence.
+        recurrence: recurrence || null
       };
       try {
         const updated = await this.api.post(`/inbox/${encodeURIComponent(taskId)}/edit`, body);
@@ -2231,7 +2365,8 @@ class App {
             : closedNoRun ? `<span class="badge" title="Done, but closed administratively without ever running a brain — so it has no artifacts and no result.md. The full explanation is in this task's result field below." style="background:#94A3B818; color:#94A3B8; border:1px solid #94A3B840">done · closed (never ran)</span>`
             : badge(t.status, STATUS_COLORS[t.status] || '#94A3B8')}
           ${t.status === 'scheduled' && t.scheduledAt ? badge(`⏰ ${new Date(t.scheduledAt).toLocaleString()}`, '#6366F1') : ''}
-          ${t.loopIntervalHours ? badge(`🔁 every ${t.loopIntervalHours}h`, '#3B82F6') : ''}
+          ${t.recurrence ? badge(`🔁 ${describeRecurrence(t.recurrence)}`, '#3B82F6')
+            : t.loopIntervalHours ? badge(`🔁 every ${t.loopIntervalHours}h`, '#3B82F6') : ''}
           ${agentLabel ? badge(agentLabel, '#7C3AED') : ''}
           ${t.interaction && t.interaction.status !== 'submitted' ? badge('⌛ awaiting input', '#EAB308') : ''}
           ${t.interaction && t.interaction.status === 'submitted' ? badge('✓ input received', '#22C55E') : ''}

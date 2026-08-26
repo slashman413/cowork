@@ -235,7 +235,10 @@ function buildServer(config: Config, store: Store, eventBus: EventBus, goals?: G
     'Create a cross-platform task. Launches now by default; pass scheduled_at ' +
     '(an ISO 8601 date-time, e.g. "2026-08-08T09:00:00+08:00") to schedule it for ' +
     'later — the task parks in the "scheduled" inbox category and the dispatcher ' +
-    'launches it when its time arrives. Pass loop_interval_hours to make the task recur.',
+    'launches it when its time arrives. Pass loop_interval_hours (simple hourly) ' +
+    'or a `recurrence` object for a flexible cadence — minutes/hours/daily/weekly/' +
+    'monthly/cron. The next run is FIXED-RATE (phased on the intended launch time), ' +
+    'so a fast run never delays the following one.',
     {
       title: z.string(),
       description: z.string(),
@@ -251,9 +254,22 @@ function buildServer(config: Config, store: Store, eventBus: EventBus, goals?: G
       // immediately). A future time parks the task on the `scheduled` status
       // until the dispatcher releases it at launch time.
       scheduled_at: z.string().optional(),
-      // Recurring loop interval in hours. If set, when this task completes, a
-      // clone of it will be automatically created and scheduled for `now + interval`.
+      // Recurring loop interval in hours (legacy shorthand for
+      // recurrence:{type:'hours', interval}). If set, completing the task spawns
+      // the next iteration at the fixed-rate next slot.
       loop_interval_hours: z.number().optional(),
+      // Flexible recurrence. When set, completing the task spawns the next
+      // iteration at this cadence's next fire time (fixed-rate, phased on the
+      // intended launch time). Wall-clock fields are the server's local time.
+      recurrence: z.object({
+        type: z.enum(['minutes', 'hours', 'daily', 'weekly', 'monthly', 'cron']),
+        interval: z.number().int().positive().optional(),
+        weekdays: z.array(z.number().int().min(0).max(6)).optional(),
+        dayOfMonth: z.number().int().min(1).max(31).optional(),
+        atTime: z.string().optional(),
+        expr: z.string().optional(),
+        until: z.string().optional(),
+      }).optional(),
       // Human-in-the-loop: request questions/checklist a person answers from the
       // Inbox card before/while the task runs. Their answers reach the executor
       // via context.humanInput.
@@ -282,7 +298,8 @@ function buildServer(config: Config, store: Store, eventBus: EventBus, goals?: G
           tags: args.tags,
           interaction: args.interaction as any,
           scheduledAt: args.scheduled_at,
-          loopIntervalHours: args.loop_interval_hours
+          loopIntervalHours: args.loop_interval_hours,
+          recurrence: args.recurrence as any
         });
         return { content: [{ type: 'text', text: JSON.stringify(task) }] };
       } catch (e: any) {

@@ -63,7 +63,10 @@ export function createApiRouter(store: Store, eventBus: EventBus): Router {
         // the dashboard sends scheduledAt, MCP-side callers may echo scheduled_at.
         scheduledAt: typeof body.scheduledAt === 'string' ? body.scheduledAt
           : typeof body.scheduled_at === 'string' ? body.scheduled_at : undefined,
-        loopIntervalHours: typeof body.loopIntervalHours === 'number' ? body.loopIntervalHours : undefined
+        loopIntervalHours: typeof body.loopIntervalHours === 'number' ? body.loopIntervalHours : undefined,
+        // Flexible periodic cadence (minutes/hours/daily/weekly/monthly/cron).
+        // Validated + normalized in the store; an invalid spec 400s below.
+        recurrence: body.recurrence != null ? body.recurrence : undefined
       }, {
         // Staged input uploads (from POST /api/uploads) the brain should read.
         inputs: Array.isArray(body.inputs) ? body.inputs : undefined
@@ -172,6 +175,10 @@ export function createApiRouter(store: Store, eventBus: EventBus): Router {
       if ('loopIntervalHours' in b) {
         patch.loopIntervalHours = b.loopIntervalHours === null || b.loopIntervalHours === ''
           ? null : Number(b.loopIntervalHours);
+      }
+      // Flexible cadence: a spec object sets it, null / '' / {type:'none'} clears it.
+      if ('recurrence' in b) {
+        patch.recurrence = (b.recurrence === null || b.recurrence === '') ? null : b.recurrence;
       }
       const task = store.updateTask(req.params.id, patch);
       if (!task) return res.status(404).json({ error: 'Task not found' });

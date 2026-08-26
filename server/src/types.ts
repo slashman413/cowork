@@ -406,7 +406,15 @@ export interface Task {
    *  task on the `scheduled` status until the dispatcher releases it (see
    *  Store.releaseDueScheduled). Normalized to UTC ISO form at creation. */
   scheduledAt?: string;
+  /** Legacy periodic cadence: recur every N hours. Superseded by `recurrence`
+   *  (which subsumes it as `{type:'hours', interval:N}`) but still honoured for
+   *  back-compatibility with tasks/clients that only set this field. */
   loopIntervalHours?: number;
+  /** Flexible periodic cadence (ADR: recurrence). When set, completing this task
+   *  spawns the next iteration at the cadence's next fire time — computed
+   *  FIXED-RATE from this run's intended `scheduledAt`, so a fast run never delays
+   *  the next one. See {@link TaskRecurrence} in core/recurrence.ts. */
+  recurrence?: import('./core/recurrence.js').TaskRecurrence;
   createdAt: string;
   claimedAt?: string;
   claimedBy?: string;

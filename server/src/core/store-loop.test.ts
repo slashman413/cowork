@@ -100,6 +100,74 @@ test('per-run bookkeeping does not bleed into the next iteration', async () => {
   assert.equal(next.context?.agent, 'mentor', 'the agent assignment is preserved');
 });
 
+test('a recurrence task spawns the next iteration and carries the cadence forward', async () => {
+  const { store } = makeStore();
+  const t = store.createTask({
+    title: 'Every 30 min', from: { platform: 'p', agent: 'a' },
+    scheduledAt: due(), recurrence: { type: 'minutes', interval: 30 },
+  } as any);
+  await store.completeTask({ taskId: t.id, result: 'done', internal: true });
+
+  const next = store.listTasks({}).find(x => x.id !== t.id)!;
+  assert.equal(next.status, 'scheduled');
+  assert.deepEqual(next.recurrence, { type: 'minutes', interval: 30 });
+  assert.ok(Date.parse(next.scheduledAt!) > Date.now(), 'next iteration is scheduled in the future');
+});
+
+test('FIXED-RATE: a fast run does not push the next run later', async () => {
+  const { store } = makeStore();
+  // The run fired 5 minutes ago and is completing now (execution << the 1h interval).
+  const firedAt = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+  const t = store.createTask({
+    title: 'Hourly', from: { platform: 'p', agent: 'a' },
+    scheduledAt: firedAt, recurrence: { type: 'hours', interval: 1 },
+  } as any);
+  await store.completeTask({ taskId: t.id, result: 'done', internal: true });
+
+  const next = store.listTasks({}).find(x => x.id !== t.id)!;
+  const expected = Date.parse(firedAt) + 60 * 60 * 1000;   // phased on the INTENDED time
+  // Next run is anchored on scheduledAt + interval, NOT on (now + interval): the
+  // 5 minutes of execution never shifts the cadence. (Old fixed-DELAY behavior
+  // would have scheduled it ~5 minutes later than this.)
+  assert.equal(Date.parse(next.scheduledAt!), expected, 'next is anchored on the intended fire time');
+  assert.ok(Date.parse(next.scheduledAt!) < Date.now() + 60 * 60 * 1000, 'sooner than a fixed-delay reschedule');
+});
+
+test('legacy loopIntervalHours still recurs (normalized onto recurrence)', async () => {
+  const { store } = makeStore();
+  const t = store.createTask({
+    title: 'Legacy', from: { platform: 'p', agent: 'a' },
+    scheduledAt: due(), loopIntervalHours: 6,
+  } as any);
+  assert.deepEqual(store.getTask(t.id)!.recurrence, { type: 'hours', interval: 6 }, 'legacy field normalizes to recurrence');
+  await store.completeTask({ taskId: t.id, result: 'done', internal: true });
+
+  const next = store.listTasks({}).find(x => x.id !== t.id)!;
+  assert.equal(next.loopIntervalHours, 6, 'legacy field stays mirrored for old dashboards');
+  assert.deepEqual(next.recurrence, { type: 'hours', interval: 6 });
+});
+
+test('a recurrence.until cutoff ends the series (no next iteration)', async () => {
+  const { store } = makeStore();
+  const t = store.createTask({
+    title: 'Bounded', from: { platform: 'p', agent: 'a' },
+    scheduledAt: due(),
+    // Next minute slot would be in the future but past `until` → series ends.
+    recurrence: { type: 'minutes', interval: 1, until: new Date(Date.now() - 1000).toISOString() },
+  } as any);
+  await store.completeTask({ taskId: t.id, result: 'done', internal: true });
+
+  assert.equal(store.listTasks({}).length, 1, 'only the finished run remains — nothing re-spawned');
+});
+
+test('an invalid recurrence spec is rejected at creation', () => {
+  const { store } = makeStore();
+  assert.throws(() => store.createTask({
+    title: 'Bad', from: { platform: 'p', agent: 'a' },
+    recurrence: { type: 'weekly', weekdays: [9] },
+  } as any), /0 \(Sun\)/);
+});
+
 test('cross-links do not leak the grand-parent id across cycles', async () => {
   const { store } = makeStore();
   const t = store.createTask({

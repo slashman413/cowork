@@ -6,6 +6,7 @@ import { globSync } from 'glob';
 import type { Config, ActiveAgent, Task, DashboardData, AgentCard, InteractionField, BrainUsage } from '../types.js';
 import type { EventBus } from './events.js';
 import { Roster } from './roster.js';
+import { normalizeRecurrence, recurrenceFromLegacyHours, nextRunAt, describeRecurrence, type TaskRecurrence } from './recurrence.js';
 
 /**
  * A veto the Dispatcher registers on the store so EXTERNAL task completions
@@ -380,6 +381,18 @@ export class Store {
       if (at > Date.now()) task.status = 'scheduled';
     }
 
+    // Flexible periodic cadence. A caller may pass `recurrence` directly, or the
+    // legacy `loopIntervalHours`; normalize whichever is present onto `recurrence`
+    // (throwing on an invalid spec) and keep loopIntervalHours mirrored so older
+    // dashboards/clients still read the interval.
+    if (task.recurrence !== undefined) {
+      task.recurrence = normalizeRecurrence(task.recurrence);
+    } else if (task.loopIntervalHours) {
+      task.recurrence = recurrenceFromLegacyHours(task.loopIntervalHours);
+    }
+    if (task.recurrence === undefined) delete task.recurrence;
+    this.syncLegacyLoopField(task);
+
     const taskPath = path.join(this.config.paths.inbox, `${id}.json`);
     fs.writeFileSync(taskPath, JSON.stringify(task, null, 2));
     
@@ -534,7 +547,24 @@ export class Store {
     // run that spawned it (context.periodicPrevId) and the finished run points
     // forward (context.periodicNextId), so the dashboard can offer a "previous
     // run" jump straight to the card whose Artifacts chips hold this cycle's files.
-    if (task.loopIntervalHours && task.loopIntervalHours > 0) {
+    // Resolve the cadence: prefer the flexible `recurrence`, fall back to the
+    // legacy hour interval. A task with neither is a one-shot and spawns nothing.
+    const recurrence: TaskRecurrence | undefined = task.recurrence
+      ? normalizeRecurrence(task.recurrence)
+      : recurrenceFromLegacyHours(task.loopIntervalHours);
+    if (recurrence) {
+      // FIXED-RATE, not fixed-delay: phase the next fire time on this run's
+      // INTENDED launch time (`scheduledAt`), not on when it finished. A run that
+      // executes faster than its interval therefore does NOT push the next run
+      // later; nextRunAt() catches up past `now` only when a run OVERRAN its
+      // interval, so we never emit a burst of missed cycles.
+      const anchor = task.scheduledAt ? new Date(task.scheduledAt) : new Date(task.completedAt!);
+      const when = nextRunAt(recurrence, anchor, new Date());
+      if (!when) {
+        // The series reached its `until` cutoff — stop cleanly, spawn nothing.
+        console.log(`Store: recurring task ${task.id} reached its end (${describeRecurrence(recurrence)}) — no further iterations — ${task.title}`);
+        return task;
+      }
       const nextContext = { ...(task.context || {}) };
       delete nextContext.failedBrains;
       const existingPin = nextContext.brainAuto ? undefined : nextContext.brain;
@@ -564,8 +594,8 @@ export class Store {
         context: nextContext,
         tags: task.tags,
         interaction: task.interaction,
-        scheduledAt: new Date(Date.now() + task.loopIntervalHours * 3600 * 1000).toISOString(),
-        loopIntervalHours: task.loopIntervalHours
+        scheduledAt: when.toISOString(),
+        recurrence
       });
       // Stamp the finished run with a forward link to the iteration it spawned, so
       // the recurring task's history is walkable in both directions.
@@ -656,6 +686,10 @@ export class Store {
     brain?: string | null;
     scheduledAt?: string | null;
     loopIntervalHours?: number | null;
+    /** A flexible recurrence spec (see core/recurrence.ts), or null/'none' to
+     *  clear the cadence. Takes precedence over `loopIntervalHours` when both are
+     *  supplied. Invalid specs throw. */
+    recurrence?: TaskRecurrence | { type?: string } | null;
   }): Task | null {
     const task = this.getTask(taskId);
     if (!task) return null;
@@ -697,9 +731,19 @@ export class Store {
     }
     task.context = ctx;
 
-    if (patch.loopIntervalHours !== undefined) {
-      if (patch.loopIntervalHours && patch.loopIntervalHours > 0) task.loopIntervalHours = patch.loopIntervalHours;
-      else delete task.loopIntervalHours;
+    // Cadence. A `recurrence` patch wins over the legacy hour interval; either
+    // key, when present, fully (re)defines the task's periodicity. null / 'none' /
+    // a zero interval clears it. loopIntervalHours is kept mirrored via
+    // syncLegacyLoopField so old cards keep showing an hour-based loop's value.
+    if (patch.recurrence !== undefined) {
+      task.recurrence = patch.recurrence == null ? undefined : normalizeRecurrence(patch.recurrence);
+      if (task.recurrence === undefined) delete task.recurrence;
+      this.syncLegacyLoopField(task);
+    } else if (patch.loopIntervalHours !== undefined) {
+      task.recurrence = recurrenceFromLegacyHours(
+        patch.loopIntervalHours && patch.loopIntervalHours > 0 ? patch.loopIntervalHours : undefined);
+      if (task.recurrence === undefined) delete task.recurrence;
+      this.syncLegacyLoopField(task);
     }
 
     // Scheduling. Only touched when the caller included the `scheduledAt` key.
@@ -993,6 +1037,21 @@ export class Store {
     const file = this.resolveTaskFile(task.id) || `${task.id}.json`;
     const taskPath = path.join(this.config.paths.inbox, file);
     fs.writeFileSync(taskPath, JSON.stringify(task, null, 2));
+  }
+
+  /**
+   * Keep the legacy `loopIntervalHours` field consistent with `recurrence` so
+   * older dashboards/clients that only understand the hour interval still show a
+   * meaningful value: an hour-based recurrence mirrors its interval onto the
+   * legacy field; any other cadence (minutes/daily/weekly/monthly/cron) or no
+   * recurrence at all drops it (it can't express those and would mislead).
+   */
+  private syncLegacyLoopField(task: Task): void {
+    if (task.recurrence && task.recurrence.type === 'hours' && task.recurrence.interval) {
+      task.loopIntervalHours = task.recurrence.interval;
+    } else {
+      delete task.loopIntervalHours;
+    }
   }
 
   /**
