@@ -120,6 +120,7 @@ export function loadConfig(): Config {
     paths: { ...defaultConfig.paths, ...(loadedConfig.paths || {}) },
     platforms: loadedConfig.platforms || {},
     services: loadedConfig.services || {},
+    serviceControl: loadedConfig.serviceControl || undefined,
     obsidian: loadedConfig.obsidian
       ? { ...defaultConfig.obsidian!, ...loadedConfig.obsidian }
       : defaultConfig.obsidian,

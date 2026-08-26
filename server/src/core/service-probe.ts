@@ -1,4 +1,8 @@
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import type { ServiceConfig } from '../types.js';
+
+const pexecFile = promisify(execFile);
 
 /**
  * Server-side reachability probe for the Portal's self-hosted services.
@@ -26,6 +30,15 @@ export interface ServiceStatus {
   ms: number | null;
   /** Short reason when not online (timeout / unreachable / disabled / no url). */
   reason?: string;
+  /** systemd --user unit backing this service, when one is configured. Presence
+   *  is what tells the UI to render Start/Stop/Restart controls for the card. */
+  unit?: string;
+  /** Whether boot-autostart Enable/Disable is exposed for this unit. */
+  controllable?: boolean;
+  /** Runtime unit state: active | inactive | failed | activating | unknown. */
+  active?: string;
+  /** Boot-autostart state: enabled | disabled | static | masked | unknown. */
+  autostart?: string;
 }
 
 /**
@@ -51,6 +64,39 @@ export async function probeServices(
   const out: Record<string, ServiceStatus> = {};
   for (const r of results) out[r.key] = r;
   return out;
+}
+
+/**
+ * Unit-name shape guard. Units come from config, never from a request, so this
+ * is defense-in-depth: it keeps a malformed config entry from ever reaching
+ * systemctl and bounds what the reachability decorator will query.
+ */
+export const UNIT_RE = /^[A-Za-z0-9@._:-]+\.(service|socket|timer|target)$/;
+
+/**
+ * `systemctl --user <subcmd> <unit>` state for one unit. is-active / is-enabled
+ * signal state via EXIT CODE (non-zero = inactive/disabled/failed), so a
+ * rejection is normal here, not an error — we read the trimmed stdout regardless
+ * and only fall back to "unknown" when there is nothing to read.
+ */
+async function systemctlQuery(subcmd: 'is-active' | 'is-enabled', unit: string): Promise<string> {
+  try {
+    const { stdout } = await pexecFile('systemctl', ['--user', subcmd, unit], { timeout: 4000 });
+    return stdout.trim() || 'unknown';
+  } catch (e: any) {
+    const s = String(e?.stdout || '').trim();
+    return s || 'unknown'; // "inactive" / "failed" / "disabled" / "static" arrive here
+  }
+}
+
+/** Read runtime (active) and boot-autostart (enabled) state for a --user unit. */
+export async function unitState(unit: string): Promise<{ active: string; autostart: string }> {
+  if (!UNIT_RE.test(unit)) return { active: 'unknown', autostart: 'unknown' };
+  const [active, autostart] = await Promise.all([
+    systemctlQuery('is-active', unit),
+    systemctlQuery('is-enabled', unit),
+  ]);
+  return { active, autostart };
 }
 
 async function probeOne(key: string, svc: ServiceConfig, timeoutMs: number): Promise<ServiceStatus> {

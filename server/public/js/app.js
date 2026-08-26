@@ -3371,6 +3371,11 @@ class App {
   async renderPortal() {
     const config = await this.api.get('/config').catch(() => ({}));
     const configured = (config && config.services) || {};
+    // Service control is opt-in (serviceControl.enabled). When on, cards backed
+    // by a systemd --user unit gain Start/Stop/Restart buttons. Mutations also
+    // need server.apiKey — if it's unset the server refuses with an actionable
+    // error, which we surface via toast rather than hiding the buttons.
+    const controlEnabled = !!(config && config.serviceControl && config.serviceControl.enabled);
 
     // Merge curated defaults with the operator's config.services (config wins).
     const merged = {};
@@ -3421,6 +3426,10 @@ class App {
         // undefined enabled (curated defaults) => treat as available; only an
         // explicit enabled:false marks a service the operator has turned off.
         enabled: v.enabled !== false,
+        // systemd --user unit backing this card. Only cards with a configured
+        // unit (and control turned on) render lifecycle buttons.
+        unit: controlEnabled ? (v.unit || '') : '',
+        controllable: controlEnabled && v.controllable === true,
       };
     }).filter(s => s.url);
 
@@ -3450,6 +3459,19 @@ class App {
       const c = PORTAL_ACCENT;
       let host = s.url;
       try { host = new URL(s.url).host || s.url; } catch { /* keep raw */ }
+      // Lifecycle control row (only when the card names a controllable unit).
+      // The card is an <a>; the click handler preventDefault()s so buttons act
+      // on the service instead of opening the tab.
+      const controls = s.unit ? `
+        <div class="portal-controls" data-svc-controls="${esc(s.key)}">
+          <span class="unit-chip" data-unit-state="${esc(s.key)}" title="systemd unit state">…</span>
+          <span class="portal-btns">
+            <button class="btn-svc" data-svc-action="start"   data-key="${esc(s.key)}" title="Start unit">Start</button>
+            <button class="btn-svc" data-svc-action="stop"    data-key="${esc(s.key)}" title="Stop unit">Stop</button>
+            <button class="btn-svc" data-svc-action="restart" data-key="${esc(s.key)}" title="Restart unit">Restart</button>
+            ${s.controllable ? `<button class="btn-svc" data-svc-action="__autostart" data-key="${esc(s.key)}" title="Toggle boot autostart">Autostart</button>` : ''}
+          </span>
+        </div>` : '';
       return `<a class="card portal-card" href="${esc(s.url)}" target="_blank" rel="noopener noreferrer"
           title="Open ${esc(s.label)} — ${esc(s.url)}">
         <div class="portal-top">
@@ -3465,6 +3487,7 @@ class App {
         <div class="portal-title">${esc(s.label)}${s.enabled ? '' : ` ${badge('disabled', '#94A3B8')}`}</div>
         ${s.description ? `<div class="portal-desc">${esc(s.description)}</div>` : ''}
         <div class="portal-url"><i data-lucide="link"></i> ${esc(host)}</div>
+        ${controls}
       </a>`;
     };
 
@@ -3483,6 +3506,35 @@ class App {
         Status dots are probed from the server every 3s.
       </p>
       ${sections}`;
+
+    // Wire lifecycle buttons (only present when service control is enabled and a
+    // card names a unit). The card is an <a>, so each button must swallow the
+    // click so it acts on the service instead of navigating.
+    this.contentEl.querySelectorAll('.btn-svc').forEach((btn) => {
+      btn.addEventListener('click', async (ev) => {
+        ev.preventDefault(); ev.stopPropagation();
+        const key = btn.getAttribute('data-key');
+        let action = btn.getAttribute('data-svc-action');
+        if (action === '__autostart') {
+          // Flip based on the current chip: if it reads "enabled", disable; else enable.
+          const chip = this.contentEl.querySelector(`[data-unit-state="${key}"]`);
+          action = (chip && /\benabled\b/i.test(chip.textContent)) ? 'disable' : 'enable';
+        }
+        const row = btn.closest('.portal-controls');
+        row.querySelectorAll('button').forEach((b) => (b.disabled = true));
+        try {
+          await this.api.post(`/services/${encodeURIComponent(key)}/${action}`, {});
+          this.toast('service', `${key}: ${action} ok`);
+        } catch (e) {
+          // api.request throws with the server's { error } message (403/423/502/…).
+          this.toast('service action failed', e.message || 'request failed');
+        } finally {
+          row.querySelectorAll('button').forEach((b) => (b.disabled = false));
+          // Immediate refresh of dots + unit chips for snappiness.
+          this.startServicePolling();
+        }
+      });
+    });
 
     // Paint the last known statuses immediately (no flash on re-render), then
     // keep them fresh every 3s for as long as we're on the Portal.
@@ -3514,6 +3566,16 @@ class App {
         unknown: 'Status unknown (not in config.services)',
       }[state];
       el.setAttribute('title', tip);
+    });
+    // Unit-state chips (only rendered on controllable cards). "Port answers" and
+    // "unit active" are different facts, so this is shown separately from the dot.
+    document.querySelectorAll('[data-unit-state]').forEach((chip) => {
+      const st = map[chip.getAttribute('data-unit-state')];
+      if (!st || !st.unit) { chip.textContent = ''; chip.className = 'unit-chip'; return; }
+      const active = st.active || 'unknown';
+      chip.textContent = st.controllable ? `${active} · ${st.autostart || 'unknown'}` : active;
+      chip.className = `unit-chip ${active}`; // styled: .active / .inactive / .failed
+      chip.setAttribute('title', `unit ${st.unit}: ${active}${st.autostart ? ` · autostart ${st.autostart}` : ''}`);
     });
   }
 

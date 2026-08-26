@@ -16,7 +16,8 @@ import { Workflows } from './core/workflows.js';
 import { Goals } from './core/goals.js';
 import { SystemMetrics } from './core/system-metrics.js';
 import { UsagePoller, isMeteredExec } from './core/usage-probe.js';
-import { probeServices } from './core/service-probe.js';
+import { probeServices, unitState } from './core/service-probe.js';
+import { controlService } from './core/service-control.js';
 import { getObsidianVault } from './core/obsidian.js';
 
 async function main() {
@@ -258,9 +259,43 @@ async function main() {
         const ok = vault.available();
         status.obsidian = { key: 'obsidian', enabled: true, online: ok, code: null, ms: null, ...(ok ? {} : { reason: 'vault not found' }) };
       }
+      // Decorate entries whose config names a systemd --user unit with its
+      // runtime + autostart state, so the Portal can show a unit-state chip
+      // alongside the reachability dot. "Port answers" and "unit active" are
+      // different facts and can disagree, so both are surfaced. This adds ~2
+      // systemctl calls per controllable unit per poll — cheap for a handful.
+      const svcCfg = config.services || {};
+      await Promise.all(Object.entries(svcCfg).map(async ([key, svc]) => {
+        if (!svc?.unit || !status[key]) return;
+        const st = await unitState(svc.unit);
+        Object.assign(status[key], {
+          unit: svc.unit,
+          controllable: svc.controllable === true,
+          active: st.active,
+          autostart: st.autostart,
+        });
+      }));
       res.json(status);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ── Portal service control: systemctl --user start/stop/restart/enable/disable ──
+  // Opt-in (serviceControl.enabled) and, for mutations, gated on server.apiKey.
+  // The unit is resolved from config server-side; the request only carries key +
+  // action. Sits under /api, so the existing apiKey middleware already guards it
+  // when a key is set. See core/service-control.ts for the guard order.
+  app.post('/api/services/:key/:action', async (req, res) => {
+    try {
+      const out = await controlService(req.params.key, req.params.action, {
+        controlEnabled: config.serviceControl?.enabled === true,
+        apiKeySet: !!config.server.apiKey,
+        services: config.services || {},
+      });
+      res.status(out.status).json(out.body);
+    } catch (e: any) {
+      res.status(500).json({ ok: false, error: e.message });
     }
   });
 

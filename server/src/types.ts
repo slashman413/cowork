@@ -9,6 +9,13 @@ export interface ServiceConfig {
   url: string;
   /** Monitor this service — when false it is listed but never probed. */
   enabled: boolean;
+  /** systemd --user unit backing this service (e.g. "filebrowser.service").
+   *  Presence turns on Start/Stop/Restart controls for this card. The unit name
+   *  is ALWAYS read from here server-side, never from a request, so a service
+   *  mutation can never inject an arbitrary unit. */
+  unit?: string;
+  /** Also expose boot-autostart Enable/Disable for this unit. Default false. */
+  controllable?: boolean;
 }
 
 
@@ -275,6 +282,11 @@ export interface Config {
   };
   platforms: Record<string, PlatformConfig>;
   services: Record<string, ServiceConfig>;
+  /** Opt-in master switch for Portal service control (systemctl --user
+   *  start/stop/restart/enable/disable). Default off: with no config change the
+   *  Portal stays a read-only launcher. Mutations additionally require
+   *  server.apiKey to be set. */
+  serviceControl?: { enabled?: boolean };
   /** Shared Obsidian Vault — a knowledge base every brain can query. Local
    *  brains (same host as the server) can read `vaultPath` off disk directly;
    *  remote brains reach it through the /api/obsidian endpoints and the

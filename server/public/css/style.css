@@ -771,6 +771,54 @@ a { color: inherit; text-decoration: none; }
   flex-shrink: 0;
 }
 
+/* ===== Portal service-control row (systemctl --user) ===== */
+.portal-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: var(--space-sm);
+  padding-top: var(--space-sm);
+  border-top: 1px solid var(--bg-tertiary);
+  flex-wrap: wrap;
+}
+.unit-chip {
+  font-size: 0.72rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text-muted);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  white-space: nowrap;
+}
+.unit-chip.active { color: #16A34A; }
+.unit-chip.inactive { color: #94A3B8; }
+.unit-chip.failed { color: #DC2626; }
+.unit-chip.activating,
+.unit-chip.deactivating { color: #D97706; }
+.portal-btns {
+  display: inline-flex;
+  gap: 4px;
+}
+.btn-svc {
+  font-size: 0.72rem;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--bg-tertiary);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+.btn-svc:hover:not(:disabled) {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+.btn-svc:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 /* ===== Buttons ===== */
 .btn {
   display: inline-flex;
