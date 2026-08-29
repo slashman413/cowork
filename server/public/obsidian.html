@@ -7,6 +7,10 @@
   over the /api/obsidian/* endpoints: list + search notes on the left, render the
   selected note (with [[wikilink]] resolution) on the right. Markdown is rendered
   with the same marked + DOMPurify pair the dashboard already ships.
+
+  The left document panel is collapsible (toggle / keyboard `[`), draggable to
+  resize, and its folder groups fold independently — all persisted to
+  localStorage so the layout survives reloads.
 -->
 <html lang="en" data-theme="dark">
 <head>
@@ -20,12 +24,12 @@
     :root[data-theme="dark"] {
       --bg: #0b0f17; --panel: #121826; --panel-2: #0e1320; --border: #232c3d;
       --text: #e6edf7; --muted: #8b98ad; --accent: #7c5cff; --accent-soft: #7c5cff22;
-      --hit: #f0b90b;
+      --hit: #f0b90b; --shadow: 0 8px 30px rgba(0,0,0,.35);
     }
     :root[data-theme="light"] {
       --bg: #f6f8fc; --panel: #ffffff; --panel-2: #eef2f8; --border: #dbe2ee;
       --text: #1a2130; --muted: #5b6779; --accent: #6b46e5; --accent-soft: #6b46e514;
-      --hit: #b8860b;
+      --hit: #b8860b; --shadow: 0 8px 30px rgba(20,30,60,.12);
     }
     * { box-sizing: border-box; }
     html, body { height: 100%; margin: 0; }
@@ -34,8 +38,8 @@
       display: grid; grid-template-rows: auto 1fr; height: 100vh; overflow: hidden;
     }
     header {
-      display: flex; align-items: center; gap: 14px; padding: 12px 18px;
-      border-bottom: 1px solid var(--border); background: var(--panel);
+      display: flex; align-items: center; gap: 12px; padding: 12px 18px;
+      border-bottom: 1px solid var(--border); background: var(--panel); z-index: 5;
     }
     header .brand { display: flex; align-items: center; gap: 9px; font-weight: 650; }
     header .brand .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 12px var(--accent); }
@@ -43,27 +47,74 @@
     header .spacer { flex: 1; }
     header a.link, header button {
       color: var(--muted); text-decoration: none; font-size: .85rem; background: none;
-      border: 1px solid var(--border); border-radius: 8px; padding: 6px 11px; cursor: pointer; font-family: inherit;
+      border: 1px solid var(--border); border-radius: 8px; padding: 6px 11px; cursor: pointer;
+      font-family: inherit; transition: color .15s, border-color .15s, background .15s;
     }
     header a.link:hover, header button:hover { color: var(--text); border-color: var(--accent); }
+    /* The sidebar toggle — an icon button that also reflects state via aria-pressed. */
+    #toggle { display: flex; align-items: center; justify-content: center; width: 34px; height: 34px; padding: 0; font-size: 1rem; }
+    #toggle svg { width: 17px; height: 17px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    #toggle .bar { transition: opacity .18s; }
+    body.nav-collapsed #toggle .bar { opacity: .35; }
     #search {
-      flex: 0 1 340px; padding: 8px 12px; border-radius: 9px; border: 1px solid var(--border);
-      background: var(--panel-2); color: var(--text); font-family: inherit; font-size: .9rem;
+      flex: 0 1 340px; padding: 8px 12px 8px 32px; border-radius: 9px; border: 1px solid var(--border);
+      background: var(--panel-2) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='15' height='15' viewBox='0 0 24 24' fill='none' stroke='%238b98ad' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cline x1='21' y1='21' x2='16.5' y2='16.5'/%3E%3C/svg%3E") no-repeat 10px center;
+      color: var(--text); font-family: inherit; font-size: .9rem;
     }
     #search:focus { outline: none; border-color: var(--accent); }
-    main { display: grid; grid-template-columns: 320px 1fr; min-height: 0; }
-    #list { border-right: 1px solid var(--border); overflow-y: auto; background: var(--panel-2); }
-    #list .folder { padding: 12px 16px 4px; font-size: .7rem; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
-    #list .note {
-      padding: 8px 16px; cursor: pointer; font-size: .88rem; border-left: 2px solid transparent;
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+
+    main { display: flex; min-height: 0; position: relative; }
+
+    /* ── Left document panel ─────────────────────────────────────────── */
+    #sidebar {
+      flex: 0 0 auto; width: 320px; min-width: 0; display: flex; flex-direction: column;
+      background: var(--panel-2); border-right: 1px solid var(--border); overflow: hidden;
+      transition: width .24s cubic-bezier(.16,1,.3,1), opacity .18s;
     }
-    #list .note:hover { background: var(--accent-soft); }
-    #list .note.active { background: var(--accent-soft); border-left-color: var(--accent); color: var(--accent); }
-    #list .note .snip { display: block; color: var(--muted); font-size: .76rem; margin-top: 2px; white-space: normal; }
-    #list .note .snip mark { background: transparent; color: var(--hit); font-weight: 600; }
-    #doc { overflow-y: auto; padding: 34px 46px 80px; max-width: 900px; margin: 0 auto; width: 100%; line-height: 1.65; }
-    #doc.empty { display: flex; align-items: center; justify-content: center; color: var(--muted); }
+    body.nav-collapsed #sidebar { width: 0 !important; opacity: 0; border-right-color: transparent; }
+    body.resizing #sidebar { transition: none; }
+
+    #list { flex: 1 1 auto; overflow-y: auto; padding-bottom: 12px; }
+    #list::-webkit-scrollbar { width: 9px; } #list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 6px; }
+
+    /* Folder group header — click to fold the notes underneath it. */
+    .folder {
+      display: flex; align-items: center; gap: 6px; padding: 12px 14px 5px; font-size: .7rem;
+      letter-spacing: .05em; text-transform: uppercase; color: var(--muted); cursor: pointer;
+      user-select: none; position: sticky; top: 0; background: var(--panel-2); z-index: 1;
+    }
+    .folder:hover { color: var(--text); }
+    .folder .chev { width: 11px; height: 11px; flex: 0 0 auto; transition: transform .18s; opacity: .8; }
+    .folder .chev svg { width: 11px; height: 11px; stroke: currentColor; fill: none; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; display: block; }
+    .folder .fname { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; }
+    .folder .fcount { opacity: .6; font-weight: 500; }
+    .group.folded .chev { transform: rotate(-90deg); }
+    .group.folded .notes { display: none; }
+
+    .note {
+      padding: 8px 16px; cursor: pointer; font-size: .88rem; border-left: 2px solid transparent;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: background .12s;
+    }
+    .note:hover { background: var(--accent-soft); }
+    .note.active { background: var(--accent-soft); border-left-color: var(--accent); color: var(--accent); font-weight: 550; }
+    .note .snip { display: block; color: var(--muted); font-size: .76rem; margin-top: 2px; white-space: normal; }
+    .note .snip mark { background: transparent; color: var(--hit); font-weight: 600; }
+    .list-note { padding: 16px; color: var(--muted); font-size: .82rem; }
+
+    /* Drag handle between the panel and the document. */
+    #resizer {
+      flex: 0 0 auto; width: 7px; margin: 0 -3px; cursor: col-resize; position: relative; z-index: 4;
+    }
+    #resizer::after {
+      content: ''; position: absolute; inset: 0 3px; background: transparent; transition: background .15s;
+    }
+    #resizer:hover::after, body.resizing #resizer::after { background: var(--accent); }
+    body.nav-collapsed #resizer { display: none; }
+
+    /* ── Right document ──────────────────────────────────────────────── */
+    #doc-wrap { flex: 1 1 auto; min-width: 0; overflow-y: auto; position: relative; }
+    #doc { padding: 34px 46px 80px; max-width: 900px; margin: 0 auto; width: 100%; line-height: 1.65; }
+    #doc-wrap.empty { display: flex; align-items: center; justify-content: center; color: var(--muted); text-align: center; }
     #doc h1, #doc h2, #doc h3 { line-height: 1.3; }
     #doc h1 { border-bottom: 1px solid var(--border); padding-bottom: .3em; }
     #doc a { color: var(--accent); }
@@ -76,29 +127,60 @@
     #doc img { max-width: 100%; }
     #doc .doc-path { color: var(--muted); font-size: .78rem; margin-bottom: 18px; }
     .muted { color: var(--muted); }
+
+    /* Floating "reopen panel" affordance, only shown while collapsed. */
+    #peek {
+      position: absolute; top: 14px; left: 14px; z-index: 6; display: none;
+      align-items: center; gap: 7px; padding: 7px 12px 7px 10px; border-radius: 10px;
+      background: var(--panel); border: 1px solid var(--border); color: var(--muted);
+      box-shadow: var(--shadow); cursor: pointer; font-size: .82rem; font-family: inherit;
+      transition: color .15s, border-color .15s, transform .15s;
+    }
+    #peek:hover { color: var(--text); border-color: var(--accent); transform: translateX(2px); }
+    #peek svg { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+    body.nav-collapsed #peek { display: flex; }
+
+    @media (max-width: 720px) {
+      #sidebar { position: absolute; inset: 0 auto 0 0; z-index: 8; box-shadow: var(--shadow); width: min(84vw, 320px); }
+      #resizer { display: none; }
+      #doc { padding: 24px 18px 64px; }
+    }
   </style>
 </head>
 <body>
   <header>
+    <button id="toggle" title="Toggle documents panel (press [ )" aria-pressed="false" aria-label="Toggle documents panel">
+      <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><line class="bar" x1="9" y1="4" x2="9" y2="20"/></svg>
+    </button>
     <span class="brand"><span class="dot"></span> Obsidian Vault</span>
     <span class="count" id="count"></span>
     <span class="spacer"></span>
-    <input id="search" type="search" placeholder="Search the vault…" autocomplete="off">
+    <input id="search" type="search" placeholder="Search the vault…  ( / )" autocomplete="off">
     <button id="theme" title="Toggle theme">🌗</button>
     <a class="link" href="/#portal">← Cowork</a>
   </header>
   <main>
-    <aside id="list"><div class="folder" style="padding:16px">Loading…</div></aside>
-    <article id="doc" class="empty">Select a note to read it.</article>
+    <aside id="sidebar">
+      <div id="list"><div class="list-note">Loading…</div></div>
+    </aside>
+    <div id="resizer" title="Drag to resize · double-click to reset"></div>
+    <div id="doc-wrap" class="empty">
+      <button id="peek" title="Show documents (press [ )">
+        <svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg> Documents
+      </button>
+      <article id="doc">Select a note to read it.</article>
+    </div>
   </main>
 
   <script src="js/marked.min.js"></script>
   <script src="js/purify.min.js"></script>
   <script>
     const $ = (s) => document.querySelector(s);
-    const listEl = $('#list'), docEl = $('#doc'), searchEl = $('#search'), countEl = $('#count');
+    const listEl = $('#list'), docEl = $('#doc'), docWrap = $('#doc-wrap'),
+          searchEl = $('#search'), countEl = $('#count');
     let notes = [];             // full note list {path,title,...}
     let searchTimer = null;
+    let searching = false;      // true while showing search results (folders don't apply)
 
     // Theme mirrors the dashboard's persisted choice.
     const theme = localStorage.getItem('cowork-theme') || 'dark';
@@ -111,15 +193,67 @@
 
     const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
+    // ── Panel state (collapse / width / folded folders) ────────────────
+    const LS = { collapsed: 'obsidian-nav-collapsed', width: 'obsidian-nav-width', folded: 'obsidian-folded-folders' };
+    const sidebar = $('#sidebar');
+
+    function applyCollapsed(on, persist = true) {
+      document.body.classList.toggle('nav-collapsed', on);
+      $('#toggle').setAttribute('aria-pressed', String(on));
+      if (persist) localStorage.setItem(LS.collapsed, on ? '1' : '0');
+    }
+    function toggleCollapsed() { applyCollapsed(!document.body.classList.contains('nav-collapsed')); }
+
+    function applyWidth(px) {
+      const w = Math.max(200, Math.min(560, px));
+      sidebar.style.width = w + 'px';
+      localStorage.setItem(LS.width, String(w));
+    }
+
+    $('#toggle').addEventListener('click', toggleCollapsed);
+    $('#peek').addEventListener('click', () => applyCollapsed(false));
+
+    // Restore persisted layout before first render.
+    (function restoreLayout() {
+      const w = parseInt(localStorage.getItem(LS.width) || '', 10);
+      if (!Number.isNaN(w)) sidebar.style.width = Math.max(200, Math.min(560, w)) + 'px';
+      applyCollapsed(localStorage.getItem(LS.collapsed) === '1', false);
+    })();
+
+    // Folded folders persist as a set of top-level folder names.
+    function foldedSet() {
+      try { return new Set(JSON.parse(localStorage.getItem(LS.folded) || '[]')); } catch { return new Set(); }
+    }
+    function saveFolded(set) { localStorage.setItem(LS.folded, JSON.stringify([...set])); }
+
+    // ── Drag-to-resize the panel ───────────────────────────────────────
+    const resizer = $('#resizer');
+    resizer.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      document.body.classList.add('resizing');
+      const move = (ev) => applyWidth(ev.clientX - sidebar.getBoundingClientRect().left);
+      const up = () => {
+        document.body.classList.remove('resizing');
+        window.removeEventListener('mousemove', move);
+        window.removeEventListener('mouseup', up);
+      };
+      window.addEventListener('mousemove', move);
+      window.addEventListener('mouseup', up);
+    });
+    resizer.addEventListener('dblclick', () => applyWidth(320));
+
     async function api(path) {
       const r = await fetch(`/api${path}`);
       if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`);
       return r.json();
     }
 
+    const chevSVG = '<span class="chev"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></span>';
+
     // Group notes by their top-level folder for a scannable sidebar.
     function renderList(items, { search } = {}) {
-      if (!items.length) { listEl.innerHTML = `<div class="folder" style="padding:16px">${search ? 'No matches.' : 'Empty vault.'}</div>`; return; }
+      searching = !!search;
+      if (!items.length) { listEl.innerHTML = `<div class="list-note">${search ? 'No matches.' : 'Empty vault.'}</div>`; return; }
       if (search) {
         listEl.innerHTML = items.map(h => `
           <div class="note" data-path="${esc(h.path)}" title="${esc(h.path)}">
@@ -127,6 +261,7 @@
             ${h.snippet ? `<span class="snip">${highlight(h.snippet, search)}</span>` : ''}
           </div>`).join('');
       } else {
+        const folded = foldedSet();
         const groups = new Map();
         for (const n of items) {
           const top = n.path.includes('/') ? n.path.split('/')[0] : '·';
@@ -134,9 +269,17 @@
           groups.get(top).push(n);
         }
         listEl.innerHTML = [...groups.keys()].sort().map(g => `
-          <div class="folder">${esc(g)}</div>
-          ${groups.get(g).map(n => `<div class="note" data-path="${esc(n.path)}" title="${esc(n.path)}">${esc(n.title)}</div>`).join('')}
-        `).join('');
+          <div class="group${folded.has(g) ? ' folded' : ''}" data-folder="${esc(g)}">
+            <div class="folder">${chevSVG}<span class="fname">${esc(g)}</span><span class="fcount">${groups.get(g).length}</span></div>
+            <div class="notes">${groups.get(g).map(n => `<div class="note" data-path="${esc(n.path)}" title="${esc(n.path)}">${esc(n.title)}</div>`).join('')}</div>
+          </div>`).join('');
+        listEl.querySelectorAll('.folder').forEach(f => f.addEventListener('click', () => {
+          const grp = f.closest('.group');
+          grp.classList.toggle('folded');
+          const set = foldedSet();
+          grp.classList.contains('folded') ? set.add(grp.dataset.folder) : set.delete(grp.dataset.folder);
+          saveFolded(set);
+        }));
       }
       listEl.querySelectorAll('.note').forEach(el => el.addEventListener('click', () => openNote(el.dataset.path)));
       markActive();
@@ -150,7 +293,18 @@
 
     function markActive() {
       const cur = decodeURIComponent(location.hash.slice(1));
-      listEl.querySelectorAll('.note').forEach(el => el.classList.toggle('active', el.dataset.path === cur));
+      let activeEl = null;
+      listEl.querySelectorAll('.note').forEach(el => {
+        const on = el.dataset.path === cur;
+        el.classList.toggle('active', on);
+        if (on) activeEl = el;
+      });
+      // Keep the active note visible even if its folder was folded or it's off-screen.
+      if (activeEl) {
+        const grp = activeEl.closest('.group');
+        if (grp && grp.classList.contains('folded')) grp.classList.remove('folded');
+        activeEl.scrollIntoView({ block: 'nearest' });
+      }
     }
 
     // Resolve Obsidian [[wikilinks]] to loadable notes before markdown rendering.
@@ -171,7 +325,7 @@
       if (!path) return;
       if (decodeURIComponent(location.hash.slice(1)) !== path) { location.hash = encodeURIComponent(path); return; }
       markActive();
-      docEl.className = '';
+      docWrap.classList.remove('empty');
       docEl.innerHTML = '<p class="muted">Loading…</p>';
       try {
         const note = await api(`/obsidian/note?path=${encodeURIComponent(path)}`);
@@ -180,9 +334,9 @@
         docEl.querySelectorAll('a.wikilink').forEach(a => a.addEventListener('click', (e) => {
           e.preventDefault(); openNote(a.dataset.wiki);
         }));
-        docEl.scrollTop = 0;
+        docWrap.scrollTop = 0;
       } catch (e) {
-        docEl.className = 'empty';
+        docWrap.classList.add('empty');
         docEl.textContent = `Could not open note: ${e.message}`;
       }
     }
@@ -190,11 +344,23 @@
     searchEl.addEventListener('input', () => {
       clearTimeout(searchTimer);
       const q = searchEl.value.trim();
+      // Searching is useless behind a collapsed panel — reveal results as you type.
+      if (q && document.body.classList.contains('nav-collapsed')) applyCollapsed(false);
       searchTimer = setTimeout(async () => {
         if (!q) { renderList(notes); return; }
         try { renderList(await api(`/obsidian/search?q=${encodeURIComponent(q)}&limit=50`), { search: q }); }
-        catch (e) { listEl.innerHTML = `<div class="folder" style="padding:16px">Search failed: ${esc(e.message)}</div>`; }
+        catch (e) { listEl.innerHTML = `<div class="list-note">Search failed: ${esc(e.message)}</div>`; }
       }, 180);
+    });
+
+    // ── Keyboard shortcuts ─────────────────────────────────────────────
+    document.addEventListener('keydown', (e) => {
+      const typing = /^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName);
+      if (e.key === '/' && !typing) { e.preventDefault(); applyCollapsed(false); searchEl.focus(); searchEl.select(); }
+      else if (e.key === '[' && !typing) { e.preventDefault(); toggleCollapsed(); }
+      else if (e.key === 'Escape' && document.activeElement === searchEl) {
+        if (searchEl.value) { searchEl.value = ''; renderList(notes); } else searchEl.blur();
+      }
     });
 
     window.addEventListener('hashchange', () => { markActive(); const p = decodeURIComponent(location.hash.slice(1)); if (p) openNote(p); });
@@ -204,8 +370,8 @@
         const info = await api('/obsidian');
         if (!info.available) {
           countEl.textContent = '';
-          listEl.innerHTML = '';
-          docEl.className = 'empty';
+          listEl.innerHTML = '<div class="list-note">Vault unavailable.</div>';
+          docWrap.classList.add('empty');
           docEl.innerHTML = 'Obsidian vault is not configured or is unavailable.<br>Set <code>obsidian.vaultPath</code> in <code>~/.cowork/config.json</code>.';
           return;
         }
@@ -215,7 +381,7 @@
         const initial = decodeURIComponent(location.hash.slice(1));
         if (initial) openNote(initial);
       } catch (e) {
-        docEl.className = 'empty';
+        docWrap.classList.add('empty');
         docEl.textContent = `Failed to load vault: ${e.message}`;
       }
     })();
