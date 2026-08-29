@@ -110,6 +110,33 @@ export class Store {
 
     this.roster.loadAll();
     this.loadActiveAgents();
+    this.reportHiddenTasks();
+  }
+
+  /**
+   * One-shot startup audit: count inbox JSON files that are present on disk but
+   * cannot be parsed, i.e. tasks that are silently HIDDEN from every listing and
+   * the dashboard. Emits a single summary line naming the offending files so a
+   * "my tasks disappeared" report is immediately diagnosable at boot instead of
+   * requiring a byte-level dig through the inbox. Purely informational — a
+   * malformed file is still tolerated at read time (see readTaskFile).
+   */
+  private reportHiddenTasks(): void {
+    let files: string[];
+    try { files = fs.readdirSync(this.config.paths.inbox).filter(f => f.endsWith('.json')); }
+    catch { return; }
+    const hidden: string[] = [];
+    for (const f of files) {
+      try { JSON.parse(fs.readFileSync(path.join(this.config.paths.inbox, f), 'utf-8')); }
+      catch { hidden.push(f); }
+    }
+    if (hidden.length) {
+      console.error(
+        `Store: ${hidden.length} of ${files.length} inbox file(s) are UNPARSEABLE and ` +
+        `therefore hidden from the dashboard: ${hidden.join(', ')}. ` +
+        `Fix or remove them to restore visibility (inbox/*.json is gitignored — not recoverable from git).`
+      );
+    }
   }
 
   private loadActiveAgents(): void {
@@ -393,9 +420,8 @@ export class Store {
     if (task.recurrence === undefined) delete task.recurrence;
     this.syncLegacyLoopField(task);
 
-    const taskPath = path.join(this.config.paths.inbox, `${id}.json`);
-    fs.writeFileSync(taskPath, JSON.stringify(task, null, 2));
-    
+    this.writeTaskFile(`${id}.json`, task);
+
     this.eventBus.emitTaskCreated(task);
     return task;
   }
@@ -494,9 +520,8 @@ export class Store {
     task.claimedBy = params.agentId;
     
     const taskFile = this.resolveTaskFile(task.id) || `${task.id}.json`;
-    const taskPath = path.join(this.config.paths.inbox, taskFile);
-    fs.writeFileSync(taskPath, JSON.stringify(task, null, 2));
-    
+    this.writeTaskFile(taskFile, task);
+
     this.eventBus.emitTaskClaimed(task, params.agentId);
     return task;
   }
@@ -535,8 +560,7 @@ export class Store {
     task.failed = (typeof result === 'string' && /^FAILED after \d+ attempt/i.test(result.trim())) || undefined;
 
     const taskFile = this.resolveTaskFile(task.id) || `${task.id}.json`;
-    const taskPath = path.join(this.config.paths.inbox, taskFile);
-    fs.writeFileSync(taskPath, JSON.stringify(task, null, 2));
+    this.writeTaskFile(taskFile, task);
 
     this.eventBus.emitTaskCompleted(task);
     
@@ -600,9 +624,9 @@ export class Store {
       // Stamp the finished run with a forward link to the iteration it spawned, so
       // the recurring task's history is walkable in both directions.
       task.context = { ...(task.context || {}), periodicNextId: next.id };
-      fs.writeFileSync(taskPath, JSON.stringify(task, null, 2));
+      this.writeTaskFile(taskFile, task);
     }
-    
+
     return task;
   }
 
@@ -938,8 +962,7 @@ export class Store {
     const inputFiles = [...new Set([...seeded, ...extra])];
     if (inputFiles.length) ctx.inputFiles = inputFiles;
 
-    const taskPath = path.join(this.config.paths.inbox, `${id}.json`);
-    fs.writeFileSync(taskPath, JSON.stringify(task, null, 2));
+    this.writeTaskFile(`${id}.json`, task);
 
     // Durably stamp the ORIGINAL as continued (→ the new task's id) so the
     // dashboard can disable its "Continue" button after a re-render. Without
@@ -1035,8 +1058,46 @@ export class Store {
   /** Persist arbitrary task mutations (handover, retries). */
   public saveTask(task: Task): void {
     const file = this.resolveTaskFile(task.id) || `${task.id}.json`;
-    const taskPath = path.join(this.config.paths.inbox, file);
-    fs.writeFileSync(taskPath, JSON.stringify(task, null, 2));
+    this.writeTaskFile(file, task);
+  }
+
+  /**
+   * Atomically persist a task's JSON to `inbox/<file>`. Writes to a unique temp
+   * file in the SAME directory, fsyncs it, then renameSync()s it into place — an
+   * all-or-nothing swap on POSIX.
+   *
+   * This closes a silent data-loss window that could make tasks "disappear": the
+   * previous write sites did `fs.writeFileSync(dest, …)` directly, which truncates
+   * the live task file to zero bytes BEFORE rewriting it. A crash / SIGKILL mid-
+   * write — and the server is redeployed/restarted often — left a truncated or
+   * empty JSON on disk. `readTaskFile` then swallowed the parse error and returned
+   * null, so the task vanished from every listing and the dashboard with no trace.
+   * Because `inbox/*.json` is gitignored, such a loss is unrecoverable. A rename is
+   * atomic: a reader (this process re-scanning, or an external client) sees either
+   * the old complete file or the new complete file, never a half-written one.
+   *
+   * The temp name is dot-prefixed and ends in `.tmp` so it is invisible to both
+   * `listTasks` (readdir → `endsWith('.json')`) and `resolveTaskFile`'s
+   * `<id>*.json` glob; a temp leaked by a crash between open and rename is inert
+   * and cleaned up by the next write to the same file.
+   */
+  private writeTaskFile(file: string, task: Task): void {
+    const dest = path.join(this.config.paths.inbox, file);
+    const tmp = path.join(this.config.paths.inbox, `.${file}.${process.pid}.${Date.now()}.tmp`);
+    const json = JSON.stringify(task, null, 2);
+    const fd = fs.openSync(tmp, 'w');
+    try {
+      fs.writeFileSync(fd, json);
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    try {
+      fs.renameSync(tmp, dest);
+    } catch (e) {
+      try { fs.rmSync(tmp, { force: true }); } catch { /* ignore */ }
+      throw e;
+    }
   }
 
   /**
@@ -1175,7 +1236,21 @@ export class Store {
     if (hit && hit.key === key) return hit.task ? structuredClone(hit.task) : null;
     let task: Task | null = null;
     try { task = JSON.parse(fs.readFileSync(fullPath, 'utf-8')) as Task; }
-    catch { task = null; }   // stay quiet: listTasks has always tolerated bad files
+    catch (e) {
+      // A present-but-unparseable task file used to be dropped SILENTLY here, so a
+      // corrupted/truncated task simply vanished from every listing and the
+      // dashboard with no trace — indistinguishable from "my task disappeared".
+      // We still tolerate the bad file (return null so one broken record can't
+      // break listTasks), but we now LOG it loudly. The parse is only reached on a
+      // cache miss (new mtime+size), so this warns once per change, not every tick.
+      console.error(
+        `Store: inbox/${file} is present but UNPARSEABLE — this task is HIDDEN from ` +
+        `every listing and the dashboard until it is fixed or removed ` +
+        `(${(e as Error).message}). Note: inbox/*.json is gitignored, so it cannot ` +
+        `be recovered from git.`
+      );
+      task = null;
+    }
     this.taskCache.set(file, { key, task });
     return task ? structuredClone(task) : null;
   }
