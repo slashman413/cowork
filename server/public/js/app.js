@@ -1835,23 +1835,28 @@ class App {
       recognition.continuous = true;
       recognition.interimResults = true;
       let isRecording = false;
+      // Anchor dictation to whatever is already in the composer when recording
+      // starts; every onresult rebuilds `base + final + interim` from the FULL
+      // results list (index 0) rather than APPENDING each new final chunk. The old
+      // append-from-resultIndex pattern duplicated words on mobile Chrome, which
+      // re-reports finalized results — so each re-report appended the same words
+      // again (the exact bug already fixed for the New-task Dictate button in
+      // 69fc83a). A full rebuild is idempotent: re-firing onresult can only
+      // recompute the same string, never grow it.
+      let base = '';
 
       recognition.onresult = (event) => {
-        let finalTranscript = '';
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
-          if (event.results[i].isFinal) {
-            finalTranscript += event.results[i][0].transcript;
-          }
+        let sessionFinal = '', sessionInterim = '';
+        for (let i = 0; i < event.results.length; i++) {
+          const t = event.results[i][0].transcript;
+          if (event.results[i].isFinal) sessionFinal += t; else sessionInterim += t;
         }
-        if (finalTranscript) {
-          const startPos = input.selectionStart;
-          const endPos = input.selectionEnd;
-          input.value = input.value.substring(0, startPos) + finalTranscript + ' ' + input.value.substring(endPos, input.value.length);
-          input.selectionStart = input.selectionEnd = startPos + finalTranscript.length + 1;
-          input.dispatchEvent(new Event('input')); // trigger auto-resize
-        }
+        let combined = base.replace(/\s*$/, '');
+        if (sessionFinal) combined += (combined ? ' ' : '') + sessionFinal.trim();
+        input.value = combined + (sessionInterim ? (combined ? ' ' : '') + sessionInterim.trim() : '');
+        input.dispatchEvent(new Event('input')); // trigger auto-resize
       };
-      
+
       recognition.onstart = () => {
         isRecording = true;
         micBtn.style.color = '#EF4444';
