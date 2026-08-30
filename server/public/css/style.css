@@ -1314,15 +1314,6 @@ a { color: inherit; text-decoration: none; }
   height: 18px;
 }
 
-@keyframes recordingPulse {
-  0% { transform: scale(1); opacity: 1; }
-  50% { transform: scale(1.1); opacity: 0.8; }
-  100% { transform: scale(1); opacity: 1; }
-}
-.recording-pulse svg {
-  animation: recordingPulse 1.5s infinite;
-}
-
 /* ===== System-load bar (Dashboard top) ===== */
 .sysbar {
   display: grid;

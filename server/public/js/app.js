@@ -1053,12 +1053,8 @@ class App {
       <p style="font-size:0.85rem; color:var(--text-secondary); margin:0 0 16px; line-height:1.5">The task is queued as pending and dispatched by the next tick — or parked as <em>scheduled</em> until its run time if you set one.</p>
       <label style="${labelStyle}">Title</label>
       <input id="nt-title" style="${fieldStyle}; margin-bottom:12px" placeholder="Short imperative title…">
-      <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin:0 0 6px">
-        <label style="${labelStyle}; margin:0">Brief (markdown)</label>
-        <button class="btn" id="nt-mic" type="button" title="Dictate the brief with your microphone" style="font-size:0.72rem; padding:3px 9px; text-transform:none; letter-spacing:0; display:inline-flex; align-items:center; gap:5px"><i data-lucide="mic" style="width:13px;height:13px"></i> <span id="nt-mic-label">Dictate</span></button>
-      </div>
+      <label style="${labelStyle}">Brief (markdown)</label>
       <textarea id="nt-desc" rows="6" style="${fieldStyle}; margin-bottom:12px; resize:vertical" placeholder="What should the agent do? Include acceptance criteria."></textarea>
-      <div id="nt-mic-status" style="display:none; font-size:0.72rem; color:var(--text-muted); margin:-6px 0 12px; line-height:1.4"></div>
       <label style="${labelStyle}">Agent <span style="text-transform:none; letter-spacing:0">(optional — pick a division, then the agent that studies the files & does the work)</span></label>
       <div style="display:flex; gap:8px; margin-bottom:12px">
         <select id="nt-div" style="${fieldStyle}; flex:1">${divOpts}</select>
@@ -1086,11 +1082,7 @@ class App {
     createIcons();
     recurrenceEditorBind(content, 'nt-rec');
     content.querySelector('#nt-title').focus();
-    // Assigned by the dictation wiring below; releases the mic stream / speech
-    // recognizer so closing the modal never leaves a hot microphone behind.
-    let micCleanup = null;
     const close = () => {
-      micCleanup?.();
       container.classList.add('hidden');
       content.innerHTML = '';
       document.removeEventListener('keydown', onKey);
@@ -1135,139 +1127,6 @@ class App {
     };
     content.querySelector('#nt-attach').onclick = () => fileEl.click();
     fileEl.onchange = () => { staged.push(...Array.from(fileEl.files || [])); fileEl.value = ''; renderStaged(); };
-
-    // ── Voice input ────────────────────────────────────────────────────────
-    // The mic button dictates straight into the Brief via the Web Speech API
-    // (Chrome/Edge). Where that API is missing, we fall back to MediaRecorder
-    // and stage the captured audio as an input file the brain can study — so
-    // "speak your task" works everywhere, just with a different landing spot.
-    const descEl = content.querySelector('#nt-desc');
-    const micBtn = content.querySelector('#nt-mic');
-    const micLabel = content.querySelector('#nt-mic-label');
-    const micStatus = content.querySelector('#nt-mic-status');
-    const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
-    let recog = null, mediaRec = null, mediaStream = null, mediaChunks = [];
-    let recording = false, micAborted = false;
-    const setMic = (on, text) => {
-      recording = on;
-      micBtn.style.color = on ? '#EF4444' : '';
-      micBtn.style.borderColor = on ? '#EF444466' : '';
-      micLabel.textContent = on ? 'Stop' : 'Dictate';
-      if (text) { micStatus.style.display = 'block'; micStatus.textContent = text; }
-      else { micStatus.style.display = 'none'; micStatus.textContent = ''; }
-    };
-    const stopMic = () => {
-      micAborted = true;
-      try { recog?.stop(); } catch { /* already stopped */ }
-      try { if (mediaRec && mediaRec.state !== 'inactive') mediaRec.stop(); } catch { /* already stopped */ }
-      try { mediaStream?.getTracks().forEach(t => t.stop()); } catch { /* no stream */ }
-    };
-    micCleanup = stopMic;
-
-    // Ask for microphone permission up front, before touching any capture API.
-    // Chrome's SpeechRecognition otherwise fails immediately (fires `onerror`
-    // 'not-allowed' or ends with no result) whenever permission has never been
-    // granted for the origin — which read to the user as "Dictate fails every
-    // time". Preflighting getUserMedia surfaces the browser's permission prompt,
-    // and once the user allows it the recognizer/recorder starts cleanly.
-    const ensureMicPermission = async () => {
-      if (!navigator.mediaDevices?.getUserMedia) {
-        // Insecure context (http:// on a non-localhost host) or an ancient
-        // browser: the mic APIs simply aren't exposed. Say so plainly and point
-        // at the fix — serving the dashboard over https (see server/gen-tls-cert.sh
-        // and the server.tls config), or opening it via http://localhost.
-        this.toast('mic needs https', 'Microphone access needs a secure page. Open the dashboard over https:// (or http://localhost) — see server.tls / gen-tls-cert.sh to enable https.');
-        return null;
-      }
-      micStatus.style.display = 'block';
-      micStatus.textContent = '● Requesting microphone access…';
-      try {
-        return await navigator.mediaDevices.getUserMedia({ audio: true });
-      } catch (err) {
-        setMic(false);
-        const denied = err && (err.name === 'NotAllowedError' || err.name === 'SecurityError');
-        this.toast('mic error', denied
-          ? 'Microphone permission was denied. Allow it for this site in your browser settings, then press Dictate again.'
-          : `Could not access the microphone: ${err?.message || err?.name || err}`);
-        return null;
-      }
-    };
-
-    if (SpeechRec) {
-      micBtn.onclick = async () => {
-        if (recording) { try { recog?.stop(); } catch {} return; }
-        // The Web Speech API only works in a secure context (https:// or
-        // localhost). In an insecure one the recognizer object still exists but
-        // start() fails instantly with no visible effect — which read to the user
-        // as "Dictate does nothing at all". Say why up front instead.
-        if (!window.isSecureContext) {
-          this.toast('mic needs https', 'Speech-to-text needs a secure page. Open the dashboard over https:// (or http://localhost) — see server.tls / gen-tls-cert.sh to enable https.');
-          return;
-        }
-        // Start the recognizer directly — do NOT preflight getUserMedia here.
-        // SpeechRecognition raises its own mic-permission prompt and manages its
-        // own audio stream; grabbing a getUserMedia stream and releasing it right
-        // before start() races Chrome's speech service and makes recognition abort
-        // with no result (that was the "doesn't work even when mic is allowed"
-        // bug). A denied permission surfaces cleanly through onerror below.
-        recog = new SpeechRec();
-        recog.lang = navigator.language || 'en-US';
-        recog.continuous = true;
-        recog.interimResults = true;
-        // Anchor to whatever's already typed so dictation always appends: final
-        // chunks commit to `base`; the in-flight interim renders live on top.
-        let base = descEl.value;
-        recog.onstart = () => setMic(true, '● Listening… speak your brief, then press Stop.');
-        recog.onerror = (e) => {
-          setMic(false);
-          this.toast('mic error', e.error === 'not-allowed' || e.error === 'service-not-allowed'
-            ? 'Microphone permission was denied. Allow it for this site in your browser, then press Dictate again.'
-            : `Speech recognition failed: ${e.error}`);
-        };
-        recog.onend = () => { setMic(false); };
-        recog.onresult = (ev) => {
-          let sessionFinal = '', sessionInterim = '';
-          for (let i = 0; i < ev.results.length; i++) {
-            const t = ev.results[i][0].transcript;
-            if (ev.results[i].isFinal) sessionFinal += t; else sessionInterim += t;
-          }
-          let combined = base.replace(/\s*$/, '');
-          if (sessionFinal) combined += (combined ? ' ' : '') + sessionFinal.trim();
-          descEl.value = combined + (sessionInterim ? (combined ? ' ' : '') + sessionInterim.trim() : '');
-          descEl.style.borderColor = '';
-        };
-        try { recog.start(); } catch { /* guard against a double-start */ }
-      };
-    } else {
-      // No speech-to-text engine: record a voice note and attach it as input.
-      micBtn.onclick = async () => {
-        if (recording) { try { if (mediaRec && mediaRec.state !== 'inactive') mediaRec.stop(); } catch {} return; }
-        if (typeof MediaRecorder === 'undefined') {
-          this.toast('unsupported', 'This browser cannot capture microphone audio.');
-          return;
-        }
-        // Ask for permission first (shared helper), then keep the granted stream
-        // open for the recorder to capture from.
-        mediaStream = await ensureMicPermission();
-        if (!mediaStream) return;
-        micAborted = false;
-        mediaChunks = [];
-        mediaRec = new MediaRecorder(mediaStream);
-        mediaRec.ondataavailable = (e) => { if (e.data && e.data.size) mediaChunks.push(e.data); };
-        mediaRec.onstop = () => {
-          try { mediaStream?.getTracks().forEach(t => t.stop()); } catch {}
-          setMic(false);
-          if (micAborted) return;   // modal was closed mid-record → discard
-          const blob = new Blob(mediaChunks, { type: mediaRec.mimeType || 'audio/webm' });
-          const ext = ((blob.type.split('/')[1] || 'webm').split(';')[0]) || 'webm';
-          staged.push(new File([blob], `voice-note-${Date.now()}.${ext}`, { type: blob.type }));
-          renderStaged();
-          this.toast('voice note attached', 'Speech-to-text is unavailable here, so your recording was attached as an input file for the brain to study.');
-        };
-        mediaRec.start();
-        setMic(true, '● Recording… speech-to-text is unavailable, so this will attach as a voice-note file.');
-      };
-    }
 
     content.querySelector('#nt-ok').onclick = async () => {
       const title = content.querySelector('#nt-title').value.trim();
@@ -1785,7 +1644,6 @@ class App {
           <div class="chat-input-toolbar-bottom">
             <input type="file" id="chat-files" multiple style="display:none">
             <button id="chat-attach" class="icon-btn-ghost" title="Attach files" aria-label="Attach files"><i data-lucide="paperclip"></i></button>
-            <button id="chat-mic" class="icon-btn-ghost" title="Voice input" aria-label="Voice input"><i data-lucide="mic"></i></button>
             <div style="flex:1"></div>
             <button id="chat-send" class="icon-btn-primary" aria-label="Send"><i data-lucide="send"></i></button>
           </div>
@@ -1826,59 +1684,6 @@ class App {
     this.contentEl.querySelector('#chat-send').addEventListener('click', doSend);
     input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doSend(); } });
     this.contentEl.querySelector('#chat-new').addEventListener('click', () => this.startNewChat());
-
-    // Mic Support (Web Speech API)
-    const micBtn = this.contentEl.querySelector('#chat-mic');
-    if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
-      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-      const recognition = new SpeechRecognition();
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      let isRecording = false;
-      // Anchor dictation to whatever is already in the composer when recording
-      // starts; every onresult rebuilds `base + final + interim` from the FULL
-      // results list (index 0) rather than APPENDING each new final chunk. The old
-      // append-from-resultIndex pattern duplicated words on mobile Chrome, which
-      // re-reports finalized results — so each re-report appended the same words
-      // again (the exact bug already fixed for the New-task Dictate button in
-      // 69fc83a). A full rebuild is idempotent: re-firing onresult can only
-      // recompute the same string, never grow it.
-      let base = '';
-
-      recognition.onresult = (event) => {
-        let sessionFinal = '', sessionInterim = '';
-        for (let i = 0; i < event.results.length; i++) {
-          const t = event.results[i][0].transcript;
-          if (event.results[i].isFinal) sessionFinal += t; else sessionInterim += t;
-        }
-        let combined = base.replace(/\s*$/, '');
-        if (sessionFinal) combined += (combined ? ' ' : '') + sessionFinal.trim();
-        input.value = combined + (sessionInterim ? (combined ? ' ' : '') + sessionInterim.trim() : '');
-        input.dispatchEvent(new Event('input')); // trigger auto-resize
-      };
-
-      recognition.onstart = () => {
-        isRecording = true;
-        micBtn.style.color = '#EF4444';
-        micBtn.classList.add('recording-pulse');
-      };
-      
-      recognition.onend = () => {
-        isRecording = false;
-        micBtn.style.color = '';
-        micBtn.classList.remove('recording-pulse');
-      };
-
-      micBtn.addEventListener('click', () => {
-        if (isRecording) {
-          recognition.stop();
-        } else {
-          recognition.start();
-        }
-      });
-    } else {
-      micBtn.style.display = 'none'; // hide if not supported
-    }
 
     // File attachments (staged client-side; uploaded as task inputs on send).
     const fileEl = this.contentEl.querySelector('#chat-files');

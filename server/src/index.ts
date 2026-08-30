@@ -132,9 +132,9 @@ async function main() {
   }
 
   // Serve over HTTPS when server.tls is configured and the cert/key are present.
-  // A secure context (https:// or localhost) is what unlocks the browser mic API,
-  // so the New-task Dictate button only works over http:// on localhost — on a
-  // LAN/Tailscale IP it needs this. Falls back to plain http:// otherwise.
+  // A secure context (https:// or localhost) is what unlocks browser features
+  // like the clipboard API on a LAN/Tailscale IP. Falls back to plain http://
+  // otherwise.
   let scheme = 'http';
   const tls = config.server.tls;
   if (tls) {
@@ -143,8 +143,7 @@ async function main() {
     } else {
       console.warn(
         `server.tls is set but the cert/key were not found ` +
-        `(${tls.certFile}, ${tls.keyFile}); falling back to http:// — the New-task ` +
-        `Dictate button will only work on localhost.`
+        `(${tls.certFile}, ${tls.keyFile}); falling back to http://.`
       );
     }
   }
