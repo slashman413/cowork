@@ -463,17 +463,27 @@ const MEDIA_KIND = [
 ];
 function mediaKindFor(f) { return MEDIA_KIND.find(k => k.re.test(f)) || null; }
 
+// Plain-text artifacts (.txt / .log) that open in the in-app viewer as raw text
+// instead of downloading. They ride the same popup as markdown (openMarkdownModal
+// with { plain: true }) but skip the markdown parse — a .log rendered as markdown
+// would mangle its formatting.
+const TEXT_RE = /\.(txt|log)$/i;
+
 // One file chip for a task's ARTIFACTS or INPUTS list (`kind` picks the API
-// route). Markdown files (.md / .markdown) open in the in-app markdown viewer and
+// route). Markdown files (.md / .markdown) open in the in-app markdown viewer,
+// plain-text files (.txt / .log) open in the same viewer as raw text, and
 // images / video / audio open in the in-app media viewer (buttons wired to
 // App.openMarkdownModal / App.openMediaModal via the delegated .md-artifact /
-// .media-artifact handlers) so they can be read without leaving the dashboard;
-// every other file type stays a plain download link. Shared by the Inbox and the
-// Workflow-run drawer so both file lists stay visually identical.
+// .text-artifact / .media-artifact handlers) so they can be read without leaving
+// the dashboard; every other file type stays a plain download link. Shared by the
+// Inbox and the Workflow-run drawer so both file lists stay visually identical.
 function artifactChip(taskId, f, fontSize = '0.9rem', kind = 'artifacts') {
   const base = `font-size:${fontSize};margin:0;display:inline-flex;align-items:center;gap:4px`;
   if (/\.(md|markdown)$/i.test(f)) {
     return `<button class="btn md-artifact" data-md-task="${esc(taskId)}" data-md-file="${esc(f)}" data-md-kind="${esc(kind)}" title="Open “${esc(f)}” in the markdown viewer" style="${base}"><i data-lucide="book-open" style="width:12px;height:12px"></i>${esc(f)}</button>`;
+  }
+  if (TEXT_RE.test(f)) {
+    return `<button class="btn text-artifact" data-md-task="${esc(taskId)}" data-md-file="${esc(f)}" data-md-kind="${esc(kind)}" title="Open “${esc(f)}” in the text viewer" style="${base}"><i data-lucide="file-text" style="width:12px;height:12px"></i>${esc(f)}</button>`;
   }
   const media = mediaKindFor(f);
   if (media) {
@@ -596,6 +606,16 @@ class App {
       e.preventDefault();
       e.stopPropagation();
       this.openMarkdownModal(btn.dataset.mdTask, btn.dataset.mdFile, btn.dataset.mdKind || 'artifacts');
+    });
+    // Delegated: plain-text artifacts (.txt / .log) open in the same popup viewer
+    // as raw text ({ plain: true } skips the markdown parse). Same document-level
+    // rationale as the markdown handler above.
+    document.addEventListener('click', (e) => {
+      const btn = e.target.closest('.text-artifact');
+      if (!btn) return;
+      e.preventDefault();
+      e.stopPropagation();
+      this.openMarkdownModal(btn.dataset.mdTask, btn.dataset.mdFile, btn.dataset.mdKind || 'artifacts', { plain: true });
     });
     // Delegated: image / video / audio artifacts (and inputs) open in the in-app
     // media viewer instead of downloading. Same document-level rationale as the
@@ -788,10 +808,14 @@ class App {
    * toggle and a Download fallback) instead of downloading it. Reuses the shared
    * #modal-container. fetch() ignores the download route's Content-Disposition,
    * so we get the raw text back; agent output is untrusted → md() sanitizes it
-   * (DOMPurify). Non-markdown artifacts never reach here — they stay download
-   * links (see artifactChip). `kind` picks the ARTIFACTS vs INPUTS API route.
+   * (DOMPurify). With { plain: true } (used for .txt / .log via the text-artifact
+   * handler) it shows the file as raw text and hides the meaningless Raw toggle;
+   * every other case still renders markdown. Non-text artifacts never reach here —
+   * they stay download links (see artifactChip). `kind` picks the ARTIFACTS vs
+   * INPUTS API route.
    */
-  async openMarkdownModal(taskId, file, kind = 'artifacts') {
+  async openMarkdownModal(taskId, file, kind = 'artifacts', opts = {}) {
+    const plain = !!opts.plain;
     const container = document.getElementById('modal-container');
     const content = document.getElementById('modal-content');
     if (!container || !content) return;
@@ -801,11 +825,11 @@ class App {
     content.innerHTML = `
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin:0 0 12px">
         <h3 style="margin:0;font-size:1.02rem;display:flex;align-items:center;gap:6px;min-width:0">
-          <i data-lucide="book-open" style="width:16px;height:16px;flex:0 0 auto"></i>
+          <i data-lucide="${plain ? 'file-text' : 'book-open'}" style="width:16px;height:16px;flex:0 0 auto"></i>
           <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(file)}</span>
         </h3>
         <div style="display:flex;gap:6px;flex:0 0 auto">
-          <button class="btn mdm-toggle" title="Toggle raw / rendered" style="${barBtn}" disabled>Raw</button>
+          ${plain ? '' : `<button class="btn mdm-toggle" title="Toggle raw / rendered" style="${barBtn}" disabled>Raw</button>`}
           <a class="btn" href="${url}" download title="Download this file" style="${barBtn}"><i data-lucide="download" style="width:13px;height:13px"></i></a>
           <button class="btn mdm-close" title="Close" style="${barBtn}"><i data-lucide="x" style="width:14px;height:14px"></i></button>
         </div>
@@ -838,10 +862,18 @@ class App {
     }
 
     const body = content.querySelector('.mdm-body');
+    if (!body) return;   // modal was closed while loading
+    body.style.color = 'var(--text-primary)';
+    if (plain) {
+      // Plain text: show verbatim in a <pre>, no markdown parse and no Raw toggle
+      // (rendered === raw). esc() keeps agent output from injecting markup.
+      body.innerHTML = `<pre style="white-space:pre-wrap;margin:0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:0.85rem;line-height:1.5">${esc(raw)}</pre>`;
+      createIcons();
+      return;
+    }
     const rawEl = content.querySelector('.mdm-raw');
     const toggle = content.querySelector('.mdm-toggle');
-    if (!body || !rawEl || !toggle) return;   // modal was closed while loading
-    body.style.color = 'var(--text-primary)';
+    if (!rawEl || !toggle) return;   // modal was closed while loading
     body.innerHTML = md(raw);
     rawEl.textContent = raw;
     toggle.disabled = false;
