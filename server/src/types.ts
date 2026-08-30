@@ -410,10 +410,13 @@ export interface Task {
    *  (which subsumes it as `{type:'hours', interval:N}`) but still honoured for
    *  back-compatibility with tasks/clients that only set this field. */
   loopIntervalHours?: number;
-  /** Flexible periodic cadence (ADR: recurrence). When set, completing this task
-   *  spawns the next iteration at the cadence's next fire time — computed
-   *  FIXED-RATE from this run's intended `scheduledAt`, so a fast run never delays
-   *  the next one. See {@link TaskRecurrence} in core/recurrence.ts. */
+  /** Flexible periodic cadence (ADR: recurrence). When set, the task is a
+   *  persistent SCHEDULER: it parks on `scheduled` and, each time its `scheduledAt`
+   *  comes due, spawns a one-shot run-child (which becomes that cycle's `done`
+   *  record, linked back via context.scheduledParentId) and re-arms itself to the
+   *  next fire time — computed FIXED-RATE from the intended `scheduledAt`, so a fast
+   *  run never delays the next one. The parent runs its own body only on the FINAL
+   *  slot (cadence exhausted). See {@link TaskRecurrence} in core/recurrence.ts. */
   recurrence?: import('./core/recurrence.js').TaskRecurrence;
   createdAt: string;
   claimedAt?: string;

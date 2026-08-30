@@ -6,7 +6,7 @@ import { globSync } from 'glob';
 import type { Config, ActiveAgent, Task, DashboardData, AgentCard, InteractionField, BrainUsage } from '../types.js';
 import type { EventBus } from './events.js';
 import { Roster } from './roster.js';
-import { normalizeRecurrence, recurrenceFromLegacyHours, nextRunAt, describeRecurrence, type TaskRecurrence } from './recurrence.js';
+import { normalizeRecurrence, recurrenceFromLegacyHours, nextRunAt, type TaskRecurrence } from './recurrence.js';
 
 /**
  * A veto the Dispatcher registers on the store so EXTERNAL task completions
@@ -420,6 +420,18 @@ export class Store {
     if (task.recurrence === undefined) delete task.recurrence;
     this.syncLegacyLoopField(task);
 
+    // A recurring task is a SCHEDULER, never a runner. It parks on `scheduled` and
+    // each due tick spawns a one-shot run-child that becomes the `done` record for
+    // that cycle (see releaseDueScheduled / spawnScheduledRun), keeping ONE stable
+    // parent identity across the whole series. So force it onto `scheduled` even
+    // when its scheduledAt is absent/past (or it carried an interaction): an
+    // immediate cadence releases — and spawns its first child — on the next tick.
+    // Only the FINAL slot (recurrence exhausted) ever runs the task's own body.
+    if (task.recurrence) {
+      if (task.scheduledAt === undefined) task.scheduledAt = new Date().toISOString();
+      task.status = 'scheduled';
+    }
+
     this.writeTaskFile(`${id}.json`, task);
 
     this.eventBus.emitTaskCreated(task);
@@ -440,6 +452,30 @@ export class Store {
     for (const task of this.listTasks({ status: 'scheduled' })) {
       const at = Date.parse(String(task.scheduledAt ?? ''));
       if (Number.isFinite(at) && at > now) continue;   // not due yet
+
+      // A recurring task never runs its own body — when due it spawns a one-shot
+      // run-child (the `done` record for this cycle, linked back to this stable
+      // parent) and RE-ARMS itself to the next slot, staying `scheduled`. The only
+      // exception is the FINAL slot: when the cadence has no future run left
+      // (interval exhausted / `until` cutoff reached), there is nothing to re-arm
+      // to, so the task falls through and runs itself — turning into a `done` task
+      // directly, exactly like a plain one-shot scheduled task.
+      const recurrence = task.recurrence ? normalizeRecurrence(task.recurrence)
+        : recurrenceFromLegacyHours(task.loopIntervalHours);
+      if (recurrence) {
+        const anchor = task.scheduledAt ? new Date(task.scheduledAt) : new Date(now);
+        const next = nextRunAt(recurrence, anchor, new Date(now));
+        if (next) {
+          const child = this.spawnScheduledRun(task);
+          task.scheduledAt = next.toISOString();
+          this.saveTask(task);
+          this.eventBus.emitTaskCreated(task);   // nudge dashboards: parent re-armed
+          released.push(child);                   // the child is what entered the pool
+          continue;
+        }
+        // no future run → fall through and run the parent itself (done directly)
+      }
+
       const awaiting = task.interaction && Array.isArray(task.interaction.fields)
         && task.interaction.fields.length > 0 && task.interaction.status !== 'submitted';
       task.status = awaiting ? 'wait-input' : 'pending';
@@ -474,6 +510,15 @@ export class Store {
     const task = this.getTask(taskId);
     if (!task) return null;
     if (task.status !== 'scheduled') return null;   // only a parked task can be released
+
+    // A recurring task doesn't run its own body — "run now" spawns an extra
+    // one-shot run-child immediately (the `done` record for this ad-hoc run,
+    // linked back to the parent) while leaving the regular cadence untouched, so
+    // the next scheduled iteration still fires on its own time.
+    const recurrence = task.recurrence ? normalizeRecurrence(task.recurrence)
+      : recurrenceFromLegacyHours(task.loopIntervalHours);
+    if (recurrence) return this.spawnScheduledRun(task);
+
     const awaiting = task.interaction && Array.isArray(task.interaction.fields)
       && task.interaction.fields.length > 0 && task.interaction.status !== 'submitted';
     task.status = awaiting ? 'wait-input' : 'pending';
@@ -563,71 +608,53 @@ export class Store {
     this.writeTaskFile(taskFile, task);
 
     this.eventBus.emitTaskCompleted(task);
-    
-    // Automatically schedule the next iteration if this is a looping task. The
-    // just-finished run KEEPS its artifacts/result on its own card; the next
-    // iteration is a FRESH task that produces its own. To make a periodic task's
-    // outputs discoverable, we cross-link the two: the new task points back at the
-    // run that spawned it (context.periodicPrevId) and the finished run points
-    // forward (context.periodicNextId), so the dashboard can offer a "previous
-    // run" jump straight to the card whose Artifacts chips hold this cycle's files.
-    // Resolve the cadence: prefer the flexible `recurrence`, fall back to the
-    // legacy hour interval. A task with neither is a one-shot and spawns nothing.
-    const recurrence: TaskRecurrence | undefined = task.recurrence
-      ? normalizeRecurrence(task.recurrence)
-      : recurrenceFromLegacyHours(task.loopIntervalHours);
-    if (recurrence) {
-      // FIXED-RATE, not fixed-delay: phase the next fire time on this run's
-      // INTENDED launch time (`scheduledAt`), not on when it finished. A run that
-      // executes faster than its interval therefore does NOT push the next run
-      // later; nextRunAt() catches up past `now` only when a run OVERRAN its
-      // interval, so we never emit a burst of missed cycles.
-      const anchor = task.scheduledAt ? new Date(task.scheduledAt) : new Date(task.completedAt!);
-      const when = nextRunAt(recurrence, anchor, new Date());
-      if (!when) {
-        // The series reached its `until` cutoff — stop cleanly, spawn nothing.
-        console.log(`Store: recurring task ${task.id} reached its end (${describeRecurrence(recurrence)}) — no further iterations — ${task.title}`);
-        return task;
-      }
-      const nextContext = { ...(task.context || {}) };
-      delete nextContext.failedBrains;
-      const existingPin = nextContext.brainAuto ? undefined : nextContext.brain;
-      if (existingPin) nextContext.brain = existingPin; else delete nextContext.brain;
-      delete nextContext.brainAuto;
-      delete nextContext.claimCount; delete nextContext.lastClaimAt; delete nextContext.failedCount;
-      delete nextContext.remoteWaitSince;
-      delete nextContext.ranAgent; delete nextContext.ranDivision; delete nextContext.ranBrain; delete nextContext.isRoster;
-      // Per-run bookkeeping that must NOT bleed into the next cycle: `dispatched`
-      // (a claim marker) and `inputFiles` (names under THIS run's inputs/<id>/ that
-      // were never copied forward) would otherwise mislead the dispatcher and the
-      // executor. Prior cross-links are per-cycle too — reset them before re-linking.
-      delete nextContext.dispatched; delete nextContext.inputFiles;
-      delete nextContext.humanInput; delete nextContext.awaitingInput; delete nextContext.inputQuestions;
-      delete nextContext.attempts; delete nextContext.continuedFrom; delete nextContext.continuedInto;
-      delete nextContext.periodicPrevId; delete nextContext.periodicNextId;
-      nextContext.periodicPrevId = task.id;
 
-      // Create a fresh task matching the original parameters
-      const next = this.createTask({
-        title: task.title,
-        description: task.description,
-        from: task.from,
-        to: task.to,
-        priority: task.priority,
-        skill: task.skill,
-        context: nextContext,
-        tags: task.tags,
-        interaction: task.interaction,
-        scheduledAt: when.toISOString(),
-        recurrence
-      });
-      // Stamp the finished run with a forward link to the iteration it spawned, so
-      // the recurring task's history is walkable in both directions.
-      task.context = { ...(task.context || {}), periodicNextId: next.id };
-      this.writeTaskFile(taskFile, task);
-    }
-
+    // NOTE: completion no longer spawns the next iteration. A recurring task is now
+    // a persistent SCHEDULER (see createTask + releaseDueScheduled): it stays on the
+    // `scheduled` status and spawns a one-shot run-child every cycle, so the thing
+    // that finishes HERE is either that run-child (which links back to its parent
+    // scheduler and just becomes `done`) or a plain one-shot task. Either way this
+    // run's own artifacts/result stay on its own card — nothing further to schedule.
     return task;
+  }
+
+  /**
+   * Spawn a one-shot RUN-CHILD from a recurring parent (its scheduler). The child
+   * inherits the parent's brief, routing, brain pin, tags and interaction, but NOT
+   * its recurrence or schedule — it enters the pending pool immediately, runs once,
+   * and becomes the `done` record for this cycle (carrying that run's own inputs and
+   * results on its own card). It links back to the parent via
+   * `context.scheduledParentId` so a finished run points at the scheduled task that
+   * produced it. Per-run bookkeeping from the parent's context is stripped so it
+   * cannot bleed into the child.
+   */
+  private spawnScheduledRun(parent: Task): Task {
+    const ctx = { ...(parent.context || {}) };
+    delete ctx.failedBrains;
+    const pin = ctx.brainAuto ? undefined : ctx.brain;
+    if (pin) ctx.brain = pin; else delete ctx.brain;
+    delete ctx.brainAuto;
+    delete ctx.claimCount; delete ctx.lastClaimAt; delete ctx.failedCount;
+    delete ctx.remoteWaitSince;
+    delete ctx.ranAgent; delete ctx.ranDivision; delete ctx.ranBrain; delete ctx.isRoster;
+    delete ctx.dispatched; delete ctx.inputFiles;
+    delete ctx.humanInput; delete ctx.awaitingInput; delete ctx.inputQuestions;
+    delete ctx.attempts; delete ctx.continuedFrom; delete ctx.continuedInto;
+    delete ctx.periodicPrevId; delete ctx.periodicNextId;
+    ctx.scheduledParentId = parent.id;   // a finished run links back to its scheduler
+
+    return this.createTask({
+      title: parent.title,
+      description: parent.description,
+      from: parent.from,
+      to: parent.to,
+      priority: parent.priority,
+      skill: parent.skill,
+      context: ctx,
+      tags: parent.tags,
+      interaction: parent.interaction,
+      // no recurrence, no scheduledAt → a one-shot that runs now (pending)
+    });
   }
 
   /**
@@ -814,6 +841,16 @@ export class Store {
           task.status = awaiting ? 'wait-input' : 'pending';
         }
       }
+    }
+
+    // Keep a recurring task a SCHEDULER (mirrors createTask): if an edit left it
+    // with a recurrence but sitting in the runnable pool, park it back on
+    // `scheduled` so it spawns run-children rather than running its own body. A
+    // finished task is untouched unless the scheduledAt edit above already re-armed
+    // it into the pool, in which case it too becomes a scheduler again.
+    if (task.recurrence && (task.status === 'pending' || task.status === 'wait-input')) {
+      if (task.scheduledAt === undefined) task.scheduledAt = new Date().toISOString();
+      task.status = 'scheduled';
     }
 
     this.saveTask(task);

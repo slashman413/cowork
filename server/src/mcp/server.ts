@@ -255,12 +255,13 @@ function buildServer(config: Config, store: Store, eventBus: EventBus, goals?: G
       // until the dispatcher releases it at launch time.
       scheduled_at: z.string().optional(),
       // Recurring loop interval in hours (legacy shorthand for
-      // recurrence:{type:'hours', interval}). If set, completing the task spawns
-      // the next iteration at the fixed-rate next slot.
+      // recurrence:{type:'hours', interval}). If set, the task becomes a persistent
+      // scheduler that spawns a one-shot run-child at each fixed-rate slot.
       loop_interval_hours: z.number().optional(),
-      // Flexible recurrence. When set, completing the task spawns the next
-      // iteration at this cadence's next fire time (fixed-rate, phased on the
-      // intended launch time). Wall-clock fields are the server's local time.
+      // Flexible recurrence. When set, the task parks on `scheduled` and, at each
+      // fire time (fixed-rate, phased on the intended launch time), spawns a
+      // one-shot run-child that becomes that cycle's `done` record while the task
+      // re-arms itself. Wall-clock fields are the server's local time.
       recurrence: z.object({
         type: z.enum(['minutes', 'hours', 'daily', 'weekly', 'monthly', 'cron']),
         interval: z.number().int().positive().optional(),
