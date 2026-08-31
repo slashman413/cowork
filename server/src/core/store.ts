@@ -1368,8 +1368,23 @@ export class Store {
       if (task) tasks.push(task);
     }
 
-    // Sort by created desc
-    tasks.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    // Newest first, by creation time. Robust on two fronts the plain
+    // `getTime() - getTime()` subtraction got wrong:
+    //  1. A missing/unparseable `createdAt` (malformed or hand-created inbox
+    //     files — see readTaskFile) yields NaN; `NaN - x` is NaN, which the
+    //     sort reads as "equal", scattering that task to a random slot instead
+    //     of the top. We sink such tasks to the bottom (they aren't "latest").
+    //  2. Tasks stamped in the same millisecond (batch creation) tied at 0 and
+    //     reshuffled between reloads. A stable id tiebreaker pins their order.
+    const createdMs = (t: Task): number => {
+      const ms = Date.parse(t.createdAt);
+      return Number.isNaN(ms) ? -Infinity : ms;
+    };
+    tasks.sort((a, b) => {
+      const ta = createdMs(a), tb = createdMs(b);
+      if (ta !== tb) return tb > ta ? 1 : -1;   // newer createdAt on top
+      return (b.id || '').localeCompare(a.id || '');
+    });
     
     if (filters?.status) {
       if (filters.status === 'failed') {
