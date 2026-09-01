@@ -463,14 +463,39 @@ async function main() {
       const { description, location, exec, model, command, host } = req.body || {};
       if (location !== 'local' && location !== 'remote') throw new Error('location must be local|remote');
       config.orchestration.brains = config.orchestration.brains || {};
+      // Preserve the disabled flag through a PUT update — a brain stays disabled
+      // (or enabled) unless the caller explicitly changes it.
+      const prev = config.orchestration.brains[id];
       config.orchestration.brains[id] = {
         description: String(description || id), location,
         ...(exec ? { exec } : {}), ...(model !== undefined ? { model } : {}),
-        ...(Array.isArray(command) ? { command } : {}), ...(host ? { host } : {})
+        ...(Array.isArray(command) ? { command } : {}), ...(host ? { host } : {}),
+        ...(prev?.disabled ? { disabled: true } : {})
       };
       persistRegistries(config);
       res.json({ ok: true, id, brain: config.orchestration.brains[id] });
     } catch (e: any) { res.status(400).json({ error: e.message }); }
+  });
+
+  // Disable a brain — it stays in the registry but is excluded from dispatch,
+  // chain resolution, and the brain picker until re-enabled.
+  app.patch('/api/brains/:id/disable', (req, res) => {
+    const id = req.params.id;
+    const brain = (config.orchestration.brains || {})[id];
+    if (!brain) return res.status(404).json({ error: 'brain not found' });
+    brain.disabled = true;
+    persistRegistries(config);
+    res.json({ ok: true, id, disabled: true });
+  });
+
+  // Re-enable a previously disabled brain.
+  app.patch('/api/brains/:id/enable', (req, res) => {
+    const id = req.params.id;
+    const brain = (config.orchestration.brains || {})[id];
+    if (!brain) return res.status(404).json({ error: 'brain not found' });
+    delete brain.disabled;
+    persistRegistries(config);
+    res.json({ ok: true, id, disabled: false });
   });
 
   // Deregister a brain — and CASCADE: strip it from every agent's chain so no

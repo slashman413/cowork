@@ -158,15 +158,25 @@ export class Dispatcher {
   /** Resolve the brain fallback chain for an agent. Precedence:
    *   special agent      → its own agents[name].brains
    *   roster agent       → its own agentChains[slug] override, else its
-   *                        division's override, else the global default chain. */
+   *                        division's override, else the global default chain.
+   *   Disabled brains are silently stripped from the resolved chain so they are
+   *   never dispatched. */
   private chainFor(agent: string, division?: string): string[] {
     const orch = this.config.orchestration;
-    if (this.isSpecial(agent)) return orch.agents[agent].brains || [];
-    // A roster agent's own override wins over its division and the global default.
-    const own = orch.agentChains && orch.agentChains[agent];
-    if (own && own.length) return own;
-    const div = division || '';
-    return (orch.divisionChains && orch.divisionChains[div]) || orch.defaultChain || [];
+    const brains = orch.brains || {};
+    let raw: string[];
+    if (this.isSpecial(agent)) raw = orch.agents[agent].brains || [];
+    else {
+      // A roster agent's own override wins over its division and the global default.
+      const own = orch.agentChains && orch.agentChains[agent];
+      if (own && own.length) raw = own;
+      else {
+        const div = division || '';
+        raw = (orch.divisionChains && orch.divisionChains[div]) || orch.defaultChain || [];
+      }
+    }
+    // Strip disabled brains so the dispatcher never schedules them.
+    return raw.filter(id => !brains[id]?.disabled);
   }
 
   /** The chosen agent for a task: a special agent name, or a roster agent slug. */
@@ -410,8 +420,9 @@ export class Dispatcher {
     //     `brainAuto` marks a brain the dispatcher itself published for a remote
     //     chain rung (see handleRemoteRung); that is NOT a user pin, so let it
     //     fall through to the chain logic below (which manages grace/handover).
+    //     A disabled brain pin is treated as absent so the task falls through.
     const ctxBrain = typeof task.context?.brain === 'string' ? task.context.brain : undefined;
-    if (ctxBrain && brains[ctxBrain] && !task.context?.brainAuto) {
+    if (ctxBrain && brains[ctxBrain] && !brains[ctxBrain].disabled && !task.context?.brainAuto) {
       return this.brainPlan(agentName, division, ctxBrain, brains[ctxBrain], { pinned: true, attempt, chainLen: 0 });
     }
 
@@ -454,10 +465,10 @@ export class Dispatcher {
     return map[exec] || 'hermes';
   }
 
-  /** Orchestrator-facing description of the brain registry. */
+  /** Orchestrator-facing description of the brain registry (disabled brains excluded). */
   private brainsPromptBlock(): string {
     const brains = this.config.orchestration.brains || {};
-    const ids = Object.keys(brains);
+    const ids = Object.keys(brains).filter(id => !brains[id].disabled);
     if (!ids.length) return '';
     const lines = ids.map(id => {
       const b = brains[id];
@@ -960,12 +971,12 @@ export class Dispatcher {
     });
   }
 
-  /** First LOCAL, runnable brain in the given chain; else the router brain. */
+  /** First LOCAL, runnable, enabled brain in the given chain; else the router brain. */
   private execForChain(chain?: string[]): { exec: string; model: string } {
     const orch = this.config.orchestration;
     for (const id of chain || []) {
       const b = orch.brains?.[id];
-      if (b?.location === 'local' && b.exec) return { exec: b.exec, model: b.model || '' };
+      if (b?.location === 'local' && b.exec && !b.disabled) return { exec: b.exec, model: b.model || '' };
     }
     return this.routerModel();
   }

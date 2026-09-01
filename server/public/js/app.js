@@ -3283,12 +3283,14 @@ class App {
         <select id="dchain-add" style="padding:5px;background:var(--bg-tertiary);border:1px solid var(--bg-tertiary);border-radius:8px;color:inherit;font-size:0.8rem"><option value="">+ add to chain…</option>${notInChain.map(b => `<option value="${esc(b)}">${esc(b)}</option>`).join('')}</select>
       </div>`;
     const row = (id, b) => `
-      <div class="card" style="margin-bottom:var(--space-md)">
+      <div class="card" style="margin-bottom:var(--space-md)${b.disabled ? ';opacity:0.55' : ''}">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
           <strong>${esc(id)}</strong>
           ${badge(b.location, b.location === 'remote' ? '#EAB308' : '#22C55E')}
           ${b.dynamic ? badge('auto', '#0EA5E9') : ''}
-          <button class="btn" data-act="del-brain" data-id="${esc(id)}" style="font-size:0.75rem;margin-left:auto">Deregister</button>
+          ${b.disabled ? badge('disabled', '#EF4444') : ''}
+          <button class="btn" data-act="toggle-brain" data-id="${esc(id)}" data-disabled="${b.disabled ? '1' : ''}" style="font-size:0.75rem;margin-left:auto;${b.disabled ? 'color:#22C55E;border-color:#22C55E66' : 'color:#EAB308;border-color:#EAB30866'}">${b.disabled ? 'Enable' : 'Disable'}</button>
+          <button class="btn" data-act="del-brain" data-id="${esc(id)}" style="font-size:0.75rem">Deregister</button>
         </div>
         <p style="font-size:0.82rem;color:var(--text-secondary);margin:4px 0">${esc(b.description || '')}</p>
         <div style="font-size:0.78rem;color:var(--text-muted)">${esc(b.exec || '')}${b.model ? ' · ' + esc(b.model) : ''}${b.host ? ' · host ' + esc(b.host) : ''}</div>
@@ -3340,6 +3342,16 @@ class App {
       const r = await this.api.del(`/brains/${encodeURIComponent(id)}`);
       this.toast('brain removed', `${id} (scrubbed from ${r.agents_scrubbed} agent chain(s))`);
       this.renderBrains();
+    }));
+    this.contentEl.querySelectorAll('[data-act="toggle-brain"]').forEach(b => b.addEventListener('click', async () => {
+      const id = b.dataset.id;
+      const isDisabled = b.dataset.disabled === '1';
+      const action = isDisabled ? 'enable' : 'disable';
+      try {
+        await this.api.patch(`/brains/${encodeURIComponent(id)}/${action}`);
+        this.toast(isDisabled ? 'brain enabled' : 'brain disabled', id);
+        this.renderBrains();
+      } catch (e) { this.toast('error', e.message); }
     }));
   }
 

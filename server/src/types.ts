@@ -73,6 +73,10 @@ export interface BrainConfig {
    *  values). A brain with no `env` is treated permissively (legacy behavior)
    *  except against `path:`/`secret:` task requirements, which fail closed. */
   env?: BrainEnv;
+  /** When true the brain is excluded from dispatch, chain resolution, and the
+   *  brain picker. It stays in the registry (config persisted) so it can be
+   *  re-enabled without re-configuration. Default false (enabled). */
+  disabled?: boolean;
 }
 
 /** Environment capability manifest for a brain (WF-3 §B-I). All fields are
