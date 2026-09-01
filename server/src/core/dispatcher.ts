@@ -6,7 +6,7 @@ import type { EventBus } from './events.js';
 import type { Store, CompletionDecision } from './store.js';
 import type { Workflows } from './workflows.js';
 import type { Goals } from './goals.js';
-import { verifyOutput, buildVerifierPrompt, parseLlmVerdict, detectInputRequest, type VerifyVerdict, type InputOptions, type InputRequest } from './result-verifier.js';
+import { verifyOutput, buildVerifierPrompt, parseLlmVerdict, detectInputRequest, detectBackgroundWait, type VerifyVerdict, type InputOptions, type InputRequest, type BackgroundOptions, type BackgroundWait } from './result-verifier.js';
 import { buildLesson, appendLesson } from './lessons.js';
 
 /** Remove ANSI CSI/OSC escape sequences and lone carriage returns. */
@@ -1019,7 +1019,7 @@ export class Dispatcher {
     // inputFiles is rendered as its own section with readable paths (below), and
     // humanInput as a dedicated "answers" section (below) — drop both from the raw
     // context dump so they aren't duplicated or lost as noise in the JSON blob.
-    for (const k of ['persona', 'brainAuto', 'remoteWaitSince', 'dispatched', 'attempts', 'agentName', 'ranAgent', 'ranDivision', 'ranBrain', 'isRoster', 'inputFiles', 'humanInput', 'awaitingInput', 'inputQuestions']) delete shownCtx[k];
+    for (const k of ['persona', 'brainAuto', 'remoteWaitSince', 'dispatched', 'attempts', 'agentName', 'ranAgent', 'ranDivision', 'ranBrain', 'isRoster', 'inputFiles', 'humanInput', 'awaitingInput', 'inputQuestions', 'backgroundWait']) delete shownCtx[k];
     if (Object.keys(shownCtx).length > 0) {
       lines.push(`# Context`, '```json', JSON.stringify(shownCtx, null, 2), '```', '');
     }
@@ -1035,6 +1035,19 @@ export class Dispatcher {
         `# The user has answered your earlier question(s)`,
         `You previously paused this task to ask for input. The user has now replied — use these answers and CONTINUE the task to completion. Do NOT ask these same questions again; only ask (via NEEDS_INPUT) for genuinely new information you still don't have.`,
         ...answerEntries.map(([q, a]) => `- **${q}** → ${a}`),
+        ``
+      );
+    }
+    // This run was RE-ARMED after the agent deferred waiting on long background
+    // work it launched. Tell it to first check whether that work has finished —
+    // and to defer again (emit the marker) rather than fake a result if not.
+    const bgWait = task.context?.backgroundWait as { count?: number; note?: string } | undefined;
+    if (bgWait && (Number(bgWait.count) || 0) > 0) {
+      lines.push(
+        `# Resuming — a background task you started may now be finished`,
+        `A previous run of THIS task deferred because long-running background work you launched had not finished (deferral #${bgWait.count}). This is that check-back.`,
+        ...(bgWait.note ? [`What it was waiting on: ${bgWait.note}`] : []),
+        `First determine whether that background work has now COMPLETED (check its output/logs/status). If it has, use its results and finish the task, producing your final deliverable. If it is STILL running, do NOT invent or guess a result — emit a line beginning "WAITING_ON_BACKGROUND:" describing what you are still waiting on, and the task will be checked again shortly.`,
         ``
       );
     }
@@ -1074,7 +1087,8 @@ export class Dispatcher {
       ``,
       `If you generate any files (documents, media, data), save them to the directory: ${artifactsDir} — they become downloadable from the dashboard when the task completes.`,
       `When done, your final output (stdout) becomes the task result visible to the CEO on the dashboard.`,
-      `If you CANNOT finish without more information or a decision from the user, do NOT guess or invent an answer. End your output with a line beginning "NEEDS_INPUT:" followed by your question(s), one per line. The task will then pause and wait for the user to answer instead of being marked done.`
+      `If you CANNOT finish without more information or a decision from the user, do NOT guess or invent an answer. End your output with a line beginning "NEEDS_INPUT:" followed by your question(s), one per line. The task will then pause and wait for the user to answer instead of being marked done.`,
+      `If you launched LONG-RUNNING BACKGROUND WORK (a background shell/command, a spawned sub-agent, a CI/deploy/render job) that has NOT finished yet, do NOT report a partial result as if the task were done. End your output with a line beginning "WAITING_ON_BACKGROUND:" describing what you are waiting on. The task will be re-run shortly to check whether that work finished, instead of being marked done and closed while it is still in flight.`
     );
     return lines.join('\n');
   }
@@ -1202,6 +1216,46 @@ export class Dispatcher {
     };
   }
 
+  /** Background-wait detection options from the verifier config (wait phrases). */
+  private backgroundOpts(): BackgroundOptions {
+    const cfg = this.config.orchestration.verifier;
+    return {
+      disabled: cfg?.detectBackground === false,
+      patterns: cfg?.backgroundPatterns,
+      replacePatterns: cfg?.replaceBackgroundPatterns
+    };
+  }
+
+  /** How long to wait before re-running a task deferred on a background wait. */
+  private backgroundPollMs(): number {
+    const v = this.config.orchestration.verifier?.backgroundPollMs;
+    return Number.isFinite(v) && (v as number) > 0 ? (v as number) : 120000;
+  }
+
+  /** Safety cap on how many times one task may be deferred for a background wait
+   *  before it is completed with whatever it has. */
+  private maxBackgroundDeferrals(): number {
+    const v = this.config.orchestration.verifier?.maxBackgroundDeferrals;
+    return Number.isFinite(v) && (v as number) > 0 ? (v as number) : 30;
+  }
+
+  /** How many times this task has already been deferred for a background wait. */
+  private backgroundDeferralCount(task: Task): number {
+    const bw = task.context?.backgroundWait as { count?: number } | undefined;
+    return Number(bw?.count) || 0;
+  }
+
+  /** Returns a `defer-background` decision when a reported result is the agent
+   *  still waiting on long background work it launched (and the deferral cap is
+   *  not yet hit); otherwise null so completion proceeds normally. Shared by both
+   *  branches of {@link verifyReportedCompletion}. */
+  private backgroundDecision(task: Task, text: string): Extract<CompletionDecision, { action: 'defer-background' }> | null {
+    const bg = detectBackgroundWait(text, this.backgroundOpts());
+    if (!bg.waiting) return null;
+    if (this.backgroundDeferralCount(task) >= this.maxBackgroundDeferrals()) return null;
+    return { action: 'defer-background', note: bg.note, pollMs: this.backgroundPollMs() };
+  }
+
   /** Append a failed-brain record to the task's inbox entry so the fallback trail
    *  is visible on the dashboard: which brains failed, in order, and why. */
   private recordFailedBrain(taskId: string, entry: { brain: string; agent: string; attempt: number; reason: string }): void {
@@ -1282,6 +1336,8 @@ export class Dispatcher {
         });
         return { action: 'wait-input', questions: req.questions };
       }
+      const bg = this.backgroundDecision(task, text);
+      if (bg) return bg;
       return { action: 'complete' };
     }
 
@@ -1305,6 +1361,11 @@ export class Dispatcher {
         });
         console.log(`Dispatcher: reported result for task ${task.id} on ${brainId} is a QUESTION → wait-input (${req.matched || 'phrase'})`);
         return { action: 'wait-input', questions: req.questions };
+      }
+      const bg = this.backgroundDecision(task, text);
+      if (bg) {
+        console.log(`Dispatcher: reported result for task ${task.id} on ${brainId} is still WAITING on background work → defer (${bg.note || 'phrase'})`);
+        return bg;
       }
       verdict = await this.llmVerdict(task, text);
       if (verdict.ok) return { action: 'complete' };
@@ -1460,13 +1521,24 @@ export class Dispatcher {
     //       result that "does not actually address the task", which a genuine
     //       question does — running it first would hand the question to the next
     //       brain and strand it, never asking the user.
+    //   (2.5) BACKGROUND WAIT — an otherwise-ok, non-question result where the
+    //       agent is still waiting on long background work it launched. It is a
+    //       successful run that is NOT YET a deliverable: DEFER (re-arm on
+    //       `scheduled`) below instead of marking it done and closing the session.
+    //       Recognised BEFORE the LLM gate for the same reason a question is — that
+    //       verifier would FAIL a "still waiting" result and hand it off wrongly.
     //   (3) LLM quality gate — only a genuine deliverable is judged for completion.
     const detVerdict = this.deterministicVerdict(output);
     const inputReq: InputRequest = detVerdict.ok ? detectInputRequest(output.text, this.inputOpts()) : { needsInput: false, questions: [] };
+    const bgWait: BackgroundWait = detVerdict.ok && !inputReq.needsInput
+      ? detectBackgroundWait(output.text, this.backgroundOpts()) : { waiting: false };
+    // Only defer while under the safety cap; past it, treat the result as final so a
+    // never-finishing background job can't loop the task forever.
+    const bgDefer = bgWait.waiting && this.backgroundDeferralCount(task) < this.maxBackgroundDeferrals();
     const verdict: VerifyVerdict = !detVerdict.ok
       ? detVerdict
-      : inputReq.needsInput
-        ? { ok: true }                                 // question → skip the LLM gate, park below
+      : inputReq.needsInput || bgDefer
+        ? { ok: true }                                 // question / bg-wait → skip the LLM gate, park below
         : await this.llmVerdict(task, output.text);
     if (output.ok && !verdict.ok) {
       console.log(`Dispatcher: verifier REJECTED task ${task.id} result on ${plan.brainId} — ${verdict.reason}`);
@@ -1522,6 +1594,24 @@ export class Dispatcher {
         console.log(`Dispatcher: task ${task.id} paused on wait-input — agent asked ${req.questions.length} question(s) (${req.matched || 'phrase'})`);
         return;
       }
+    }
+
+    // The agent is still WAITING on long background work it launched (gate 2.5).
+    // Do NOT mark the task done / close the session: re-arm it on `scheduled` a
+    // short while out so a later run checks whether the background job finished
+    // and only then delivers. Bounded by maxBackgroundDeferrals (checked into
+    // bgDefer above) so a never-finishing job can't loop forever.
+    if (verdict.ok && bgDefer) {
+      const t = this.store.getTask(task.id);
+      if (t) {
+        t.context = { ...(t.context || {}), ranAgent: plan.agent, ranDivision: plan.division, ranBrain: plan.brainId, isRoster: plan.isRoster };
+        if (artifacts.length) (t as any).artifacts = artifacts;
+        this.store.saveTask(t);
+      }
+      this.store.deferForBackground({ taskId: task.id, note: bgWait.note, result: output.text.slice(0, 4000), pollMs: this.backgroundPollMs() });
+      const n = this.backgroundDeferralCount(this.store.getTask(task.id) || task);
+      console.log(`Dispatcher: task ${task.id} DEFERRED (background wait #${n}/${this.maxBackgroundDeferrals()}) — re-runs in ${Math.round(this.backgroundPollMs() / 1000)}s (${bgWait.matched || 'phrase'})`);
+      return;
     }
 
     // The whole fallback chain is exhausted here. Summarise which brains failed

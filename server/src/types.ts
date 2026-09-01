@@ -162,6 +162,22 @@ export interface VerifierConfig {
   inputPatterns?: string[];
   /** Replace the built-in input-request phrases entirely instead of merging. */
   replaceInputPatterns?: boolean;
+  /** Detect a result where the agent is still WAITING on long background work it
+   *  launched (a background shell, spawned sub-agent, CI/deploy/render job) and
+   *  DEFER the task (re-arm it on `scheduled`) instead of marking it done and
+   *  closing the session. Default on. */
+  detectBackground?: boolean;
+  /** Extra case-insensitive phrases that also mark a result as a background wait. */
+  backgroundPatterns?: string[];
+  /** Replace the built-in background-wait phrases entirely instead of merging. */
+  replaceBackgroundPatterns?: boolean;
+  /** How long to wait before re-running a task deferred on a background wait (ms).
+   *  Default 120000 (2 min). */
+  backgroundPollMs?: number;
+  /** Safety cap on how many times one task may be deferred for a background wait
+   *  before it is completed with whatever it has (avoids an infinite loop when a
+   *  background job never finishes). Default 30. */
+  maxBackgroundDeferrals?: number;
   /** Optional LLM verifier agent stacked on top of the deterministic check. */
   llm?: {
     enabled: boolean;

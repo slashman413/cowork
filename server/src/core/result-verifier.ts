@@ -323,6 +323,130 @@ function cleanQuestionLine(line: string): string {
   return (line || '').trim().replace(/^(?:[-*+]|\d+[.)]|#{1,6})\s+/, '').trim();
 }
 
+/* ────────────────────────────────────────────────────────────────────────────
+ * BACKGROUND-WAIT detection — the fourth outcome a raw "done" status hides. An
+ * agent can exit 0 having KICKED OFF long-running background work (a background
+ * shell, a spawned sub-agent, a CI/deploy/render job) that has NOT finished yet.
+ * Its stdout is not a deliverable and not a question — it's "I'm still waiting."
+ * Marking that "done" closes the task session while the real work is still in
+ * flight, throwing away whatever the background job eventually produces. When
+ * detected the dispatcher DEFERS the task (re-arms it on `scheduled` a short
+ * while out) instead of completing it, so a later run checks whether the
+ * background work finished and only then delivers.
+ *
+ * Precedence (enforced by the dispatcher): a hard/soft FAILURE and a QUESTION
+ * for the user are both decided FIRST — a rate-limit notice is a failure, and a
+ * genuine "I need a human decision" must reach the user, not silently loop on a
+ * timer. Only an otherwise-ok, non-question result is inspected for a wait.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+export interface BackgroundWait {
+  waiting: boolean;
+  /** The sentinel/phrase that triggered detection (for logs). */
+  matched?: string;
+  /** A short human-readable line describing what is being waited on (for the card). */
+  note?: string;
+}
+
+export interface BackgroundOptions {
+  /** Extra case-insensitive phrases that also mark a result as a background wait. */
+  patterns?: string[];
+  /** Replace the built-in phrases entirely instead of merging the extras in. */
+  replacePatterns?: boolean;
+  /** Turn detection off (trust the result as complete). */
+  disabled?: boolean;
+}
+
+/**
+ * A DEFINITIVE marker an agent is told (via the executor prompt) to emit when it
+ * has launched long background work that has not finished: a line beginning
+ * `WAITING_ON_BACKGROUND:` (also accepts BACKGROUND_WAIT / WAITING_FOR_BACKGROUND
+ * / AWAITING_BACKGROUND). Everything after the marker on that line is kept as the
+ * note describing what is being waited on.
+ */
+const BACKGROUND_SENTINEL =
+  /^\s*(?:#{1,6}\s*)?\**\s*(WAITING[_ -]?ON[_ -]?BACKGROUND|WAITING[_ -]?FOR[_ -]?BACKGROUND|BACKGROUND[_ -]?WAIT|AWAITING[_ -]?BACKGROUND)\**\s*:?\s*(.*)$/i;
+
+/**
+ * Phrases that signal the agent is blocked waiting on long-running background
+ * work it already started (not a finished deliverable that merely mentions a
+ * background job). Deliberately phrase-level and "still running / not finished"
+ * shaped so a completed report that describes background processing isn't
+ * flagged. Matched case-insensitively as substrings.
+ */
+export const DEFAULT_BACKGROUND_WAIT_PATTERNS: string[] = [
+  'waiting for the background task',
+  'waiting for background task',
+  'waiting for the background tasks',
+  'waiting for background tasks',
+  'waiting for the background job',
+  'waiting for background job',
+  'waiting for the background process',
+  'waiting for background process',
+  'waiting for the background agent',
+  'waiting for background agent',
+  'waiting on the background task',
+  'waiting on background task',
+  'waiting on the long-running',
+  'waiting for the long-running',
+  'still running in the background',
+  'background task is still running',
+  'background tasks are still running',
+  'background job is still running',
+  'background jobs are still running',
+  'background process is still running',
+  'background agent is still running',
+  'background task has not finished',
+  'background task has not completed',
+  'background task is not finished',
+  'background task is not yet complete',
+  'background task is not yet finished',
+  'background task is still in progress',
+  'background job has not finished',
+  'background work is still in progress',
+  'background work has not finished',
+];
+
+/**
+ * Decide whether a finished, otherwise-ok, non-question result is really an agent
+ * DEFERRING because long background work it launched has not finished. Returns
+ * waiting + a short note. A sentinel line is authoritative; failing that, a
+ * "still running / not finished" phrase (see DEFAULT_BACKGROUND_WAIT_PATTERNS)
+ * flags it and a nearby line is lifted out as the note.
+ */
+export function detectBackgroundWait(text: string, opts: BackgroundOptions = {}): BackgroundWait {
+  const none: BackgroundWait = { waiting: false };
+  if (opts.disabled) return none;
+  const raw = (text || '').trim();
+  if (!raw) return none;
+  const lines = raw.split('\n');
+
+  // 1. Authoritative sentinel.
+  for (const line of lines) {
+    const m = line.match(BACKGROUND_SENTINEL);
+    if (!m) continue;
+    const note = (m[2] || '').trim() || undefined;
+    return { waiting: true, matched: m[1].toUpperCase().replace(/[_ -]+/g, '_'), note };
+  }
+
+  // 2. Heuristic: a "still running / not finished" phrase means the run deferred.
+  const patterns = opts.replacePatterns
+    ? (opts.patterns ?? [])
+    : [...DEFAULT_BACKGROUND_WAIT_PATTERNS, ...(opts.patterns ?? [])];
+  const hay = raw.toLowerCase();
+  let matched: string | undefined;
+  for (const p of patterns) {
+    const needle = p.toLowerCase();
+    if (needle && hay.includes(needle)) { matched = p; break; }
+  }
+  if (!matched) return none;
+
+  // Note = the sentence containing the matched phrase, capped.
+  const sentence = raw.split(/(?<=[.!?])\s+/).find(s => s.toLowerCase().includes(matched!.toLowerCase()));
+  const note = (sentence || matched).trim().slice(0, 300);
+  return { waiting: true, matched, note };
+}
+
 /** Dedupe, drop empties, cap count (8) and each length (500), or a generic fallback. */
 function capQuestions(questions: string[]): string[] {
   const seen = new Set<string>();

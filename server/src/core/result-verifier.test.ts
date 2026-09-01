@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { verifyOutput, parseLlmVerdict, buildVerifierPrompt, DEFAULT_FAIL_PATTERNS, detectInputRequest, DEFAULT_QUESTION_PATTERNS } from './result-verifier.js';
+import { verifyOutput, parseLlmVerdict, buildVerifierPrompt, DEFAULT_FAIL_PATTERNS, detectInputRequest, DEFAULT_QUESTION_PATTERNS, detectBackgroundWait, DEFAULT_BACKGROUND_WAIT_PATTERNS } from './result-verifier.js';
 
 /**
  * The result verifier is the fix for "a rate-limit reply looked like a done
@@ -216,4 +216,53 @@ test('DEFAULT_QUESTION_PATTERNS is non-empty and matched case-insensitively', ()
 test('questions are capped at 8', () => {
   const many = 'NEEDS_INPUT:\n' + Array.from({ length: 15 }, (_, i) => `- Question ${i}?`).join('\n');
   assert.equal(detectInputRequest(many).questions.length, 8);
+});
+
+/**
+ * Background-wait detection: an agent that KICKED OFF long background work which
+ * hasn't finished must DEFER, not be marked done. These pin the sentinel, the
+ * phrase heuristic, and that finished deliverables which merely mention
+ * background jobs are NOT flagged.
+ */
+test('WAITING_ON_BACKGROUND sentinel is detected with its note', () => {
+  const r = detectBackgroundWait('Started the render.\nWAITING_ON_BACKGROUND: the 4K render job is still encoding (job 7f3a).');
+  assert.equal(r.waiting, true);
+  assert.match(r.matched || '', /WAITING_ON_BACKGROUND/);
+  assert.match(r.note || '', /render job/);
+});
+
+test('sentinel variants are accepted', () => {
+  assert.equal(detectBackgroundWait('BACKGROUND_WAIT: still building').waiting, true);
+  assert.equal(detectBackgroundWait('AWAITING_BACKGROUND: deploy in flight').waiting, true);
+  assert.equal(detectBackgroundWait('WAITING_FOR_BACKGROUND: CI running').waiting, true);
+});
+
+test('a "still running in the background" phrase flags a wait', () => {
+  const r = detectBackgroundWait('I launched the data export; the background task is still running. I will check back.');
+  assert.equal(r.waiting, true);
+  assert.match(r.note || '', /still running/i);
+});
+
+test('a finished deliverable that merely mentions background jobs is NOT flagged', () => {
+  const r = detectBackgroundWait('# Report\n\nThis system offloads heavy work to a background job queue for speed. Done.');
+  assert.equal(r.waiting, false);
+});
+
+test('a polite finished sign-off is NOT flagged as a background wait', () => {
+  assert.equal(detectBackgroundWait('Here is the complete analysis. Let me know if you want changes!').waiting, false);
+});
+
+test('background-wait detection can be disabled', () => {
+  assert.equal(detectBackgroundWait('WAITING_ON_BACKGROUND: x', { disabled: true }).waiting, false);
+});
+
+test('custom backgroundPatterns merge with the built-ins', () => {
+  assert.equal(detectBackgroundWait('the transcode is still cooking', { patterns: ['still cooking'] }).waiting, true);
+  // built-ins still apply when merging extras
+  assert.equal(detectBackgroundWait('the background job is still running', { patterns: ['x'] }).waiting, true);
+});
+
+test('DEFAULT_BACKGROUND_WAIT_PATTERNS is non-empty and matched case-insensitively', () => {
+  assert.ok(DEFAULT_BACKGROUND_WAIT_PATTERNS.length > 0);
+  assert.equal(detectBackgroundWait('THE BACKGROUND TASK IS STILL RUNNING').waiting, true);
 });

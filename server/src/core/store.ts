@@ -21,7 +21,11 @@ import { normalizeRecurrence, recurrenceFromLegacyHours, nextRunAt, type TaskRec
 export type CompletionDecision =
   | { action: 'complete'; result?: string }
   | { action: 'handover' }
-  | { action: 'wait-input'; questions?: string[] };
+  | { action: 'wait-input'; questions?: string[] }
+  /** The agent is still waiting on long background work it launched — DEFER the
+   *  task (re-arm on `scheduled` a short while out) instead of marking it done,
+   *  so a later run checks whether the background job finished. */
+  | { action: 'defer-background'; note?: string; pollMs?: number };
 export type CompletionGuard = (task: Task, result?: string) => Promise<CompletionDecision>;
 
 /**
@@ -590,6 +594,9 @@ export class Store {
       if (decision.action === 'handover') return this.getTask(params.taskId);
       if (decision.action === 'wait-input') {
         return this.parkForInput({ taskId: task.id, questions: decision.questions || [], result: params.result });
+      }
+      if (decision.action === 'defer-background') {
+        return this.deferForBackground({ taskId: task.id, note: decision.note, result: params.result, pollMs: decision.pollMs });
       }
       if (decision.result !== undefined) result = decision.result;
     }
@@ -1245,6 +1252,42 @@ export class Store {
       inputQuestions: qs
     };
     this.saveTask(task);
+    return task;
+  }
+
+  /**
+   * DEFER a task whose agent is still waiting on long background work it launched
+   * (a background shell, a spawned sub-agent, a CI/deploy/render job). Instead of
+   * marking it `done` and closing the session, re-arm it on `scheduled` a short
+   * while out so a later run checks whether the background job finished and only
+   * then delivers. The partial output is preserved on task.result + carried into
+   * context.backgroundWait so the next run's prompt knows what it was waiting on.
+   * A bounded deferral count (context.backgroundWait.count) prevents an infinite
+   * loop when a background job never finishes — the caller enforces the cap.
+   */
+  public deferForBackground(params: { taskId: string; note?: string; result?: string; pollMs?: number }): Task | null {
+    const task = this.getTask(params.taskId);
+    if (!task) return null;
+    const pollMs = Number.isFinite(params.pollMs) && (params.pollMs as number) > 0 ? (params.pollMs as number) : 120000;
+    const prev = (task.context?.backgroundWait as { count?: number } | undefined) || {};
+    const count = (Number(prev.count) || 0) + 1;
+    task.status = 'scheduled';
+    task.scheduledAt = new Date(Date.now() + pollMs).toISOString();
+    delete task.claimedAt;
+    delete task.claimedBy;
+    if (params.result) task.result = params.result;
+    // Reset scheduling flags so the re-armed task re-dispatches cleanly from the
+    // top of its chain — the previous run produced a wait, not a failure, so it
+    // must not count against the fallback attempts.
+    task.context = {
+      ...(task.context || {}),
+      dispatched: false,
+      attempts: 0,
+      remoteWaitSince: undefined,
+      backgroundWait: { count, note: params.note || prev['note' as keyof typeof prev] || undefined, at: new Date().toISOString() }
+    };
+    this.saveTask(task);
+    this.eventBus.emitTaskCreated(task);   // nudge live dashboards to refresh
     return task;
   }
 
