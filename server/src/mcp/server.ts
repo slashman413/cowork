@@ -80,7 +80,7 @@ function buildServer(config: Config, store: Store, eventBus: EventBus, goals?: G
       brains: z.array(z.object({
         id: z.string(),
         location: z.enum(['local', 'remote']).default('remote'),
-        exec: z.enum(['claude', 'hermes', 'agy', 'script', 'codex', 'ollama']).optional(),
+        exec: z.enum(['claude', 'hermes', 'agy', 'script', 'codex', 'ollama', 'dsh']).optional(),
         model: z.string().optional(),
         host: z.string().optional(),
         description: z.string().optional(),

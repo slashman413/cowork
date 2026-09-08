@@ -140,7 +140,7 @@ const MY_IDS = new Set(Object.keys(BRAIN));
 const AGENT_NAME = process.env.AGENT_NAME || `remote-${HOST}`;
 // Registration platform reflects the declared brains (a box may be claude-only,
 // hermes-only, or mixed). Derive from the first brain's exec.
-const execToPlatform = e => e === 'claude' ? 'claude' : e === 'agy' ? 'antigravity' : e === 'codex' ? 'codex' : e === 'ollama' ? 'ollama' : 'hermes';
+const execToPlatform = e => e === 'claude' ? 'claude' : e === 'agy' ? 'antigravity' : e === 'codex' ? 'codex' : e === 'ollama' ? 'ollama' : e === 'dsh' ? 'dsh' : 'hermes';
 const PLATFORM = execToPlatform(Object.values(BRAIN)[0]?.exec || EXEC_DEFAULT);
 
 function need(k) { const v = process.env[k]; if (!v) { console.error(`Missing required env ${k}`); process.exit(2); } return v; }
@@ -495,6 +495,11 @@ function runModel(brain, prompt, artDir) {
     : brain.exec === 'agy' ? ['agy', '-p', prompt, ...(brain.model ? ['--model', brain.model] : []), '--dangerously-skip-permissions']
     : brain.exec === 'codex' ? ['codex', 'exec', '--skip-git-repo-check', '--dangerously-bypass-approvals-and-sandbox', ...(brain.profile ? ['--profile', brain.profile] : []), ...(brain.model ? ['-m', brain.model] : []), prompt]
     : brain.exec === 'ollama' ? (brain.model ? ['ollama', 'run', brain.model, prompt] : null)
+    // dsh (DeepSeek Harness) headless profile: answer one task, print it, exit.
+    // Talks to a local OpenAI-compatible endpoint via the provider in
+    // $DSH_HOME/settings.yaml; DSH_HOME + the provider apiKeyEnv are pinned so the
+    // brain is self-contained regardless of spawn cwd (SGLang ignores the value).
+    : brain.exec === 'dsh' ? ['env', `DSH_HOME=${process.env.HOME}/.dsh`, 'SGLANG_API_KEY=dummy', 'dsh', '--profile', 'headless', prompt]
     : null;
   if (!argv) return Promise.resolve({ ok: false, text: `unknown/misconfigured exec ${brain.exec}` });
   return new Promise((resolve) => {

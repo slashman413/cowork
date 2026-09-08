@@ -20,9 +20,11 @@ export interface ServiceConfig {
 
 
 export interface RoleConfig {
-  /** claude/hermes/agy spawn an LLM CLI; script runs an arbitrary command
-   *  (e.g. a media pipeline) with the task passed via COWORK_TASK_* env vars. */
-  exec: 'claude' | 'hermes' | 'agy' | 'script' | 'codex' | 'ollama';
+  /** claude/hermes/agy/codex/dsh spawn an LLM CLI; script runs an arbitrary
+   *  command (e.g. a media pipeline) with the task passed via COWORK_TASK_* env
+   *  vars. dsh (DeepSeek Harness) runs its headless profile against a local
+   *  OpenAI-compatible endpoint wired in $DSH_HOME/settings.yaml. */
+  exec: 'claude' | 'hermes' | 'agy' | 'script' | 'codex' | 'ollama' | 'dsh';
   model: string;
   /** argv for exec:script roles (the command + args to run). */
   command?: string[];
@@ -45,7 +47,7 @@ export interface BrainConfig {
   description: string;
   location: 'local' | 'remote';
   /** local brains: how to run them. */
-  exec?: 'claude' | 'hermes' | 'agy' | 'script' | 'codex' | 'ollama';
+  exec?: 'claude' | 'hermes' | 'agy' | 'script' | 'codex' | 'ollama' | 'dsh';
   model?: string;
   command?: string[];
   /** remote brains: which machine/client (informational + claim-routing hint). */
