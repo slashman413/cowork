@@ -31,7 +31,7 @@ interface ExecPlan {
   pinned: boolean;             // context.brain override (retry same brain)
   label: string;                // worker display + logs
   platform: string;             // active-agent platform bucket
-  exec: 'claude' | 'hermes' | 'agy' | 'script' | 'codex' | 'ollama';
+  exec: 'claude' | 'hermes' | 'agy' | 'script' | 'codex' | 'ollama' | 'dsh';
   model: string;
   command?: string[];
 }
@@ -461,7 +461,7 @@ export class Dispatcher {
   }
 
   private platformOf(exec: string): string {
-    const map: Record<string, string> = { claude: 'claude', agy: 'antigravity', script: 'pipeline', codex: 'codex', ollama: 'ollama', hermes: 'hermes' };
+    const map: Record<string, string> = { claude: 'claude', agy: 'antigravity', script: 'pipeline', codex: 'codex', ollama: 'ollama', dsh: 'dsh', hermes: 'hermes' };
     return map[exec] || 'hermes';
   }
 
@@ -922,6 +922,9 @@ export class Dispatcher {
       '```',
       `Rules: answer evaluate{met:true} ONLY when the criteria are genuinely met (this ENDS the goal). Emit the current phase's real work as a small batch — the last task automatically completes the phase and triggers the Judger. Do not repeat completed work. If no phase is workable, plan one.`,
       '',
+      `EXECUTE, don't just describe: producing a PLAN, ANALYSIS, STRATEGY, REPORT, or SUMMARY is NOT achieving the goal — it is at most the setup for the task that does. When the goal is to build / ship / optimize / automate / grow something, it is met ONLY once that work has actually been CARRIED OUT and then VERIFIED — by a test, a review, or a real check that actually ran and passed (a live URL that loads, a green run, a dated snapshot read from the real source). So the tasks you emit must be the real work itself ("build X", "change Y", "run Z", "deploy", "publish"), and every batch of execution must be followed — this phase or the next — by a concrete verification/test/review task that proves it works. NEVER emit only planning or reporting tasks, and NEVER answer evaluate{met:true} while any build, execution, integration, or verification step is still unrun. If the only thing that has happened so far is that plans and reports were written, the goal is NOT met — emit the execution work now.`,
+      `Act on the Judger, don't archive it: the Judger's report and minutes above are a MANAGER'S DECISION about what to do next, not a deliverable to file and stop on. Read the latest minutes' recommended next move and DO it this turn — emit the specific work it points to, plan the phase it names, or evaluate if it says the criterion is genuinely met with evidence. Bypassing that recommendation to write another summary is the failure mode that stalls goals; keep the loop moving toward real, verified execution.`,
+      '',
       `Waiting on the real world: when the next honest move is to LET TIME PASS (a month of revenue, a cohort of traffic, an indexing window), do not burn turns re-evaluating. Emit the measurement task with a future "scheduledAt". The goal then sleeps — no turns, no budget — until that checkpoint fires. This is the correct move, not a stall.`,
       `Persistence: a criterion that is not yet met is NEVER a reason to stop. If a phase's results disappointed, plan the next phase with a DIFFERENT approach informed by the Judger's minutes above — do not repeat the approach that underperformed.`,
       `Blocking honestly: if — and only if — you hit a real obstacle you cannot clear yourself (a missing credential, an external dependency, a decision only a human can make, a criterion that has become impossible), return kind:"block" with a precise unblockCriteria. A blocked goal is HELD, not abandoned, and it is SELF-HEALING: it stops spending turns and budget, then the system auto-resumes it for a fresh probe on a backoff (minutes at first, later hours), so it recovers on its own the moment the obstacle clears — no human click required. Make unblockCriteria a concrete, checkable condition so that probe can tell whether to proceed. Prefer block over spinning: an evaluate{met:false} that neither plans nor emits counts as no progress, and enough of those will block the goal automatically with a generic reason — declaring the block yourself, with a specific unblockCriteria, is always better.`
@@ -1147,6 +1150,22 @@ export class Dispatcher {
         // Local Ollama chat model (model required).
         if (!roleCfg.model) throw new Error('exec:ollama needs a model');
         return ['ollama', 'run', roleCfg.model, prompt];
+      case 'dsh':
+        // DeepSeek Harness, headless profile: "answer one task, print the result,
+        // and exit" — the non-interactive shape a brain needs. dsh is NOT a model
+        // server; it talks to a local OpenAI-compatible endpoint (here the SGLang
+        // Qwen3.8-27B engine on :30000) via the `local-sglang` provider wired in
+        // $DSH_HOME/settings.yaml, which also pins agent-default-model. The model
+        // is therefore chosen by that settings file, not a CLI flag, so roleCfg.model
+        // is documentation only.
+        //
+        // Hermetic env is essential: execute() spawns brains with cwd = the task's
+        // artifacts dir and a bare env, but dsh resolves its settings.yaml + the
+        // `headless` profile from $DSH_HOME (default is the launch cwd — wrong here),
+        // and the provider needs its apiKeyEnv present (SGLang ignores the value).
+        // env(1) sets both regardless of spawn cwd so the brain is self-contained.
+        return ['env', `DSH_HOME=${process.env.HOME}/.dsh`, 'SGLANG_API_KEY=dummy',
+          'dsh', '--profile', 'headless', prompt];
       case 'script':
         // Task is passed via COWORK_TASK_* env vars (see execute); the command
         // is a fixed pipeline, not an LLM prompt.

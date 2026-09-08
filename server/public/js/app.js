@@ -2501,6 +2501,13 @@ class App {
 
     this.applyInboxSearch();
     if (this.pendingTask) this.focusInboxTask();
+
+    // renderInbox() is called directly by the filter pills, delete/purge/search
+    // and load-more handlers — NOT only through renderCurrentView() (which has its
+    // own trailing createIcons()). Each of those re-renders innerHTML with fresh
+    // `<i data-lucide>` placeholders, so we must re-hydrate the Lucide glyphs here
+    // or every icon vanishes on filter click until a full page refresh.
+    createIcons();
   }
 
   // Deep-link target from a workflow run's OUTPUT panel (#inbox/<taskId>): scroll

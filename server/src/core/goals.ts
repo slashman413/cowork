@@ -582,11 +582,20 @@ export class Goals {
       'Work in scope:',
       doneWork || '(no completed tasks found)',
       '',
-      'Produce TWO artifacts in your artifacts dir (relative paths):',
-      `  1. report-${phaseKey}.md — a ${rec.reportBrief ? rec.reportBrief + ' style' : 'concise'} status report on what was achieved vs. the success criteria.`,
-      `  2. minutes-${phaseKey}.md — meeting minutes of the Achiever↔Judger sync: what the phase accomplished, gaps, and the recommended next step for the Achiever.`,
+      'Judge by EXECUTION, not description. A plan, analysis, strategy, or report is NOT',
+      'progress toward the criterion — it is at most the setup for the work that is. For',
+      'each task in scope, decide whether it actually CARRIED OUT real work and whether that',
+      'work was VERIFIED (a test/review/live check that really ran and passed), or whether it',
+      'only produced words. If the phase only planned or reported, say so plainly — that is a',
+      'gap, and the next move is to EXECUTE, not to summarise again.',
       '',
-      'You are read-mostly: do NOT create execution tasks. Report and recommend only.'
+      'Produce TWO artifacts in your artifacts dir (relative paths):',
+      `  1. report-${phaseKey}.md — a ${rec.reportBrief ? rec.reportBrief + ' style' : 'concise'} status report on what was actually built/executed/verified this phase vs. the success criteria, calling out any step that was merely planned or reported but not done.`,
+      `  2. minutes-${phaseKey}.md — meeting minutes of the Achiever↔Judger sync. End with a section "NEXT MOVE:" giving the Achiever ONE concrete, decisive instruction — the specific execution work to emit next (real build/change/run/deploy/test, not another plan), the specific phase to plan, or "evaluate met" WITH the evidence that the criterion is genuinely satisfied. Never make the next move "write another report".`,
+      '',
+      'You are read-mostly: do NOT create execution tasks yourself. But your minutes ARE the',
+      "manager's decision the Achiever acts on next — make the NEXT MOVE unambiguous and biased",
+      'toward real, verified execution, so the goal keeps moving instead of stalling on reports.'
     ].filter(l => l !== '').join('\n');
 
     const task = this.store.createTask({

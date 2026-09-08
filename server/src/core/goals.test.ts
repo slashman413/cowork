@@ -353,6 +353,22 @@ test('the Judger is read-mostly: it never counts against the execution budget', 
   assert.equal(goals.overBudget(g.goalId), false, 'Judger does not consume the budget');
 });
 
+test('the Judger brief forces a decisive NEXT MOVE and judges execution over description', () => {
+  const { goals, store } = makeGoals();
+  const g = goals.create({ ...seed, phases: [{ key: 'research', title: 'Research' }] });
+  goals.activate(g.goalId);
+  goals.applyAchieverDecision(g.goalId, { kind: 'emit', tasks: [{ title: 'work' }] });
+  const term = goals.generatedTasks(g.goalId).find(t => t.context!.completesPhase)!;
+  store.finish(term.id);
+  goals.onTaskCompleted(store.getTask(term.id)!);
+  const judger = goals.generatedTasks(g.goalId).find(t => t.context!.role === 'goal-judger')!;
+  // The manager decision the Achiever acts on next must be explicit and biased to
+  // real execution — not "file a report and stop".
+  assert.match(judger.description, /NEXT MOVE:/);
+  assert.match(judger.description, /EXECUTION, not description|Judge by EXECUTION/i);
+  assert.match(judger.description, /not another plan|not to summarise again/i);
+});
+
 // ── success gate & self-heal ─────────────────────────────────────────────────
 
 test('evaluate met:true achieves the goal and queues a closeout report', () => {
