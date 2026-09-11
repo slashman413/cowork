@@ -115,8 +115,6 @@
     "maxWorkflowSteps": 12,
     "defaultChain": [
       "local-ha-qwen35b",
-      "local-ha-deepseek-v4-pro",
-      "local-ha-deepseek",
       "local-cc-opus"
     ],
     "divisionChains": {},
@@ -124,18 +122,14 @@
       "orchestrator": {
         "description": "Decompose a CEO idea into role-tagged subtasks and dispatch them",
         "brains": [
-          "local-ha-deepseek-v4-pro",
           "local-ha-qwen35b",
-          "local-cc-fable",
-          "local-ha-deepseek"
+          "local-cc-fable"
         ]
       },
       "generalist": {
         "description": "Fallback when the router can't classify or an agent fails through its chain",
         "brains": [
           "local-ha-qwen35b",
-          "local-ha-deepseek-v4-pro",
-          "local-ha-deepseek",
           "local-cc-sonnet"
         ]
       },
@@ -153,21 +147,6 @@
         "exec": "hermes",
         "model": "nvidia/Qwen3.6-35B-A3B-NVFP4",
         "maxConcurrent": 3
-      },
-      "local-ha-deepseek": {
-        "description": "Local Hermes agent on DeepSeek-V4-Flash",
-        "location": "local",
-        "exec": "hermes",
-        "model": "deepseek-v4-flash",
-        "maxConcurrent": 3
-      },
-      "local-ha-deepseek-v4-pro": {
-        "description": "Local Hermes agent on DeepSeek V4 Pro (custom provider)",
-        "location": "local",
-        "exec": "hermes",
-        "model": "nvidia/deepseek-v4-pro",
-        "_maxConcurrent_comment": "The workhorse brain: all credential/local-file tasks are pinned here (Inc 6 rule). Backed by a shared inference server, so it serves several pinned tasks at once instead of serialising them behind a global cap of 1.",
-        "maxConcurrent": 4
       },
       "local-cc-opus": {
         "description": "Local Claude Code using Opus 4.8",

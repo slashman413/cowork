@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -68,6 +68,93 @@ test('restoreClientBrains: never overwrites existing registry entries (static or
     assert.equal(config.orchestration.brains!['local-cc-opus'].description, 'hand-configured');  // untouched
     assert.equal(config.orchestration.brains!['local-cc-opus'].dynamic, undefined);
     assert.equal(config.orchestration.brains!['local-cc-nova'].registeredBy, 'cc-agent-2');
+  } finally {
+    delete process.env.COWORK_CONFIG;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('registerBrain: preserves a server-side disable across client re-registration', async () => {
+  const dir = makeConfig();
+  try {
+    const { loadConfig, registerBrain } = await import('./config.js');
+    const config = loadConfig();
+
+    // Client declares the brain, operator disables it, client reconnects and
+    // re-declares it verbatim. The disable must survive — this is the "disabled
+    // brains re-enable themselves after a while" bug.
+    registerBrain(config, 'remote-box-cc-opus', { description: 'v1', location: 'remote', exec: 'claude', dynamic: true, registeredBy: 'a1' });
+    config.orchestration.brains!['remote-box-cc-opus'].disabled = true;
+    registerBrain(config, 'remote-box-cc-opus', { description: 'v2', location: 'remote', exec: 'claude', dynamic: true, registeredBy: 'a1' });
+
+    assert.equal(config.orchestration.brains!['remote-box-cc-opus'].disabled, true);
+    const disk = JSON.parse(readFileSync(process.env.COWORK_CONFIG!, 'utf-8'));
+    assert.equal(disk.orchestration.brains['remote-box-cc-opus'].disabled, true);
+  } finally {
+    delete process.env.COWORK_CONFIG;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('registerBrain: refuses denylisted (deepseek) brains', async () => {
+  const dir = makeConfig();
+  try {
+    const { loadConfig, registerBrain, isDenylistedBrain } = await import('./config.js');
+    const config = loadConfig();
+
+    registerBrain(config, 'local-ha-deepseek-v4-pro', { description: 'x', location: 'local', exec: 'hermes', dynamic: true });
+    registerBrain(config, 'remote-box-ha-deepseek', { description: 'x', location: 'remote', exec: 'hermes', dynamic: true });
+
+    assert.equal(isDenylistedBrain('local-ha-deepseek-v4-pro'), true);
+    assert.equal(isDenylistedBrain('local-ha-qwen35b'), false);
+    assert.equal(config.orchestration.brains!['local-ha-deepseek-v4-pro'], undefined);
+    assert.equal(config.orchestration.brains!['remote-box-ha-deepseek'], undefined);
+  } finally {
+    delete process.env.COWORK_CONFIG;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('loadConfig: scrubs a denylisted brain that lingered in the on-disk config', async () => {
+  const dir = makeConfig();
+  try {
+    const { loadConfig } = await import('./config.js');
+    // Seed the on-disk config with a deepseek brain + chain references, as an
+    // older server (pre-denylist) would have persisted.
+    writeFileSync(process.env.COWORK_CONFIG!, JSON.stringify({
+      orchestration: {
+        brains: {
+          'local-ha-qwen35b': { description: 'q', location: 'local', exec: 'hermes' },
+          'local-ha-deepseek-v4-pro': { description: 'd', location: 'local', exec: 'hermes' }
+        },
+        defaultChain: ['local-ha-deepseek-v4-pro', 'local-ha-qwen35b'],
+        agents: { orchestrator: { description: 'o', brains: ['local-ha-deepseek-v4-pro', 'local-ha-qwen35b'] } }
+      }
+    }));
+
+    const config = loadConfig();
+    assert.equal(config.orchestration.brains!['local-ha-deepseek-v4-pro'], undefined);
+    assert.equal(config.orchestration.brains!['local-ha-qwen35b'].exec, 'hermes');
+    assert.deepEqual(config.orchestration.defaultChain, ['local-ha-qwen35b']);
+    assert.deepEqual(config.orchestration.agents!.orchestrator.brains, ['local-ha-qwen35b']);
+  } finally {
+    delete process.env.COWORK_CONFIG;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('restoreClientBrains: never restores a denylisted (deepseek) brain', async () => {
+  const dir = makeConfig();
+  try {
+    const { loadConfig, restoreClientBrains } = await import('./config.js');
+    const config = loadConfig();
+
+    const restored = restoreClientBrains(config, [
+      { id: 'ha-agent', platform: 'hermes', capabilities: ['local-ha-deepseek-v4-pro', 'local-ha-nova'] }
+    ]);
+
+    assert.deepEqual(restored, ['local-ha-nova']);
+    assert.equal(config.orchestration.brains!['local-ha-deepseek-v4-pro'], undefined);
   } finally {
     delete process.env.COWORK_CONFIG;
     rmSync(dir, { recursive: true, force: true });

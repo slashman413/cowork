@@ -14,7 +14,7 @@
 //     PRESET=claude  HOST=aicodegen          # → deploy/presets/claude.json:
 //       remote-aicodegen-cc-opus (claude-opus-4-8), -cc-sonnet (claude-sonnet-5),
 //       -cc-fable (claude-fable-5), -cc-default (account default)
-//     PRESET=hermes  HOST=box2               # → qwen35b / qwen27b / deepseek
+//     PRESET=hermes  HOST=box2               # → qwen35b
 //     (BRAINS_FILE=/path/to/list.json also works; {HOST} is substituted.)
 //
 //   Multiple explicit — one client, several models:

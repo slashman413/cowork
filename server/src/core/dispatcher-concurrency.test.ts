@@ -7,7 +7,7 @@ import type { Config, Task } from '../types.js';
  * Per-brain concurrency + preference-preserving load balancing.
  *
  * Historically the dispatcher ran one task at a time per brain and always picked
- * chain[attempt], so a reliable workhorse brain (e.g. local-ha-deepseek-v4-pro)
+ * chain[attempt], so a reliable workhorse brain (e.g. local-ha-qwen35b)
  * absorbed every concurrent task while its peers sat idle. These tests drive the
  * private selection helpers directly against a fake store — no timers, no spawn —
  * and simulate in-flight load by seeding the dispatcher's `running` map.

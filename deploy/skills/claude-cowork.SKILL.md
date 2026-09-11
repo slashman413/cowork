@@ -127,14 +127,14 @@ When *you* are the brain running a dispatched task:
 5. **Stay inside the task.** One task, one deliverable; no side quests, no new cowork
    tasks unless the brief asks you to decompose.
 6. **Credential/local-filesystem tasks must run on a local brain.** Anything touching
-   `~/.priv/` or `/home/wayne/...` — pin `context: {"brain": "local-ha-deepseek-v4-pro"}`
+   `~/.priv/` or `/home/wayne/...` — pin `context: {"brain": "local-ha-qwen35b"}`
    (or another `local-*`). `remote-*` brains cannot see this filesystem; if you are one
    and the task needs it, report the routing error and stop.
 
 ## Brains, chains, and the verifier
 
 **Brain = model × exec × location.** `exec` ∈ `claude | hermes | agy | codex | ollama | script`.
-On this box today: `local-ha-*` (Hermes: qwen35b/deepseek/deepseek-v4-pro),
+On this box today: `local-ha-*` (Hermes: qwen35b),
 `local-agy-*` (Antigravity: gemini-3.x, claude-opus-4-6-thinking, gpt-oss-120b),
 `local-cc-*` (Claude Code), `local-codex-*`, `local-comfy-ltx` (LTX video — never
 Wan/Hunyuan), `remote-ai-code-gen-cc-*`. Read the live set with `GET /api/brains`;

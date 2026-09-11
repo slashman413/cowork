@@ -142,6 +142,13 @@ export function loadConfig(): Config {
     }
   };
 
+  // Scrub any denylisted (retired) brains that lingered in the on-disk registry
+  // or its chains — the disk config may have been written before the brain was
+  // retired, or by an older server that lacked the denylist. Doing it at load
+  // time guarantees a retired brain can never come back across a restart, not
+  // just be blocked from new registration.
+  scrubDenylistedBrains(config);
+
   // COWORK_API_KEY env var overrides config (keeps the secret out of git)
   if (process.env.COWORK_API_KEY) {
     config.server.apiKey = process.env.COWORK_API_KEY;
@@ -225,10 +232,64 @@ export function removeBrainCascade(config: Config, id: string): number {
   return scrubbed;
 }
 
-/** Merge a client-declared brain into the registry (auto-registration). */
+/**
+ * Brain ids that are permanently retired: the server refuses to (re)register
+ * them and never restores them from a client's persisted capabilities, so a
+ * client that still declares one is simply ignored rather than resurrecting a
+ * decommissioned model. Matched against the brain id (case-insensitive).
+ * DeepSeek was pulled from the fleet — see removeBrainCascade callers.
+ */
+export const DENYLISTED_BRAIN_RE = /deepseek/i;
+
+/** True when a brain id must never enter (or re-enter) the registry. */
+export function isDenylistedBrain(id: string): boolean {
+  return DENYLISTED_BRAIN_RE.test(id);
+}
+
+/**
+ * Strip every denylisted brain from an in-memory config: the registry itself and
+ * every chain that references one (defaultChain, division/agent chains, each
+ * agent's brains list). Mutates in place and returns the ids removed. Used at
+ * load time so a retired brain can't survive a restart via the on-disk config.
+ */
+export function scrubDenylistedBrains(config: Config): string[] {
+  const orch = config.orchestration;
+  const brains = orch.brains || {};
+  const removed = Object.keys(brains).filter(isDenylistedBrain);
+  if (!removed.length) return [];
+  for (const id of removed) delete brains[id];
+  const clean = (arr?: string[]) => (arr || []).filter(id => !isDenylistedBrain(id));
+  if (Array.isArray(orch.defaultChain)) orch.defaultChain = clean(orch.defaultChain);
+  for (const div of Object.keys(orch.divisionChains || {})) orch.divisionChains![div] = clean(orch.divisionChains![div]);
+  for (const agent of Object.keys(orch.agentChains || {})) {
+    const next = clean(orch.agentChains![agent]);
+    if (next.length) orch.agentChains![agent] = next; else delete orch.agentChains![agent];
+  }
+  for (const a of Object.values(orch.agents || {})) a.brains = clean(a.brains);
+  return removed;
+}
+
+/**
+ * Merge a client-declared brain into the registry (auto-registration).
+ *
+ * Two invariants are enforced here because this is the single choke point every
+ * register_agent handshake flows through:
+ *  1. Denylisted ids (DeepSeek) are dropped — a reconnecting client can never
+ *     resurrect a retired brain.
+ *  2. The server-owned `disabled` flag is PRESERVED across re-registration. A
+ *     client re-declares its brains verbatim every time it reconnects; without
+ *     this merge that handshake would silently clear a manual disable and the
+ *     brain would start taking tasks again ("disabled brains re-enable
+ *     themselves"). Disabling is a server-side decision and outlives the client.
+ */
 export function registerBrain(config: Config, id: string, brain: import('./types.js').BrainConfig): void {
+  if (isDenylistedBrain(id)) return;
   config.orchestration.brains = config.orchestration.brains || {};
-  config.orchestration.brains[id] = brain;
+  const prev = config.orchestration.brains[id];
+  config.orchestration.brains[id] = {
+    ...brain,
+    ...(prev?.disabled ? { disabled: true } : {})
+  };
   persistRegistries(config);
 }
 
@@ -269,6 +330,7 @@ export function restoreClientBrains(
     if (!exec) continue;
     for (const cap of a.capabilities || []) {
       if (!BRAIN_ID_RE.test(cap)) continue;
+      if (isDenylistedBrain(cap)) continue;   // retired brain — never restore
       if (config.orchestration.brains[cap]) continue;
       config.orchestration.brains[cap] = {
         description: `${cap} (declared by client ${a.id.slice(0, 8)}; restored from persisted registration)`,

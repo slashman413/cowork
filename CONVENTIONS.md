@@ -77,13 +77,13 @@ Files a person attached to your task are listed in your prompt and live in
 
 Any task that needs access to the **local filesystem** — especially credentials under
 `~/.priv/` (Cloudflare, Gumroad, Twitter/X, YouTube, GitHub tokens, Mautic, NAS) or
-any `/home/wayne/` path — must run on a **local brain** (`local-ha-deepseek-v4-pro`).
+any `/home/wayne/` path — must run on a **local brain** (`local-ha-qwen35b`).
 
 - **Remote brains (`remote-*`, e.g. `remote-ai-code-gen-cc-opus`) cannot access
   `/home/wayne/`.** A credential task routed to a remote brain will fail or vanish.
   If you are a remote brain and the task requires `~/.priv/` or local files, do NOT
   fake it — report the routing error and stop (see rule 4).
-- When dispatching, pin the brain: `context: {"brain": "local-ha-deepseek-v4-pro"}`.
+- When dispatching, pin the brain: `context: {"brain": "local-ha-qwen35b"}`.
 - Full rule + incident history: `/home/wayne/.hermes/cowork-routing-rules.md`.
 
 ---

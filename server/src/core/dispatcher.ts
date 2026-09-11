@@ -217,7 +217,7 @@ export class Dispatcher {
    * preferred rung is a LOCAL brain that is SATURATED (at its maxConcurrent) do we
    * scan the rest of the chain and hand the overflow to the local rung with the most
    * spare capacity. That is what stops one reliable workhorse brain (e.g.
-   * `local-ha-deepseek-v4-pro`) from absorbing every concurrent task while its
+   * `local-ha-qwen35b`) from absorbing every concurrent task while its
    * peers sit idle.
    *
    * Remote rungs and unrunnable/missing brains are left to the caller's existing

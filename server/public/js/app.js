@@ -497,6 +497,18 @@ const BRAIN_COLOR = '#F97316';        // orange
 const BRAIN_BAD_COLOR = '#EF4444';    // unknown / deregistered brain
 
 /**
+ * Sorted brain ids that may be PICKED to run a task. Disabled brains are
+ * excluded everywhere a task is dispatched or scheduled (new-task, continue/
+ * re-run, edit-task) so a disabled brain can never be assigned — mirroring the
+ * dispatcher, which strips disabled brains from every chain and pin. The Brains
+ * management page still lists disabled brains (with the Enable toggle); it uses
+ * the raw /api/brains map directly, not this helper.
+ */
+function selectableBrainIds(brains) {
+  return Object.keys(brains || {}).filter(id => !brains[id]?.disabled).sort();
+}
+
+/**
  * One rung of a brain fallback chain: draggable, in the translucent chip style.
  * Used by both the Brains default chain and every Agents chain so reordering
  * looks and behaves the same everywhere.
@@ -968,7 +980,7 @@ class App {
     }
     let brains = {};
     try { brains = await this.api.get('/brains'); } catch { /* registry unreachable → Auto only */ }
-    const ids = Object.keys(brains).sort();
+    const ids = selectableBrainIds(brains);
     const opts = [`<option value="">🧠 Auto — route via the agent's brain chain</option>`]
       .concat(ids.map(b => `<option value="${esc(b)}"${b === defaultBrain ? ' selected' : ''}>${esc(b)}</option>`)).join('');
     const fieldStyle = 'width:100%; padding:9px 10px; background:var(--bg-tertiary); border:1px solid var(--border-color); border-radius:8px; color:inherit; font:inherit; font-size:0.9rem';
@@ -1075,7 +1087,7 @@ class App {
     try { brains = await this.api.get('/brains'); } catch { /* registry unreachable → Auto only */ }
     try { divisions = await this.api.get('/roster-divisions'); } catch { /* roster unreachable → no agent picker options */ }
     const opts = [`<option value="">🧠 Auto — route via the agent's brain chain</option>`]
-      .concat(Object.keys(brains).sort().map(b => `<option value="${esc(b)}">${esc(b)}</option>`)).join('');
+      .concat(selectableBrainIds(brains).map(b => `<option value="${esc(b)}">${esc(b)}</option>`)).join('');
     const divOpts = [`<option value="">🤖 Auto — let the router pick the agent</option>`]
       .concat(Object.entries(divisions).sort().map(([d, i]) => `<option value="${esc(d)}">${esc(i.label || d)} (${i.agents.length})</option>`)).join('');
     const fieldStyle = 'width:100%; padding:9px 10px; background:var(--bg-tertiary); border:1px solid var(--border-color); border-radius:8px; color:inherit; font:inherit; font-size:0.9rem';
@@ -1229,8 +1241,11 @@ class App {
     const curBrain = ctx.brainAuto ? '' : (ctx.brain || '');
     const curDivision = ctx.division || '';
     const curAgent = ctx.agent || '';
-    const brainOpts = [`<option value=""${curBrain ? '' : ' selected'}>🧠 Auto — route via the agent's brain chain</option>`]
-      .concat(Object.keys(brains).sort().map(b => `<option value="${esc(b)}"${b === curBrain ? ' selected' : ''}>${esc(b)}</option>`)).join('');
+    // A pin to a now-disabled brain resolves to Auto at dispatch (the dispatcher
+    // treats a disabled pin as absent), so it's not offered here either.
+    const curBrainSelectable = curBrain && !brains[curBrain]?.disabled;
+    const brainOpts = [`<option value=""${curBrainSelectable ? '' : ' selected'}>🧠 Auto — route via the agent's brain chain</option>`]
+      .concat(selectableBrainIds(brains).map(b => `<option value="${esc(b)}"${b === curBrain ? ' selected' : ''}>${esc(b)}</option>`)).join('');
     const divOpts = [`<option value=""${curDivision ? '' : ' selected'}>🤖 Auto — let the router pick the agent</option>`]
       .concat(Object.entries(divisions).sort().map(([d, i]) => `<option value="${esc(d)}"${d === curDivision ? ' selected' : ''}>${esc(i.label || d)} (${i.agents.length})</option>`)).join('');
     const prioOpts = ['normal', 'low', 'high', 'urgent']

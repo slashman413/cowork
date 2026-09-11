@@ -43,7 +43,7 @@ dispatch cross-platform tasks, heartbeat, and query agencies/inbox.
   - Port: 6868, no API key required
 - `agency-agents` — a git submodule at `./agency-agents` (init: `git submodule update --init`)
 - Hermes MCP endpoint: `mcp_endpoints: { cowork: "http://localhost:6868/mcp" }`
-- Hermes model CLIs: `hermes` (qwen35b/deepseek/deepseek-v4-pro), optional `claude`, `agy`, `codex`, `ollama`
+- Hermes model CLIs: `hermes` (qwen35b), optional `claude`, `agy`, `codex`, `ollama`
 
 ## Key Paths
 
@@ -52,7 +52,7 @@ dispatch cross-platform tasks, heartbeat, and query agencies/inbox.
 - `artifacts/` — Per-task output files (audio/video/md), downloadable from the Inbox
 - `.status/` — Runtime state (auto-managed)
 - `deploy/remote-brain-client.mjs` — Remote brain registration script (zero-config)
-- `deploy/presets/hermes.json` — Hermes preset: qwen35b, deepseek, deepseek-v4-pro
+- `deploy/presets/hermes.json` — Hermes preset: qwen35b
 - `deploy/presets/claude.json` — Claude preset: opus, sonnet, fable, default
 
 ## Quick Reference
@@ -120,9 +120,7 @@ register_agent(
   capabilities=["engineering", "research", "planner", "generalist"],
   current_task="Working on X",
   brains=[
-    {"id": "local-ha-qwen35b",  "location": "local", "exec": "hermes", "model": "nvidia/Qwen3.6-35B-A3B-NVFP4"},
-    {"id": "local-ha-deepseek-v4-pro", "location": "local", "exec": "hermes", "model": "deepseek-ai/deepseek-v4-pro"},
-    {"id": "local-ha-deepseek", "location": "local", "exec": "hermes", "model": "deepseek:deepseek-v4-flash"}
+    {"id": "local-ha-qwen35b",  "location": "local", "exec": "hermes", "model": "nvidia/Qwen3.6-35B-A3B-NVFP4"}
   ]
 )
 ```
@@ -341,7 +339,7 @@ may appear stale on the dashboard.
 
 Any task that needs the **local filesystem** — credentials under `~/.priv/`, or any path
 under the cowork host's home dir — MUST run on a **local** brain. Pin it explicitly:
-`context: {"brain": "local-ha-deepseek-v4-pro"}`. `remote-*` brains cannot see that
+`context: {"brain": "local-ha-qwen35b"}`. `remote-*` brains cannot see that
 filesystem; such a task routed to one will fail or vanish. If you are a remote brain and
 the brief needs local files, report the routing error and stop — do not fake it.
 
@@ -356,7 +354,7 @@ task schema:
   "description": "…",
   "from": {"platform": "hermes", "agent": "<your agent name>"},
   "to": {},
-  "context": {"brain": "local-ha-deepseek-v4-pro"}
+  "context": {"brain": "local-ha-qwen35b"}
 }
 ```
 

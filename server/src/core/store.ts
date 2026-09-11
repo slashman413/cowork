@@ -114,6 +114,7 @@ export class Store {
 
     this.roster.loadAll();
     this.loadActiveAgents();
+    this.loadBrainUsage();
     this.reportHiddenTasks();
   }
 
@@ -228,13 +229,51 @@ export class Store {
     return { ran: toObj(this.counters.ran), submitted: toObj(this.counters.submitted) };
   }
 
-  // ── Per-brain rate-limit usage snapshots (in-memory, non-persistent; refilled
-  //    by the local UsagePoller and by remote clients' heartbeats within one
-  //    cycle after a restart). Only METERED brains (claude/codex/…) ever get an
-  //    entry — hermes/ollama/script brains have no quota and stay absent. ──────
+  // ── Per-brain rate-limit usage snapshots. Refilled by the local UsagePoller
+  //    and by remote clients' heartbeats, AND persisted to .status so a server
+  //    restart / redeploy doesn't blank every rate-limit meter until the next
+  //    poll or heartbeat lands (a remote brain may not re-report for minutes,
+  //    so its meter would silently vanish across every redeploy — the "rate
+  //    limits sometimes not shown" report). The reloaded snapshot carries its
+  //    original `at`, so the UI still flags it as stale once it ages out. Only
+  //    METERED brains (claude/codex/…) ever get an entry — hermes/ollama/script
+  //    brains have no quota and stay absent. ─────────────────────────────────
   private brainUsage = new Map<string, BrainUsage>();
+  private brainUsageSaveTimer: NodeJS.Timeout | null = null;
+
+  private brainUsageFile(): string {
+    return path.join(this.config.paths.status, 'brain-usage.json');
+  }
+
+  private loadBrainUsage(): void {
+    try {
+      const data = JSON.parse(fs.readFileSync(this.brainUsageFile(), 'utf-8'));
+      if (data && typeof data === 'object') {
+        for (const [id, u] of Object.entries(data)) {
+          if (u && typeof u === 'object' && Array.isArray((u as any).windows)) {
+            this.brainUsage.set(id, u as BrainUsage);
+          }
+        }
+      }
+    } catch { /* no snapshot on disk yet — first boot */ }
+  }
+
+  // Coalesce writes: usage arrives on every heartbeat (seconds apart), so flush
+  // to disk at most once per window instead of on every update.
+  private scheduleBrainUsageSave(): void {
+    if (this.brainUsageSaveTimer) return;
+    this.brainUsageSaveTimer = setTimeout(() => {
+      this.brainUsageSaveTimer = null;
+      try {
+        fs.writeFileSync(this.brainUsageFile(), JSON.stringify(Object.fromEntries(this.brainUsage), null, 2));
+      } catch { /* best-effort; a lost snapshot just re-fills on the next poll */ }
+    }, 5000);
+    this.brainUsageSaveTimer.unref?.();
+  }
+
   public setBrainUsage(brainId: string, usage: BrainUsage): void {
     this.brainUsage.set(brainId, usage);
+    this.scheduleBrainUsageSave();
   }
   public getBrainUsage(): Record<string, BrainUsage> {
     return Object.fromEntries(this.brainUsage);
