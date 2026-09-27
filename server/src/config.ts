@@ -82,7 +82,11 @@ const defaultConfig: Config = {
       timeoutMs: 300000
     },
     staleClaimMs: 0,
-    hardClaimMs: 0
+    hardClaimMs: 0,
+    autoAnswer: {
+      enabled: false,
+      maxAttempts: 3
+    }
   }
 };
 
@@ -138,6 +142,10 @@ export function loadConfig(): Config {
       classifier: {
         ...defaultConfig.orchestration.classifier!,
         ...(loadedConfig.orchestration?.classifier || {})
+      },
+      autoAnswer: {
+        ...defaultConfig.orchestration.autoAnswer!,
+        ...(loadedConfig.orchestration?.autoAnswer || {})
       }
     }
   };

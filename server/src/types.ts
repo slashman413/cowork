@@ -270,6 +270,31 @@ export interface OrchestrationConfig {
    *  orchestrator may dispatch before the run is force-finished (prevents a
    *  runaway decision loop). Default 12. */
   maxWorkflowSteps?: number;
+  /** Autonomous human-input handling. When enabled, the orchestrator answers a
+   *  task's `wait-input` questions ON THE CEO's BEHALF (via submitInteraction),
+   *  so a paused task resumes without a person filling in the Inbox card. Truly
+   *  human-only decisions (a browser OAuth re-auth, spending money, an
+   *  owner-only toggle, anything irreversible/legal) are ESCALATED honestly and
+   *  left parked — never fabricated. See ADR-009. */
+  autoAnswer?: AutoAnswerConfig;
+}
+
+/** Config for the orchestrator's autonomous answering of `wait-input` tasks. */
+export interface AutoAnswerConfig {
+  /** Master switch. Default false (opt-in) — the historical behaviour is that a
+   *  paused task waits for a person. */
+  enabled?: boolean;
+  /** Per-task ceiling on consecutive auto-answers before the task is left for a
+   *  real human. A task that keeps re-asking after this many orchestrator
+   *  answers is genuinely undecidable by the orchestrator; leaving it parked is
+   *  the honest fallback. Default 3. */
+  maxAttempts?: number;
+  /** Timeout (ms) for the orchestrator's answering turn. Defaults to
+   *  classifier.timeoutMs, else 300000. */
+  timeoutMs?: number;
+  /** Brain chain to answer with (ordered brain ids). Defaults to the
+   *  orchestrator agent's own chain. */
+  brains?: string[];
 }
 
 export interface Config {

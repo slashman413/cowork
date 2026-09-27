@@ -67,6 +67,7 @@ export class Dispatcher {
   private classifying = new Set<string>();
   private decidingRuns = new Set<string>();   // orchestrated runs mid-decision (re-entrancy guard)
   private decidingGoals = new Set<string>();   // goals mid-Achiever-turn (re-entrancy guard)
+  private decidingInput = new Set<string>();   // wait-input tasks mid auto-answer (re-entrancy guard)
   /** Consecutive unusable router answers per orchestrated run (timeout/garbled). */
   private decisionFailures = new Map<string, number>();
   /** Consecutive unusable / no-progress Achiever turns per goal. */
@@ -76,6 +77,10 @@ export class Dispatcher {
   /** Abandon a goal after this many consecutive Achiever turns that make no
    *  progress (garbled decision, or an evaluate that neither ends nor advances). */
   static readonly MAX_GOAL_FAILURES = 5;
+  /** Default per-task ceiling on orchestrator auto-answers of a `wait-input`
+   *  task before it is left for a real human (overridable via
+   *  orchestration.autoAnswer.maxAttempts). */
+  static readonly MAX_AUTO_ANSWERS = 3;
 
   constructor(config: Config, store: Store, eventBus: EventBus, workflows?: Workflows, goals?: Goals) {
     this.config = config;
@@ -306,6 +311,13 @@ export class Dispatcher {
     // the Achiever brain takes one evaluate/plan/emit turn toward the criterion.
     try { this.driveGoals(); }
     catch (e) { console.error('Dispatcher: driveGoals failed this tick:', e); }
+
+    // Autonomous human-input handling: for each task parked on `wait-input`, the
+    // orchestrator answers the questions on the CEO's behalf and releases it —
+    // so a paused task resumes without a person touching the Inbox card. Truly
+    // human-only decisions are escalated honestly and left parked (see ADR-009).
+    try { this.driveWaitInput(); }
+    catch (e) { console.error('Dispatcher: driveWaitInput failed this tick:', e); }
 
     if (this.running.size >= orch.maxConcurrent) return;
 
@@ -952,6 +964,178 @@ export class Dispatcher {
         if (obj.kind === 'plan' && obj.phase && obj.phase.key) return obj as AchieverDecision;
         if (obj.kind === 'emit' && Array.isArray(obj.tasks) && obj.tasks.length) return obj as AchieverDecision;
         if (obj.kind === 'block' && typeof obj.reason === 'string' && obj.reason.trim()) return obj as AchieverDecision;
+      } catch { /* try the next candidate */ }
+    }
+    return null;
+  }
+
+  /**
+   * Autonomous human-input handling (ADR-009). The sibling of driveGoals(): for
+   * each task parked on `wait-input`, the orchestrator brain answers the pending
+   * questions ON THE CEO's BEHALF and submits them via store.submitInteraction —
+   * releasing the task back to `pending` without a person filling in the Inbox
+   * card. A per-task re-entrancy guard prevents overlapping turns, and a per-task
+   * attempt counter (context.autoAnswer.count, persisted so it survives restarts)
+   * bounds the loop: after maxAttempts consecutive auto-answers the task is left
+   * for a real human — a task that keeps re-asking is genuinely undecidable by the
+   * orchestrator, and leaving it parked is the honest fallback (never a fabricated
+   * answer). The orchestrator may also ESCALATE a single decision it judges
+   * human-only (a browser OAuth re-auth, spending money, an owner-only toggle,
+   * anything irreversible/legal); that task stays parked with the reason recorded.
+   *
+   * Opt-in via orchestration.autoAnswer.enabled. A task tagged `human-only` (or
+   * `manual`) is never auto-answered — the CEO's explicit escape hatch to force a
+   * decision back to themselves.
+   */
+  private driveWaitInput(): void {
+    const cfg = this.config.orchestration.autoAnswer;
+    if (!cfg?.enabled) return;
+    const maxAttempts = cfg.maxAttempts ?? Dispatcher.MAX_AUTO_ANSWERS;
+    const chain = (cfg.brains && cfg.brains.length)
+      ? cfg.brains
+      : this.config.orchestration.agents?.orchestrator?.brains;
+    const timeout = cfg.timeoutMs || this.config.orchestration.classifier?.timeoutMs || 300000;
+
+    let parked: Task[];
+    try { parked = this.store.listTasks({ status: 'wait-input' }); } catch { return; }
+    for (const task of parked) {
+      if (this.decidingInput.has(task.id)) continue;
+      const ix = task.interaction;
+      if (!ix || !Array.isArray(ix.fields) || ix.fields.length === 0) continue;
+      if (ix.status === 'submitted') continue;
+      // Explicit human-only escape hatch: the CEO can force a decision to wait for
+      // them by tagging the task, and an already-escalated task stays put.
+      if (task.tags?.includes('human-only') || task.tags?.includes('manual')) continue;
+      const meta = (task.context?.autoAnswer as { count?: number; escalated?: boolean } | undefined) || {};
+      if (meta.escalated) continue;
+      const count = Number(meta.count) || 0;
+      if (count >= maxAttempts) continue;   // ceiling hit — left for a real human
+
+      this.decidingInput.add(task.id);
+      const prompt = this.autoAnswerPrompt(task);
+      const fieldIds = ix.fields.map(f => f.id);
+      (async () => {
+        try {
+          const out = await this.askExecutor(chain, prompt, timeout);
+          const decision = this.parseAutoAnswer(out, fieldIds);
+          if (!decision) {
+            console.error(`Dispatcher: auto-answer for task ${task.id} — no usable decision from the orchestrator (timeout or unparseable)`);
+            return;   // no counter bump on an infra blip; retried next tick
+          }
+          // Re-read: the task may have been answered by a human in the meantime.
+          const fresh = this.store.getTask(task.id);
+          if (!fresh || fresh.status !== 'wait-input' || fresh.interaction?.status === 'submitted') return;
+
+          if (decision.escalate) {
+            fresh.context = {
+              ...(fresh.context || {}),
+              autoAnswer: { ...meta, escalated: true, escalateReason: decision.reason || 'human-only decision' }
+            };
+            this.store.saveTask(fresh);
+            console.log(`Dispatcher: auto-answer ESCALATED task ${task.id} to a human — ${decision.reason || 'human-only decision'}`);
+            return;
+          }
+
+          // Persist the attempt counter BEFORE releasing, so the resumed task
+          // carries the bumped count if it parks again this same tick.
+          fresh.context = {
+            ...(fresh.context || {}),
+            autoAnswer: { ...meta, count: count + 1 }
+          };
+          this.store.saveTask(fresh);
+          const updated = this.store.submitInteraction({
+            taskId: task.id,
+            responses: decision.answers,
+            submittedBy: 'orchestrator (auto-answer)'
+          });
+          if (updated) {
+            console.log(`Dispatcher: auto-answered task ${task.id} on the CEO's behalf (attempt ${count + 1}/${maxAttempts}) — released to ${updated.status}`);
+          }
+        } catch (e) {
+          console.error(`Dispatcher: auto-answer for task ${task.id} failed:`, e);
+        } finally {
+          this.decidingInput.delete(task.id);
+        }
+      })();
+    }
+  }
+
+  /** The prompt the orchestrator answers to fill a paused task's questions on the
+   *  CEO's behalf. It frames the orchestrator as the CEO's delegate, gives it the
+   *  full task context, and constrains the reply to one fenced-JSON decision:
+   *  either the answers keyed by field id, or an honest escalation. */
+  private autoAnswerPrompt(task: Task): string {
+    const ix = task.interaction!;
+    const lines: string[] = [];
+    lines.push(
+      `You are the ORCHESTRATOR acting as the CEO's fully-authorised delegate. A task has PAUSED to ask the user (the CEO) questions before it can finish. Answer them ON THE CEO's BEHALF so the work resumes automatically — the CEO does not want to answer these manually.`,
+      ''
+    );
+    lines.push(`TASK: ${task.title}`);
+    if (task.description) lines.push(`BRIEF: ${task.description}`);
+    if (task.tags?.length) lines.push(`TAGS: ${task.tags.join(', ')}`);
+    const prior = task.context?.humanInput as Record<string, unknown> | undefined;
+    if (prior && Object.keys(prior).length) {
+      lines.push('', 'ANSWERS ALREADY GIVEN in earlier rounds (do not contradict; build on them):');
+      for (const [k, v] of Object.entries(prior)) lines.push(`  - ${k}: ${String(v)}`);
+    }
+    if (task.result) {
+      lines.push('', `WHAT THE AGENT PRODUCED / SAID before pausing (context for the questions):`);
+      lines.push((task.result || '').replace(/\s+/g, ' ').slice(0, 1500));
+    }
+    lines.push('', 'QUESTIONS TO ANSWER (answer each by its id):');
+    for (const f of ix.fields) {
+      const opts = f.options?.length ? ` [choose one: ${f.options.join(' | ')}]` : '';
+      const kind = f.type === 'checkbox' ? ' [yes/no → true/false]' : '';
+      lines.push(`  - ${f.id}${f.required ? ' (required)' : ''}: ${f.label}${opts}${kind}`);
+    }
+    lines.push(
+      '',
+      'Reply with ONLY one fenced JSON block:',
+      '```json',
+      '{ "answers": { "q1": "your decision on the CEO\'s behalf", "q2": "..." } }',
+      '// OR, only when the decision is genuinely one a human MUST make in person:',
+      '{ "escalate": true, "reason": "why this needs the human specifically" }',
+      '```',
+      'Rules:',
+      '- DECIDE. You have full authority over strategy, priorities, defaults, naming, scope, and reversible choices. Pick the sensible default a competent CEO would pick and move the work forward — do not hedge or ask back.',
+      '- Answer EVERY required field. Use each field\'s id as the key. For a yes/no (checkbox) field answer with true or false; for a choose-one field pick exactly one of the listed options verbatim.',
+      '- ESCALATE (do not fabricate) ONLY for a decision a human must physically make or that is irreversible/high-stakes: a browser OAuth re-auth, entering a password/2FA, spending real money or approving a fee, an owner-only console toggle (e.g. enabling GitHub Pages), signing a legal/financial commitment, or deleting production data. You cannot click a browser button or spend money, so answering those would be a lie. Everything else you decide.',
+      '- Be concrete and specific — your answer goes straight back into the task as the CEO\'s instruction.'
+    );
+    return lines.join('\n');
+  }
+
+  /** Tolerant parser for the orchestrator's auto-answer decision: pull the JSON
+   *  out (fenced or bare) and validate it either escalates or answers at least one
+   *  known field id. Coerces checkbox-style booleans through as-is. Returns null on
+   *  anything unusable so the caller retries rather than mis-submitting. */
+  private parseAutoAnswer(text: string, fieldIds: string[]):
+    | { escalate: true; reason?: string }
+    | { escalate: false; answers: Record<string, string | boolean> }
+    | null {
+    if (!text || !text.trim()) return null;
+    const candidates: string[] = [];
+    const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/gi);
+    if (fenced) for (const f of fenced) candidates.push(f.replace(/```(?:json)?/i, '').replace(/```$/, ''));
+    const braceMatches = text.match(/\{[\s\S]*\}/g);
+    if (braceMatches) candidates.push(braceMatches[braceMatches.length - 1]);
+    for (const c of candidates.reverse()) {
+      try {
+        const obj = JSON.parse(c.trim());
+        if (!obj || typeof obj !== 'object') continue;
+        if (obj.escalate === true) return { escalate: true, reason: typeof obj.reason === 'string' ? obj.reason : undefined };
+        const raw = obj.answers;
+        if (raw && typeof raw === 'object') {
+          const answers: Record<string, string | boolean> = {};
+          for (const id of fieldIds) {
+            if (!Object.prototype.hasOwnProperty.call(raw, id)) continue;
+            const v = raw[id];
+            if (typeof v === 'boolean') answers[id] = v;
+            else if (v !== undefined && v !== null) answers[id] = String(v);
+          }
+          if (Object.keys(answers).length) return { escalate: false, answers };
+        }
       } catch { /* try the next candidate */ }
     }
     return null;
