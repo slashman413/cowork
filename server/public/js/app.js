@@ -1371,6 +1371,11 @@ class App {
   clearViewTimers() {
     (this._viewTimers || []).forEach((id) => clearInterval(id));
     this._viewTimers = [];
+    // The inbox's live progress-log poller lives outside _viewTimers (it is
+    // (re)created inside renderInbox, which runs on filter clicks too) — stop it
+    // when navigating away so it doesn't keep polling a hidden view.
+    clearInterval(this._progressPoll);
+    this._progressPoll = null;
   }
   addViewTimer(fn, ms) {
     const id = setInterval(fn, ms);
@@ -2218,6 +2223,40 @@ class App {
           </div>`;
         }).join('')}
       </div>` : '';
+
+      // (2) PENDING — why is this task still waiting? The dispatcher annotates each
+      // pending task with context.pendingReason (free slot / brain at capacity /
+      // routing / remote-unclaimed / deps / held-manual). Shown only while pending.
+      const pendingReason = (t.status === 'pending' && c.pendingReason) ? String(c.pendingReason) : '';
+      const pendingHtml = pendingReason ? `<div class="task-pending-why" style="display:flex; align-items:flex-start; gap:6px; margin:2px 0 6px; padding:6px 9px; border-radius:8px; background:#EAB30814; border:1px solid #EAB30833; color:var(--text-secondary); font-size:0.8rem">
+        <i data-lucide="hourglass" style="width:13px;height:13px;margin-top:1px;color:#EAB308;flex-shrink:0"></i>
+        <span>${esc(pendingReason)}${c.pendingReasonAt ? ` <span style="color:var(--text-muted)">· ${esc(timeAgo(c.pendingReasonAt))}</span>` : ''}</span>
+      </div>` : '';
+
+      // (1) IN-PROGRESS — a live progress-log window streaming what the brain is
+      // doing right now. Filled + auto-scrolled by pollInboxProgress() polling
+      // GET /inbox/:id/progress (the tail of artifacts/<id>/progress.log).
+      const isRunning = t.status === 'in-progress' || t.status === 'claimed';
+      const progressHtml = isRunning ? `<div class="task-progress" style="margin:4px 0 8px; border:1px solid var(--border-hover); border-radius:10px; overflow:hidden; background:var(--bg-tertiary)">
+        <div style="display:flex; align-items:center; gap:7px; padding:6px 10px; font-size:0.74rem; text-transform:uppercase; letter-spacing:.03em; color:#0EA5E9; border-bottom:1px solid var(--border-hover)">
+          <span class="progress-pulse" style="width:8px;height:8px;border-radius:50%;background:#0EA5E9;display:inline-block;animation:progressPulse 1.4s ease-in-out infinite"></span>
+          Live progress — what it's doing right now
+        </div>
+        <pre data-progress="${esc(t.id)}" style="margin:0; padding:9px 11px; max-height:220px; overflow:auto; white-space:pre-wrap; word-break:break-word; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:0.74rem; line-height:1.45; color:var(--text-secondary)">Loading live output…</pre>
+      </div>` : '';
+
+      // (3) FAILED on a RATE LIMIT — a toggle to auto re-run once the window resets.
+      // Shown only when the server classified the failure as rate-limited.
+      const rlReset = c.rateLimitResetsAt ? new Date(c.rateLimitResetsAt) : null;
+      const rlResetOk = rlReset && !isNaN(rlReset.getTime());
+      const autoRerunHtml = (failed && c.rateLimited) ? `<div class="task-autorerun" style="margin:6px 0 2px; padding:8px 10px; border-radius:9px; background:#F9731614; border:1px solid #F9731633">
+        <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:0.82rem; color:var(--text-primary)">
+          <input type="checkbox" data-autorerun="${esc(t.id)}" ${c.autoRerunOnReset ? 'checked' : ''} style="width:15px;height:15px;cursor:pointer;accent-color:#F97316">
+          <span><i data-lucide="refresh-cw" style="width:12px;height:12px;vertical-align:-1px;margin-right:3px"></i>Auto re-run when the rate limit resets${rlResetOk ? ` <span style="color:var(--text-muted)">(≈ ${esc(rlReset.toLocaleString())})</span>` : ''}</span>
+        </label>
+        <div style="font-size:0.72rem; color:var(--text-muted); margin-top:3px; padding-left:23px">Failed on a rate limit. When on, Cowork re-queues this task automatically once the usage window resets${rlResetOk ? '' : ' (re-checked hourly until a reset time is known)'}.</div>
+      </div>` : '';
+
       return `
       <div class="card task-card" style="margin-bottom: var(--space-md)${failed ? ';border-left:3px solid #EF4444' : ''}" data-task="${esc(t.id)}" data-title="${esc((t.title || '').toLowerCase())}">
         <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap">
@@ -2238,6 +2277,9 @@ class App {
         </div>
         <div style="margin:7px 0 3px"><strong style="font-size:1.02rem">${esc(t.title)}</strong></div>
         ${chainHtml}
+        ${pendingHtml}
+        ${progressHtml}
+        ${autoRerunHtml}
         <div class="task-meta" style="display:block; margin:2px 0 4px">${esc(t.from?.platform || '?')}/${esc(t.from?.agent || '?')} · <span title="${esc(t.createdAt || '')}">${timeAgo(t.createdAt)}</span>
           ${failed ? `<button class="btn" data-rerun-task="${esc(t.id)}" data-brain="${esc(c.brainAuto ? '' : (c.brain || ''))}" title="Re-run this task — pick which brain claims it"
             style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#EF4444;border-color:#EF444466">↻ Re-run</button>` : ''}
@@ -2510,6 +2552,32 @@ class App {
         else this.toast('copy failed', text);
       }));
 
+    // Auto-rerun-on-reset toggle on a rate-limited failed task: persist the choice.
+    this.contentEl.querySelectorAll('[data-autorerun]').forEach(cb =>
+      cb.addEventListener('change', async (e) => {
+        e.stopPropagation();
+        const id = cb.dataset.autorerun;
+        const enabled = cb.checked;
+        cb.disabled = true;
+        try {
+          await this.api.post(`/inbox/${encodeURIComponent(id)}/auto-rerun`, { enabled });
+          this.toast('auto re-run', enabled
+            ? 'On — Cowork will re-run this task automatically once the rate limit resets.'
+            : 'Off — this task will not re-run automatically.');
+        } catch (err) { this.toast('error', err.message); cb.checked = !enabled; }
+        finally { cb.disabled = false; }
+      }));
+
+    // Live progress log for in-progress cards: poll GET /inbox/:id/progress and
+    // stream the tail into each card's <pre data-progress>. One shared interval,
+    // cleared on re-render and on leaving the view (clearViewTimers).
+    clearInterval(this._progressPoll);
+    this._progressPoll = null;
+    if (this.contentEl.querySelector('[data-progress]')) {
+      this.pollInboxProgress();
+      this._progressPoll = setInterval(() => this.pollInboxProgress(), 2500);
+    }
+
     // Task cards no longer expand on click — RESULT and DESCRIPTION now live as
     // result.md / description.md chips (opened in the markdown viewer), so there is
     // no detail panel to toggle.
@@ -2523,6 +2591,26 @@ class App {
     // `<i data-lucide>` placeholders, so we must re-hydrate the Lucide glyphs here
     // or every icon vanishes on filter click until a full page refresh.
     createIcons();
+  }
+
+  // Fetch the live progress tail for every in-progress card currently on screen and
+  // stream it into the card's <pre data-progress>, auto-scrolling to the newest line.
+  // Driven by a 2.5s interval set up at the end of renderInbox().
+  async pollInboxProgress() {
+    const els = Array.from(this.contentEl.querySelectorAll('[data-progress]'));
+    if (!els.length) { clearInterval(this._progressPoll); this._progressPoll = null; return; }
+    await Promise.all(els.map(async (el) => {
+      const id = el.dataset.progress;
+      try {
+        const p = await this.api.get(`/inbox/${encodeURIComponent(id)}/progress`);
+        // Keep the view pinned to the bottom only when the user is already there, so
+        // scrolling up to read earlier output isn't yanked back down on each poll.
+        const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+        const txt = (p.log || '').replace(/\s+$/, '');
+        el.textContent = txt || (p.running ? 'Running — no output captured yet…' : 'No live output captured for this run.');
+        if (atBottom) el.scrollTop = el.scrollHeight;
+      } catch { /* transient fetch error — keep the last text, retry next tick */ }
+    }));
   }
 
   // Deep-link target from a workflow run's OUTPUT panel (#inbox/<taskId>): scroll

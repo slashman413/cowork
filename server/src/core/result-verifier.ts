@@ -103,6 +103,57 @@ export const DEFAULT_FAIL_PATTERNS: string[] = [
 ];
 
 /**
+ * The subset of {@link DEFAULT_FAIL_PATTERNS} that specifically mean "metered
+ * capacity exhausted" — a rate limit, usage cap, quota, or overload — as opposed
+ * to a transport error, auth failure, or context-window overflow. A chain-exhausted
+ * task whose failure matches one of these is eligible for an AUTOMATIC re-run once
+ * the window resets: see Store.classifyRateLimit (which records the reset time) and
+ * Dispatcher.autoRerunRateLimited (which re-queues the task when the user opted in).
+ * Kept deliberately narrower than the full fail list so a task that failed on an
+ * auth error or a socket reset is NOT offered a pointless "retry after reset".
+ */
+export const RATE_LIMIT_FAIL_PATTERNS: string[] = [
+  'rate limit reached',
+  'rate limit exceeded',
+  'rate-limited',
+  'hit the rate limit',
+  'hit your rate limit',
+  "you've hit your",
+  'you have hit your',
+  "you've reached your",
+  'you have reached your',
+  'usage limit reached',
+  'reached your usage limit',
+  'reached your daily limit',
+  'reached your monthly limit',
+  'too many requests',
+  'quota exceeded',
+  'exceeded your quota',
+  'insufficient quota',
+  'insufficient_quota',
+  'resource exhausted',
+  'resource_exhausted',
+  'model is overloaded',
+  'currently overloaded',
+  'overloaded_error',
+  'error 429',
+  '429 too many requests',
+  'http 429',
+  'status code 429',
+  'status: 429',
+];
+
+/**
+ * True when `text` contains a rate-limit / quota / overload phrase (matched
+ * case-insensitively as a substring). Used to decide whether a failed task can be
+ * auto-retried once its usage window resets.
+ */
+export function isRateLimitFailure(text: string): boolean {
+  const hay = (text || '').toLowerCase();
+  return RATE_LIMIT_FAIL_PATTERNS.some(p => p && hay.includes(p));
+}
+
+/**
  * Deterministic verdict on one attempt's output. `spawnOk` is the raw exit-code
  * result (false = the process itself failed/timed out — already a failure).
  * Returns ok:false with a short reason when the output is empty or matches a

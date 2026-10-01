@@ -7,6 +7,7 @@ import type { Config, ActiveAgent, Task, DashboardData, AgentCard, InteractionFi
 import type { EventBus } from './events.js';
 import { Roster } from './roster.js';
 import { normalizeRecurrence, recurrenceFromLegacyHours, nextRunAt, type TaskRecurrence } from './recurrence.js';
+import { isRateLimitFailure } from './result-verifier.js';
 
 /**
  * A veto the Dispatcher registers on the store so EXTERNAL task completions
@@ -277,6 +278,123 @@ export class Store {
   }
   public getBrainUsage(): Record<string, BrainUsage> {
     return Object.fromEntries(this.brainUsage);
+  }
+
+  /**
+   * Decide whether a just-failed task died on a RATE LIMIT (as opposed to an auth
+   * error, a bad deliverable, a timeout, …) and, if so, record the soonest time its
+   * usage window resets so the task can be auto-re-run then. Mutates `task.context`
+   * in place (the caller persists it). Inspects the per-brain failure reasons on
+   * `context.failedBrains` plus the final result text; the reset time is read from
+   * the live rate-limit meters (Store.setBrainUsage) of the brains that failed.
+   * Clears the flags when the failure is NOT a rate limit, so a re-run that later
+   * fails for a different reason doesn't keep looking rate-limited.
+   */
+  private classifyRateLimit(task: Task): void {
+    const ctx: Record<string, any> = { ...(task.context || {}) };
+    const failedBrains: Array<{ brain?: string; reason?: string }> =
+      Array.isArray(ctx.failedBrains) ? ctx.failedBrains : [];
+    const reasons = failedBrains.map(f => f.reason || '').join('\n');
+    const haystack = `${reasons}\n${task.result || ''}`;
+
+    if (!isRateLimitFailure(haystack)) {
+      if (ctx.rateLimited || ctx.rateLimitResetsAt) {
+        delete ctx.rateLimited;
+        delete ctx.rateLimitResetsAt;
+        task.context = ctx;
+      }
+      return;
+    }
+
+    ctx.rateLimited = true;
+    // Consult the meters of the brains that failed (fall back to every metered
+    // brain when no brain ids were recorded) for the soonest future reset.
+    const usageAll = this.getBrainUsage();
+    const ids = failedBrains.map(f => f.brain).filter((b): b is string => !!b);
+    const pool: BrainUsage[] = (ids.length ? ids.map(id => usageAll[id]) : Object.values(usageAll))
+      .filter((u): u is BrainUsage => !!u && Array.isArray(u.windows));
+    const reset = this.earliestFutureReset(pool);
+    if (reset) ctx.rateLimitResetsAt = reset; else delete ctx.rateLimitResetsAt;
+    task.context = ctx;
+  }
+
+  /** Soonest future `resetsAt` across a set of usage snapshots. Prefers windows
+   *  that are actually exhausted (used ≥ 80%) — the one that caused the failure —
+   *  and only falls back to the soonest of any future window when none look maxed. */
+  private earliestFutureReset(pool: BrainUsage[]): string | undefined {
+    const now = Date.now();
+    const futures: number[] = [];
+    const exhausted: number[] = [];
+    for (const u of pool) {
+      for (const w of u.windows) {
+        if (!w.resetsAt) continue;
+        const t = Date.parse(w.resetsAt);
+        if (!Number.isFinite(t) || t <= now) continue;
+        futures.push(t);
+        const used = typeof w.usedPct === 'number' ? w.usedPct
+          : (typeof w.remainingPct === 'number' ? 100 - w.remainingPct : 0);
+        if (used >= 80) exhausted.push(t);
+      }
+    }
+    const pick = exhausted.length ? exhausted : futures;
+    return pick.length ? new Date(Math.min(...pick)).toISOString() : undefined;
+  }
+
+  /**
+   * Toggle AUTOMATIC re-run-on-reset for a rate-limited, chain-exhausted task.
+   * When enabled, the dispatcher re-queues the task the moment its rate-limit
+   * window resets (Dispatcher.autoRerunRateLimited). The dashboard only surfaces
+   * the toggle on a failed card the server classified `context.rateLimited`, but
+   * enabling is harmless on any task — it is a no-op until the task is both failed
+   * and rate-limited. Returns the updated task, or null when it does not exist.
+   */
+  public setAutoRerun(taskId: string, enabled: boolean): Task | null {
+    const task = this.getTask(taskId);
+    if (!task) return null;
+    const ctx = { ...(task.context || {}) };
+    if (enabled) ctx.autoRerunOnReset = true; else delete ctx.autoRerunOnReset;
+    task.context = ctx;
+    this.saveTask(task);
+    this.eventBus.emitTaskCreated(task);   // nudge live dashboards to refresh
+    return task;
+  }
+
+  /**
+   * Tail the live PROGRESS LOG the dispatcher streams while a local brain runs a
+   * task (`artifacts/<id>/progress.log`). Returns the last ~`maxBytes` of text plus
+   * whether the task is still executing, so the dashboard can show a live "what is
+   * it doing right now" window on an in-progress card. The log is empty when no run
+   * has emitted output yet (a remote task, or one that hasn't printed anything).
+   */
+  public readProgressLog(taskId: string, maxBytes = 16000): {
+    running: boolean; status: string; log: string; updatedAt: string | null;
+  } {
+    const task = this.getTask(taskId);
+    const status = task?.status || 'unknown';
+    const running = status === 'in-progress' || status === 'claimed';
+    const file = path.join(this.artifactsDir(taskId), 'progress.log');
+    let log = '';
+    let updatedAt: string | null = null;
+    try {
+      const st = fs.statSync(file);
+      updatedAt = st.mtime.toISOString();
+      const start = Math.max(0, st.size - maxBytes);
+      const len = st.size - start;
+      const fd = fs.openSync(file, 'r');
+      try {
+        const buf = Buffer.alloc(len);
+        fs.readSync(fd, buf, 0, len, start);
+        log = buf.toString('utf-8');
+      } finally { fs.closeSync(fd); }
+      // Dropped a partial first line when tailing — trim to the next newline so the
+      // window never opens mid-word, and mark that earlier output was elided.
+      if (start > 0) {
+        const nl = log.indexOf('\n');
+        log = (nl >= 0 ? log.slice(nl + 1) : log);
+        log = `…(earlier output trimmed)\n${log}`;
+      }
+    } catch { /* no log on disk yet */ }
+    return { running, status, log, updatedAt };
   }
 
   public removeAgent(id: string): boolean {
@@ -649,6 +767,12 @@ export class Store {
     // dispatcher's own internal completion and a remote brain's guarded completion
     // — because both finalise here with the same "FAILED after N attempt(s)…" text.
     task.failed = (typeof result === 'string' && /^FAILED after \d+ attempt/i.test(result.trim())) || undefined;
+
+    // Classify WHY it failed: a chain-exhausted failure whose brains all died on a
+    // rate limit / quota / overload is flagged `context.rateLimited` + the window's
+    // reset time, so the dashboard can offer an auto-re-run-on-reset toggle and the
+    // dispatcher can honour it (see classifyRateLimit / Dispatcher.autoRerunRateLimited).
+    if (task.failed) this.classifyRateLimit(task);
 
     const taskFile = this.resolveTaskFile(task.id) || `${task.id}.json`;
     this.writeTaskFile(taskFile, task);

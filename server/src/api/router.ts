@@ -39,6 +39,28 @@ export function createApiRouter(store: Store, eventBus: EventBus): Router {
     res.json(task);
   });
 
+  // Live progress log for a running task — the tail of the brain's stdout/stderr the
+  // dispatcher streams to artifacts/<id>/progress.log. The dashboard polls this on
+  // an in-progress card to show "what it is doing right now". Always 200 (empty log
+  // when nothing has been written yet); never 404 so a card can poll optimistically.
+  router.get('/inbox/:id/progress', (req, res) => {
+    res.json(store.readProgressLog(req.params.id));
+  });
+
+  // Toggle automatic re-run-on-reset for a rate-limited failed task. Body:
+  // { enabled: boolean }. When enabled, the dispatcher re-queues the task once its
+  // rate-limit window resets (Dispatcher.autoRerunRateLimited).
+  router.post('/inbox/:id/auto-rerun', (req, res) => {
+    try {
+      const enabled = !!(req.body && req.body.enabled);
+      const task = store.setAutoRerun(req.params.id, enabled);
+      if (!task) return res.status(404).json({ error: 'Task not found' });
+      res.json(task);
+    } catch (e: any) {
+      res.status(400).json({ error: e.message });
+    }
+  });
+
   router.post('/inbox', (req, res) => {
     try {
       const body = req.body || {};

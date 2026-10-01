@@ -1,6 +1,6 @@
 import { spawn } from 'child_process';
 import { join } from 'node:path';
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, statSync, createWriteStream, type WriteStream } from 'node:fs';
 import type { Config, RoleConfig, Task, AchieverDecision } from '../types.js';
 import type { EventBus } from './events.js';
 import type { Store, CompletionDecision } from './store.js';
@@ -213,6 +213,59 @@ export class Dispatcher {
   }
 
   /**
+   * Record WHY a task is still sitting in the pending pool, for the dashboard's
+   * pending cards ("what is it waiting on"). Stored on `context.pendingReason`
+   * (+ `pendingReasonAt`). Only writes when the reason text CHANGES, so the 5s
+   * dispatch tick doesn't rewrite every pending task file on every pass. A no-op
+   * once the task leaves `pending`.
+   */
+  private markPending(task: Task, reason: string): void {
+    const t = this.store.getTask(task.id);
+    if (!t || t.status !== 'pending') return;
+    if (t.context?.pendingReason === reason) return;
+    t.context = { ...(t.context || {}), pendingReason: reason, pendingReasonAt: new Date().toISOString() };
+    this.store.saveTask(t);
+  }
+
+  /** Drop a stale pending reason the moment a task is actually dispatched, so a
+   *  running/finished card never shows a "waiting for…" note. */
+  private clearPending(taskId: string): void {
+    const t = this.store.getTask(taskId);
+    if (!t || !t.context || t.context.pendingReason === undefined) return;
+    const ctx = { ...t.context };
+    delete ctx.pendingReason;
+    delete ctx.pendingReasonAt;
+    t.context = ctx;
+    this.store.saveTask(t);
+  }
+
+  /**
+   * AUTOMATIC re-run of rate-limited failures the user opted into. For each failed
+   * task flagged `context.rateLimited` with `context.autoRerunOnReset`, re-queue it
+   * (Store.rerunTask resets it to the top of its chain) once its rate-limit window
+   * has reset. The reset time is the one classified at failure (`rateLimitResetsAt`);
+   * when that is unknown — the meters hadn't reported a reset — a fixed 1h backoff
+   * from `completedAt` still eventually retries so the opt-in never silently stalls.
+   */
+  private autoRerunRateLimited(): void {
+    const now = Date.now();
+    const fallbackMs = 60 * 60 * 1000;   // 1h when no reset time was discoverable
+    for (const t of this.store.listTasks({ status: 'failed' })) {
+      const ctx = t.context || {};
+      if (ctx.autoRerunOnReset !== true || ctx.rateLimited !== true) continue;
+      const resetAt = typeof ctx.rateLimitResetsAt === 'string' ? Date.parse(ctx.rateLimitResetsAt) : NaN;
+      const due = Number.isFinite(resetAt)
+        ? now >= resetAt
+        : (t.completedAt ? now >= Date.parse(t.completedAt) + fallbackMs : false);
+      if (!due) continue;
+      try {
+        const re = this.store.rerunTask(t.id);
+        if (re) console.log(`Dispatcher: auto re-ran rate-limited task ${t.id} — usage window reset, back to pending — ${t.title}`);
+      } catch (e) { console.error(`Dispatcher: auto-rerun of ${t.id} failed:`, e); }
+    }
+  }
+
+  /**
    * Pick which rung of a fallback chain to run for a FRESH (unpinned) dispatch,
    * with preference-preserving load balancing.
    *
@@ -319,7 +372,19 @@ export class Dispatcher {
     try { this.driveWaitInput(); }
     catch (e) { console.error('Dispatcher: driveWaitInput failed this tick:', e); }
 
-    if (this.running.size >= orch.maxConcurrent) return;
+    // Re-run rate-limited failures the user opted into, once their window resets.
+    // Independent of the concurrency gate below (it only re-queues to pending).
+    try { this.autoRerunRateLimited(); }
+    catch (e) { console.error('Dispatcher: autoRerunRateLimited failed this tick:', e); }
+
+    if (this.running.size >= orch.maxConcurrent) {
+      // Still annotate WHY each pending task is waiting, so the dashboard explains
+      // the queue even when every execution slot is busy.
+      for (const t of this.store.listTasks({ status: 'pending' })) {
+        this.markPending(t, `Waiting for a free execution slot — ${this.running.size}/${orch.maxConcurrent} concurrent tasks are already running.`);
+      }
+      return;
+    }
 
     // FIFO: listTasks sorts newest-first; dispatch oldest first so pipelines
     // (research -> synthesis) run in creation order.
@@ -340,18 +405,37 @@ export class Dispatcher {
         if (this.awaitingHumanInput(task)) continue;
         const plan = this.planFor(task);
         switch (plan.action) {
-          case 'skip': continue;               // manual, or unknown target
-          case 'remote': this.handleRemoteRung(task, plan.exec); continue;
-          case 'route': this.route(task); continue;
+          case 'skip':                         // manual, or unknown target
+            this.markPending(task, task.tags?.includes('manual')
+              ? 'Held — tagged `manual`, so it never auto-runs. Use “Run now”, or drop the manual tag, to dispatch it.'
+              : 'No eligible brain to run this — its agent’s brain chain is empty, exhausted, or every rung is disabled. Edit its agent/brain targeting.');
+            continue;
+          case 'remote':
+            this.handleRemoteRung(task, plan.exec);
+            this.markPending(task, plan.exec?.brainId
+              ? `Offered to remote brain \`${plan.exec.brainId}\` — waiting for that machine’s client to connect and claim it.`
+              : 'Waiting for a remote brain’s client to connect and claim it.');
+            continue;
+          case 'route':
+            this.route(task);
+            this.markPending(task, 'Routing — an agent/division is being auto-assigned; it dispatches on the next tick.');
+            continue;
           case 'execute':
-            if (!this.depsSatisfied(task)) continue;
+            if (!this.depsSatisfied(task)) {
+              this.markPending(task, 'Waiting on an upstream task it depends on to finish first.');
+              continue;
+            }
             // Per-brain concurrency: if this brain is already at its capacity, skip
             // THIS task (don't break) so a task bound to a different, free brain can
             // still launch this tick. A brain with spare room runs the task
             // concurrently on the same instance. selectRung already steered fresh
             // dispatches toward free rungs; this backstops a pinned task or a fully
             // saturated chain.
-            if (this.brainLoad(plan.exec.brainId) >= this.brainCap(plan.exec.brainId)) continue;
+            if (this.brainLoad(plan.exec.brainId) >= this.brainCap(plan.exec.brainId)) {
+              this.markPending(task, `Queued — brain \`${plan.exec.brainId}\` is at capacity (${this.brainLoad(plan.exec.brainId)}/${this.brainCap(plan.exec.brainId)} slots). Runs as soon as a slot frees.`);
+              continue;
+            }
+            this.clearPending(task.id);
             this.execute(task, plan.exec).catch(e => console.error(`Dispatcher: task ${task.id} failed:`, e));
         }
       } catch (e) { console.error(`Dispatcher: planning task ${task.id} failed:`, e); }
@@ -1668,6 +1752,16 @@ export class Dispatcher {
     const prompt = this.buildPrompt(task, plan);
     const argv = this.buildArgv({ exec: plan.exec, model: plan.model, command: plan.command }, prompt);
 
+    // Live PROGRESS LOG: stream the brain's stdout/stderr to artifacts/<id>/progress.log
+    // as it runs, so the dashboard can show a "what is it doing right now" window on
+    // the in-progress card (served via GET /api/inbox/:id/progress → Store.readProgressLog).
+    // Opened with the 'w' flag so each run starts a fresh log (a re-run isn't appended
+    // to the prior attempt's output).
+    let plog: WriteStream | null = null;
+    try { plog = createWriteStream(join(artDir, 'progress.log'), { flags: 'w' }); } catch { plog = null; }
+    const logProgress = (s: string) => { try { plog?.write(s); } catch { /* best-effort */ } };
+    logProgress(`[${new Date().toISOString()}] ▶ ${plan.label} (${plan.exec}:${plan.model || 'default'}) started\n   task: ${task.title}\n\n`);
+
     const output = await new Promise<{ ok: boolean; text: string }>((resolve) => {
       const child = spawn(argv[0], argv.slice(1), {
         // Run the agent INSIDE its artifacts dir. Without a cwd the child
@@ -1700,8 +1794,8 @@ export class Dispatcher {
         child.kill('SIGTERM');
         resolve({ ok: false, text: `TIMEOUT after ${orch.taskTimeoutMs}ms\n${out}\n${err}` });
       }, orch.taskTimeoutMs);
-      child.stdout.on('data', (d) => { out += d.toString(); });
-      child.stderr.on('data', (d) => { err += d.toString(); });
+      child.stdout.on('data', (d) => { const s = d.toString(); out += s; logProgress(stripAnsi(s)); });
+      child.stderr.on('data', (d) => { const s = d.toString(); err += s; logProgress(stripAnsi(s)); });
       child.on('error', (e) => {
         clearTimeout(timer);
         resolve({ ok: false, text: `SPAWN ERROR: ${e.message}` });
@@ -1715,6 +1809,9 @@ export class Dispatcher {
         else resolve({ ok: code === 0, text: (clean || stripAnsi(err).trim() || `exit code ${code}`) });
       });
     });
+
+    logProgress(`\n[${new Date().toISOString()}] ■ finished — ${output.ok ? 'ok' : 'failed/empty'} (verifying result…)\n`);
+    try { plog?.end(); } catch { /* best-effort */ }
 
     this.running.delete(task.id);
     this.store.removeAgent(worker.id);
