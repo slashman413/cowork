@@ -12,6 +12,10 @@ jobs:
     defaults:
       run:
         working-directory: ./server
+    env:
+      # The fleet runs on Taiwan time; recurrence calendar math (daily/weekly/
+      # monthly/cron) uses the server's local TZ, so CI must match it.
+      TZ: Asia/Taipei
     steps:
       - uses: actions/checkout@v4
       - name: Setup Node.js
