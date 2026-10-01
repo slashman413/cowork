@@ -1,7 +1,12 @@
 node_modules/
 dist/
-.status/agents.json
+.status/
 *.log
+# Server-owned backup snapshots (timestamped .bak.* files) and root-level
+# runtime logs (job_log.txt, failed_log.txt, logs.txt) — per-server state,
+# never commit. Root-only so real .txt files in subdirectories stay visible.
+*.bak.*
+/*.txt
 .DS_Store
 inbox/*.json
 decisions/*.md
