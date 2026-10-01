@@ -60,8 +60,12 @@
       "category": "Dev",
       "enabled": true
     },
-    "vllm35b": {
-      "url": "http://localhost:8000/v1",
+    "sglang38": {
+      "url": "http://localhost:8001/v1",
+      "label": "SGLang (Qwen3.8-27B)",
+      "description": "Local SGLang OpenAI-compatible inference server — Qwen3.8-27B NVFP4 + DFlash2, :8001.",
+      "icon": "cpu",
+      "category": "APIs & MCP",
       "enabled": true
     },
     "comfyui": {
@@ -94,7 +98,7 @@
     "classifier": {
       "enabled": true,
       "exec": "hermes",
-      "model": "nvidia/Qwen3.6-35B-A3B-NVFP4",
+      "model": "qwen3.8-27b",
       "fallbackRole": "generalist",
       "timeoutMs": 300000
     },
@@ -106,7 +110,7 @@
       "llm": {
         "enabled": false,
         "exec": "hermes",
-        "model": "nvidia/Qwen3.6-35B-A3B-NVFP4",
+        "model": "qwen3.8-27b",
         "timeoutMs": 120000
       }
     },
@@ -114,7 +118,7 @@
     "hardClaimMs": 5400000,
     "maxWorkflowSteps": 12,
     "defaultChain": [
-      "local-ha-qwen35b",
+      "local-ha-qwen38-27b",
       "local-cc-opus"
     ],
     "divisionChains": {},
@@ -122,14 +126,14 @@
       "orchestrator": {
         "description": "Decompose a CEO idea into role-tagged subtasks and dispatch them",
         "brains": [
-          "local-ha-qwen35b",
+          "local-ha-qwen38-27b",
           "local-cc-fable"
         ]
       },
       "generalist": {
         "description": "Fallback when the router can't classify or an agent fails through its chain",
         "brains": [
-          "local-ha-qwen35b",
+          "local-ha-qwen38-27b",
           "local-cc-sonnet"
         ]
       },
@@ -141,11 +145,11 @@
       }
     },
     "brains": {
-      "local-ha-qwen35b": {
-        "description": "Local Hermes agent on Qwen3.6-35B-A3B",
+      "local-ha-qwen38-27b": {
+        "description": "Local Hermes agent on Qwen3.8-27B",
         "location": "local",
         "exec": "hermes",
-        "model": "nvidia/Qwen3.6-35B-A3B-NVFP4",
+        "model": "qwen3.8-27b",
         "maxConcurrent": 3
       },
       "local-cc-opus": {
