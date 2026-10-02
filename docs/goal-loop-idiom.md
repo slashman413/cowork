@@ -117,8 +117,8 @@ curl -s -X POST $COWORK/api/goals -H 'content-type: application/json' -d '{
     {"key":"review","title":"Review what moved the number and choose the next lever"}
   ],
   "stepBudget": 200,
-  "achieverBrainChain": ["local-cc-opus"],
-  "judgerBrainChain": ["local-cc-opus"]
+  "achieverBrainChain": ["local-cc-opus-5-5"],
+  "judgerBrainChain": ["local-cc-opus-5-5"]
 }'
 
 # 3. Start the /loop — the dispatcher drives it 24/7 until met

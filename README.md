@@ -301,10 +301,15 @@ can reference. The **Brains** view lists every registered brain — its platform
 
 | Alias | Location | Runs |
 |-------|----------|------|
-| `local-ha-qwen35b` / `-qwen27b` / `-deepseek` | local | Hermes on that model |
-| `local-cc-opus` / `-sonnet` / `-fable` | local | Claude Code on that model |
+| `local-ha-qwen3-8-27b` | local | Hermes on that model |
+| `local-cc-opus-5-5` / `-sonnet-5-5` / `-fable-5-1` | local | Claude Code on that model |
 | `local-agy-*` / `local-comfy-ltx` | local | Antigravity/Gemini / ComfyUI-LTX video |
-| `remote-<host>-cc-sonnet` | remote | Claude Code on another machine |
+| `remote-<host>-cc-sonnet-5-5` | remote | Claude Code on another machine |
+
+Brain ids carry the **model version** (`local-cc-opus-5-5`, not `local-cc-opus`) so the
+model a brain runs is readable from its id; only `-default` brains, which follow the
+account default, are unversioned. DeepSeek brains are retired — any id matching
+`/deepseek/i` is scrubbed from the registry on load (see `DENYLISTED_BRAIN_RE`).
 
 **Local** brains the dispatcher spawns here. **Remote** brains it leaves `pending`
 and **publishes the brain id onto the task's `context.brain`** so that machine's
@@ -351,8 +356,8 @@ client that does exactly that loop. Its header comment documents every env var.
 
 ```bash
 git clone https://github.com/slashman413/cowork
-COWORK_URL=http://<cowork-host>:6868 EXEC=claude MODEL=claude-sonnet-5 \
-  BRAIN_ID=remote-<host>-cc-sonnet \
+COWORK_URL=http://<cowork-host>:6868 EXEC=claude MODEL=claude-sonnet-5-5 \
+  BRAIN_ID=remote-<host>-cc-sonnet-5-5 \
   node cowork/deploy/remote-brain-client.mjs
 ```
 
@@ -360,8 +365,8 @@ Several brains from one machine (declares them all; each becomes a targetable br
 
 ```bash
 COWORK_URL=http://<cowork-host>:6868 EXEC=claude HOST=<host> \
-  BRAINS='[{"id":"remote-<host>-cc-opus","model":"claude-opus-4-8"},
-           {"id":"remote-<host>-cc-sonnet","model":"claude-sonnet-5"}]' \
+  BRAINS='[{"id":"remote-<host>-cc-opus-5-5","model":"claude-opus-5-5"},
+           {"id":"remote-<host>-cc-sonnet-5-5","model":"claude-sonnet-5-5"}]' \
   node cowork/deploy/remote-brain-client.mjs
 ```
 
@@ -393,7 +398,7 @@ tasks each brain has run vs. submitted:
 The always-on coordinator agent shown in **Connections** as `cowork/orchestrator`
 polls the inbox, two-stage-routes unassigned tasks, reclaims orphans, and
 dispatches; transient per-task workers appear as e.g.
-`testing / Workflow Optimizer · local-ha-qwen35b` or `video · local-comfy-ltx`
+`testing / Workflow Optimizer · local-ha-qwen3-8-27b` or `video · local-comfy-ltx`
 while running.
 
 CEO flow: tell Hermes (e.g. via Discord) an idea → Hermes creates ONE task with

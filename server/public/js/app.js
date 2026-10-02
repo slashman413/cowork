@@ -76,7 +76,7 @@ function resetsInHM(iso) {
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
 
-// "remote-ai-code-gen-cc-fable" → "cc-fable"; "local-cc-opus" → "cc-opus".
+// "remote-ai-code-gen-cc-fable" → "cc-fable"; "local-cc-opus-5-5" → "cc-opus".
 // Falls back to the raw id when no exec marker is present.
 function shortBrain(id) {
   const m = String(id).match(/(cc|agy|codex|ollama|ha)-[^]*$/);

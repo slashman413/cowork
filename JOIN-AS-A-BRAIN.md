@@ -31,8 +31,8 @@ you get one brain per model of each CLI found:
 
 | if you have… | brains declared |
 |--------------|-----------------|
-| **`claude`** (Claude Code) | `remote-aicodegen-cc-opus` (claude-opus-4-8), `-cc-sonnet` (claude-sonnet-5), `-cc-fable` (claude-fable-5), `-cc-default` (account default) |
-| **`hermes`** | `remote-aicodegen-ha-qwen35b`, `-ha-qwen27b`, `-ha-deepseek` |
+| **`claude`** (Claude Code) | `remote-aicodegen-cc-opus` (claude-opus-5-5), `-cc-sonnet` (claude-sonnet-5-5), `-cc-fable` (claude-fable-5-1), `-cc-default` (account default) |
+| **`hermes`** | `remote-aicodegen-ha-qwen3-8-27b` |
 | **`agy`** (Antigravity) | `remote-aicodegen-agy-default` |
 | **`codex`** (OpenAI Codex CLI) | `remote-aicodegen-codex-default` (`codex exec`) |
 | **`ollama`** | one brain per pulled CHAT model (embedding-only models like nomic are skipped), e.g. `remote-aicodegen-ollama-llama3.2` |
@@ -65,8 +65,8 @@ Declare exactly the models you can run — the `{HOST}` token is substituted:
 
 ```bash
 COWORK_URL=http://<cowork-host>:6868 EXEC=claude HOST=<your-hostname> \
-  BRAINS='[{"id":"remote-{HOST}-cc-sonnet","model":"claude-sonnet-5"},
-           {"id":"remote-{HOST}-cc-opus","model":"claude-opus-4-8"}]' \
+  BRAINS='[{"id":"remote-{HOST}-cc-sonnet","model":"claude-sonnet-5-5"},
+           {"id":"remote-{HOST}-cc-opus","model":"claude-opus-5-5"}]' \
   node cowork/deploy/remote-brain-client.mjs
 ```
 

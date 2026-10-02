@@ -275,7 +275,7 @@ export class Dispatcher {
    * preferred rung is a LOCAL brain that is SATURATED (at its maxConcurrent) do we
    * scan the rest of the chain and hand the overflow to the local rung with the most
    * spare capacity. That is what stops one reliable workhorse brain (e.g.
-   * `local-ha-qwen35b`) from absorbing every concurrent task while its
+   * `local-ha-qwen3-8-27b`) from absorbing every concurrent task while its
    * peers sit idle.
    *
    * Remote rungs and unrunnable/missing brains are left to the caller's existing
@@ -1732,7 +1732,7 @@ export class Dispatcher {
     this.store.saveTask(claimed);
 
     // Surface the worker as its own active agent so the dashboard shows WHO
-    // is working (e.g. hermes/engineer · local-cc-opus), not just the coordinator.
+    // is working (e.g. hermes/engineer · local-cc-opus-5-5), not just the coordinator.
     const worker = this.store.registerAgent({
       platform: plan.platform,
       agentName: plan.label,

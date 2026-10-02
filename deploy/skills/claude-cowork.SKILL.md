@@ -37,17 +37,17 @@ Resources: `cowork://status`, `cowork://roster`.
 
 1. **Register once** before other calls. Declare your local Claude brains only if this
    box's brain client isn't already doing it (check `GET /api/brains` first —
-   `local-cc-opus/-sonnet/-fable/-default` are usually already registered by the local
+   `local-cc-opus-5-5/-sonnet-5-5/-fable-5-1/-default` are usually already registered by the local
    brain service, and re-declaring the **same ids** is a harmless idempotent refresh):
    ```
    register_agent(
      platform: "claude",
      agent_name: "<short name for this session/box>",
-     capabilities: ["local-cc-opus", "local-cc-sonnet", "local-cc-fable"],
+     capabilities: ["local-cc-opus-5-5", "local-cc-sonnet-5-5", "local-cc-fable-5-1"],
      brains: [
-       { id: "local-cc-opus",   location: "local", exec: "claude", model: "claude-opus-4-8" },
-       { id: "local-cc-sonnet", location: "local", exec: "claude", model: "claude-sonnet-5" },
-       { id: "local-cc-fable",  location: "local", exec: "claude", model: "claude-fable-5" }
+       { id: "local-cc-opus-5-5",   location: "local", exec: "claude", model: "claude-opus-5-5" },
+       { id: "local-cc-sonnet-5-5", location: "local", exec: "claude", model: "claude-sonnet-5-5" },
+       { id: "local-cc-fable-5-1",  location: "local", exec: "claude", model: "claude-fable-5-1" }
      ]
    )
    ```
@@ -127,7 +127,7 @@ When *you* are the brain running a dispatched task:
 5. **Stay inside the task.** One task, one deliverable; no side quests, no new cowork
    tasks unless the brief asks you to decompose.
 6. **Credential/local-filesystem tasks must run on a local brain.** Anything touching
-   `~/.priv/` or `/home/wayne/...` — pin `context: {"brain": "local-ha-qwen35b"}`
+   `~/.priv/` or `/home/wayne/...` — pin `context: {"brain": "local-ha-qwen3-8-27b"}`
    (or another `local-*`). `remote-*` brains cannot see this filesystem; if you are one
    and the task needs it, report the routing error and stop.
 

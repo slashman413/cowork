@@ -65,9 +65,9 @@ glass.
 | `local-agy-gemini-3.6-flash-high` | Gemini 3.6 Flash (High) | local |
 | `local-agy-gemini-3.6-flash-medium` | Gemini 3.6 Flash (Medium) | local |
 | `local-agy-gemini-3.6-flash-low` | Gemini 3.6 Flash (Low) | local |
-| `local-agy-gemini-3.5-flash-high` | Gemini 3.5 Flash (High) | local |
-| `local-agy-gemini-3.5-flash-medium` | Gemini 3.5 Flash (Medium) | local |
-| `local-agy-gemini-3.5-flash-low` | Gemini 3.5 Flash (Low) | local |
+| `local-agy-gemini-3.8-flash-high` | Gemini 3.8 Flash (High) | local |
+| `local-agy-gemini-3.8-flash-medium` | Gemini 3.8 Flash (Medium) | local |
+| `local-agy-gemini-3.8-flash-low` | Gemini 3.8 Flash (Low) | local |
 | `local-agy-gemini-3.1-pro-high` | Gemini 3.1 Pro (High) | local |
 | `local-agy-gemini-3.1-pro-low` | Gemini 3.1 Pro (Low) | local |
 | `local-agy-claude-sonnet-4-6` | Claude Sonnet 4.6 | local |
@@ -124,9 +124,9 @@ register_agent(
     "local-agy-gemini-3.6-flash-high",
     "local-agy-gemini-3.6-flash-medium",
     "local-agy-gemini-3.6-flash-low",
-    "local-agy-gemini-3.5-flash-high",
-    "local-agy-gemini-3.5-flash-medium",
-    "local-agy-gemini-3.5-flash-low",
+    "local-agy-gemini-3.8-flash-high",
+    "local-agy-gemini-3.8-flash-medium",
+    "local-agy-gemini-3.8-flash-low",
     "local-agy-gemini-3.1-pro-high",
     "local-agy-gemini-3.1-pro-low",
     "local-agy-claude-sonnet-4-6",
@@ -137,9 +137,9 @@ register_agent(
     {"id": "local-agy-gemini-3.6-flash-high",   "location": "local", "exec": "agy", "model": "gemini-3.6-flash-high"},
     {"id": "local-agy-gemini-3.6-flash-medium",  "location": "local", "exec": "agy", "model": "gemini-3.6-flash-medium"},
     {"id": "local-agy-gemini-3.6-flash-low",     "location": "local", "exec": "agy", "model": "gemini-3.6-flash-low"},
-    {"id": "local-agy-gemini-3.5-flash-high",    "location": "local", "exec": "agy", "model": "gemini-3.5-flash-high"},
-    {"id": "local-agy-gemini-3.5-flash-medium",  "location": "local", "exec": "agy", "model": "gemini-3.5-flash-medium"},
-    {"id": "local-agy-gemini-3.5-flash-low",     "location": "local", "exec": "agy", "model": "gemini-3.5-flash-low"},
+    {"id": "local-agy-gemini-3.8-flash-high",    "location": "local", "exec": "agy", "model": "gemini-3.8-flash-high"},
+    {"id": "local-agy-gemini-3.8-flash-medium",  "location": "local", "exec": "agy", "model": "gemini-3.8-flash-medium"},
+    {"id": "local-agy-gemini-3.8-flash-low",     "location": "local", "exec": "agy", "model": "gemini-3.8-flash-low"},
     {"id": "local-agy-gemini-3.1-pro-high",      "location": "local", "exec": "agy", "model": "gemini-3.1-pro-high"},
     {"id": "local-agy-gemini-3.1-pro-low",       "location": "local", "exec": "agy", "model": "gemini-3.1-pro-low"},
     {"id": "local-agy-claude-sonnet-4-6",        "location": "local", "exec": "agy", "model": "claude-sonnet-4-6"},
@@ -209,8 +209,8 @@ or a special-executor name skips classification.
 ### Brains = Model × Platform × Location
 
 `config.json → orchestration.brains` (`GET /api/brains`) — the execution identities a
-chain references: `local-ha-qwen35b` (Hermes),
-`local-cc-opus/-sonnet/-fable` (Claude), `local-agy-*` (Antigravity/Gemini),
+chain references: `local-ha-qwen3-8-27b` (Hermes),
+`local-cc-opus-5-5/-sonnet-5-5/-fable-5-1` (Claude), `local-agy-*` (Antigravity/Gemini),
 `local-comfy-ltx` (LTX video), `remote-<host>-…`. **Local** brains
 the dispatcher spawns; **remote** brains it leaves `pending` for that machine's client
 to claim.

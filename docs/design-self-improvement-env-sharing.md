@@ -130,7 +130,7 @@ Two distinct problems hide in "environment issues", and they need different mech
 Extend the registration handshake — the payload is free-form JSON already, so this is backward-compatible:
 
 ```json
-{ "id": "remote-aicodegen-cc-fable", "exec": "claude", "model": "claude-fable-5",
+{ "id": "remote-aicodegen-cc-fable", "exec": "claude", "model": "claude-fable-5-1",
   "host": "aicodegen", "location": "remote",
   "env": {
     "paths":   ["/home/maxchang/workspace/github/slashman413"],

@@ -120,7 +120,7 @@ register_agent(
   capabilities=["engineering", "research", "planner", "generalist"],
   current_task="Working on X",
   brains=[
-    {"id": "local-ha-qwen35b",  "location": "local", "exec": "hermes", "model": "nvidia/Qwen3.6-35B-A3B-NVFP4"}
+    {"id": "local-ha-qwen3-8-27b",  "location": "local", "exec": "hermes", "model": "qwen3.8-27b"}
   ]
 )
 ```
@@ -249,7 +249,7 @@ register_agent(
   agent_name="hermes-agent-01",
   capabilities=["engineering", "research", "planner", "generalist"],
   current_task="Working on X",
-  brains=[{"id": "local-ha-qwen35b", "location": "local", "exec": "hermes", "model": "nvidia/Qwen3.6-35B-A3B-NVFP4"}]
+  brains=[{"id": "local-ha-qwen3-8-27b", "location": "local", "exec": "hermes", "model": "qwen3.8-27b"}]
 )
 ```
 
@@ -339,7 +339,7 @@ may appear stale on the dashboard.
 
 Any task that needs the **local filesystem** — credentials under `~/.priv/`, or any path
 under the cowork host's home dir — MUST run on a **local** brain. Pin it explicitly:
-`context: {"brain": "local-ha-qwen35b"}`. `remote-*` brains cannot see that
+`context: {"brain": "local-ha-qwen3-8-27b"}`. `remote-*` brains cannot see that
 filesystem; such a task routed to one will fail or vanish. If you are a remote brain and
 the brief needs local files, report the routing error and stop — do not fake it.
 
@@ -354,7 +354,7 @@ task schema:
   "description": "…",
   "from": {"platform": "hermes", "agent": "<your agent name>"},
   "to": {},
-  "context": {"brain": "local-ha-qwen35b"}
+  "context": {"brain": "local-ha-qwen3-8-27b"}
 }
 ```
 

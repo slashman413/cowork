@@ -34,12 +34,12 @@
       "color": "#0EA5E9"
     }
   },
-  "_services_comment": "Powers the Portal launcher in the web UI. Each entry needs a url; label/description/icon (a lucide icon name)/category are optional and default from a built-in catalog. Known keys (mautic, filebrowser, forgejo, firecrawl, vllm35b, grafana, portainer, n8n, …) get their metadata for free.",
+  "_services_comment": "Powers the Portal launcher in the web UI. Each entry needs a url; label/description/icon (a lucide icon name)/category are optional and default from a built-in catalog. Known keys (mautic, filebrowser, forgejo, firecrawl, vllm35b, grafana, portainer, n8n, \u2026) get their metadata for free.",
   "services": {
     "mautic": {
       "url": "http://localhost:8081",
       "label": "Mautic",
-      "description": "Marketing automation — campaigns, email, contacts.",
+      "description": "Marketing automation \u2014 campaigns, email, contacts.",
       "icon": "megaphone",
       "category": "Marketing",
       "enabled": true
@@ -55,7 +55,7 @@
     "forgejo": {
       "url": "http://localhost:3001",
       "label": "Forgejo",
-      "description": "Self-hosted Git server — repos, issues, pull requests.",
+      "description": "Self-hosted Git server \u2014 repos, issues, pull requests.",
       "icon": "git-fork",
       "category": "Dev",
       "enabled": true
@@ -63,7 +63,7 @@
     "sglang38": {
       "url": "http://localhost:8001/v1",
       "label": "SGLang (Qwen3.8-27B)",
-      "description": "Local SGLang OpenAI-compatible inference server — Qwen3.8-27B NVFP4 + DFlash2, :8001.",
+      "description": "Local SGLang OpenAI-compatible inference server \u2014 Qwen3.8-27B NVFP4 + DFlash2, :8001.",
       "icon": "cpu",
       "category": "APIs & MCP",
       "enabled": true
@@ -118,23 +118,23 @@
     "hardClaimMs": 5400000,
     "maxWorkflowSteps": 12,
     "defaultChain": [
-      "local-ha-qwen38-27b",
-      "local-cc-opus"
+      "local-ha-qwen3-8-27b",
+      "local-cc-opus-5-5"
     ],
     "divisionChains": {},
     "agents": {
       "orchestrator": {
         "description": "Decompose a CEO idea into role-tagged subtasks and dispatch them",
         "brains": [
-          "local-ha-qwen38-27b",
-          "local-cc-fable"
+          "local-ha-qwen3-8-27b",
+          "local-cc-fable-5-1"
         ]
       },
       "generalist": {
         "description": "Fallback when the router can't classify or an agent fails through its chain",
         "brains": [
-          "local-ha-qwen38-27b",
-          "local-cc-sonnet"
+          "local-ha-qwen3-8-27b",
+          "local-cc-sonnet-5-5"
         ]
       },
       "video": {
@@ -145,31 +145,31 @@
       }
     },
     "brains": {
-      "local-ha-qwen38-27b": {
+      "local-ha-qwen3-8-27b": {
         "description": "Local Hermes agent on Qwen3.8-27B",
         "location": "local",
         "exec": "hermes",
         "model": "qwen3.8-27b",
         "maxConcurrent": 3
       },
-      "local-cc-opus": {
-        "description": "Local Claude Code using Opus 4.8",
+      "local-cc-opus-5-5": {
+        "description": "Local Claude Code using Opus 5.5",
         "location": "local",
         "exec": "claude",
-        "model": "claude-opus-4-8",
+        "model": "claude-opus-5-5",
         "maxConcurrent": 2
       },
-      "local-cc-sonnet": {
-        "description": "Local Claude Code using Sonnet 5",
+      "local-cc-sonnet-5-5": {
+        "description": "Local Claude Code using Sonnet 5.5",
         "location": "local",
         "exec": "claude",
-        "model": "claude-sonnet-5"
+        "model": "claude-sonnet-5-5"
       },
-      "local-cc-fable": {
-        "description": "Local Claude Code using Fable 5",
+      "local-cc-fable-5-1": {
+        "description": "Local Claude Code using Fable 5.1",
         "location": "local",
         "exec": "claude",
-        "model": "claude-fable-5"
+        "model": "claude-fable-5-1"
       },
       "local-comfy-ltx": {
         "description": "Local ComfyUI LTX video pipeline (short vertical promo)",
@@ -179,11 +179,11 @@
           "./deploy/video-pipeline.sh"
         ]
       },
-      "remote-example-cc-sonnet": {
-        "description": "EXAMPLE remote brain — a Claude Code client on another machine. Delete or edit; remote brains normally auto-register via register_agent (see JOIN-AS-A-BRAIN.md).",
+      "remote-example-cc-sonnet-5-5": {
+        "description": "EXAMPLE remote brain \u2014 a Claude Code client on another machine. Delete or edit; remote brains normally auto-register via register_agent (see JOIN-AS-A-BRAIN.md).",
         "location": "remote",
         "exec": "claude",
-        "model": "claude-sonnet-5",
+        "model": "claude-sonnet-5-5",
         "host": "your-remote-host"
       }
     }
