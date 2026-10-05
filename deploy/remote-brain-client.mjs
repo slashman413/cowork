@@ -5,7 +5,8 @@
 // registry), then polls the shared inbox for tasks addressed to ANY of its
 // brains, claims them, runs the matching local model, and reports results back.
 //
-// Zero-config by default: run `COWORK_URL=http://<host>:6868 node remote-brain-client.mjs`
+// Zero-config by default: run `COWORK_URL=https://<host>:6868 node remote-brain-client.mjs`
+// (self-signed TLS: also set NODE_EXTRA_CA_CERTS=<copy of the server cert.pem>)
 // and the client AUTO-DETECTS the model CLIs installed here (claude/hermes/agy) and
 // declares the matching brains in its registration handshake — no brain env needed.
 // Override the auto default with any of (first that is set wins):
@@ -27,7 +28,7 @@
 //   Single (simplest):
 //     BRAIN_ID=remote-aicodegen-cc-fable  EXEC=claude  MODEL=claude-fable-5
 //
-//   COWORK_URL       cowork server base, e.g. http://<cowork-host>:6868   (required)
+//   COWORK_URL       cowork server base, e.g. https://<cowork-host>:6868   (required)
 //   COWORK_API_KEY   bearer token if the server sets server.apiKey       (optional)
 //   POLL_MS          inbox poll interval                                 (default 5000)
 //   MAX_CONCURRENT   tasks in parallel across all brains                 (default 1)

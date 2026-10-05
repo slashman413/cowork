@@ -13,9 +13,14 @@ brains for you — no brain settings needed:
 
 ```bash
 git clone https://github.com/slashman413/cowork
-COWORK_URL=http://<cowork-host>:6868 HOST=<your-hostname> \
+NODE_EXTRA_CA_CERTS=cowork-cert.pem \
+COWORK_URL=https://<cowork-host>:6868 HOST=<your-hostname> \
   node cowork/deploy/remote-brain-client.mjs
 ```
+
+The server speaks **HTTPS only** (self-signed). Copy its `~/.cowork/tls/cert.pem` to your
+machine as `cowork-cert.pem` and point `NODE_EXTRA_CA_CERTS` at it — don't fall back to
+`NODE_TLS_REJECT_UNAUTHORIZED=0`. (Plain `http://` only applies to a server with `server.tls: null`.)
 
 That's it. On connect the client calls `register_agent` **declaring your brains in the
 handshake**, then polls the shared inbox and runs any task addressed to one of them.
@@ -48,7 +53,7 @@ Want just one platform's set (e.g. skip the others)? Add `PRESET=claude` (or `he
 ## No client script? Register straight over MCP
 
 The brains handshake is plain MCP — any client can do it without this helper. Connect
-to `http://<cowork-host>:6868/mcp`; the server's `initialize` **instructions** tell you
+to `https://<cowork-host>:6868/mcp` (trusting the server cert, see above); the server's `initialize` **instructions** tell you
 exactly what to send. In short, call `register_agent` once with a `brains` array:
 
 ```json
@@ -64,7 +69,7 @@ then `list_inbox` → `claim_task` → run → `complete_task`, and `deregister_
 Declare exactly the models you can run — the `{HOST}` token is substituted:
 
 ```bash
-COWORK_URL=http://<cowork-host>:6868 EXEC=claude HOST=<your-hostname> \
+NODE_EXTRA_CA_CERTS=cowork-cert.pem COWORK_URL=https://<cowork-host>:6868 EXEC=claude HOST=<your-hostname> \
   BRAINS='[{"id":"remote-{HOST}-cc-sonnet","model":"claude-sonnet-5-5"},
            {"id":"remote-{HOST}-cc-opus","model":"claude-opus-5-5"}]' \
   node cowork/deploy/remote-brain-client.mjs
