@@ -72,6 +72,12 @@ Files a person attached to your task are listed in your prompt and live in
   improvements that the brief did not ask for.
 - Do not create new cowork tasks unless the brief asks you to decompose work.
 - Do not install system packages or change machine state as a side effect.
+- **Never archive, unarchive, delete, or change the visibility of a GitHub repo, and
+  never disable a workflow**, unless the CEO explicitly approved that specific repo or
+  workflow. These actions stop scheduled jobs. Propose them as action items with
+  evidence (last commit, last workflow run, live Pages status, maintaining-overall
+  status) and let the CEO decide. (Added 2026-10-05 after the daily GitHub review
+  archived 66 repos without approval.)
 
 ## 6. Credential tasks MUST use a local brain (Inc 6 rule)
 
