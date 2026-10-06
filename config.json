@@ -75,6 +75,15 @@
     "firecrawl": {
       "url": "http://localhost:3002",
       "enabled": false
+    },
+    "godseye": {
+      "url": "http://<tailnet-host>:4173",
+      "label": "God's Eye View \u4e0a\u5e1d\u4e4b\u773c",
+      "description": "\u5373\u6642 3D \u5730\u7403\u60c5\u5831\u53f0 \u2014 \u822a\u73ed\u3001\u8239\u8236\u3001\u885b\u661f\u3001\u5730\u9707\u3001CCTV\uff08\u7e41\u4e2d\u5916\u639b\uff0cTailscale :4173\uff09\u3002",
+      "icon": "globe",
+      "category": "Explore",
+      "enabled": true,
+      "unit": "gods-eye-view.service"
     }
   },
   "_obsidian_comment": "Shared knowledge base every brain can query. Local brains (same host) may read vaultPath off disk directly; remote brains use GET /api/obsidian/* and the obsidian_* MCP tools. Served read-only. The Portal shows an 'Obsidian Vault' web-viewer card when enabled.",
