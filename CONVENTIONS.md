@@ -83,13 +83,17 @@ Files a person attached to your task are listed in your prompt and live in
 
 Any task that needs access to the **local filesystem** — especially credentials under
 `~/.priv/` (Cloudflare, Gumroad, Twitter/X, YouTube, GitHub tokens, Mautic, NAS) or
-any `/home/wayne/` path — must run on a **local brain** (`local-ha-qwen3-8-27b`).
+any `/home/wayne/` path — must run on a **local brain** (`local-hermes-qwen3.8-27b`).
 
-- **Remote brains (`remote-*`, e.g. `remote-ai-code-gen-cc-opus`) cannot access
-  `/home/wayne/`.** A credential task routed to a remote brain will fail or vanish.
+- **Remote brains on other machines (e.g. `remote-ai-code-gen-cc-opus-4-8`) cannot
+  access `/home/wayne/`.** A credential task routed to one will fail or vanish.
   If you are a remote brain and the task requires `~/.priv/` or local files, do NOT
   fake it — report the routing error and stop (see rule 4).
-- When dispatching, pin the brain: `context: {"brain": "local-ha-qwen3-8-27b"}`.
+- `remote-` in a brain id means a client claims the task, not always another
+  machine: `remote-codex-*` runs on this host. Still pin credential tasks to the
+  local brain above.
+- When dispatching, pin the brain: `context: {"brain": "local-hermes-qwen3.8-27b"}`.
+  Old ids (`local-ha-qwen3-8-27b`, …) still resolve, but use the canonical one.
 - Full rule + incident history: `/home/wayne/.hermes/cowork-routing-rules.md`.
 
 ---

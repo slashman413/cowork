@@ -127,7 +127,7 @@
     "hardClaimMs": 5400000,
     "maxWorkflowSteps": 12,
     "defaultChain": [
-      "local-ha-qwen3-8-27b",
+      "local-hermes-qwen3.8-27b",
       "local-cc-opus-5-5"
     ],
     "divisionChains": {},
@@ -135,14 +135,14 @@
       "orchestrator": {
         "description": "Decompose a CEO idea into role-tagged subtasks and dispatch them",
         "brains": [
-          "local-ha-qwen3-8-27b",
+          "local-hermes-qwen3.8-27b",
           "local-cc-fable-5-1"
         ]
       },
       "generalist": {
         "description": "Fallback when the router can't classify or an agent fails through its chain",
         "brains": [
-          "local-ha-qwen3-8-27b",
+          "local-hermes-qwen3.8-27b",
           "local-cc-sonnet-5-5"
         ]
       },
@@ -154,7 +154,7 @@
       }
     },
     "brains": {
-      "local-ha-qwen3-8-27b": {
+      "local-hermes-qwen3.8-27b": {
         "description": "Local Hermes agent on Qwen3.8-27B",
         "location": "local",
         "exec": "hermes",

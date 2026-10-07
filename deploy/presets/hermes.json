@@ -1,3 +1,3 @@
 [
-  { "id": "remote-{HOST}-ha-qwen38-27b",  "exec": "hermes", "model": "qwen3.8-27b" }
+  { "id": "remote-{HOST}-hermes-qwen3.8-27b",  "exec": "hermes", "model": "qwen3.8-27b" }
 ]

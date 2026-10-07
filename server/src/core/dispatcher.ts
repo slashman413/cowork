@@ -8,6 +8,7 @@ import type { Workflows } from './workflows.js';
 import type { Goals } from './goals.js';
 import { verifyOutput, buildVerifierPrompt, parseLlmVerdict, detectInputRequest, detectBackgroundWait, type VerifyVerdict, type InputOptions, type InputRequest, type BackgroundOptions, type BackgroundWait } from './result-verifier.js';
 import { buildLesson, appendLesson } from './lessons.js';
+import { canonicalBrainId } from '../config.js';
 import { STREAMING_EXECS, streamArgs, createStreamRenderer } from './progress-stream.js';
 
 /** Remove ANSI CSI/OSC escape sequences and lone carriage returns. */
@@ -518,7 +519,8 @@ export class Dispatcher {
     //     chain rung (see handleRemoteRung); that is NOT a user pin, so let it
     //     fall through to the chain logic below (which manages grace/handover).
     //     A disabled brain pin is treated as absent so the task falls through.
-    const ctxBrain = typeof task.context?.brain === 'string' ? task.context.brain : undefined;
+    // Canonicalised so a task pinned to a retired brain id before a rename still runs on it.
+    const ctxBrain = typeof task.context?.brain === 'string' ? canonicalBrainId(this.config, task.context.brain) : undefined;
     if (ctxBrain && brains[ctxBrain] && !brains[ctxBrain].disabled && !task.context?.brainAuto) {
       return this.brainPlan(agentName, division, ctxBrain, brains[ctxBrain], { pinned: true, attempt, chainLen: 0 });
     }
@@ -1621,7 +1623,7 @@ export class Dispatcher {
   private verifyReportedCompletion = async (task: Task, result?: string): Promise<CompletionDecision> => {
     const text = result || '';
     const brains = this.config.orchestration.brains || {};
-    const brainId = typeof task.context?.brain === 'string' ? task.context.brain : undefined;
+    const brainId = typeof task.context?.brain === 'string' ? canonicalBrainId(this.config, task.context.brain) : undefined;
 
     // Results not attributable to a configured brain (human / pipeline
     // completions) skip the failure/fallback gate, but a QUESTION back to the

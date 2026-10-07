@@ -5,7 +5,7 @@ import type { Config } from '../types.js';
 import type { Store } from '../core/store.js';
 import type { EventBus } from '../core/events.js';
 import type { Goals } from '../core/goals.js';
-import { registerBrain, removeBrainCascade } from '../config.js';
+import { registerBrain, removeBrainCascade, clientTaskView } from '../config.js';
 import { getObsidianVault } from '../core/obsidian.js';
 
 // Stateless streamable-HTTP pattern: build a fresh McpServer + transport per
@@ -107,8 +107,9 @@ function buildServer(config: Config, store: Store, eventBus: EventBus, goals?: G
         });
         store.resetCounters(args.agent_name);   // fresh client → fresh counters
         const registered: string[] = [];
+        const aliased: Record<string, string> = {};
         for (const b of args.brains || []) {
-          registerBrain(config, b.id, {
+          const canon = registerBrain(config, b.id, {
             description: b.description || `${b.id} (auto-registered by ${args.agent_name})`,
             location: b.location,
             ...(b.exec ? { exec: b.exec } : {}),
@@ -119,9 +120,15 @@ function buildServer(config: Config, store: Store, eventBus: EventBus, goals?: G
             dynamic: true,
             registeredBy: agent.id
           });
-          registered.push(b.id);
+          registered.push(canon);
+          if (canon !== b.id) aliased[b.id] = canon;
         }
-        return { content: [{ type: 'text', text: JSON.stringify({ ...agent, registered_brains: registered }) }] };
+        // brain_aliases: declared retired id → canonical registry id, so a client
+        // can update its own config (tasks still reach it under the declared id).
+        return { content: [{ type: 'text', text: JSON.stringify({
+          ...agent, registered_brains: registered,
+          ...(Object.keys(aliased).length ? { brain_aliases: aliased } : {})
+        }) }] };
       } catch (e: any) {
         return { content: [{ type: 'text', text: e.message }], isError: true };
       }
@@ -320,7 +327,7 @@ function buildServer(config: Config, store: Store, eventBus: EventBus, goals?: G
       try {
         const task = store.claimTask({ taskId: args.task_id, agentId: args.agent_id });
         if (!task) throw new Error('Task not found');
-        return { content: [{ type: 'text', text: JSON.stringify(task) }] };
+        return { content: [{ type: 'text', text: JSON.stringify(clientTaskView(config, task)) }] };
       } catch (e: any) {
         return { content: [{ type: 'text', text: e.message }], isError: true };
       }
@@ -362,7 +369,7 @@ function buildServer(config: Config, store: Store, eventBus: EventBus, goals?: G
           agent: args.agent,
           limit: args.limit
         });
-        return { content: [{ type: 'text', text: JSON.stringify(tasks) }] };
+        return { content: [{ type: 'text', text: JSON.stringify(tasks.map(t => clientTaskView(config, t))) }] };
       } catch (e: any) {
         return { content: [{ type: 'text', text: e.message }], isError: true };
       }

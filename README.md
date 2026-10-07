@@ -253,7 +253,7 @@ brain it ran on, with its output artifacts attached and filterable by status
 ### Two-stage routing
 
 An unassigned task is routed in **two stages** by an orchestrator/classifier brain
-(default `Qwen3.6-35B-A3B`, `orchestration.classifier`):
+(default `qwen3.8-27b` via Hermes, `orchestration.classifier`):
 
 1. **Division** — pick 1 of 19 divisions (testing, engineering, security, …).
 2. **Agent** — pick 1 of ~285 agents in that division. The chosen agent's
@@ -301,15 +301,34 @@ can reference. The **Brains** view lists every registered brain — its platform
 
 | Alias | Location | Runs |
 |-------|----------|------|
-| `local-ha-qwen3-8-27b` | local | Hermes on that model |
+| `local-hermes-qwen3.8-27b` | local | Hermes on that model |
+| `local-dsh-qwen3-8-27b` | local | DeepSeek Harness (`dsh`) on that model |
 | `local-cc-opus-5-5` / `-sonnet-5-5` / `-fable-5-1` | local | Claude Code on that model |
 | `local-agy-*` / `local-comfy-ltx` | local | Antigravity/Gemini / ComfyUI-LTX video |
+| `remote-codex-gpt-5-6-terra` / `-luna` / `-default` | remote | Codex, claimed by the codex client (on this host) |
+| `remote-ai-code-gen-cc-opus-4-8` / `-sonnet-5` / `-fable-5` | remote | Claude Code on the ai-code-gen machine |
 | `remote-<host>-cc-sonnet-5-5` | remote | Claude Code on another machine |
 
 Brain ids carry the **model version** (`local-cc-opus-5-5`, not `local-cc-opus`) so the
 model a brain runs is readable from its id; only `-default` brains, which follow the
-account default, are unversioned. DeepSeek brains are retired — any id matching
-`/deepseek/i` is scrubbed from the registry on load (see `DENYLISTED_BRAIN_RE`).
+account default, are unversioned. The `local-`/`remote-` prefix must match the
+brain's `location`, which means **who runs it** (local = the dispatcher spawns it;
+remote = a client claims it from the inbox), not which machine it is on. DeepSeek
+brains are retired — any id matching `/deepseek/i` is scrubbed from the registry on
+load (see `DENYLISTED_BRAIN_RE`), so never put `deepseek` in a new id.
+
+**Renamed ids keep working.** `BRAIN_ID_ALIASES` in `server/src/config.ts` (plus an
+optional `orchestration.brainAliases` in config) maps retired ids to their canonical
+id. Old ids in an on-disk config, a task's `context.brain` pin, or a client's
+registration all resolve to the canonical brain. A client that still declares an
+old id keeps receiving its tasks under that id (`clientId` on the brain), until it
+re-declares the canonical one. Renamed on 2026-10-07:
+
+| Retired id | Canonical id |
+|------------|--------------|
+| `local-ha-qwen3-8-27b`, `local-ha-qwen38-27b`, `local-ha-qwen3.8-27b` | `local-hermes-qwen3.8-27b` |
+| `local-codex-default` / `-gpt-5-6-terra` / `-gpt-5-6-luna` | `remote-codex-default` / `-gpt-5-6-terra` / `-gpt-5-6-luna` |
+| `remote-ai-code-gen-cc-opus` / `-sonnet` / `-fable` | `remote-ai-code-gen-cc-opus-4-8` / `-sonnet-5` / `-fable-5` |
 
 **Local** brains the dispatcher spawns here. **Remote** brains it leaves `pending`
 and **publishes the brain id onto the task's `context.brain`** so that machine's
@@ -398,7 +417,7 @@ tasks each brain has run vs. submitted:
 The always-on coordinator agent shown in **Connections** as `cowork/orchestrator`
 polls the inbox, two-stage-routes unassigned tasks, reclaims orphans, and
 dispatches; transient per-task workers appear as e.g.
-`testing / Workflow Optimizer · local-ha-qwen3-8-27b` or `video · local-comfy-ltx`
+`testing / Workflow Optimizer · local-hermes-qwen3.8-27b` or `video · local-comfy-ltx`
 while running.
 
 CEO flow: tell Hermes (e.g. via Discord) an idea → Hermes creates ONE task with
@@ -409,7 +428,7 @@ chain → results and artifacts appear live on the dashboard.
 ### LLM classifier — no task left behind
 
 An unassigned task (e.g. a free-text idea filed straight from Discord) no longer
-stalls: the dispatcher runs the **two-stage LLM router** (default Qwen3.6-35B-A3B
+stalls: the dispatcher runs the **two-stage LLM router** (default qwen3.8-27b
 via Hermes, `orchestration.classifier` in config.json) that reads the task, picks
 a division, then an agent, which then dispatches normally on that agent's
 brain chain. Tag a task `manual` to skip both routing and dispatch.

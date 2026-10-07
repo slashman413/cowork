@@ -209,7 +209,7 @@ or a special-executor name skips classification.
 ### Brains = Model × Platform × Location
 
 `config.json → orchestration.brains` (`GET /api/brains`) — the execution identities a
-chain references: `local-ha-qwen3-8-27b` (Hermes),
+chain references: `local-hermes-qwen3.8-27b` (Hermes),
 `local-cc-opus-5-5/-sonnet-5-5/-fable-5-1` (Claude), `local-agy-*` (Antigravity/Gemini),
 `local-comfy-ltx` (LTX video), `remote-<host>-…`. **Local** brains
 the dispatcher spawns; **remote** brains it leaves `pending` for that machine's client

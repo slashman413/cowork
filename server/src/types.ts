@@ -79,6 +79,11 @@ export interface BrainConfig {
    *  brain picker. It stays in the registry (config persisted) so it can be
    *  re-enabled without re-configuration. Default false (enabled). */
   disabled?: boolean;
+  /** The id the owning client declared, when it differs from this (canonical)
+   *  registry id because the client still uses a retired alias. The MCP task
+   *  views translate context.brain back to it so that client can still find and
+   *  claim its tasks. Cleared as soon as the client re-declares the canonical id. */
+  clientId?: string;
 }
 
 /** Environment capability manifest for a brain (WF-3 §B-I). All fields are
@@ -238,6 +243,10 @@ export interface OrchestrationConfig {
    *  precedence for a roster agent: an agent with its own chain here ignores its
    *  division override and the global default. Editable live from the Agents view. */
   agentChains?: Record<string, string[]>;
+  /** Extra retired-id → canonical-id brain aliases, merged over the built-in
+   *  BRAIN_ID_ALIASES (config.ts). Lets a renamed brain keep resolving for tasks
+   *  and clients that still use the old id. */
+  brainAliases?: Record<string, string>;
   /** Special (non-roster) executor agents: orchestrator (router/decomposer),
    *  video (LTX pipeline), generalist (fallback). Each has its own brain chain. */
   agents: Record<string, AgentConfig>;

@@ -77,7 +77,7 @@ const defaultConfig: Config = {
     classifier: {
       enabled: false,
       exec: 'hermes',
-      model: 'nvidia/Qwen3.6-35B-A3B-NVFP4',
+      model: 'qwen3.8-27b',
       fallbackRole: 'generalist',
       timeoutMs: 300000
     },
@@ -156,6 +156,11 @@ export function loadConfig(): Config {
   // time guarantees a retired brain can never come back across a restart, not
   // just be blocked from new registration.
   scrubDenylistedBrains(config);
+
+  // Rename brains that still carry a retired id (BRAIN_ID_ALIASES) — registry
+  // keys and every chain — and write the result back once so the on-disk config
+  // converges on the canonical ids. Idempotent: a clean config changes nothing.
+  if (migrateBrainAliases(config).length) persistRegistries(config);
 
   // COWORK_API_KEY env var overrides config (keeps the secret out of git)
   if (process.env.COWORK_API_KEY) {
@@ -278,6 +283,89 @@ export function scrubDenylistedBrains(config: Config): string[] {
 }
 
 /**
+ * Retired brain id → canonical brain id. A renamed brain keeps resolving under
+ * its old id everywhere an id enters the server: task pins (context.brain),
+ * client registration, restored client capabilities, and chains in an older
+ * on-disk config. Extend per server via orchestration.brainAliases.
+ * Never alias to an id containing "deepseek" — DENYLISTED_BRAIN_RE drops it.
+ */
+export const BRAIN_ID_ALIASES: Readonly<Record<string, string>> = {
+  // codex brains are claimed by a client (location "remote"), so the id says remote.
+  'local-codex-default': 'remote-codex-default',
+  'local-codex-gpt-5-6-terra': 'remote-codex-gpt-5-6-terra',
+  'local-codex-gpt-5-6-luna': 'remote-codex-gpt-5-6-luna',
+  // ids carry the model version.
+  'remote-ai-code-gen-cc-opus': 'remote-ai-code-gen-cc-opus-4-8',
+  'remote-ai-code-gen-cc-sonnet': 'remote-ai-code-gen-cc-sonnet-5',
+  'remote-ai-code-gen-cc-fable': 'remote-ai-code-gen-cc-fable-5',
+  // one canonical id for the Hermes qwen3.8 brain ("ha" read as Home Assistant).
+  'local-ha-qwen3-8-27b': 'local-hermes-qwen3.8-27b',
+  'local-ha-qwen38-27b': 'local-hermes-qwen3.8-27b',
+  'local-ha-qwen3.8-27b': 'local-hermes-qwen3.8-27b'
+};
+
+/** Resolve a (possibly retired) brain id to its canonical id. Follows chained
+ *  aliases with a hop limit so a misconfigured cycle cannot hang. */
+export function canonicalBrainId(config: Config | undefined, id: string): string {
+  const aliases = { ...BRAIN_ID_ALIASES, ...(config?.orchestration?.brainAliases || {}) };
+  let cur = id;
+  for (let hop = 0; hop < 8 && aliases[cur] && aliases[cur] !== cur; hop++) cur = aliases[cur];
+  return cur;
+}
+
+/**
+ * The task as a brain CLIENT should see it: when the pinned brain is held under
+ * a canonical id but its owning client still declared a retired one
+ * (`clientId`), report context.brain as that declared id — a client only claims
+ * tasks whose context.brain is one of its own ids. Returns a shallow copy and
+ * never touches the stored task; unaffected tasks are returned as-is.
+ */
+export function clientTaskView<T extends { context?: Record<string, any> }>(config: Config, task: T): T {
+  const id = task?.context?.brain;
+  const clientId = typeof id === 'string' ? config.orchestration.brains?.[id]?.clientId : undefined;
+  if (!clientId || clientId === id) return task;
+  return { ...task, context: { ...task.context, brain: clientId } };
+}
+
+/**
+ * Rename every retired brain id in an in-memory config to its canonical id: the
+ * registry keys and every chain (defaultChain, division/agent chains, each
+ * special agent's brains), de-duplicating chains where old and new both appear.
+ * A dynamic brain moved this way remembers the id its client declared
+ * (`clientId`) until that client re-registers. Mutates in place; returns the
+ * retired ids that were rewritten.
+ */
+export function migrateBrainAliases(config: Config): string[] {
+  const orch = config.orchestration;
+  const brains = orch.brains || {};
+  const renamed = new Set<string>();
+  for (const id of Object.keys(brains)) {
+    const canon = canonicalBrainId(config, id);
+    if (canon === id) continue;
+    if (!brains[canon]) {
+      brains[canon] = { ...brains[id], ...(brains[id].dynamic ? { clientId: brains[id].clientId || id } : {}) };
+    }
+    delete brains[id];
+    renamed.add(id);
+  }
+  const fix = (arr: string[] | undefined): string[] | undefined => {
+    if (!Array.isArray(arr)) return arr;
+    const out: string[] = [];
+    for (const id of arr) {
+      const canon = canonicalBrainId(config, id);
+      if (canon !== id) renamed.add(id);
+      if (!out.includes(canon)) out.push(canon);
+    }
+    return out;
+  };
+  if (Array.isArray(orch.defaultChain)) orch.defaultChain = fix(orch.defaultChain);
+  for (const div of Object.keys(orch.divisionChains || {})) orch.divisionChains![div] = fix(orch.divisionChains![div])!;
+  for (const agent of Object.keys(orch.agentChains || {})) orch.agentChains![agent] = fix(orch.agentChains![agent])!;
+  for (const a of Object.values(orch.agents || {})) a.brains = fix(a.brains) || [];
+  return [...renamed];
+}
+
+/**
  * Merge a client-declared brain into the registry (auto-registration).
  *
  * Two invariants are enforced here because this is the single choke point every
@@ -290,15 +378,21 @@ export function scrubDenylistedBrains(config: Config): string[] {
  *     brain would start taking tasks again ("disabled brains re-enable
  *     themselves"). Disabling is a server-side decision and outlives the client.
  */
-export function registerBrain(config: Config, id: string, brain: import('./types.js').BrainConfig): void {
-  if (isDenylistedBrain(id)) return;
+export function registerBrain(config: Config, id: string, brain: import('./types.js').BrainConfig): string {
+  const canon = canonicalBrainId(config, id);
+  if (isDenylistedBrain(id) || isDenylistedBrain(canon)) return canon;
   config.orchestration.brains = config.orchestration.brains || {};
-  const prev = config.orchestration.brains[id];
-  config.orchestration.brains[id] = {
-    ...brain,
-    ...(prev?.disabled ? { disabled: true } : {})
+  const prev = config.orchestration.brains[canon];
+  const { clientId: _stale, ...rest } = brain;
+  config.orchestration.brains[canon] = {
+    ...rest,
+    ...(prev?.disabled ? { disabled: true } : {}),
+    // A client still declaring a retired id is registered under the canonical
+    // id; remember what it calls the brain so its task views can be translated.
+    ...(canon !== id ? { clientId: id } : {})
   };
   persistRegistries(config);
+  return canon;
 }
 
 /** Client platforms whose capabilities are brain ids, and the exec each implies. */
@@ -338,16 +432,18 @@ export function restoreClientBrains(
     if (!exec) continue;
     for (const cap of a.capabilities || []) {
       if (!BRAIN_ID_RE.test(cap)) continue;
-      if (isDenylistedBrain(cap)) continue;   // retired brain — never restore
-      if (config.orchestration.brains[cap]) continue;
-      config.orchestration.brains[cap] = {
-        description: `${cap} (declared by client ${a.id.slice(0, 8)}; restored from persisted registration)`,
-        location: cap.startsWith('local-') ? 'local' : 'remote',
+      const id = canonicalBrainId(config, cap);
+      if (isDenylistedBrain(cap) || isDenylistedBrain(id)) continue;   // retired brain — never restore
+      if (config.orchestration.brains[id]) continue;
+      config.orchestration.brains[id] = {
+        description: `${id} (declared by client ${a.id.slice(0, 8)}; restored from persisted registration)`,
+        location: id.startsWith('local-') ? 'local' : 'remote',
         exec,
         dynamic: true,
-        registeredBy: a.id
+        registeredBy: a.id,
+        ...(id !== cap ? { clientId: cap } : {})
       };
-      restored.push(cap);
+      restored.push(id);
     }
   }
   if (restored.length) persistRegistries(config);

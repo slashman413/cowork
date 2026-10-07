@@ -79,7 +79,7 @@ function resetsInHM(iso) {
 // "remote-ai-code-gen-cc-fable" → "cc-fable"; "local-cc-opus-5-5" → "cc-opus".
 // Falls back to the raw id when no exec marker is present.
 function shortBrain(id) {
-  const m = String(id).match(/(cc|agy|codex|ollama|ha)-[^]*$/);
+  const m = String(id).match(/(cc|agy|codex|ollama|hermes|dsh|ha)-[^]*$/);
   return m ? m[0] : String(id);
 }
 
@@ -1358,8 +1358,8 @@ class App {
       item.classList.toggle('active', item.dataset.view === this.currentView);
     });
     const titles = {
-      dashboard: 'Dashboard', chat: 'Chat', portal: 'Portal', connections: 'Connections', inbox: 'Task Inbox',
-      workflows: 'Workflows', team: 'Agents', brains: 'Brains', roster: 'Agencies', config: 'Configuration'
+      dashboard: 'Dashboard', chat: 'Chat', portal: 'Portal', connections: 'Workers', inbox: 'Tasks',
+      workflows: 'Workflows', team: 'Routing', brains: 'Brains', roster: 'Personas', config: 'Configuration'
     };
     this.viewTitleEl.textContent = titles[this.currentView] || 'Dashboard';
     this.renderCurrentView();
@@ -1448,10 +1448,10 @@ class App {
     this.contentEl.innerHTML = `
       ${this.renderSysbar()}
       <div class="grid-4" style="margin-bottom: var(--space-xl)">
-        ${stat('bot', status.activeAgents, 'Active Agents')}
+        ${stat('bot', status.activeAgents, 'Active Workers')}
         ${stat('inbox', status.inboxSummary.pending + status.inboxSummary.inProgress,
                `Open Tasks (${status.inboxSummary.completed - (status.inboxSummary.failed || 0)} done${status.inboxSummary.failed ? `, ${status.inboxSummary.failed} failed` : ''}${status.inboxSummary.scheduled ? `, ${status.inboxSummary.scheduled} scheduled` : ''}${status.inboxSummary.waitingInput ? `, ${status.inboxSummary.waitingInput} wait input` : ''})`)}
-        ${stat('users', status.rosterCount, 'Agencies')}
+        ${stat('users', status.rosterCount, 'Personas')}
       </div>
       <div class="grid-2" style="margin-bottom: var(--space-xl)">
         <div class="card">
@@ -1924,7 +1924,7 @@ class App {
     // task, expanded). Shown while running too — the id is stamped at dispatch.
     const taskLink = (!user && m.taskId)
       ? `<div style="margin-top:6px;font-size:0.72rem;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-          <a href="#inbox/${encodeURIComponent(m.taskId)}" target="_blank" rel="noopener" title="Open this task in the Task Inbox — status, full result, inputs and downloadable artifacts" style="display:inline-flex;align-items:center;gap:4px;color:#0EA5E9;text-decoration:none"><i data-lucide="external-link" style="width:12px;height:12px"></i>Related task ↗</a>
+          <a href="#inbox/${encodeURIComponent(m.taskId)}" target="_blank" rel="noopener" title="Open this task in Tasks — status, full result, inputs and downloadable artifacts" style="display:inline-flex;align-items:center;gap:4px;color:#0EA5E9;text-decoration:none"><i data-lucide="external-link" style="width:12px;height:12px"></i>Related task ↗</a>
           <span class="copyable" data-copy="${esc(m.taskId)}" title="Task ID — click to copy" style="cursor:pointer;opacity:.65;font-family:ui-monospace,SFMono-Regular,Menlo,monospace">#${esc(m.taskId.slice(0, 8))}</span>
         </div>`
       : '';
@@ -3221,7 +3221,7 @@ class App {
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
             ${badge(t.status, STATUS_COLORS[t.status] || '#94A3B8')}
             <strong style="font-size:0.86rem">${esc(t.title)}</strong>
-            <a href="${taskUrl}" target="_blank" rel="noopener" class="btn" title="Open this task in the Task Inbox in a new tab — full result, inputs and downloadable artifacts"
+            <a href="${taskUrl}" target="_blank" rel="noopener" class="btn" title="Open this task in Tasks in a new tab — full result, inputs and downloadable artifacts"
                style="margin-left:auto;font-size:0.74rem;display:inline-flex;align-items:center;gap:4px;color:#0EA5E9;border-color:#0EA5E966"><i data-lucide="external-link" style="width:12px;height:12px"></i>Open task ↗</a>
           </div>
           <div style="display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:0 0 2px;font-size:0.72rem;color:var(--text-muted)">

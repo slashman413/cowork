@@ -8,6 +8,7 @@ import type { EventBus } from './events.js';
 import { Roster } from './roster.js';
 import { normalizeRecurrence, recurrenceFromLegacyHours, nextRunAt, type TaskRecurrence } from './recurrence.js';
 import { isRateLimitFailure } from './result-verifier.js';
+import { canonicalBrainId } from '../config.js';
 
 /**
  * A veto the Dispatcher registers on the store so EXTERNAL task completions
@@ -536,6 +537,11 @@ export class Store {
       status: 'pending',
       createdAt: new Date().toISOString()
     };
+    // A pin to a retired brain id (BRAIN_ID_ALIASES) is stored as the canonical id.
+    if (typeof task.context?.brain === 'string') {
+      const canon = canonicalBrainId(this.config, task.context.brain);
+      if (canon !== task.context.brain) task.context = { ...task.context, brain: canon };
+    }
     // Materialize any staged input uploads into inputs/<id>/ and record the stored
     // filenames on context.inputFiles BEFORE the task is written/emitted, so it is
     // never visible as `pending` (claimable) without its inputs already present.
@@ -712,7 +718,7 @@ export class Store {
     // WITHOUT the persona/ran-labels. Only internal (dispatcher) claims are allowed.
     if (!params.internal) {
       const brainId = task.context?.brain;
-      const brain = brainId ? this.config.orchestration.brains?.[brainId] : undefined;
+      const brain = brainId ? this.config.orchestration.brains?.[canonicalBrainId(this.config, brainId)] : undefined;
       if (brain && brain.location === 'local') return null;
     }
     // Atomic compare-and-set: only a pending task can be claimed. The server is
@@ -942,8 +948,9 @@ export class Store {
       // else the task would target a brain that can never claim it.
       if (patch.brain && patch.brain.trim()) {
         const brains = this.config.orchestration?.brains || {};
-        if (!brains[patch.brain]) throw new Error(`Unknown brain "${patch.brain}" — not in the registry`);
-        ctx.brain = patch.brain;
+        const brain = canonicalBrainId(this.config, patch.brain);
+        if (!brains[brain]) throw new Error(`Unknown brain "${patch.brain}" — not in the registry`);
+        ctx.brain = brain;
         delete ctx.brainAuto;   // an explicit edit is a USER pin, not a dispatcher-published one
       } else {
         delete ctx.brain;
@@ -1193,7 +1200,7 @@ export class Store {
    */
   private resolveBrainOverride(override: string | undefined, fallback: string | undefined): string | undefined {
     if (override === undefined) return fallback;
-    const v = override.trim();
+    const v = canonicalBrainId(this.config, override.trim());
     if (!v) return undefined;
     const brains = this.config.orchestration?.brains || {};
     if (!brains[v]) throw new Error(`Unknown brain "${v}" — not in the registry`);
