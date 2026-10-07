@@ -2241,8 +2241,9 @@ class App {
         <div style="display:flex; align-items:center; gap:7px; padding:6px 10px; font-size:0.74rem; text-transform:uppercase; letter-spacing:.03em; color:#0EA5E9; border-bottom:1px solid var(--border-hover)">
           <span class="progress-pulse" style="width:8px;height:8px;border-radius:50%;background:#0EA5E9;display:inline-block;animation:progressPulse 1.4s ease-in-out infinite"></span>
           Live progress — what it's doing right now
+          <span data-progress-age="${esc(t.id)}" style="margin-left:auto; text-transform:none; letter-spacing:0; color:var(--text-muted)"></span>
         </div>
-        <pre data-progress="${esc(t.id)}" style="margin:0; padding:9px 11px; max-height:220px; overflow:auto; white-space:pre-wrap; word-break:break-word; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:0.74rem; line-height:1.45; color:var(--text-secondary)">Loading live output…</pre>
+        <pre data-progress="${esc(t.id)}" style="margin:0; padding:9px 11px; max-height:320px; overflow:auto; white-space:pre-wrap; word-break:break-word; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:0.74rem; line-height:1.45; color:var(--text-secondary)">Loading live output…</pre>
       </div>` : '';
 
       // (3) FAILED on a RATE LIMIT — a toggle to auto re-run once the window resets.
@@ -2609,6 +2610,12 @@ class App {
         const txt = (p.log || '').replace(/\s+$/, '');
         el.textContent = txt || (p.running ? 'Running — no output captured yet…' : 'No live output captured for this run.');
         if (atBottom) el.scrollTop = el.scrollHeight;
+        // "last activity Ns ago" — makes a stalled run (no new output) obvious.
+        const age = this.contentEl.querySelector(`[data-progress-age="${(window.CSS && CSS.escape) ? CSS.escape(id) : id}"]`);
+        if (age && p.updatedAt) {
+          const secs = Math.max(0, Math.round((Date.now() - Date.parse(p.updatedAt)) / 1000));
+          age.textContent = `last activity ${secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}m ${secs % 60}s`} ago`;
+        }
       } catch { /* transient fetch error — keep the last text, retry next tick */ }
     }));
   }

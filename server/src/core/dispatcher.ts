@@ -8,6 +8,7 @@ import type { Workflows } from './workflows.js';
 import type { Goals } from './goals.js';
 import { verifyOutput, buildVerifierPrompt, parseLlmVerdict, detectInputRequest, detectBackgroundWait, type VerifyVerdict, type InputOptions, type InputRequest, type BackgroundOptions, type BackgroundWait } from './result-verifier.js';
 import { buildLesson, appendLesson } from './lessons.js';
+import { STREAMING_EXECS, streamArgs, createStreamRenderer } from './progress-stream.js';
 
 /** Remove ANSI CSI/OSC escape sequences and lone carriage returns. */
 // eslint-disable-next-line no-control-regex
@@ -1750,7 +1751,12 @@ export class Dispatcher {
     try { mkdirSync(artDir, { recursive: true }); } catch { /* ignore */ }
 
     const prompt = this.buildPrompt(task, plan);
-    const argv = this.buildArgv({ exec: plan.exec, model: plan.model, command: plan.command }, prompt);
+    // claude/agy run in stream-json mode here (and only here — probes and the
+    // verifier keep plain text) so progress.log shows each tool call and message
+    // as it happens instead of nothing until the final answer.
+    const streaming = STREAMING_EXECS.has(plan.exec);
+    const argv = [...this.buildArgv({ exec: plan.exec, model: plan.model, command: plan.command }, prompt), ...streamArgs(plan.exec)];
+    const renderer = streaming ? createStreamRenderer(plan.exec) : null;
 
     // Live PROGRESS LOG: stream the brain's stdout/stderr to artifacts/<id>/progress.log
     // as it runs, so the dashboard can show a "what is it doing right now" window on
@@ -1790,11 +1796,19 @@ export class Dispatcher {
       });
       let out = '';
       let err = '';
+      // Streaming execs: `out` is the answer recovered from the JSON events (the
+      // `result` event, else the assistant text so far) — the same text plain `-p`
+      // would have printed — so verification below is unchanged.
+      const answer = () => (renderer ? renderer.finalText() : out);
       const timer = setTimeout(() => {
         child.kill('SIGTERM');
-        resolve({ ok: false, text: `TIMEOUT after ${orch.taskTimeoutMs}ms\n${out}\n${err}` });
+        resolve({ ok: false, text: `TIMEOUT after ${orch.taskTimeoutMs}ms\n${answer()}\n${err}` });
       }, orch.taskTimeoutMs);
-      child.stdout.on('data', (d) => { const s = d.toString(); out += s; logProgress(stripAnsi(s)); });
+      child.stdout.on('data', (d) => {
+        const s = d.toString();
+        if (renderer) logProgress(stripAnsi(renderer.feed(s)));
+        else { out += s; logProgress(stripAnsi(s)); }
+      });
       child.stderr.on('data', (d) => { const s = d.toString(); err += s; logProgress(stripAnsi(s)); });
       child.on('error', (e) => {
         clearTimeout(timer);
@@ -1802,6 +1816,7 @@ export class Dispatcher {
       });
       child.on('close', (code) => {
         clearTimeout(timer);
+        if (renderer) { logProgress(stripAnsi(renderer.flush())); out = renderer.finalText(); }
         // Strip ANSI/terminal control sequences some CLIs emit even to a pipe
         // (e.g. Ollama's streaming cursor redraws) so results are clean text.
         const clean = stripAnsi(out).trim();
