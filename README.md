@@ -892,18 +892,15 @@ curl -X POST http://localhost:6868/mcp \
       "color": "#0EA5E9"
     }
   },
-  "services": {
-    "forgejo": { "url": "http://localhost:3001", "enabled": true },
-    "vllm35b": { "url": "http://localhost:8000/v1", "enabled": false },
-    "vllm27b": { "url": "http://localhost:8001/v1", "enabled": false },
-    "firecrawl": { "url": "http://localhost:3002", "enabled": false }
-  },
   "inbox": {
     "autoArchiveDays": 30,
     "maxRetries": 3
   }
 }
 ```
+
+Portal launcher cards live in their own file, `portal.json` (live copy
+`~/.cowork/portal.json`, hot-reloaded) — see [docs/dashboard.md#portal](docs/dashboard.md#portal).
 
 ### Environment-Specific Overrides
 

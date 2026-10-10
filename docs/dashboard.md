@@ -9,8 +9,8 @@ Nav order and labels (from `server/public/index.html`):
 
 | Page | Label | Backing endpoints (main) |
 |------|-------|--------------------------|
-| [Dashboard](#dashboard) | Dashboard | `GET /api/status` |
-| [Portal](#portal) | Portal | client-side catalog + `GET /api/services` |
+| [Overview](#overview) | Overview | `GET /api/status`, `GET /api/system`, `GET /api/system/details/:kind` |
+| [Portal](#portal) | Portal | `GET /api/portal` (portal.json) + `GET /api/services` |
 | [Chat](#chat) | Chat | `POST /api/inbox`, `GET /api/inbox/:id` |
 | [Inbox](#inbox) | Task Inbox | `GET/POST /api/inbox`, `PATCH /api/inbox/:id` |
 | [Workflows](#workflows) | Workflows | `GET /api/workflows*`, `POST /api/workflows/:id/run`, `GET /api/workflow-runs*` |
@@ -25,9 +25,23 @@ place as tasks are created, claimed, and completed.
 
 ---
 
-## Dashboard
+## Overview
+
+(Formerly "Dashboard"; old `#dashboard` links still land here.)
 
 The at-a-glance overview (`GET /api/status` → `DashboardData`):
+
+- **Host metrics bar** — CPU / GPU / Memory / Core Temp tiles from `GET /api/system`,
+  refreshed every 3s. **Click a tile** for a live detail dialog
+  (`GET /api/system/details/cpu|gpu|memory|thermal`, refreshed every 2.5s while open):
+  - **CPU** — model mix, load averages, task counts, uptime, per-core usage + clock,
+    and the top processes by *current* CPU (with their docker container).
+  - **GPU** — per-GPU utilisation, memory (or "unified" on GB10), temperature,
+    power, clocks, P-state, driver, UUID, and the processes holding GPU memory.
+  - **Memory** — used / cache / free breakdown, the full meminfo summary, swap,
+    GPU allocations (on unified memory these are *not* in any process's RSS), and
+    the top processes by resident memory.
+  - **Temp** — every thermal zone plus GPU temperature.
 
 - **Active agents** — how many MCP clients are currently registered.
 - **Inbox summary** — counts for `pending`, `scheduled`, `waitingInput`,
@@ -43,18 +57,45 @@ diving into the Inbox.
 
 ## Portal
 
-A **launcher** for the local self-hosted web services this host runs. It merges:
+A **launcher** for the self-hosted web services this host runs. Nothing is
+hard-coded in the UI — the whole catalog comes from **`portal.json`**:
 
-1. `PORTAL_DEFAULTS` — always-present launcher tiles so the Portal is useful
-   before any service is configured.
-2. `PORTAL_CATALOG` — a curated catalog, grouped by category (Marketing, Files,
-   Dev, Automation, Ops, APIs & MCP, Other).
-3. Live service health from the server's monitored `services` list.
+- Repo `portal.json` = the default catalog (this DGX Spark's services). The live
+  copy is **`~/.cowork/portal.json`** (override with `COWORK_PORTAL`), seeded from
+  the repo file on first start. An install that still had a `services` block in
+  `config.json` gets those entries merged into the seeded file once; after that
+  `config.services` is ignored.
+- The file is **hot-reloaded** — save it and refresh the Portal, no restart.
+  Invalid entries are listed in a warning box above the cards; a file that fails
+  to parse keeps serving the last good catalog.
 
-The Portal reads the **live** config, not the repo template — see the memory note
-that editing `config.json` + rebuild does nothing until the live
-`~/.cowork/config.json` is updated. It's a convenience dashboard for humans, not
-part of the task pipeline.
+```jsonc
+{
+  "accent": "#2563EB",                       // default card colour
+  "categories": ["Knowledge", "Dev", "Ops"], // section order; unlisted ones sort after A→Z
+  "services": {
+    "forgejo": {
+      "url": "http://localhost:3001",        // required: http(s)://… or a /path on the dashboard
+      "label": "Forgejo",
+      "description": "Self-hosted Git server.",
+      "icon": "git-fork",                    // any lucide icon name
+      "category": "Dev",
+      "enabled": true,                       // false = listed, never probed
+      "order": 1,                            // position inside its category
+      "accent": "#F97316",                   // per-card colour
+      "probe": "http://localhost:3001/api/healthz", // health-check URL, or false
+      "unit": "forgejo.service",             // systemd --user unit → Start/Stop/Restart
+      "controllable": true                   // also expose Autostart toggle
+    }
+  }
+}
+```
+
+`localhost` URLs are rewritten to the dashboard's own host so links work from
+other machines. Status dots come from `GET /api/services`, probed server-side every
+3s. Lifecycle buttons additionally need `serviceControl.enabled` and
+`server.apiKey` in `config.json` (that security switch stays there on purpose).
+The `obsidian` key is special: its status is "vault exists on disk", not an HTTP probe.
 
 ---
 

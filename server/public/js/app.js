@@ -524,39 +524,15 @@ function chainChip(brain, i, total, known) {
 }
 
 /**
- * Portal — a launcher for the local self-hosted web services this host runs
- * (Mautic, Filebrowser, …). Cards are built by merging two sources:
- *   1. PORTAL_DEFAULTS — a curated catalog shown out of the box.
- *   2. config.services from /api/config — the operator's own list; entries are
- *      matched to the catalog by key so a bare { url, enabled } gets a nice
- *      label/icon/description for free, and unknown keys still render sensibly.
+ * Portal — a launcher for the local self-hosted web services this host runs.
+ * Nothing here is hard-coded: the whole catalog (cards, labels, icons,
+ * categories + their order, accent colour, systemd units) comes from
+ * portal.json via GET /api/portal — see server/src/core/portal-config.ts.
  * Each card is a plain link that opens the service in a new tab. Status dots are
  * probed server-side (GET /api/services) rather than from the browser, since a
  * cross-origin fetch to a service's localhost URL just trips CORS; the server
  * runs on the host, so it can reach the real loopback ports. See service-probe.ts.
  */
-const PORTAL_CATALOG = {
-  mautic:      { label: 'Mautic',      icon: 'megaphone',   category: 'Marketing', description: 'Open-source marketing automation — campaigns, email, contacts.' },
-  filebrowser: { label: 'Filebrowser', icon: 'folder',      category: 'Files',     description: 'Web file manager — browse, upload and share host files.' },
-  forgejo:     { label: 'Forgejo',     icon: 'git-fork',    category: 'Dev',       description: 'Self-hosted Git server — repos, issues and pull requests.' },
-  firecrawl:   { label: 'Firecrawl',   icon: 'flame',       category: 'APIs & MCP', description: 'Web scraping / crawling API for LLM pipelines.' },
-  vllm35b:     { label: 'vLLM 35B',    icon: 'cpu',         category: 'APIs & MCP', description: 'Local vLLM OpenAI-compatible inference server (35B).' },
-  comfyui:     { label: 'ComfyUI',     icon: 'image',       category: 'APIs & MCP', description: 'Local ComfyUI node-based image-generation server.' },
-  grafana:     { label: 'Grafana',     icon: 'gauge',       category: 'Ops',       description: 'Metrics dashboards and observability.' },
-  portainer:   { label: 'Portainer',   icon: 'container',   category: 'Ops',       description: 'Docker / container management UI.' },
-  n8n:         { label: 'n8n',         icon: 'workflow',    category: 'Automation', description: 'Workflow automation and integrations.' },
-  obsidian:    { label: 'Obsidian Vault', icon: 'book-open', category: 'Knowledge', description: 'Shared knowledge base — search and read the team vault in a web viewer.' },
-};
-
-// Always-present launcher tiles so the Portal is useful before any service is
-// configured. Operator config.services entries override these by key.
-const PORTAL_DEFAULTS = {
-  mautic:      { url: 'http://localhost:8081' },
-  filebrowser: { url: 'http://localhost:8082' },
-};
-
-const PORTAL_CATEGORY_ORDER = ['Knowledge', 'Marketing', 'Files', 'Dev', 'Automation', 'Ops', 'APIs & MCP', 'Other'];
-const PORTAL_ACCENT = '#2563EB';
 
 // Turn a service key like "vllm35b" into a readable "Vllm35b" fallback label.
 function humanizeKey(key) {
@@ -1346,11 +1322,12 @@ class App {
   }
 
   navigate() {
-    const raw = window.location.hash.replace('#', '') || 'dashboard';
+    const raw = window.location.hash.replace('#', '') || 'overview';
     // A hash may carry a sub-path: `#inbox/<taskId>` deep-links to one task so a
     // workflow run's OUTPUT panel can open the exact task in a new tab.
     const [view, ...rest] = raw.split('/');
-    this.currentView = view || 'dashboard';
+    // "#dashboard" was the Overview's old name — keep old bookmarks working.
+    this.currentView = (view === 'dashboard' ? 'overview' : view) || 'overview';
     this.pendingTask = (this.currentView === 'inbox' && rest.length)
       ? decodeURIComponent(rest.join('/')) : null;
     if (this.pendingTask) this._focusRetried = false;
@@ -1358,10 +1335,10 @@ class App {
       item.classList.toggle('active', item.dataset.view === this.currentView);
     });
     const titles = {
-      dashboard: 'Dashboard', chat: 'Chat', portal: 'Portal', connections: 'Workers', inbox: 'Tasks',
+      overview: 'Overview', chat: 'Chat', portal: 'Portal', connections: 'Workers', inbox: 'Tasks',
       workflows: 'Workflows', team: 'Routing', brains: 'Brains', roster: 'Personas', config: 'Configuration'
     };
-    this.viewTitleEl.textContent = titles[this.currentView] || 'Dashboard';
+    this.viewTitleEl.textContent = titles[this.currentView] || 'Overview';
     this.renderCurrentView();
   }
 
@@ -1397,7 +1374,7 @@ class App {
         case 'brains': await this.renderBrains(); break;
         case 'roster': await this.renderRoster(); break;
         case 'config': await this.renderConfig(); break;
-        default: await this.renderDashboard(); break;
+        default: await this.renderOverview(); break;
       }
       // A successful data fetch proves the server is reachable — mark the badge
       // Live even if the SSE stream is slow/blocked for any reason.
@@ -1410,9 +1387,9 @@ class App {
     createIcons();
   }
 
-  // ── Dashboard ──────────────────────────────────────────────────────────
+  // ── Overview ───────────────────────────────────────────────────────────
 
-  async renderDashboard() {
+  async renderOverview() {
     const [status, dispatcher] = await Promise.all([
       this.api.get('/status'),
       this.api.get('/dispatcher').catch(() => null),
@@ -1482,8 +1459,12 @@ class App {
         <div>${platforms}</div>
       </div>`;
 
+    this.contentEl.querySelectorAll('[data-sys-detail]').forEach((el) => {
+      el.addEventListener('click', () => this.openSysDetail(el.dataset.sysDetail, el));
+    });
+
     // Kick off (and keep) the 3s system-load polling for as long as we're on
-    // the dashboard. clearViewTimers() (in renderCurrentView) stops it on nav.
+    // the Overview. clearViewTimers() (in renderCurrentView) stops it on nav.
     this.startSystemPolling();
   }
 
@@ -1502,21 +1483,24 @@ class App {
   // place via applySysbar(). Only numbers + an escaped GPU name reach the DOM.
   renderSysbar() {
     const s = this.sysMetrics || null;
-    const tile = (id, icon, label) => `
-      <div class="sysbar-tile">
+    // Each tile is a button that opens its drill-down dialog (openSysDetail).
+    const tile = (id, icon, label, detail) => `
+      <button type="button" class="sysbar-tile" data-sys-detail="${detail}" aria-haspopup="dialog"
+              title="Show ${label} details">
         <div class="sysbar-head">
           <i data-lucide="${icon}"></i><span class="sysbar-label">${label}</span>
           <span class="sysbar-val" id="sys-${id}-val">—</span>
         </div>
         <div class="meter"><div class="meter-fill" id="sys-${id}-bar" style="width:0%"></div></div>
         <div class="sysbar-sub" id="sys-${id}-sub">—</div>
-      </div>`;
+        <i data-lucide="chevron-right" class="sysbar-more" aria-hidden="true"></i>
+      </button>`;
     const html = `
       <div class="sysbar" id="sysbar">
-        ${tile('cpu', 'cpu', 'CPU')}
-        ${tile('gpu', 'gpu', 'GPU')}
-        ${tile('mem', 'memory-stick', 'Memory')}
-        ${tile('temp', 'thermometer', 'Core Temp')}
+        ${tile('cpu', 'cpu', 'CPU', 'cpu')}
+        ${tile('gpu', 'gpu', 'GPU', 'gpu')}
+        ${tile('mem', 'memory-stick', 'Memory', 'memory')}
+        ${tile('temp', 'thermometer', 'Core Temp', 'thermal')}
       </div>`;
     // If we already have a snapshot, apply it after this HTML lands in the DOM.
     if (s) queueMicrotask(() => this.applySysbar(s));
@@ -1550,8 +1534,10 @@ class App {
     if (g) {
       const memPct = (g.memoryUsedMb != null && g.memoryTotalMb) ? Math.round((g.memoryUsedMb / g.memoryTotalMb) * 100) : null;
       const name = (s.gpus && s.gpus.length === 1) ? s.gpus[0].name : (s.gpus && s.gpus.length > 1 ? `${s.gpus.length}× GPU` : '');
+      // Unified-memory GPUs (GB10) report no memory total of their own.
+      const gmem = g.memoryTotalMb == null ? 'unified mem' : `${mb(g.memoryUsedMb)}/${mb(g.memoryTotalMb)}`;
       set('gpu', pct(g.usage), g.usage,
-        `${mb(g.memoryUsedMb)}/${mb(g.memoryTotalMb)}${g.temperature != null ? ` · ${g.temperature}°C` : ''}${name ? ` · ${name.slice(0, 22)}` : ''}`);
+        `${gmem}${g.temperature != null ? ` · ${g.temperature}°C` : ''}${name ? ` · ${name.slice(0, 22)}` : ''}`);
     } else {
       set('gpu', 'n/a', null, 'no GPU detected');
     }
@@ -1575,6 +1561,194 @@ class App {
     };
     poll();
     this.addViewTimer(poll, 3000);
+  }
+
+  // ── System detail dialogs (Overview tile drill-down) ───────────────────
+
+  /**
+   * Open the CPU / GPU / Memory / Temp drill-down for an Overview tile. Data
+   * comes from GET /api/system/details/:kind (sampled on demand server-side) and
+   * refreshes every 2.5s while the dialog is open; a self-rescheduling timeout
+   * (not setInterval) means a slow sample never stacks requests. Closing — ✕,
+   * backdrop, or Esc — stops the refresh and returns focus to the tile.
+   */
+  openSysDetail(kind, opener) {
+    const container = document.getElementById('modal-container');
+    const content = document.getElementById('modal-content');
+    if (!container || !content) return;
+    const meta = {
+      cpu:     { title: 'CPU',         icon: 'cpu' },
+      gpu:     { title: 'GPU',         icon: 'gpu' },
+      memory:  { title: 'Memory',      icon: 'memory-stick' },
+      thermal: { title: 'Temperature', icon: 'thermometer' },
+    }[kind];
+    if (!meta) return;
+    const barBtn = 'font-size:0.75rem;padding:3px 8px;display:inline-flex;align-items:center;gap:4px';
+    content.classList.add('modal-md');
+    content.setAttribute('role', 'dialog');
+    content.setAttribute('aria-modal', 'true');
+    content.setAttribute('aria-labelledby', 'sysd-title');
+    content.innerHTML = `
+      <div class="sysd-head">
+        <h3 id="sysd-title"><i data-lucide="${meta.icon}"></i> ${meta.title} details</h3>
+        <span class="sysd-live" title="Refreshing every 2.5s"><span class="svc-dot"></span><span class="sysd-at">loading…</span></span>
+        <button class="btn sysd-close" title="Close (Esc)" aria-label="Close" style="${barBtn}"><i data-lucide="x" style="width:14px;height:14px"></i></button>
+      </div>
+      <div class="sysd-body" aria-live="polite"><p class="sysd-muted">Sampling…</p></div>`;
+    container.classList.remove('hidden');
+    createIcons();
+
+    let timer = null, open = true;
+    const close = () => {
+      open = false;
+      clearTimeout(timer);
+      container.classList.add('hidden');
+      content.classList.remove('modal-md');
+      ['role', 'aria-modal', 'aria-labelledby'].forEach(a => content.removeAttribute(a));
+      content.innerHTML = '';
+      document.removeEventListener('keydown', onKey);
+      opener?.focus?.();
+    };
+    const onKey = (ev) => { if (ev.key === 'Escape') close(); };
+    document.addEventListener('keydown', onKey);
+    content.querySelector('.sysd-close').onclick = close;
+    container.querySelector('.modal-backdrop').onclick = close;
+    content.querySelector('.sysd-close').focus();
+
+    const load = async () => {
+      try {
+        const d = await this.api.get(`/system/details/${kind}`);
+        if (!open) return;
+        const body = content.querySelector('.sysd-body');
+        // Keep the scroll position of the body across refreshes.
+        const top = content.scrollTop;
+        body.innerHTML = this.renderSysDetail(kind, d);
+        content.scrollTop = top;
+        const at = content.querySelector('.sysd-at');
+        if (at) at.textContent = `live · ${new Date(d.at).toLocaleTimeString()}`;
+        content.querySelector('.sysd-live')?.classList.remove('stale');
+        createIcons();
+      } catch (e) {
+        if (!open) return;
+        content.querySelector('.sysd-live')?.classList.add('stale');
+        const at = content.querySelector('.sysd-at');
+        if (at) at.textContent = `error: ${e.message || 'request failed'}`;
+      }
+      if (open) timer = setTimeout(load, 2500);
+    };
+    load();
+  }
+
+  // Build a detail dialog body. Every string from the host (process names,
+  // container names, GPU names, zone types) goes through esc().
+  renderSysDetail(kind, d) {
+    const mb = (n) => (n == null ? '—' : n >= 1024 ? `${(n / 1024).toFixed(1)} GB` : `${Math.round(n)} MB`);
+    const pct = (n) => (n == null ? '—' : `${n}%`);
+    const meter = (p, band = this.sysBand(p)) =>
+      `<div class="meter"><div class="meter-fill ${band}" style="width:${p == null ? 0 : Math.max(0, Math.min(100, p))}%"></div></div>`;
+    const kv = (rows) => `<dl class="sysd-kv">${rows.filter(Boolean).map(([k, v]) =>
+      `<div><dt>${esc(k)}</dt><dd>${v}</dd></div>`).join('')}</dl>`;
+    const section = (title, html) => `<h4 class="section-title sysd-sec">${title}</h4>${html}`;
+    const dur = (sec) => {
+      const dd = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60);
+      return dd ? `${dd}d ${h}h ${m}m` : h ? `${h}h ${m}m` : `${m}m`;
+    };
+    const procTable = (rows, cols) => rows?.length ? `
+      <div class="sysd-table-wrap"><table class="sysd-table">
+        <thead><tr><th>PID</th><th>Process</th>${cols.map(c => `<th class="num">${c.h}</th>`).join('')}</tr></thead>
+        <tbody>${rows.map(r => `<tr>
+          <td class="mono">${r.pid}</td>
+          <td><span class="sysd-proc">${esc(r.name)}</span>${r.container ? ` <span class="sysd-ctr" title="docker container">${esc(r.container)}</span>` : ''}</td>
+          ${cols.map(c => `<td class="num mono">${c.f(r)}</td>`).join('')}</tr>`).join('')}</tbody>
+      </table></div>` : '<p class="sysd-muted">No processes to show.</p>';
+
+    if (kind === 'cpu') {
+      const usage = this.sysMetrics?.cpu?.usage;
+      const models = (d.models || []).map(m => `${m.count}× ${esc(m.model)}`).join(' · ') || '—';
+      const cores = (d.cores || []).map(c => `
+        <div class="sysd-core" title="cpu${c.id}: ${pct(c.usage)}${c.mhz ? ` @ ${c.mhz} MHz` : ''}">
+          <div class="sysd-core-head"><span>cpu${c.id}</span><b>${pct(c.usage)}</b></div>
+          ${meter(c.usage)}
+          <div class="sysd-core-sub">${c.mhz ? `${(c.mhz / 1000).toFixed(2)} GHz` : '&nbsp;'}</div>
+        </div>`).join('');
+      return kv([
+        ['Usage', pct(usage)],
+        ['Cores', `${(d.cores || []).length} · ${esc(d.arch || '')}`],
+        ['Model', models],
+        ['Load avg', `${d.load?.m1 ?? '—'} / ${d.load?.m5 ?? '—'} / ${d.load?.m15 ?? '—'} <span class="sysd-muted">(1 / 5 / 15 min)</span>`],
+        ['Tasks', d.tasks?.total != null ? `${d.tasks.running} running / ${d.tasks.total} total` : '—'],
+        ['Uptime', d.uptimeSec != null ? dur(d.uptimeSec) : '—'],
+      ])
+      + section('Per core', `<div class="sysd-cores">${cores}</div>`)
+      + section('Top processes <span class="sysd-muted">by CPU now · 100% = one core</span>',
+          procTable(d.processes, [{ h: 'CPU', f: r => pct(r.cpu) }, { h: 'RSS', f: r => mb(r.rssMb) }]));
+    }
+
+    if (kind === 'memory') {
+      const t = d.totalMb || 0;
+      const used = d.usedMb ?? 0, free = d.freeMb ?? 0;
+      const cache = Math.max(0, t - used - free); // reclaimable: page cache + buffers
+      const seg = (v, cls, label) => t ? `<div class="sysd-seg ${cls}" style="width:${(v / t) * 100}%" title="${label}: ${mb(v)}"></div>` : '';
+      const swapUsed = d.swap?.totalMb != null && d.swap?.freeMb != null ? d.swap.totalMb - d.swap.freeMb : null;
+      return `
+        <div class="sysd-stack">${seg(used, 'used', 'Used')}${seg(cache, 'cache', 'Cache / buffers')}${seg(free, 'free', 'Free')}</div>
+        <div class="sysd-legend"><span><i class="used"></i>Used ${mb(used)}</span><span><i class="cache"></i>Cache ${mb(cache)}</span><span><i class="free"></i>Free ${mb(free)}</span></div>`
+      + kv([
+        ['Total', mb(d.totalMb)],
+        ['Used', `${mb(d.usedMb)} <span class="sysd-muted">(${t ? Math.round((used / t) * 100) : '—'}%)</span>`],
+        ['Available', mb(d.availableMb)],
+        ['Cached', mb(d.cachedMb)],
+        ['Buffers', mb(d.buffersMb)],
+        ['Shared (shmem)', mb(d.shmemMb)],
+        ['Slab reclaimable', mb(d.reclaimableMb)],
+        ['Dirty', mb(d.dirtyMb)],
+        ['Committed', mb(d.committedMb)],
+        ['Swap', d.swap?.totalMb ? `${mb(swapUsed)} / ${mb(d.swap.totalMb)}` : 'none'],
+        d.hugePages?.total ? ['Huge pages', `${d.hugePages.total - d.hugePages.free} / ${d.hugePages.total} used`] : null,
+        d.gpuAllocatedMb != null ? ['GPU allocations', `${mb(d.gpuAllocatedMb)} <span class="sysd-muted">(not in RSS)</span>`] : null,
+      ])
+      + section('Top processes <span class="sysd-muted">by resident memory</span>',
+          procTable(d.processes, [{ h: 'RSS', f: r => mb(r.rssMb) }]));
+    }
+
+    if (kind === 'gpu') {
+      if (!d.gpus?.length) return `<p class="sysd-muted">No GPU detected${d.error ? ` (${esc(d.error)})` : ''}.</p>`;
+      const sysMem = this.sysMetrics?.memory || {};
+      const cards = d.gpus.map(g => {
+        const memPct = g['memory.total'] ? Math.round((g['memory.used'] / g['memory.total']) * 100) : null;
+        const memLine = g['memory.total'] != null
+          ? `${mb(g['memory.used'])} / ${mb(g['memory.total'])} (${memPct}%)`
+          : `Unified — shares system RAM <span class="sysd-muted">(${mb(sysMem.usedMb)} / ${mb(sysMem.totalMb)} in use)</span>`;
+        const w = (v, unit) => (v == null ? '—' : `${v} ${unit}`);
+        return `<div class="sysd-gpu">
+          <div class="sysd-gpu-head"><b>#${g.index} ${esc(g.name || 'GPU')}</b><span>${pct(g['utilization.gpu'])}</span></div>
+          ${meter(g['utilization.gpu'])}
+          ${kv([
+            ['Memory', memLine],
+            ['Mem bandwidth util', pct(g['utilization.memory'])],
+            ['Temperature', w(g['temperature.gpu'], '°C')],
+            ['Power', g['power.draw'] != null ? `${g['power.draw']} W${g['power.limit'] != null ? ` / ${g['power.limit']} W` : ''}` : '—'],
+            ['SM clock', g['clocks.sm'] != null ? `${g['clocks.sm']} MHz${g['clocks.max.sm'] != null ? ` / ${g['clocks.max.sm']} max` : ''}` : '—'],
+            ['Mem clock', w(g['clocks.mem'], 'MHz')],
+            ['Fan', pct(g['fan.speed'])],
+            ['P-state', esc(g.pstate || '—')],
+            ['Driver', esc(g.driver_version || '—')],
+            ['Compute mode', esc(g.compute_mode || '—')],
+            ['UUID', `<span class="mono">${esc(g.uuid || '—')}</span>`],
+          ])}
+        </div>`;
+      }).join('');
+      return cards
+      + section('GPU processes <span class="sysd-muted">by GPU memory</span>',
+          procTable(d.processes, [{ h: 'GPU mem', f: r => mb(r.gpuMemMb) }, { h: 'RSS', f: r => mb(r.rssMb) }]));
+    }
+
+    // thermal — meters scaled against a 100°C ceiling, like the tile.
+    const row = (label, c) => `<div class="sysd-therm"><span>${label}</span>${meter(c)}<b>${c == null ? '—' : `${c}°C`}</b></div>`;
+    return section('Thermal zones', (d.zones || []).length
+        ? d.zones.map(z => row(`${esc(z.zone.replace('thermal_zone', 'zone '))} <span class="sysd-muted">${esc(z.type)}</span>`, z.celsius)).join('')
+        : '<p class="sysd-muted">No thermal zones exposed by this host.</p>')
+      + ((d.gpus || []).length ? section('GPU', d.gpus.map(g => row(`#${g.index} ${esc(g.name)}`, g.celsius)).join('')) : '');
   }
 
   // ── Active Agents ──────────────────────────────────────────────────────
@@ -3477,26 +3651,16 @@ class App {
   // ── Portal (launcher for local self-hosted web services) ────────────────
 
   async renderPortal() {
-    const config = await this.api.get('/config').catch(() => ({}));
-    const configured = (config && config.services) || {};
+    // { path, accent, categories, services, errors, controlEnabled } — the
+    // server has already validated portal.json; errors are surfaced, not fatal.
+    const portal = await this.api.get('/portal');
+    const configured = portal.services || {};
     // Service control is opt-in (serviceControl.enabled). When on, cards backed
     // by a systemd --user unit gain Start/Stop/Restart buttons. Mutations also
     // need server.apiKey — if it's unset the server refuses with an actionable
     // error, which we surface via toast rather than hiding the buttons.
-    const controlEnabled = !!(config && config.serviceControl && config.serviceControl.enabled);
-
-    // Merge curated defaults with the operator's config.services (config wins).
-    const merged = {};
-    for (const [key, v] of Object.entries(PORTAL_DEFAULTS)) merged[key] = { ...v };
-    for (const [key, v] of Object.entries(configured)) merged[key] = { ...(merged[key] || {}), ...v };
-
-    // Obsidian Vault card — the viewer is served by THIS server (public/obsidian.html),
-    // so its URL is the dashboard's own origin, not a separate service port. Shown
-    // whenever the vault is enabled in config; its status dot is driven by the
-    // synthetic 'obsidian' entry in GET /api/services (online = vault dir exists).
-    if (config && config.obsidian && config.obsidian.enabled !== false) {
-      merged.obsidian = { url: `${window.location.origin}/obsidian.html`, enabled: true };
-    }
+    const controlEnabled = !!portal.controlEnabled;
+    const categoryOrder = portal.categories || [];
 
     // Services are configured with loopback URLs (localhost / 127.0.0.1)
     // because they run on this host. But the dashboard is usually opened from
@@ -3515,24 +3679,27 @@ class App {
     };
 
     // Only http(s) URLs are launchable — anything else (javascript:, data:, …)
-    // is dropped so an escaped-but-malicious href can never reach the DOM.
+    // is dropped so an escaped-but-malicious href can never reach the DOM. A
+    // "/path" entry is served by this dashboard, so it resolves against our origin.
     const safeUrl = (u) => {
-      try { const p = new URL(u); return (p.protocol === 'http:' || p.protocol === 'https:') ? u : ''; }
-      catch { return ''; }
+      try {
+        const p = new URL(u, window.location.origin);
+        return (p.protocol === 'http:' || p.protocol === 'https:') ? p.href : '';
+      } catch { return ''; }
     };
 
-    // Normalize each entry into a card model, enriched from the catalog.
-    const services = Object.entries(merged).map(([key, v]) => {
-      const meta = PORTAL_CATALOG[key] || {};
+    // Normalize each entry into a card model; unset presentation fields fall
+    // back to neutral defaults so a bare { "url": … } still renders sensibly.
+    const services = Object.entries(configured).map(([key, v]) => {
       return {
         key,
         url: safeUrl(rehost(v.url || '')),
-        label: v.label || meta.label || humanizeKey(key),
-        description: v.description || meta.description || '',
-        icon: v.icon || meta.icon || 'globe',
-        category: v.category || meta.category || 'Other',
-        // undefined enabled (curated defaults) => treat as available; only an
-        // explicit enabled:false marks a service the operator has turned off.
+        label: v.label || humanizeKey(key),
+        description: v.description || '',
+        icon: v.icon || 'globe',
+        category: v.category || 'Other',
+        accent: v.accent || portal.accent || '#2563EB',
+        order: typeof v.order === 'number' ? v.order : null,
         enabled: v.enabled !== false,
         // systemd --user unit backing this card. Only cards with a configured
         // unit (and control turned on) render lifecycle buttons.
@@ -3541,11 +3708,19 @@ class App {
       };
     }).filter(s => s.url);
 
+    // portal.json problems (bad JSON, invalid url/icon/unit) — shown above the
+    // cards so a typo is visible instead of a card silently vanishing.
+    const errorBox = (portal.errors || []).length ? `
+      <div class="card portal-errors">
+        <strong><i data-lucide="triangle-alert"></i> portal.json has ${portal.errors.length} problem${portal.errors.length > 1 ? 's' : ''}</strong>
+        <ul>${portal.errors.map(e => `<li>${esc(e)}</li>`).join('')}</ul>
+      </div>` : '';
+
     if (!services.length) {
-      this.contentEl.innerHTML = `<div class="empty-state">
+      this.contentEl.innerHTML = `${errorBox}<div class="empty-state">
         <div class="empty-state-icon"><i data-lucide="layout-grid"></i></div>
         <h3>No services yet</h3>
-        <p>Add a <code>services</code> block to your <code>~/.cowork/config.json</code> — each entry
+        <p>Add entries to the <code>services</code> block of <code>${esc(portal.path || 'portal.json')}</code> — each entry
         <code>{ "url": "http://localhost:8081", "label": "Mautic", "icon": "megaphone", "category": "Marketing" }</code>
         shows up here as a launch card.</p>
       </div>`;
@@ -3559,12 +3734,16 @@ class App {
       groups.get(s.category).push(s);
     }
     const orderedCats = [...groups.keys()].sort((a, b) => {
-      const ia = PORTAL_CATEGORY_ORDER.indexOf(a), ib = PORTAL_CATEGORY_ORDER.indexOf(b);
-      return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib) || a.localeCompare(b);
+      const ia = categoryOrder.indexOf(a), ib = categoryOrder.indexOf(b);
+      return (ia === -1 ? 1e9 : ia) - (ib === -1 ? 1e9 : ib) || a.localeCompare(b);
     });
+    // Within a category: explicit `order` first (ascending), then by label.
+    for (const list of groups.values()) {
+      list.sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || a.label.localeCompare(b.label));
+    }
 
     const card = (s) => {
-      const c = PORTAL_ACCENT;
+      const c = s.accent;
       let host = s.url;
       try { host = new URL(s.url).host || s.url; } catch { /* keep raw */ }
       // Lifecycle control row (only when the card names a controllable unit).
@@ -3609,10 +3788,11 @@ class App {
 
     this.contentEl.innerHTML = `
       <p style="color:var(--text-secondary); font-size:0.875rem; margin-bottom:var(--space-lg)">
-        Quick-launch the local web services running on this host. Cards come from your
-        <code>config.json</code> <code>services</code> block, enriched with built-in defaults.
+        Quick-launch the local web services running on this host. Cards come from
+        <code>${esc(portal.path || 'portal.json')}</code> — edit it and refresh, no restart needed.
         Status dots are probed from the server every 3s.
       </p>
+      ${errorBox}
       ${sections}`;
 
     // Wire lifecycle buttons (only present when service control is enabled and a
@@ -3650,10 +3830,11 @@ class App {
     this.startServicePolling();
   }
 
-  // Map a probe result to a UI state: online | offline | disabled | unknown.
+  // Map a probe result to a UI state: online | offline | disabled | unprobed | unknown.
   svcState(st) {
     if (!st) return 'unknown';
     if (!st.enabled || st.reason === 'disabled') return 'disabled';
+    if (st.reason === 'not probed') return 'unprobed';
     return st.online ? 'online' : 'offline';
   }
 
@@ -3664,14 +3845,15 @@ class App {
       const st = map[key];
       const state = this.svcState(st);
       el.className = `svc-status ${state}`;
-      const label = { online: 'online', offline: 'offline', disabled: 'disabled', unknown: 'unknown' }[state];
+      const label = { online: 'online', offline: 'offline', disabled: 'disabled', unprobed: 'link', unknown: 'unknown' }[state];
       const txt = el.querySelector('.svc-text');
       if (txt) txt.textContent = label;
       const tip = {
         online: st ? `Online${st.code ? ` · HTTP ${st.code}` : ''}${st.ms != null ? ` · ${st.ms}ms` : ''}` : 'Online',
         offline: st ? `Offline${st.reason ? ` · ${st.reason}` : ''}` : 'Offline',
         disabled: 'Monitoring disabled in config',
-        unknown: 'Status unknown (not in config.services)',
+        unknown: 'Status unknown (not in portal.json)',
+        unprobed: 'Not health-checked (probe: false)',
       }[state];
       el.setAttribute('title', tip);
     });

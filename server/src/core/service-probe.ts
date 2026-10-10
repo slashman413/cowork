@@ -15,7 +15,8 @@ const pexecFile = promisify(execFile);
  * service counts as online; only a connection error or timeout is offline.
  *
  * Per ServiceConfig semantics, a service with `enabled: false` is listed but
- * never probed — it's reported as disabled rather than offline.
+ * never probed — it's reported as disabled rather than offline. `probe` may
+ * point the check at a different URL, or turn it off (reason "not probed").
  */
 
 export interface ServiceStatus {
@@ -41,25 +42,13 @@ export interface ServiceStatus {
   autostart?: string;
 }
 
-/**
- * Curated launcher tiles the Portal always renders, even before the operator
- * configures any services. This MUST stay in sync with PORTAL_DEFAULTS in
- * public/js/app.js — the UI merges those same keys into its card list, so if we
- * don't probe them here their status dot never leaves "checking".
- */
-const PORTAL_DEFAULT_SERVICES: Record<string, ServiceConfig> = {
-  mautic: { url: 'http://localhost:8081', enabled: true },
-  filebrowser: { url: 'http://localhost:8082', enabled: true },
-};
-
 export async function probeServices(
   services: Record<string, ServiceConfig> | undefined,
   timeoutMs = 2500
 ): Promise<Record<string, ServiceStatus>> {
-  // Merge curated defaults with the operator's config.services (config wins),
-  // mirroring the Portal UI so every rendered card has a matching probe result.
-  const merged: Record<string, ServiceConfig> = { ...PORTAL_DEFAULT_SERVICES, ...(services || {}) };
-  const entries = Object.entries(merged);
+  // services comes from portal.json (core/portal-config.ts) — the same catalog
+  // the Portal renders, so every card has a matching probe result.
+  const entries = Object.entries(services || {});
   const results = await Promise.all(entries.map(([key, svc]) => probeOne(key, svc, timeoutMs)));
   const out: Record<string, ServiceStatus> = {};
   for (const r of results) out[r.key] = r;
@@ -101,9 +90,12 @@ export async function unitState(unit: string): Promise<{ active: string; autosta
 
 async function probeOne(key: string, svc: ServiceConfig, timeoutMs: number): Promise<ServiceStatus> {
   const enabled = svc?.enabled !== false;
-  const url = svc?.url;
-  if (!url) return { key, enabled, online: false, code: null, ms: null, reason: 'no url' };
+  if (!svc?.url) return { key, enabled, online: false, code: null, ms: null, reason: 'no url' };
   if (!enabled) return { key, enabled, online: false, code: null, ms: null, reason: 'disabled' };
+  // probe:false opts out; a relative url (e.g. "/obsidian.html") is served by
+  // this dashboard itself and has no host to probe.
+  const url = svc.probe === false ? '' : (svc.probe || svc.url);
+  if (!/^https?:\/\//i.test(url)) return { key, enabled, online: false, code: null, ms: null, reason: 'not probed' };
 
   const started = Date.now();
   const ctrl = new AbortController();

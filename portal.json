@@ -1,0 +1,72 @@
+{
+  "$comment": "Portal launcher catalog — default services of the DGX Spark host. Live copy: ~/.cowork/portal.json (override with COWORK_PORTAL), seeded from this file on first run and hot-reloaded on save. Per service: url (required; http(s)://… or a /path on the dashboard), label, description, icon (lucide name), category, enabled, order, accent (#hex), probe (health-check URL, or false), unit + controllable (systemd --user lifecycle buttons; also needs serviceControl.enabled in config.json). localhost URLs are rewritten to the dashboard's host for remote viewers.",
+  "accent": "#2563EB",
+  "categories": ["Knowledge", "Marketing", "Files", "Dev", "Automation", "Ops", "APIs & MCP", "Explore", "Other"],
+  "services": {
+    "obsidian": {
+      "url": "/obsidian.html",
+      "label": "Obsidian Vault",
+      "description": "Shared knowledge base — search and read the team vault in a web viewer.",
+      "icon": "book-open",
+      "category": "Knowledge",
+      "enabled": true
+    },
+    "mautic": {
+      "url": "http://localhost:8081",
+      "label": "Mautic",
+      "description": "Marketing automation — campaigns, email, contacts.",
+      "icon": "megaphone",
+      "category": "Marketing",
+      "enabled": true
+    },
+    "filebrowser": {
+      "url": "http://localhost:8082",
+      "label": "Filebrowser",
+      "description": "Web file manager for host files.",
+      "icon": "folder",
+      "category": "Files",
+      "enabled": true
+    },
+    "forgejo": {
+      "url": "http://localhost:3001",
+      "label": "Forgejo",
+      "description": "Self-hosted Git server — repos, issues, pull requests.",
+      "icon": "git-fork",
+      "category": "Dev",
+      "enabled": true
+    },
+    "sglang38": {
+      "url": "http://localhost:8001/v1",
+      "label": "SGLang (Qwen3.8-27B)",
+      "description": "Local SGLang OpenAI-compatible inference server — Qwen3.8-27B NVFP4 + DFlash2, :8001.",
+      "icon": "cpu",
+      "category": "APIs & MCP",
+      "enabled": true
+    },
+    "comfyui": {
+      "url": "http://localhost:8188",
+      "label": "ComfyUI",
+      "description": "Local ComfyUI node-based image / audio generation server.",
+      "icon": "image",
+      "category": "APIs & MCP",
+      "enabled": true
+    },
+    "firecrawl": {
+      "url": "http://localhost:3002",
+      "label": "Firecrawl",
+      "description": "Web scraping / crawling API for LLM pipelines.",
+      "icon": "flame",
+      "category": "APIs & MCP",
+      "enabled": false
+    },
+    "godseye": {
+      "url": "http://localhost:4173",
+      "label": "God's Eye View 上帝之眼",
+      "description": "即時 3D 地球情報台 — 航班、船舶、衛星、地震、CCTV（繁中外掛，Tailscale :4173）。",
+      "icon": "globe",
+      "category": "Explore",
+      "enabled": true,
+      "unit": "gods-eye-view.service"
+    }
+  }
+}

@@ -16,6 +16,28 @@ export interface ServiceConfig {
   unit?: string;
   /** Also expose boot-autostart Enable/Disable for this unit. Default false. */
   controllable?: boolean;
+  // ── Portal card presentation (all optional; see core/portal-config.ts) ──
+  label?: string;
+  description?: string;
+  /** Lucide icon name, e.g. "git-fork". */
+  icon?: string;
+  /** Section the card is grouped under; ordered by PortalFile.categories. */
+  category?: string;
+  /** Per-card accent colour (#rgb / #rrggbb); defaults to PortalFile.accent. */
+  accent?: string;
+  /** Sort position inside its category (lower first; ties sort by label). */
+  order?: number;
+  /** Health-check URL when it differs from `url`; false = never probe. */
+  probe?: string | false;
+}
+
+/** Shape of portal.json — the Portal's fully config-driven launcher catalog. */
+export interface PortalFile {
+  /** Default card accent colour. */
+  accent?: string;
+  /** Category display order; categories not listed sort after, alphabetically. */
+  categories?: string[];
+  services?: Record<string, ServiceConfig>;
 }
 
 

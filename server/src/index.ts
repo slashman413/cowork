@@ -17,6 +17,8 @@ import { Goals } from './core/goals.js';
 import { SystemMetrics } from './core/system-metrics.js';
 import { UsagePoller, isMeteredExec } from './core/usage-probe.js';
 import { probeServices, unitState } from './core/service-probe.js';
+import { PortalStore } from './core/portal-config.js';
+import { systemDetails, DETAIL_KINDS, type DetailKind } from './core/system-details.js';
 import { controlService } from './core/service-control.js';
 import { getObsidianVault } from './core/obsidian.js';
 
@@ -245,26 +247,44 @@ async function main() {
   // Cached snapshot refreshed on a background timer, so this is O(1) and safe to
   // poll every few seconds from the UI.
   app.get('/api/system', (_req, res) => res.json(sysMetrics.get()));
+  // Drill-down for the Overview tile dialogs (per-core, top processes, GPU apps,
+  // meminfo breakdown, thermal zones). Sampled on demand — only polled while a
+  // dialog is open — so it can afford a ~0.4s CPU sample window.
+  app.get('/api/system/details/:kind', async (req, res) => {
+    const kind = req.params.kind as DetailKind;
+    if (!DETAIL_KINDS.has(kind)) return res.status(400).json({ error: `unknown kind "${kind}"` });
+    try { res.json(await systemDetails(kind)); }
+    catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ── Portal catalog (portal.json, hot-reloaded on change) ───────────────────
+  // config.services is only read once, to migrate a pre-portal.json install
+  // into the freshly seeded file.
+  const portal = new PortalStore(undefined, config.services);
+  app.get('/api/portal', (_req, res) => {
+    res.json({ ...portal.get(), controlEnabled: config.serviceControl?.enabled === true });
+  });
 
   // ── Service reachability for the Portal (probed from the host) ─────────────
   app.get('/api/services', async (_req, res) => {
     try {
-      const status = await probeServices(config.services);
-      // The Obsidian card is served by THIS server (not a separate port), so its
-      // "online" is simply whether the configured vault exists on disk — fold a
-      // synthetic status in so the Portal dot reflects reality without an HTTP probe.
-      const vault = getObsidianVault(config.obsidian);
-      if (vault) {
-        const ok = vault.available();
-        status.obsidian = { key: 'obsidian', enabled: true, online: ok, code: null, ms: null, ...(ok ? {} : { reason: 'vault not found' }) };
+      const services = portal.get().services;
+      const status = await probeServices(services);
+      // The Obsidian card (portal.json key "obsidian") is served by THIS server,
+      // not a separate port, so its "online" is simply whether the configured
+      // vault exists on disk — fold a synthetic status in instead of an HTTP probe.
+      if (status.obsidian?.enabled) {
+        const vault = getObsidianVault(config.obsidian);
+        const ok = !!vault?.available();
+        status.obsidian = { key: 'obsidian', enabled: !!vault, online: ok, code: null, ms: null,
+          ...(ok ? {} : { reason: vault ? 'vault not found' : 'disabled' }) };
       }
       // Decorate entries whose config names a systemd --user unit with its
       // runtime + autostart state, so the Portal can show a unit-state chip
       // alongside the reachability dot. "Port answers" and "unit active" are
       // different facts and can disagree, so both are surfaced. This adds ~2
       // systemctl calls per controllable unit per poll — cheap for a handful.
-      const svcCfg = config.services || {};
-      await Promise.all(Object.entries(svcCfg).map(async ([key, svc]) => {
+      await Promise.all(Object.entries(services).map(async ([key, svc]) => {
         if (!svc?.unit || !status[key]) return;
         const st = await unitState(svc.unit);
         Object.assign(status[key], {
@@ -290,7 +310,7 @@ async function main() {
       const out = await controlService(req.params.key, req.params.action, {
         controlEnabled: config.serviceControl?.enabled === true,
         apiKeySet: !!config.server.apiKey,
-        services: config.services || {},
+        services: portal.get().services,
       });
       res.status(out.status).json(out.body);
     } catch (e: any) {
