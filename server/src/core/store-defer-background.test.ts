@@ -83,3 +83,20 @@ test('completeTask via the guard DEFERS instead of marking done', async () => {
   const res2 = await store.completeTask({ taskId: task.id, result: 'final deliverable', internal: true });
   assert.equal(res2!.status, 'done');
 });
+
+test('a same-size rewrite within one mtime tick is not masked by the read cache', () => {
+  const { store, root } = makeStore();
+  const task = store.createTask({ title: 't', from: { platform: 'p', agent: 'a' } } as any);
+  const file = path.join(root, 'inbox', `${task.id}.json`);
+  // Pin mtime to a whole second (exactly representable) after each write to
+  // reproduce the coarse-clock case deterministically: same size (1 → 2) AND same mtime.
+  const T = 1_700_000_000;
+  store.deferForBackground({ taskId: task.id, pollMs: 1 });
+  fs.utimesSync(file, T, T);
+  const size = fs.statSync(file).size;
+  assert.equal((store.getTask(task.id)!.context!.backgroundWait as any).count, 1); // primes the cache
+  store.deferForBackground({ taskId: task.id, pollMs: 1 });
+  fs.utimesSync(file, T, T);
+  assert.equal(fs.statSync(file).size, size);
+  assert.equal((store.getTask(task.id)!.context!.backgroundWait as any).count, 2);
+});

@@ -1232,6 +1232,7 @@ export class Store {
 
     const taskFile = this.resolveTaskFile(fullId) || `${fullId}.json`;
     fs.rmSync(path.join(this.config.paths.inbox, taskFile), { force: true });
+    this.taskCache.delete(taskFile);
     return { deleted: true, artifacts };
   }
 
@@ -1311,6 +1312,12 @@ export class Store {
     } catch (e) {
       try { fs.rmSync(tmp, { force: true }); } catch { /* ignore */ }
       throw e;
+    } finally {
+      // Two writes inside one mtime tick that happen to produce the same byte
+      // size (e.g. a counter going 2 → 3) leave the mtime:size key unchanged, so
+      // readTaskFile would keep serving the stale parse. Our own writes must
+      // always bust the entry; the key check only guards against external edits.
+      this.taskCache.delete(file);
     }
   }
 
