@@ -188,6 +188,9 @@ export interface VerifierConfig {
   replacePatterns?: boolean;
   /** A trimmed result shorter than this many chars is treated as empty. Default 1. */
   minLength?: number;
+  /** Failure phrases are only matched in results up to this many chars — a longer
+   *  result is a real deliverable, not a soft-failure notice. Default 1500. */
+  maxPatternScanLength?: number;
   /** Detect a result that ASKS THE USER a question (rather than delivering) and
    *  park the task on `wait-input` instead of marking it done. Default on. */
   detectInput?: boolean;

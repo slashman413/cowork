@@ -71,6 +71,23 @@ test('does NOT flag a legitimate article that merely discusses rate limiting', (
   assert.equal(verifyOutput(article, true).ok, true);
 });
 
+test('does NOT reject a long deliverable that reports on rate-limited tasks (5edef1d8)', () => {
+  // A fix report for "auto re-run of rate-limited tasks" was rejected twice as a
+  // rate limit — real committed work thrown away and re-queued.
+  const report = '## Fix: auto re-run of rate-limited tasks\n\n' +
+    'The dispatcher now re-queues rate-limited failures once the window resets. '.repeat(25) +
+    "\nVerified: a task that hit \"You've hit your session limit\" is re-run after reset.";
+  assert.ok(report.length > 1500);
+  assert.equal(verifyOutput(report, true).ok, true);
+});
+
+test('a short rate-limit notice is still rejected; the scan length is configurable', () => {
+  assert.equal(verifyOutput('Request was rate-limited, try again later.', true).ok, false);
+  const long = 'x'.repeat(300) + ' rate-limited';
+  assert.equal(verifyOutput(long, true).ok, false);
+  assert.equal(verifyOutput(long, true, { maxPatternScanLength: 100 }).ok, true);
+});
+
 test('custom failPatterns merge with the built-ins', () => {
   assert.equal(verifyOutput('SPECIAL_SENTINEL_ERROR occurred', true, { failPatterns: ['special_sentinel_error'] }).ok, false);
   // built-ins still apply when merging

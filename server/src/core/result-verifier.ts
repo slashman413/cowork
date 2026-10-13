@@ -26,7 +26,22 @@ export interface VerifyOptions {
   replacePatterns?: boolean;
   /** A result whose trimmed length is below this is treated as empty / non-deliverable. */
   minLength?: number;
+  /** Only scan results up to this many chars for failure phrases (default
+   *  {@link DEFAULT_MAX_PATTERN_SCAN_LENGTH}); a longer result is a real deliverable. */
+  maxPatternScanLength?: number;
 }
+
+/**
+ * Soft-failure notices are SHORT — a CLI that exits 0 on a rate limit / quota /
+ * overload prints a line or two ("You've hit your limit · resets 2am",
+ * "Error 429 Too Many Requests"), never pages of work. A result longer than this
+ * is a real deliverable that merely DISCUSSES such things — e.g. a fix report for
+ * "auto re-run of rate-limited tasks" — and pattern-matching it rejected genuine,
+ * already-committed work as a rate limit (task 5edef1d8, twice), which then also
+ * got classified rate-limited and queued for pointless auto re-runs. The optional
+ * LLM gate still judges long results.
+ */
+export const DEFAULT_MAX_PATTERN_SCAN_LENGTH = 1500;
 
 /**
  * High-signal phrases a model or CLI emits when it *couldn't* do the work but
@@ -167,6 +182,8 @@ export function verifyOutput(text: string, spawnOk: boolean, opts: VerifyOptions
   if (clean.length < minLength) {
     return { ok: false, reason: `empty result (${clean.length} < ${minLength} chars)` };
   }
+
+  if (clean.length > (opts.maxPatternScanLength ?? DEFAULT_MAX_PATTERN_SCAN_LENGTH)) return { ok: true };
 
   const patterns = opts.replacePatterns
     ? (opts.failPatterns ?? [])

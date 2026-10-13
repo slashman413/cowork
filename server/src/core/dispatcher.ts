@@ -1491,7 +1491,8 @@ export class Dispatcher {
     return verifyOutput(output.text, output.ok, {
       failPatterns: cfg?.failPatterns,
       replacePatterns: cfg?.replacePatterns,
-      minLength: cfg?.minLength
+      minLength: cfg?.minLength,
+      maxPatternScanLength: cfg?.maxPatternScanLength
     });
   }
 
