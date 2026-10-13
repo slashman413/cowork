@@ -259,9 +259,15 @@ export class Dispatcher {
     const fallbackMs = 60 * 60 * 1000;   // 1h when no reset time was discoverable
     const graceMs = Math.max(0, cfg.graceSeconds ?? 120) * 1000;
     const maxAttempts = cfg.maxAttempts ?? 6;
+    const defaultOn = cfg.enabled !== false;
     for (const t of this.store.listTasks({ status: 'failed' })) {
       const ctx = t.context || {};
-      if (ctx.autoRerunOnReset !== true || ctx.rateLimited !== true) continue;
+      if (ctx.rateLimited !== true) continue;
+      // Armed = explicitly on, or UNSET while default-on. Honouring an unset flag
+      // here (not only at classification) also covers tasks classified before
+      // the default flipped, which would otherwise sit failed forever.
+      const armed = ctx.autoRerunOnReset === true || (ctx.autoRerunOnReset === undefined && defaultOn);
+      if (!armed) continue;
       if ((Number(ctx.autoRerunCount) || 0) >= maxAttempts) continue;
       const resetAt = typeof ctx.rateLimitResetsAt === 'string' ? Date.parse(ctx.rateLimitResetsAt) : NaN;
       const due = Number.isFinite(resetAt)

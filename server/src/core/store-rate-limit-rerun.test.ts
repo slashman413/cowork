@@ -169,3 +169,26 @@ test('dispatcher stops auto re-running after maxAttempts; manual re-run resets t
   const manual = store.rerunTask(id)!;
   assert.equal(manual.context!.autoRerunCount, undefined, 'manual re-run starts a fresh budget');
 });
+
+test('dispatcher re-runs a rate-limited failure classified before default-on (flag unset)', async () => {
+  const { store, config } = makeStore({ autoRerunRateLimited: { graceSeconds: 0 } });
+  const d = new Dispatcher(config, store as any, {} as any);
+  const legacy = await failRateLimited(store, 'legacy', 60 * 1000);
+  const optedOut = await failRateLimited(store, 'opted out', 60 * 1000);
+  for (const [id, v] of [[legacy, undefined], [optedOut, false]] as const) {
+    const ft = store.getTask(id)!;
+    if (v === undefined) delete ft.context!.autoRerunOnReset; else ft.context!.autoRerunOnReset = v;
+    store.saveTask(ft);
+  }
+  (d as any).autoRerunRateLimited();
+  assert.equal(store.getTask(legacy)!.status, 'pending', 'unset flag is armed by default');
+  assert.equal(store.getTask(optedOut)!.failed, true, 'explicit opt-out is left failed');
+});
+
+test('enabled=false: an unset flag is NOT auto re-run', async () => {
+  const { store, config } = makeStore({ autoRerunRateLimited: { enabled: false, graceSeconds: 0 } });
+  const d = new Dispatcher(config, store as any, {} as any);
+  const id = await failRateLimited(store, 'opt-in mode', 60 * 1000);
+  (d as any).autoRerunRateLimited();
+  assert.equal(store.getTask(id)!.failed, true);
+});
