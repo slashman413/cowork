@@ -192,3 +192,36 @@ test('enabled=false: an unset flag is NOT auto re-run', async () => {
   (d as any).autoRerunRateLimited();
   assert.equal(store.getTask(id)!.failed, true);
 });
+
+test('store: setBrainUsage does not overwrite newer snapshot with older one', () => {
+  const { store } = makeStore();
+  const newer: BrainUsage = { exec: 'agy', at: '2026-10-13T12:00:00.000Z', windows: [{ label: '5h', usedPct: 10 }] };
+  const older: BrainUsage = { exec: 'agy', at: '2026-10-10T12:00:00.000Z', windows: [{ label: '5h', usedPct: 80 }] };
+
+  store.setBrainUsage('local-agy', newer);
+  assert.equal(store.getBrainUsage()['local-agy'].at, '2026-10-13T12:00:00.000Z');
+
+  // Attempting to overwrite with older timestamp is ignored
+  store.setBrainUsage('local-agy', older);
+  assert.equal(store.getBrainUsage()['local-agy'].at, '2026-10-13T12:00:00.000Z');
+  assert.equal(store.getBrainUsage()['local-agy'].windows[0].usedPct, 10);
+});
+
+test('store: loadBrainUsage prunes retired local brains from disk snapshot', () => {
+  const { store, root, config } = makeStore({
+    brains: {
+      'local-agy-gemini-3.8-flash-high': { location: 'local', exec: 'agy' }
+    }
+  });
+  // Write a snapshot containing both an active local brain and a retired local brain
+  const file = path.join(config.paths.status, 'brain-usage.json');
+  fs.writeFileSync(file, JSON.stringify({
+    'local-agy-gemini-3.8-flash-high': { exec: 'agy', at: '2026-10-13T12:00:00.000Z', windows: [{ label: '5h', usedPct: 10 }] },
+    'local-agy-gemini-3.7-flash-high': { exec: 'agy', at: '2026-10-10T12:00:00.000Z', windows: [{ label: '5h', usedPct: 50 }] }
+  }));
+
+  (store as any).loadBrainUsage();
+  const usage = store.getBrainUsage();
+  assert.equal('local-agy-gemini-3.8-flash-high' in usage, true);
+  assert.equal('local-agy-gemini-3.7-flash-high' in usage, false, 'retired local brain must be pruned');
+});

@@ -251,8 +251,17 @@ export class Store {
     try {
       const data = JSON.parse(fs.readFileSync(this.brainUsageFile(), 'utf-8'));
       if (data && typeof data === 'object') {
+        const localBrains = new Set(
+          Object.entries(this.config.orchestration?.brains || {})
+            .filter(([, b]) => b.location === 'local')
+            .map(([id]) => id)
+        );
         for (const [id, u] of Object.entries(data)) {
           if (u && typeof u === 'object' && Array.isArray((u as any).windows)) {
+            // Prune retired local brains that are no longer configured on this host
+            if (id.startsWith('local-') && localBrains.size > 0 && !localBrains.has(id)) {
+              continue;
+            }
             this.brainUsage.set(id, u as BrainUsage);
           }
         }
@@ -274,8 +283,17 @@ export class Store {
   }
 
   public setBrainUsage(brainId: string, usage: BrainUsage): void {
+    const existing = this.brainUsage.get(brainId);
+    if (existing?.at && usage.at && new Date(usage.at).getTime() < new Date(existing.at).getTime()) {
+      return; // Do not overwrite with an older snapshot
+    }
     this.brainUsage.set(brainId, usage);
     this.scheduleBrainUsageSave();
+  }
+  public removeBrainUsage(brainId: string): void {
+    if (this.brainUsage.delete(brainId)) {
+      this.scheduleBrainUsageSave();
+    }
   }
   public getBrainUsage(): Record<string, BrainUsage> {
     return Object.fromEntries(this.brainUsage);

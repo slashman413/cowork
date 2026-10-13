@@ -31,4 +31,8 @@ export class EventBus extends EventEmitter {
   public emitHeartbeat(agentId: string, status: string, currentTask?: string): void {
     this.emitEvent('heartbeat', { agentId, status, currentTask });
   }
+
+  public emitBrainExecuted(brainId: string, exec: string, taskId: string): void {
+    this.emitEvent('brainExecuted', { brainId, exec, taskId });
+  }
 }

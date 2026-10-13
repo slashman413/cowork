@@ -1852,6 +1852,9 @@ export class Dispatcher {
     // to whoever created the task.
     this.store.countRun('local', plan.brainId);
     if (task.from?.agent) this.store.countSubmitted(task.from.agent, plan.brainId);
+    if (plan.exec) {
+      try { this.eventBus.emitBrainExecuted(plan.brainId, plan.exec, task.id); } catch { /* ignore */ }
+    }
 
     // VERIFY the result in strict gate precedence:
     //   (1) hard/soft FAILURE — a brain that hit a rate limit (or refused, or

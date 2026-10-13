@@ -165,7 +165,7 @@ const running = new Set();
 // REMAINING (inverted to used) and needs a supplied bearer token — see
 // probeAgyUsage. Mirror of the server's TS probes in
 // server/src/core/usage-probe.ts — keep in sync.
-const USAGE_MS = +(process.env.USAGE_MS || 300000);
+const USAGE_MS = +(process.env.USAGE_MS || 30000);
 let USAGE = {};   // brainId → snapshot; {} until the first successful probe
 const clampPct = n => Number.isFinite(+n) ? Math.max(0, Math.min(100, Math.round(+n * 10) / 10)) : null;
 
@@ -271,14 +271,28 @@ function probeCodexUsage() {
   return null;
 }
 
-// Gemini CLI's Code Assist OAuth client, published in the open-source
-// google-gemini/gemini-cli repo (an "installed app" client — its secret is
-// non-confidential by design). Antigravity shares the ~/.gemini credential dir
-// and the same cloudcode-pa quota RPC; if its refresh tokens are minted for a
-// different client the exchange fails soft (no meter). Override with
-// AGY_CLIENT_ID / AGY_CLIENT_SECRET. Mirror of server/src/core/usage-probe.ts.
-const AGY_DEFAULT_CLIENT_ID = '681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com';
-const AGY_DEFAULT_CLIENT_SECRET = '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';
+// Google installed-app OAuth clients for refreshing Antigravity/Gemini tokens,
+// in try order: AGY_CLIENT_* (explicit override), AGY_OAUTH_CLIENT_* (Antigravity
+// CLI), GEMINI_OAUTH_CLIENT_* (Gemini CLI). They are the public values those CLIs
+// ship with but are deliberately NOT hardcoded (secret scanners flag them) — set
+// them in the env or in ~/.cowork/oauth-clients.env (KEY=VALUE; env wins). Same
+// logic as agyOAuthClients() in server/src/core/usage-probe.ts.
+function agyOAuthClients() {
+  const fromFile = {};
+  try {
+    for (const line of readFileSync(join(os.homedir(), '.cowork', 'oauth-clients.env'), 'utf8').split(/\r?\n/)) {
+      const m = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
+      if (m) fromFile[m[1]] = m[2].replace(/^(['"])(.*)\1$/, '$2');
+    }
+  } catch { /* no file → env only */ }
+  const get = (k) => process.env[k]?.trim() || fromFile[k]?.trim() || '';
+  const clients = [];
+  for (const prefix of ['AGY_', 'AGY_OAUTH_', 'GEMINI_OAUTH_']) {
+    const clientId = get(`${prefix}CLIENT_ID`), clientSecret = get(`${prefix}CLIENT_SECRET`);
+    if (clientId && clientSecret && !clients.some(c => c.clientId === clientId)) clients.push({ clientId, clientSecret });
+  }
+  return clients;
+}
 let agyMinted = null;   // {token, expMs} — don't re-mint while the last one is live
 
 function discoverAgyRefreshToken() {
@@ -328,23 +342,27 @@ async function agyAccessToken() {
   if (agyMinted && agyMinted.expMs > Date.now() + 60000) return agyMinted.token;
   const refresh = discoverAgyRefreshToken();
   if (!refresh) return null;
-  try {
-    const res = await fetch('https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type: 'refresh_token', refresh_token: refresh,
-        client_id: process.env.AGY_CLIENT_ID?.trim() || AGY_DEFAULT_CLIENT_ID,
-        client_secret: process.env.AGY_CLIENT_SECRET?.trim() || AGY_DEFAULT_CLIENT_SECRET
-      }).toString(),
-      signal: AbortSignal.timeout(15000)
-    });
-    if (!res.ok) return null;
-    const j = await res.json();
-    if (typeof j?.access_token !== 'string' || !j.access_token) return null;
-    agyMinted = { token: j.access_token, expMs: Date.now() + (Number(j.expires_in) || 3600) * 1000 };
-    return agyMinted.token;
-  } catch { return null; }
+
+  for (const client of agyOAuthClients()) {
+    try {
+      const res = await fetch('https://oauth2.googleapis.com/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          grant_type: 'refresh_token', refresh_token: refresh,
+          client_id: client.clientId,
+          client_secret: client.clientSecret
+        }).toString(),
+        signal: AbortSignal.timeout(15000)
+      });
+      if (!res.ok) continue;
+      const j = await res.json();
+      if (typeof j?.access_token !== 'string' || !j.access_token) continue;
+      agyMinted = { token: j.access_token, expMs: Date.now() + (Number(j.expires_in) || 3600) * 1000 };
+      return agyMinted.token;
+    } catch { /* next */ }
+  }
+  return null;
 }
 
 async function probeAgyUsage() {
@@ -591,7 +609,12 @@ async function handle(task, agentId) {
     running.delete(task.id);
     try { rmSync(artDir, { recursive: true, force: true }); } catch { /* best-effort cleanup */ }
     try { rmSync(inputDir, { recursive: true, force: true }); } catch { /* best-effort cleanup */ }
-    await tool('heartbeat', { agent_id: agentId, status: running.size ? 'working' : 'idle' }).catch(() => {});
+    await refreshUsage().catch(() => {});
+    await tool('heartbeat', {
+      agent_id: agentId,
+      status: running.size ? 'working' : 'idle',
+      ...(Object.keys(USAGE).length ? { usage: USAGE } : {})
+    }).catch(() => {});
   }
 }
 

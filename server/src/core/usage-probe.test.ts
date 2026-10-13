@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { normalizeClaudeUsage, normalizeCodexRateLimits, normalizeAgyQuota, isMeteredExec, findRateLimitsSnapshot, discoverAgyRefreshToken, readCachedAgyToken } from './usage-probe.js';
+import { normalizeClaudeUsage, normalizeCodexRateLimits, normalizeAgyQuota, isMeteredExec, findRateLimitsSnapshot, discoverAgyRefreshToken, readCachedAgyToken, agyOAuthClients, UsagePoller } from './usage-probe.js';
 
 // Shape captured from a live GET /api/oauth/usage response (values trimmed).
 const CLAUDE_LIVE_SHAPE = {
@@ -330,3 +330,53 @@ test('metered execs: claude/codex/agy yes; hermes/ollama/script no', () => {
   assert.equal(isMeteredExec('agy'), true);
   for (const e of ['hermes', 'ollama', 'script', undefined]) assert.equal(isMeteredExec(e), false);
 });
+
+test('agy: OAuth clients come from env/file — override, Antigravity, then Gemini CLI', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-oauth-'));
+  const file = path.join(dir, 'oauth-clients.env');
+  try {
+    // No env, no file → no clients (nothing hardcoded).
+    assert.deepEqual(agyOAuthClients({}, file), []);
+    fs.writeFileSync(file, [
+      '# comment',
+      'AGY_OAUTH_CLIENT_ID=agy-id',
+      'AGY_OAUTH_CLIENT_SECRET="agy-secret"',
+      'GEMINI_OAUTH_CLIENT_ID=gem-id',
+      'GEMINI_OAUTH_CLIENT_SECRET=gem-secret',
+      'AGY_CLIENT_ID=half-pair-ignored'
+    ].join('\n'));
+    assert.deepEqual(agyOAuthClients({}, file), [
+      { clientId: 'agy-id', clientSecret: 'agy-secret' },
+      { clientId: 'gem-id', clientSecret: 'gem-secret' }
+    ]);
+    // Process env wins over the file; the explicit override goes first; dupes dropped.
+    assert.deepEqual(agyOAuthClients({ AGY_CLIENT_ID: 'gem-id', AGY_CLIENT_SECRET: 'x', GEMINI_OAUTH_CLIENT_SECRET: 'gem-env' }, file), [
+      { clientId: 'gem-id', clientSecret: 'x' },
+      { clientId: 'agy-id', clientSecret: 'agy-secret' }
+    ]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('UsagePoller: refreshExec ignores non-metered execs and handles local brains', async () => {
+  const store = {
+    setBrainUsage: () => {}
+  } as any;
+  const brains = {
+    'local-hermes': { location: 'local', exec: 'hermes' },
+    'remote-agy': { location: 'remote', exec: 'agy' }
+  } as any;
+  const poller = new UsagePoller(store, () => brains, 60000);
+  // hermes is unmetered -> no-op
+  await poller.refreshExec('hermes');
+  // remote-agy is remote -> no-op
+  await poller.refreshExec('agy');
+  poller.stop();
+});
+
+test('UsagePoller: defaults to 30s interval', () => {
+  const poller = new UsagePoller({} as any, () => ({}));
+  assert.equal((poller as any).intervalMs, 30000);
+});
+

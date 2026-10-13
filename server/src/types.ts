@@ -559,6 +559,7 @@ export interface CoworkEventPayloads {
   taskClaimed: { task: Task; agentId: string };
   taskCompleted: { task: Task };
   heartbeat: { agentId: string; status: string; currentTask?: string };
+  brainExecuted: { brainId: string; exec: string; taskId: string };
 }
 
 /**

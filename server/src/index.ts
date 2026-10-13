@@ -103,6 +103,26 @@ async function main() {
   eventBus.on('taskCompleted', (evt: any) => {
     try { goals.onTaskCompleted(evt.payload.task); }
     catch (e) { console.error('Goals: taskCompleted handler failed:', e); }
+
+    try {
+      const task = evt?.payload?.task;
+      const brainId = task?.context?.ranBrain || task?.context?.brain;
+      if (brainId) {
+        const brain = config.orchestration.brains?.[brainId];
+        if (brain?.location === 'local' && brain.exec && isMeteredExec(brain.exec)) {
+          void usagePoller.refreshExec(brain.exec);
+        }
+      }
+    } catch (e) { console.error('UsagePoller: taskCompleted refresh failed:', e); }
+  });
+
+  eventBus.on('brainExecuted', (evt: any) => {
+    try {
+      const exec = evt?.payload?.exec;
+      if (exec && isMeteredExec(exec)) {
+        void usagePoller.refreshExec(exec);
+      }
+    } catch (e) { console.error('UsagePoller: brainExecuted refresh failed:', e); }
   });
 
   // MCP Server
@@ -356,7 +376,10 @@ async function main() {
   });
 
   // ── Connections: external MCP clients (heartbeat-live) + invocation counters ─
-  app.get('/api/connections', (_req, res) => {
+  app.get('/api/connections', async (req, res) => {
+    if (req.query.refresh === '1' || req.query.refresh === 'true') {
+      await usagePoller.refresh();
+    }
     const now = Date.now();
     const clients = store.getActiveAgents()
       .filter(a => a.sessionId !== 'dispatcher-worker' && !(a.platform === 'cowork' && a.agentName === 'orchestrator'))

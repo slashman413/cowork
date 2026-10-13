@@ -25,8 +25,9 @@ import type { Store } from './store.js';
  *            checked); or one minted from a discovered refresh token
  *            (AGY_REFRESH_TOKEN, or Antigravity's own
  *            ~/.gemini/user_refresh.antigravity) via the standard Google OAuth
- *            refresh grant using the public Gemini-CLI installed-app client
- *            (override with AGY_CLIENT_ID / AGY_CLIENT_SECRET). NOTE: unlike
+ *            refresh grant using the agy / Gemini-CLI installed-app clients
+ *            from the env or ~/.cowork/oauth-clients.env (see
+ *            agyOAuthClients). NOTE: unlike
  *            claude/codex the quota is reported as REMAINING, so we invert to
  *            used = 100 - remaining.
  *   hermes / ollama / script — self-hosted, no external rate limit BY DESIGN;
@@ -372,14 +373,50 @@ export function normalizeAgyQuota(raw: any): BrainUsageWindow[] {
 }
 
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
-// Gemini CLI's Code Assist OAuth client, published in the open-source
-// google-gemini/gemini-cli repo (an "installed app" client — Google documents
-// its secret as non-confidential by design). Antigravity shares the ~/.gemini
-// credential dir and the same cloudcode-pa quota RPC; if its refresh tokens
-// turn out to be minted for a different client, the exchange fails soft (no
-// meter) and AGY_CLIENT_ID / AGY_CLIENT_SECRET override these.
-const AGY_DEFAULT_CLIENT_ID = '681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com';
-const AGY_DEFAULT_CLIENT_SECRET = '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';
+
+export interface OAuthClientCreds {
+  clientId: string;
+  clientSecret: string;
+}
+
+/** Where the OAuth client values live when they aren't in the process env:
+ *  a KEY=VALUE file outside the repo (never committed). */
+export const AGY_OAUTH_ENV_FILE = path.join(os.homedir(), '.cowork', 'oauth-clients.env');
+
+/** Parse a KEY=VALUE env file (blank lines and `#` comments skipped, optional
+ *  surrounding quotes stripped). Missing/unreadable file → {}. */
+function readEnvFile(file: string): Record<string, string> {
+  let raw: string;
+  try { raw = fs.readFileSync(file, 'utf8'); } catch { return {}; }
+  const out: Record<string, string> = {};
+  for (const line of raw.split(/\r?\n/)) {
+    const m = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
+    if (m) out[m[1]] = m[2].replace(/^(['"])(.*)\1$/, '$2');
+  }
+  return out;
+}
+
+/**
+ * Google installed-app OAuth clients used to refresh Antigravity/Gemini tokens,
+ * in try order. The values are the public clients the agy and Gemini CLIs ship
+ * with, but they are NOT hardcoded here (secret scanners flag them) — set them
+ * in the env or in ~/.cowork/oauth-clients.env (see .env.example):
+ *   AGY_CLIENT_ID / AGY_CLIENT_SECRET               explicit override, tried first
+ *   AGY_OAUTH_CLIENT_ID / AGY_OAUTH_CLIENT_SECRET   Antigravity CLI's client
+ *   GEMINI_OAUTH_CLIENT_ID / GEMINI_OAUTH_CLIENT_SECRET  Gemini CLI's Code Assist client
+ * Tokens issued to either CLI then refresh smoothly. Process env wins over the
+ * file; incomplete pairs and duplicates are skipped. Exported for tests.
+ */
+export function agyOAuthClients(env: NodeJS.ProcessEnv = process.env, file = AGY_OAUTH_ENV_FILE): OAuthClientCreds[] {
+  const fromFile = readEnvFile(file);
+  const get = (k: string) => (env[k]?.trim() || fromFile[k]?.trim() || '');
+  const clients: OAuthClientCreds[] = [];
+  for (const prefix of ['AGY_', 'AGY_OAUTH_', 'GEMINI_OAUTH_']) {
+    const clientId = get(`${prefix}CLIENT_ID`), clientSecret = get(`${prefix}CLIENT_SECRET`);
+    if (clientId && clientSecret && !clients.some(c => c.clientId === clientId)) clients.push({ clientId, clientSecret });
+  }
+  return clients;
+}
 
 /** Find a Google OAuth refresh token for Antigravity/Gemini on this host:
  *  AGY_REFRESH_TOKEN, the AGY_TOKEN_FILE json, Antigravity's own
@@ -411,7 +448,7 @@ export function discoverAgyRefreshToken(home = os.homedir()): string | null {
 }
 
 // Minted access token cache — refresh grants are rate-limited, don't re-mint
-// on every 5-minute poll while the last token is still live.
+// while the last token is still live.
 let agyMinted: { token: string; expMs: number } | null = null;
 
 /** Read a cached Antigravity/Gemini access token from a creds file, honouring
@@ -451,24 +488,28 @@ async function agyAccessToken(): Promise<string | null> {
   if (agyMinted && agyMinted.expMs > Date.now() + 60000) return agyMinted.token;
   const refresh = discoverAgyRefreshToken();
   if (!refresh) return null;
-  try {
-    const res = await fetch(GOOGLE_TOKEN_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type: 'refresh_token',
-        refresh_token: refresh,
-        client_id: process.env.AGY_CLIENT_ID?.trim() || AGY_DEFAULT_CLIENT_ID,
-        client_secret: process.env.AGY_CLIENT_SECRET?.trim() || AGY_DEFAULT_CLIENT_SECRET
-      }).toString(),
-      signal: AbortSignal.timeout(15000)
-    });
-    if (!res.ok) return null;
-    const j: any = await res.json();
-    if (typeof j?.access_token !== 'string' || !j.access_token) return null;
-    agyMinted = { token: j.access_token, expMs: Date.now() + (Number(j.expires_in) || 3600) * 1000 };
-    return agyMinted.token;
-  } catch { return null; }
+
+  for (const client of agyOAuthClients()) {
+    try {
+      const res = await fetch(GOOGLE_TOKEN_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          grant_type: 'refresh_token',
+          refresh_token: refresh,
+          client_id: client.clientId,
+          client_secret: client.clientSecret
+        }).toString(),
+        signal: AbortSignal.timeout(15000)
+      });
+      if (!res.ok) continue;
+      const j: any = await res.json();
+      if (typeof j?.access_token !== 'string' || !j.access_token) continue;
+      agyMinted = { token: j.access_token, expMs: Date.now() + (Number(j.expires_in) || 3600) * 1000 };
+      return agyMinted.token;
+    } catch { /* network/timeout → try next client */ }
+  }
+  return null;
 }
 
 async function probeAgy(): Promise<BrainUsageWindow[] | null> {
@@ -511,11 +552,12 @@ export function isMeteredExec(exec?: string): boolean { return !!exec && exec in
  */
 export class UsagePoller {
   private timer: NodeJS.Timeout | null = null;
+  private inFlight = new Map<string, Promise<void>>();
 
   constructor(
     private store: Store,
     private brains: () => Record<string, BrainConfig>,
-    private intervalMs = 300000
+    private intervalMs = +(process.env.USAGE_POLL_MS || 30000)
   ) {}
 
   start(): void {
@@ -526,20 +568,37 @@ export class UsagePoller {
 
   stop(): void { if (this.timer) clearInterval(this.timer); this.timer = null; }
 
-  async refresh(): Promise<void> {
-    const byExec = new Map<string, string[]>();
-    for (const [id, b] of Object.entries(this.brains())) {
-      if (b.location !== 'local' || !isMeteredExec(b.exec)) continue;
-      const ids = byExec.get(b.exec!) || [];
-      ids.push(id);
-      byExec.set(b.exec!, ids);
-    }
-    for (const [exec, ids] of byExec) {
+  async refreshExec(targetExec: string): Promise<void> {
+    if (!isMeteredExec(targetExec)) return;
+    const existing = this.inFlight.get(targetExec);
+    if (existing) return existing;
+
+    const p = (async () => {
+      const ids: string[] = [];
+      for (const [id, b] of Object.entries(this.brains())) {
+        if (b.location === 'local' && b.exec === targetExec) ids.push(id);
+      }
+      if (!ids.length) return;
       let windows: BrainUsageWindow[] | null = null;
-      try { windows = await PROBES[exec](); } catch { /* fail-soft: keep last snapshot */ }
-      if (!windows) continue;
-      const usage: BrainUsage = { exec, windows, at: new Date().toISOString() };
+      try { windows = await PROBES[targetExec](); } catch { /* fail-soft: keep last snapshot */ }
+      if (!windows) return;
+      const usage: BrainUsage = { exec: targetExec, windows, at: new Date().toISOString() };
       for (const id of ids) this.store.setBrainUsage(id, usage);
+    })().finally(() => {
+      this.inFlight.delete(targetExec);
+    });
+
+    this.inFlight.set(targetExec, p);
+    return p;
+  }
+
+  async refresh(): Promise<void> {
+    const execs = new Set<string>();
+    for (const b of Object.values(this.brains())) {
+      if (b.location === 'local' && isMeteredExec(b.exec)) {
+        execs.add(b.exec!);
+      }
     }
+    await Promise.allSettled([...execs].map(exec => this.refreshExec(exec)));
   }
 }

@@ -94,7 +94,10 @@ function usageMeters(brainIds, usage) {
   for (const id of brainIds || []) {
     const u = usage?.[id];
     if (!u?.windows?.length) continue;
-    if (!byExec.has(u.exec)) byExec.set(u.exec, { u });
+    const existing = byExec.get(u.exec);
+    if (!existing || (u.at && (!existing.u.at || new Date(u.at).getTime() > new Date(existing.u.at).getTime()))) {
+      byExec.set(u.exec, { u });
+    }
   }
   if (!byExec.size) return '';
   const blocks = [...byExec.entries()].map(([exec, { u }]) => {
@@ -122,8 +125,15 @@ function localBrainCards(localBrains, usage) {
   for (const id of localBrains || []) {
     const u = usage?.[id];
     if (!u?.windows?.length) continue;
-    if (!byExec.has(u.exec)) byExec.set(u.exec, { u, names: [] });
-    byExec.get(u.exec).names.push(shortBrain(id));
+    const existing = byExec.get(u.exec);
+    if (!existing) {
+      byExec.set(u.exec, { u, names: [shortBrain(id)] });
+    } else {
+      existing.names.push(shortBrain(id));
+      if (u.at && (!existing.u.at || new Date(u.at).getTime() > new Date(existing.u.at).getTime())) {
+        existing.u = u;
+      }
+    }
   }
   // Antigravity first (it's the richest card), then the rest alphabetically.
   const order = e => (e === 'agy' ? '0' : `1${e}`);
@@ -1893,7 +1903,7 @@ class App {
     // inner render (NOT renderConnections) so it never stacks new timers.
     const render = () => this.renderConnectionsInner();
     await render();
-    this.addViewTimer(() => render().then(createIcons).catch(() => { /* transient */ }), 60000);
+    this.addViewTimer(() => render().then(createIcons).catch(() => { /* transient */ }), 15000);
   }
 
   async renderConnectionsInner() {
@@ -1920,7 +1930,12 @@ class App {
     // instead of being crammed into a grid column.
     const localCards = localBrainCards(localBrains, usage);
     const localHtml = localCards.length ? `
-      <div class="conn-section-label">Local brains <span>· run by the dispatcher on this host</span></div>
+      <div class="conn-section-label" style="display:flex;justify-content:space-between;align-items:center">
+        <div>Local brains <span>· run by the dispatcher on this host</span></div>
+        <button id="btn-refresh-usage" class="btn btn-sm" style="display:inline-flex;align-items:center;gap:4px;font-size:0.75rem;padding:2px 8px;cursor:pointer" title="Refresh rate limits">
+          <i data-lucide="refresh-cw" style="width:12px;height:12px"></i> Refresh
+        </button>
+      </div>
       <div class="conn-local-stack">${localCards.join('')}</div>` : '';
 
     const clientsHtml = clientCards.length ? `<div class="conn-local-stack">${clientCards.join('')}</div>`
@@ -1941,6 +1956,24 @@ class App {
         <h3 style="font-size:0.95rem; margin-bottom:8px">Brain invocations <span style="font-size:0.72rem;color:var(--text-muted);font-weight:400">(this session · resets on restart)</span></h3>
         ${counterRows ? `<table style="font-size:0.83rem"><thead><tr style="color:var(--text-muted);font-size:0.75rem"><th style="text-align:left">client</th><th style="text-align:left">brain</th><th style="text-align:right;padding-right:12px">ran</th><th style="text-align:right">submitted</th></tr></thead><tbody>${counterRows}</tbody></table>` : '<p style="color:var(--text-muted);font-size:0.85rem">No invocations yet.</p>'}
       </div>`;
+
+    const btnRefresh = this.contentEl.querySelector('#btn-refresh-usage');
+    if (btnRefresh) {
+      btnRefresh.onclick = async () => {
+        btnRefresh.disabled = true;
+        btnRefresh.style.opacity = '0.6';
+        const icon = btnRefresh.querySelector('i');
+        if (icon) icon.classList.add('spin');
+        try {
+          await this.api.get('/connections?refresh=1');
+          await this.renderConnectionsInner();
+          createIcons();
+        } finally {
+          btnRefresh.disabled = false;
+          btnRefresh.style.opacity = '1';
+        }
+      };
+    }
   }
 
   // ── Inbox ──────────────────────────────────────────────────────────────
