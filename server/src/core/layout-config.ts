@@ -36,7 +36,7 @@ export function activeLayoutPath(): string {
 }
 
 /** Singleton app pages: id === type, at most one each, rendered by app.js. */
-export const APP_PAGES = ['chat', 'inbox', 'workflows', 'goals', 'team', 'brains', 'roster', 'connections', 'config'] as const;
+export const APP_PAGES = ['chat', 'inbox', 'calendar', 'workflows', 'goals', 'team', 'brains', 'roster', 'connections', 'config'] as const;
 /** Composable page types: any number, any id. */
 export const COMPOSABLE_PAGES = ['dashboard', 'portal'] as const;
 const PAGE_TYPES = new Set<string>([...APP_PAGES, ...COMPOSABLE_PAGES]);
@@ -45,6 +45,7 @@ const PAGE_TYPES = new Set<string>([...APP_PAGES, ...COMPOSABLE_PAGES]);
 const APP_PAGE_DEFAULTS: Record<string, { label: string; icon: string }> = {
   chat: { label: 'Chat', icon: 'message-square' },
   inbox: { label: 'Tasks', icon: 'inbox' },
+  calendar: { label: 'Calendar', icon: 'calendar-days' },
   workflows: { label: 'Workflows', icon: 'workflow' },
   goals: { label: 'Goals', icon: 'target' },
   team: { label: 'Routing', icon: 'bot' },

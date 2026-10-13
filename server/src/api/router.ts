@@ -7,6 +7,7 @@ import { activeConfigPath } from '../config.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 import type { Store } from '../core/store.js';
+import { buildCalendar } from '../core/calendar.js';
 import type { EventBus } from '../core/events.js';
 
 export function createApiRouter(store: Store, eventBus: EventBus): Router {
@@ -30,6 +31,23 @@ export function createApiRouter(store: Store, eventBus: EventBus): Router {
       agent: req.query.agent as string,
       limit: req.query.limit ? parseInt(req.query.limit as string, 10) : undefined
     }));
+  });
+
+  // Calendar projection for the Calendar page: past runs + projected future fires
+  // of scheduled tasks in [from, to) (ISO; default: 7 days back .. 35 days ahead,
+  // window capped at 100 days). See core/calendar.ts.
+  router.get('/calendar', (req, res) => {
+    const DAY = 86400000;
+    const now = new Date();
+    const parse = (v: unknown, dflt: number) => {
+      const ms = typeof v === 'string' && v ? Date.parse(v) : NaN;
+      return Number.isFinite(ms) ? ms : dflt;
+    };
+    const from = parse(req.query.from, now.getTime() - 7 * DAY);
+    const to = parse(req.query.to, now.getTime() + 35 * DAY);
+    if (to <= from) return res.status(400).json({ error: '`to` must be after `from`' });
+    if (to - from > 100 * DAY) return res.status(400).json({ error: 'calendar window is capped at 100 days' });
+    res.json(buildCalendar(store.listTasks({}), new Date(from), new Date(to), now));
   });
 
   // Single task by id — used by the Chat UI to poll a dispatched task to completion.

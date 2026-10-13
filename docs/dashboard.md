@@ -14,6 +14,7 @@ Nav sections, page order, labels and the Overview's widgets come from **`layout.
 | [Portal](#portal) | Portal | `GET /api/portal` (portal.json) + `GET /api/services` |
 | [Chat](#chat) | Chat | `POST /api/inbox`, `GET /api/inbox/:id` |
 | [Inbox](#inbox) | Task Inbox | `GET/POST /api/inbox`, `PATCH /api/inbox/:id` |
+| [Calendar](#calendar) | Calendar | `GET /api/calendar`, `POST /api/inbox/:id/edit`, `POST /api/inbox/:id/run-now` |
 | [Workflows](#workflows) | Workflows | `GET /api/workflows*`, `POST /api/workflows/:id/run`, `GET /api/workflow-runs*` |
 | [Agents](#agents) | Agents | `GET/PUT /api/agents-config`, `/api/chains*` |
 | [Brains](#brains) | Brains | `GET/PUT/DELETE /api/brains*` |
@@ -75,7 +76,7 @@ keeps serving the last good layout.
   `{ "minWidth": px, "widgets": [...] }` (auto-fit grid, wraps below `minWidth`).
 - `portal` — any id, any number. Shows `portal.json` cards, optionally narrowed by
   `categories` and/or `keys`; `intro` (markdown) replaces the default blurb.
-- App pages — `chat`, `inbox`, `workflows`, `goals`, `team`, `brains`, `roster`,
+- App pages — `chat`, `inbox`, `calendar`, `workflows`, `goals`, `team`, `brains`, `roster`,
   `connections`, `config`. Fixed ids (other code deep-links to `#inbox/<id>`); a
   section can name them without an entry under `pages`, an entry only overrides
   `label`/`icon`/`hidden`. One the layout never mentions is appended to a
@@ -220,6 +221,24 @@ What you can do here:
 
 Tasks created by a workflow run carry `context.workflowId` / `workflowRunId` /
 `stepKey`, which is how the Workflows tab groups them (see below).
+
+---
+
+## Calendar
+
+Tasks on a time axis, built for scheduled work. There are three views: **Month**,
+**Week** (a time grid) and **Agenda** (a list, the default on phones). A **Schedules**
+rail lists every scheduled task with its next fire, cadence, last-run outcome, and
+*Run now* / *Edit* buttons.
+
+- A dashed entry is a projected future fire, and a solid entry is a real run. Recurring
+  tasks are expanded with the dispatcher's own `nextRunAt`.
+- An amber banner and ⚠ flag a scheduled task that is past its launch time (overdue).
+- Click an empty slot to create a task pre-filled with that time. Drag a task's next
+  fire to reschedule it. Click any entry for details and actions.
+
+Backed by `GET /api/calendar?from=ISO&to=ISO`. Full UX spec and data contract:
+[calendar-ux.md](calendar-ux.md).
 
 ---
 

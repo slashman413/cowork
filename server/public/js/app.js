@@ -703,7 +703,7 @@ class App {
     } catch (e) {
       // Mirrors the repo layout.json, so an older server without /api/layout
       // (or a failed fetch) still gets the familiar nav.
-      const app = { chat: ['Chat', 'message-square'], inbox: ['Tasks', 'inbox'], workflows: ['Workflows', 'workflow'],
+      const app = { chat: ['Chat', 'message-square'], inbox: ['Tasks', 'inbox'], calendar: ['Calendar', 'calendar-days'], workflows: ['Workflows', 'workflow'],
         goals: ['Goals', 'target'], team: ['Routing', 'bot'], brains: ['Brains', 'cpu'], roster: ['Personas', 'users-round'],
         connections: ['Workers', 'plug'], config: ['Configuration', 'settings'] };
       const pages = {
@@ -714,7 +714,7 @@ class App {
       };
       for (const [id, [label, icon]] of Object.entries(app)) pages[id] = { id, type: id, label, icon };
       this.layout = { brand: { title: 'Cowork', icon: 'zap', footer: 'Cowork Server' }, defaultPage: 'overview', pages,
-        sections: [{ label: 'Operations', pages: ['overview', 'portal', 'chat', 'inbox', 'workflows', 'goals'] },
+        sections: [{ label: 'Operations', pages: ['overview', 'portal', 'chat', 'inbox', 'calendar', 'workflows', 'goals'] },
                    { label: 'AI Fleet', pages: ['team', 'brains', 'roster'] },
                    { label: 'System', pages: ['connections', 'config'] }],
         errors: [], fallback: e.message };
@@ -1128,7 +1128,8 @@ class App {
    * division's brain chain), attached files upload to task inputs the brain
    * reads, and brain pinning mirrors pickBrain ('' = auto-route via the chain).
    */
-  async createTaskModal() {
+  // prefill.scheduledAt (ISO) pre-fills Run at — the Calendar opens this on an empty slot.
+  async createTaskModal(prefill = {}) {
     const container = document.getElementById('modal-container');
     const content = document.getElementById('modal-content');
     if (!container || !content) return;
@@ -1176,6 +1177,7 @@ class App {
     container.classList.remove('hidden');
     createIcons();
     recurrenceEditorBind(content, 'nt-rec');
+    if (prefill.scheduledAt) content.querySelector('#nt-when').value = isoToLocalInput(prefill.scheduledAt);
     content.querySelector('#nt-title').focus();
     const close = () => {
       container.classList.add('hidden');
@@ -1261,6 +1263,7 @@ class App {
         const fileNote = inputs.length ? ` · ${inputs.length} file(s) attached` : '';
         this.toast('task created', `${when ? `Scheduled for ${new Date(when).toLocaleString()}` : 'Queued'} — ${routeNote}${fileNote}.`);
         if (this.currentView === 'inbox') this.renderInbox();
+        if (this.currentView === 'calendar') this.renderCalendar();
       } catch (err) {
         okBtn.disabled = false;
         this.toast('error', err.message);
@@ -1389,6 +1392,7 @@ class App {
           : `Saved — now ${updated.status}`;
         this.toast('task updated', timing + '.');
         if (this.currentView === 'inbox') this.renderInbox();
+        if (this.currentView === 'calendar') this.renderCalendar();
       } catch (err) {
         okBtn.disabled = false;
         this.toast('error', err.message);
@@ -1449,6 +1453,7 @@ class App {
         case 'chat': await this.renderChat(); break;
         case 'connections': await this.renderConnections(); break;
         case 'inbox': await this.renderInbox(); break;
+        case 'calendar': await this.renderCalendar(); break;
         case 'workflows': await this.renderWorkflows(); break;
         case 'goals': await this.renderGoals(); break;
         case 'team': await this.renderTeam(); break;
