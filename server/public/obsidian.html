@@ -119,6 +119,7 @@
     #doc h1 { border-bottom: 1px solid var(--border); padding-bottom: .3em; }
     #doc a { color: var(--accent); }
     #doc a.wikilink { text-decoration: none; border-bottom: 1px dashed var(--accent); }
+    #doc .wikilink.unresolved { color: var(--muted); border-bottom: 1px dotted var(--muted); cursor: help; }
     #doc code { background: var(--panel-2); padding: .15em .4em; border-radius: 5px; font-size: .88em; }
     #doc pre { background: var(--panel-2); padding: 14px 16px; border-radius: 10px; overflow-x: auto; border: 1px solid var(--border); }
     #doc pre code { background: none; padding: 0; }
@@ -307,39 +308,116 @@
       }
     }
 
-    // Resolve Obsidian [[wikilinks]] to loadable notes before markdown rendering.
-    // [[Target]] and [[Target|Alias]] both become an in-app anchor that reopens
-    // via the hash router; unresolved targets just link by title (best effort).
-    function resolveWikilinks(md) {
-      return md.replace(/\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|([^\]]+))?\]\]/g, (_m, target, alias) => {
-        const name = target.trim();
-        const hit = notes.find(n => n.title.toLowerCase() === name.toLowerCase())
-                 || notes.find(n => n.path.toLowerCase() === (name.toLowerCase().endsWith('.md') ? name.toLowerCase() : name.toLowerCase() + '.md'));
-        const label = (alias || name).trim();
-        const path = hit ? hit.path : name;
-        return `<a class="wikilink" href="#${encodeURIComponent(path)}" data-wiki="${esc(path)}">${esc(label)}</a>`;
+    // Resolve a link target the way Obsidian does: exact vault path (with or
+    // without .md), then relative to the current note, then by note name.
+    // Returns the vault path, or null when no such note exists.
+    function resolveTarget(target, from) {
+      const t = target.trim().replace(/^\/+/, '');
+      if (!t) return null;
+      const byPath = (p) => {
+        const lc = p.toLowerCase(), md = lc.endsWith('.md') ? lc : lc + '.md';
+        const hit = notes.find(n => n.path.toLowerCase() === md);
+        return hit ? hit.path : null;
+      };
+      const dir = from && from.includes('/') ? from.slice(0, from.lastIndexOf('/') + 1) : '';
+      const name = t.split('/').pop().replace(/\.md$/i, '').toLowerCase();
+      const byName = notes.find(n => n.title.toLowerCase() === name);
+      return byPath(t) || byPath(normalizePath(dir + t)) || (byName ? byName.path : null);
+    }
+    function normalizePath(p) {
+      const out = [];
+      for (const seg of p.split('/')) {
+        if (seg === '..') out.pop(); else if (seg && seg !== '.') out.push(seg);
+      }
+      return out.join('/');
+    }
+    // Same slug rule as GitHub/Obsidian TOCs: "一、AI Agent 市場概況" -> "一ai-agent-市場概況".
+    function slugify(text) {
+      return text.trim().toLowerCase().replace(/[^\p{L}\p{N}\s_-]/gu, '').replace(/\s/g, '-');
+    }
+
+    // Resolve Obsidian [[wikilinks]] before markdown rendering. Resolved targets
+    // become in-app anchors; [[#Heading]] scrolls within the note; targets with
+    // no note render as a muted "unresolved" span (as in Obsidian) instead of a
+    // link that would 404. "\|" is the table-escaped alias separator.
+    function resolveWikilinks(md, from) {
+      return md.replace(/\[\[([^\]|#]*?)\\?(?:#([^\]|]*?))?\\?(?:\|([^\]]+))?\]\]/g, (_m, target, heading, alias) => {
+        const label = esc((alias || target || heading || '').trim());
+        if (!target.trim() && heading) {
+          return `<a class="wikilink" href="#" data-anchor="${esc(slugify(heading))}">${label}</a>`;
+        }
+        const path = resolveTarget(target, from);
+        if (!path) return `<span class="wikilink unresolved" title="No note named “${esc(target.trim())}” in the vault">${label}</span>`;
+        const anchor = heading ? ` data-anchor="${esc(slugify(heading))}"` : '';
+        return `<a class="wikilink" href="#${encodeURIComponent(path)}" data-wiki="${esc(path)}"${anchor}>${label}</a>`;
       });
     }
 
-    async function openNote(path) {
+    function scrollToAnchor(slug) {
+      if (!slug) return false;
+      const el = docEl.querySelector(`[id="${CSS.escape(slug)}"]`);
+      if (el) el.scrollIntoView({ block: 'start' });
+      return !!el;
+    }
+
+    // Route clicks on rendered links: wikilinks, in-note #heading anchors, and
+    // relative Markdown links to other .md notes all stay in the viewer.
+    function wireLinks(from) {
+      docEl.querySelectorAll('h1,h2,h3,h4,h5,h6').forEach(h => { h.id = slugify(h.textContent); });
+      docEl.querySelectorAll('a[href]').forEach(a => {
+        const href = a.getAttribute('href');
+        if (a.dataset.wiki) {
+          a.addEventListener('click', (e) => { e.preventDefault(); openNote(a.dataset.wiki, a.dataset.anchor); });
+        } else if (a.dataset.anchor !== undefined || href.startsWith('#')) {
+          const slug = a.dataset.anchor ?? decodeURIComponent(href.slice(1));
+          a.addEventListener('click', (e) => { e.preventDefault(); scrollToAnchor(slug) || scrollToAnchor(slugify(slug)); });
+        } else if (!/^[a-z][a-z0-9+.-]*:/i.test(href) && !href.startsWith('//')) {
+          const [rel, frag] = href.split('#');
+          let target = null;
+          try { target = resolveTarget(normalizePath((from.includes('/') ? from.slice(0, from.lastIndexOf('/') + 1) : '') + decodeURIComponent(rel)), ''); } catch { /* bad escape */ }
+          if (target) {
+            a.addEventListener('click', (e) => { e.preventDefault(); openNote(target, frag ? slugify(decodeURIComponent(frag)) : ''); });
+          } else {
+            a.classList.add('wikilink', 'unresolved');
+            a.removeAttribute('href');
+            a.title = `No note at “${rel}” in the vault`;
+          }
+        } else {
+          a.target = '_blank'; a.rel = 'noopener';
+        }
+      });
+    }
+
+    let currentPath = '';
+    async function openNote(path, anchor = '') {
       if (!path) return;
-      if (decodeURIComponent(location.hash.slice(1)) !== path) { location.hash = encodeURIComponent(path); return; }
+      if (decodeURIComponent(location.hash.slice(1)) !== path) {
+        pendingAnchor = anchor;
+        location.hash = encodeURIComponent(path); return;
+      }
       markActive();
+      // A stale bookmark of an in-note "#heading" link has no note behind it.
+      if (notes.length && !resolveTarget(path, '')) {
+        docWrap.classList.add('empty');
+        docEl.textContent = `“${path}” is not a note in this vault (it looks like a heading link). Pick a note from the list.`;
+        return;
+      }
       docWrap.classList.remove('empty');
       docEl.innerHTML = '<p class="muted">Loading…</p>';
       try {
         const note = await api(`/obsidian/note?path=${encodeURIComponent(path)}`);
-        const html = DOMPurify.sanitize(marked.parse(resolveWikilinks(note.content)));
+        currentPath = note.path;
+        const html = DOMPurify.sanitize(marked.parse(resolveWikilinks(note.content, note.path)));
         docEl.innerHTML = `<div class="doc-path">📄 ${esc(note.path)}</div>${html}`;
-        docEl.querySelectorAll('a.wikilink').forEach(a => a.addEventListener('click', (e) => {
-          e.preventDefault(); openNote(a.dataset.wiki);
-        }));
+        wireLinks(note.path);
         docWrap.scrollTop = 0;
+        if (anchor) scrollToAnchor(anchor);
       } catch (e) {
         docWrap.classList.add('empty');
         docEl.textContent = `Could not open note: ${e.message}`;
       }
     }
+    let pendingAnchor = '';
 
     searchEl.addEventListener('input', () => {
       clearTimeout(searchTimer);
@@ -363,7 +441,19 @@
       }
     });
 
-    window.addEventListener('hashchange', () => { markActive(); const p = decodeURIComponent(location.hash.slice(1)); if (p) openNote(p); });
+    window.addEventListener('hashchange', () => {
+      const p = decodeURIComponent(location.hash.slice(1));
+      if (!p) return;
+      // A bare "#heading" (e.g. a TOC link that slipped through) is not a note:
+      // scroll within the open note and put the note back in the URL.
+      if (currentPath && !resolveTarget(p, '') && (scrollToAnchor(p) || scrollToAnchor(slugify(p)))) {
+        history.replaceState(null, '', '#' + encodeURIComponent(currentPath));
+        return;
+      }
+      markActive();
+      const a = pendingAnchor; pendingAnchor = '';
+      openNote(p, a);
+    });
 
     (async function init() {
       try {
