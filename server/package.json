@@ -11,7 +11,7 @@
     "test": "tsx --test src/*.test.ts src/**/*.test.ts"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@modelcontextprotocol/sdk": "^1.31.0",
     "drizzle-orm": "^0.45.2",
     "express": "^5.1.0",
     "glob": "^11.0.0",
