@@ -672,10 +672,75 @@ class App {
     createIcons();
   }
 
-  init() {
+  async init() {
     window.addEventListener('hashchange', () => this.navigate());
     this.setupSSE();
+    await this.loadLayout();
     this.navigate();
+  }
+
+  // ── Layout (layout.json → nav sections, pages, dashboard widgets) ─────────
+
+  /**
+   * Fetch the dashboard layout (GET /api/layout, validated server-side by
+   * core/layout-config.ts) and build the sidebar from it. If the server can't
+   * serve it, fall back to a flat nav of the built-in pages so the app never
+   * boots without navigation.
+   */
+  async loadLayout() {
+    try {
+      this.layout = await this.api.get('/layout');
+    } catch (e) {
+      // Mirrors the repo layout.json, so an older server without /api/layout
+      // (or a failed fetch) still gets the familiar nav.
+      const app = { chat: ['Chat', 'message-square'], inbox: ['Tasks', 'inbox'], workflows: ['Workflows', 'workflow'],
+        goals: ['Goals', 'target'], team: ['Routing', 'bot'], brains: ['Brains', 'cpu'], roster: ['Personas', 'users-round'],
+        connections: ['Workers', 'plug'], config: ['Configuration', 'settings'] };
+      const pages = {
+        overview: { id: 'overview', type: 'dashboard', label: 'Overview', icon: 'layout-dashboard',
+          rows: [{ widgets: [{ type: 'sysbar' }] }, { widgets: [{ type: 'stats' }] },
+                 { minWidth: 380, widgets: [{ type: 'dispatcher' }, { type: 'activity' }] }, { widgets: [{ type: 'platforms' }] }] },
+        portal: { id: 'portal', type: 'portal', label: 'Portal', icon: 'layout-grid' },
+      };
+      for (const [id, [label, icon]] of Object.entries(app)) pages[id] = { id, type: id, label, icon };
+      this.layout = { brand: { title: 'Cowork', icon: 'zap', footer: 'Cowork Server' }, defaultPage: 'overview', pages,
+        sections: [{ label: 'Operations', pages: ['overview', 'portal', 'chat', 'inbox', 'workflows', 'goals'] },
+                   { label: 'AI Fleet', pages: ['team', 'brains', 'roster'] },
+                   { label: 'System', pages: ['connections', 'config'] }],
+        errors: [], fallback: e.message };
+      console.warn('layout.json unavailable, using built-in default:', e.message);
+    }
+    this.renderNav();
+  }
+
+  renderNav() {
+    const { brand, sections, pages } = this.layout;
+    document.title = brand.title;
+    const logo = document.querySelector('.logo-area');
+    if (logo) logo.innerHTML = `<i data-lucide="${esc(brand.icon)}"></i><h1 class="logo-text">${esc(brand.title)}</h1>`;
+    const footer = document.querySelector('.sidebar-footer');
+    if (footer) footer.textContent = brand.footer;
+    const nav = document.querySelector('.nav-menu');
+    if (nav) nav.innerHTML = sections.map((sec) => `
+      <div class="nav-section" role="group"${sec.label ? ` aria-label="${esc(sec.label)}"` : ''}>
+        ${sec.label ? `<span class="nav-section-label" aria-hidden="true">${esc(sec.label)}</span>` : ''}
+        ${sec.pages.map((id) => {
+          const p = pages[id];
+          return `<a href="#${esc(id)}" class="nav-item" data-view="${esc(id)}" data-label="${esc(p.label)}">
+            <i data-lucide="${esc(p.icon)}"></i><span class="nav-text">${esc(p.label)}</span></a>`;
+        }).join('')}
+      </div>`).join('');
+    createIcons();
+  }
+
+  // layout.json problems, shown on dashboard/portal pages (never fatal).
+  layoutErrorBox() {
+    const errs = this.layout?.errors || [];
+    return errs.length ? `
+      <div class="card portal-errors">
+        <strong><i data-lucide="triangle-alert"></i> ${esc(this.layout.path ? this.layout.path.split('/').pop() : 'layout.json')} has ${errs.length} problem${errs.length > 1 ? 's' : ''}</strong>
+        <ul>${errs.map(e => `<li>${esc(e)}</li>`).join('')}</ul>
+      </div>` : '';
   }
 
   setupSSE() {
@@ -1322,23 +1387,26 @@ class App {
   }
 
   navigate() {
-    const raw = window.location.hash.replace('#', '') || 'overview';
+    const pages = this.layout?.pages || {};
+    const fallback = this.layout?.defaultPage || 'overview';
+    const raw = window.location.hash.replace('#', '') || fallback;
     // A hash may carry a sub-path: `#inbox/<taskId>` deep-links to one task so a
     // workflow run's OUTPUT panel can open the exact task in a new tab.
     const [view, ...rest] = raw.split('/');
-    // "#dashboard" was the Overview's old name — keep old bookmarks working.
-    this.currentView = (view === 'dashboard' ? 'overview' : view) || 'overview';
+    // "#dashboard" was the Overview's old name — keep old bookmarks working
+    // unless a layout defines a page with that id. Unknown ids land on the
+    // default page rather than a blank view.
+    let id = (view === 'dashboard' && !pages.dashboard) ? 'overview' : view;
+    if (!pages[id]) id = fallback;
+    this.currentView = id;
+    this.currentPage = pages[id] || { id, type: 'dashboard', label: id, rows: [] };
     this.pendingTask = (this.currentView === 'inbox' && rest.length)
       ? decodeURIComponent(rest.join('/')) : null;
     if (this.pendingTask) this._focusRetried = false;
     document.querySelectorAll('.nav-item').forEach(item => {
       item.classList.toggle('active', item.dataset.view === this.currentView);
     });
-    const titles = {
-      overview: 'Overview', chat: 'Chat', portal: 'Portal', connections: 'Workers', inbox: 'Tasks',
-      workflows: 'Workflows', team: 'Routing', brains: 'Brains', roster: 'Personas', config: 'Configuration'
-    };
-    this.viewTitleEl.textContent = titles[this.currentView] || 'Overview';
+    this.viewTitleEl.textContent = this.currentPage.label;
     this.renderCurrentView();
   }
 
@@ -1362,10 +1430,13 @@ class App {
 
   async renderCurrentView() {
     this.clearViewTimers();
+    if (!this.currentPage) return;  // SSE can fire before the layout has loaded
     try {
-      switch (this.currentView) {
+      // App pages keep id === type; dashboard/portal pages can have any id.
+      switch (this.currentPage?.type) {
+        case 'dashboard': await this.renderDashboard(this.currentPage); break;
+        case 'portal': await this.renderPortal(this.currentPage); break;
         case 'chat': await this.renderChat(); break;
-        case 'portal': await this.renderPortal(); break;
         case 'connections': await this.renderConnections(); break;
         case 'inbox': await this.renderInbox(); break;
         case 'workflows': await this.renderWorkflows(); break;
@@ -1374,7 +1445,7 @@ class App {
         case 'brains': await this.renderBrains(); break;
         case 'roster': await this.renderRoster(); break;
         case 'config': await this.renderConfig(); break;
-        default: await this.renderOverview(); break;
+        default: await this.renderDashboard(this.currentPage); break;
       }
       // A successful data fetch proves the server is reachable — mark the badge
       // Live even if the SSE stream is slow/blocked for any reason.
@@ -1389,83 +1460,140 @@ class App {
 
   // ── Overview ───────────────────────────────────────────────────────────
 
-  async renderOverview() {
-    const [status, dispatcher] = await Promise.all([
-      this.api.get('/status'),
-      this.api.get('/dispatcher').catch(() => null),
-      this.refreshAgents()
+  /**
+   * A `dashboard` page from layout.json: rows of widgets. Each widget type
+   * declares the data it needs, so a page only fetches (and polls) what it
+   * shows — a page without a sysbar never polls /api/system.
+   */
+  async renderDashboard(page) {
+    const widgets = (page.rows || []).flatMap(r => r.widgets);
+    const has = (t) => widgets.some(w => w.type === t);
+    const [status, dispatcher, portal] = await Promise.all([
+      (has('stats') || has('platforms')) ? this.api.get('/status') : null,
+      has('dispatcher') ? this.api.get('/dispatcher').catch(() => null) : null,
+      has('services') ? this.api.get('/portal').catch(() => null) : null,
+      has('activity') ? this.refreshAgents() : null,
     ]);
-    const stat = (iconName, value, label) => `
-      <div class="card stat-card">
-        <div class="stat-icon"><i data-lucide="${iconName}"></i></div>
-        <div>
-          <div class="stat-value">${value}</div>
-          <div class="stat-label">${label}</div>
-        </div>
-      </div>`;
-    const dot = (ok) => `<span class="dot ${ok ? 'connected' : 'disconnected'}" style="display:inline-block; margin-left:6px"></span>`;
+    const ctx = { status, dispatcher, portal };
 
-    const platforms = Object.entries(status.platformStatus || {})
-      .map(([id, on]) => `<p style="margin:6px 0; font-size:0.875rem">${esc(id)} ${dot(on)}</p>`).join('') || '<p style="color:var(--text-muted)">-</p>';
+    const rows = (page.rows || []).map((row) => {
+      const cells = row.widgets.map((w) => {
+        const span = w.span > 1 ? ` style="grid-column: span ${w.span}"` : '';
+        return `<div class="layout-cell"${span}>${this.renderWidget(w, ctx)}</div>`;
+      }).join('');
+      const min = row.minWidth || (row.widgets.length > 1 ? 380 : 0);
+      const cols = min ? `repeat(auto-fit, minmax(min(${min}px, 100%), 1fr))` : '1fr';
+      return `<div class="layout-row" style="grid-template-columns:${cols}">${cells}</div>`;
+    }).join('');
 
-    const roles = dispatcher
-      ? Object.entries(dispatcher.agents || {}).map(([name, a]) =>
-          `<tr><td style="padding:3px 12px 3px 0">${badge(name, '#7C3AED')}</td><td style="color:var(--text-secondary); font-size:0.85rem">${esc((a.brains || []).join(' → '))}</td></tr>`).join('')
-      : '';
-    const running = dispatcher?.running?.length
-      ? dispatcher.running.map(r =>
-          `<p style="margin:4px 0; font-size:0.85rem">${badge(r.role, '#22C55E')} <span style="color:var(--text-secondary)">${esc(r.taskId.slice(0, 8))} · ${timeAgo(new Date(r.startedAt).toISOString())}</span></p>`).join('')
-      : '<p style="color:var(--text-muted); font-size:0.85rem">Idle</p>';
-
-    const activity = this.activity.length
-      ? this.activity.slice(0, 12).map(e =>
-          `<p style="margin:6px 0; font-size:0.85rem">${badge(e.type, '#0EA5E9')} ${esc(this.describeEvent(e))} <span style="color:var(--text-muted)">${timeAgo(e.timestamp)}</span></p>`).join('')
-      : '<p style="color:var(--text-muted); font-size:0.875rem">Waiting for events…</p>';
-
-    this.contentEl.innerHTML = `
-      ${this.renderSysbar()}
-      <div class="grid-4" style="margin-bottom: var(--space-xl)">
-        ${stat('bot', status.activeAgents, 'Active Workers')}
-        ${stat('inbox', status.inboxSummary.pending + status.inboxSummary.inProgress,
-               `Open Tasks (${status.inboxSummary.completed - (status.inboxSummary.failed || 0)} done${status.inboxSummary.failed ? `, ${status.inboxSummary.failed} failed` : ''}${status.inboxSummary.scheduled ? `, ${status.inboxSummary.scheduled} scheduled` : ''}${status.inboxSummary.waitingInput ? `, ${status.inboxSummary.waitingInput} wait input` : ''})`)}
-        ${stat('users', status.rosterCount, 'Personas')}
-      </div>
-      <div class="grid-2" style="margin-bottom: var(--space-xl)">
-        <div class="card">
-          <div style="display:flex; align-items:center; gap:8px; margin-bottom:var(--space-md)">
-            <i data-lucide="zap" style="width:18px;height:18px;color:var(--text-muted)"></i>
-            <h3 style="font-size:0.95rem">Dispatcher</h3>
-            ${dispatcher?.enabled ? badge('enabled', '#22C55E') : badge('disabled', '#EF4444')}
-          </div>
-          <div style="margin-top: var(--space-md)">
-            <h4 class="section-title">Running Now</h4>
-            ${running}
-          </div>
-          <div style="margin-top: var(--space-md)">
-            <h4 class="section-title">Role → Model</h4>
-            <table class="dispatcher-table">${roles}</table>
-          </div>
-        </div>
-        <div class="card">
-          <div style="display:flex; align-items:center; gap:8px; margin-bottom:var(--space-md)">
-            <i data-lucide="activity" style="width:18px;height:18px;color:var(--text-muted)"></i>
-            <h3 style="font-size:0.95rem">Live Activity</h3>
-          </div>
-          <div style="max-height:340px; overflow-y:auto">${activity}</div>
-        </div>
-      </div>
-      <div class="card">
-        <h3 style="font-size:0.95rem; margin-bottom:var(--space-md)">Platforms</h3>
-        <div>${platforms}</div>
-      </div>`;
+    this.contentEl.innerHTML = `${this.layoutErrorBox()}${rows || `<div class="empty-state">
+        <div class="empty-state-icon"><i data-lucide="${esc(page.icon || 'layout-dashboard')}"></i></div>
+        <h3>Empty page</h3>
+        <p>Add widget rows to <code>pages.${esc(page.id)}.rows</code> in <code>${esc(this.layout?.path || 'layout.json')}</code>.</p>
+      </div>`}`;
 
     this.contentEl.querySelectorAll('[data-sys-detail]').forEach((el) => {
       el.addEventListener('click', () => this.openSysDetail(el.dataset.sysDetail, el));
     });
+    // Pollers live in _viewTimers, so clearViewTimers() stops them on nav.
+    if (has('sysbar')) this.startSystemPolling();
+    if (has('services')) {
+      this.wireServiceControls(this.contentEl);
+      if (this.svcStatus) this.applyServiceStatus(this.svcStatus);
+      this.startServicePolling();
+    }
+  }
 
-    // Kick off (and keep) the 3s system-load polling for as long as we're on
-    // the Overview. clearViewTimers() (in renderCurrentView) stops it on nav.
-    this.startSystemPolling();
+  // One widget's HTML. Options were validated server-side (layout-config.ts);
+  // every string that reaches the DOM still goes through esc()/md().
+  renderWidget(w, { status, dispatcher, portal }) {
+    const head = (icon, title, extra = '') => `
+      <div style="display:flex; align-items:center; gap:8px; margin-bottom:var(--space-md)">
+        <i data-lucide="${icon}" style="width:18px;height:18px;color:var(--text-muted)"></i>
+        <h3 style="font-size:0.95rem">${esc(title)}</h3>${extra}
+      </div>`;
+    const dot = (ok) => `<span class="dot ${ok ? 'connected' : 'disconnected'}" style="display:inline-block; margin-left:6px"></span>`;
+
+    switch (w.type) {
+      case 'sysbar': return this.renderSysbar(w);
+
+      case 'stats': {
+        const s = status || { inboxSummary: {} };
+        const sum = s.inboxSummary || {};
+        const dur = (sec) => {
+          const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60);
+          return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
+        };
+        const defs = {
+          workers: ['bot', s.activeAgents, 'Active Workers'],
+          openTasks: ['inbox', (sum.pending || 0) + (sum.inProgress || 0),
+            `Open Tasks (${(sum.completed || 0) - (sum.failed || 0)} done${sum.failed ? `, ${sum.failed} failed` : ''}${sum.scheduled ? `, ${sum.scheduled} scheduled` : ''}${sum.waitingInput ? `, ${sum.waitingInput} wait input` : ''})`],
+          personas: ['users', s.rosterCount, 'Personas'],
+          failedTasks: ['circle-x', sum.failed || 0, 'Failed Tasks'],
+          waitingInput: ['message-circle-question', sum.waitingInput || 0, 'Waiting for Input'],
+          scheduled: ['calendar-clock', sum.scheduled || 0, 'Scheduled Tasks'],
+          uptime: ['timer', s.uptime != null ? dur(s.uptime) : '—', 'Server Uptime'],
+        };
+        const items = w.items?.length ? w.items : ['workers', 'openTasks', 'personas'];
+        return `${w.title ? `<h4 class="section-title">${esc(w.title)}</h4>` : ''}<div class="grid-4">${items.map((k) => {
+          const [icon, value, label] = defs[k];
+          return `<div class="card stat-card">
+            <div class="stat-icon"><i data-lucide="${icon}"></i></div>
+            <div><div class="stat-value">${esc(value ?? '—')}</div><div class="stat-label">${esc(label)}</div></div>
+          </div>`;
+        }).join('')}</div>`;
+      }
+
+      case 'dispatcher': {
+        const roles = dispatcher
+          ? Object.entries(dispatcher.agents || {}).map(([name, a]) =>
+              `<tr><td style="padding:3px 12px 3px 0">${badge(name, '#7C3AED')}</td><td style="color:var(--text-secondary); font-size:0.85rem">${esc((a.brains || []).join(' → '))}</td></tr>`).join('')
+          : '';
+        const running = dispatcher?.running?.length
+          ? dispatcher.running.map(r =>
+              `<p style="margin:4px 0; font-size:0.85rem">${badge(r.role, '#22C55E')} <span style="color:var(--text-secondary)">${esc(r.taskId.slice(0, 8))} · ${timeAgo(new Date(r.startedAt).toISOString())}</span></p>`).join('')
+          : '<p style="color:var(--text-muted); font-size:0.85rem">Idle</p>';
+        return `<div class="card">
+          ${head('zap', w.title || 'Dispatcher', dispatcher?.enabled ? badge('enabled', '#22C55E') : badge('disabled', '#EF4444'))}
+          <div style="margin-top: var(--space-md)"><h4 class="section-title">Running Now</h4>${running}</div>
+          <div style="margin-top: var(--space-md)"><h4 class="section-title">Role → Model</h4><table class="dispatcher-table">${roles}</table></div>
+        </div>`;
+      }
+
+      case 'activity': {
+        const list = this.activity.length
+          ? this.activity.slice(0, w.limit || 12).map(e =>
+              `<p style="margin:6px 0; font-size:0.85rem">${badge(e.type, '#0EA5E9')} ${esc(this.describeEvent(e))} <span style="color:var(--text-muted)">${timeAgo(e.timestamp)}</span></p>`).join('')
+          : '<p style="color:var(--text-muted); font-size:0.875rem">Waiting for events…</p>';
+        return `<div class="card">${head('activity', w.title || 'Live Activity')}<div style="max-height:340px; overflow-y:auto">${list}</div></div>`;
+      }
+
+      case 'platforms': {
+        const rows = Object.entries(status?.platformStatus || {})
+          .map(([id, on]) => `<p style="margin:6px 0; font-size:0.875rem">${esc(id)} ${dot(on)}</p>`).join('')
+          || '<p style="color:var(--text-muted)">-</p>';
+        return `<div class="card"><h3 style="font-size:0.95rem; margin-bottom:var(--space-md)">${esc(w.title || 'Platforms')}</h3><div>${rows}</div></div>`;
+      }
+
+      case 'services': {
+        // Portal cards on a dashboard — same portal.json, same status polling.
+        if (!portal) return `<div class="card">${head('layout-grid', w.title || 'Services')}<p style="color:var(--text-muted)">Portal catalog unavailable.</p></div>`;
+        const svcs = this.portalServices(portal, w);
+        const title = w.title || 'Services';
+        if (!svcs.length) return `<div class="card">${head('layout-grid', title)}<p style="color:var(--text-muted); font-size:0.85rem">No portal.json services match this widget's filter.</p></div>`;
+        if (!w.compact) return `<h4 class="section-title" style="margin-bottom:var(--space-md)">${esc(title)}</h4><div class="grid-3">${svcs.map(s => this.portalCard(s)).join('')}</div>`;
+        return `<div class="card">${head('layout-grid', title)}<div class="svc-compact">${svcs.map(s =>
+          `<a class="svc-compact-row" href="${esc(s.url)}" target="_blank" rel="noopener noreferrer" title="Open ${esc(s.label)}">
+            <i data-lucide="${esc(s.icon)}" style="color:${s.accent}"></i><span class="svc-compact-label">${esc(s.label)}</span>${this.svcStatusChip(s)}
+          </a>`).join('')}</div></div>`;
+      }
+
+      case 'note':
+        return `<div class="card layout-note">${w.title ? head('sticky-note', w.title) : ''}${md(w.text)}</div>`;
+
+      default:
+        return `<div class="card" style="color:var(--text-muted)">Unknown widget "${esc(w.type)}"</div>`;
+    }
   }
 
   // ── System load bar (CPU / GPU / Memory / Temperature) ───────────────────
@@ -1481,45 +1609,51 @@ class App {
   // Build the bar from the last known snapshot (this.sysMetrics) so SSE-driven
   // re-renders never flash back to placeholders. Live values then update in
   // place via applySysbar(). Only numbers + an escaped GPU name reach the DOM.
-  renderSysbar() {
+  // `opts.tiles` picks/orders tiles; `opts.hideUnavailable` hides a tile whose
+  // metric the host can't report (no GPU, no thermal sensor).
+  renderSysbar(opts = {}) {
     const s = this.sysMetrics || null;
+    const TILES = {
+      cpu:     ['cpu',  'cpu',          'CPU'],
+      gpu:     ['gpu',  'gpu',          'GPU'],
+      memory:  ['mem',  'memory-stick', 'Memory'],
+      thermal: ['temp', 'thermometer',  'Core Temp'],
+    };
     // Each tile is a button that opens its drill-down dialog (openSysDetail).
-    const tile = (id, icon, label, detail) => `
-      <button type="button" class="sysbar-tile" data-sys-detail="${detail}" aria-haspopup="dialog"
-              title="Show ${label} details">
+    const tile = (detail) => {
+      const [id, icon, label] = TILES[detail];
+      return `
+      <button type="button" class="sysbar-tile" data-sys-detail="${detail}" data-sys-tile="${id}" aria-haspopup="dialog"
+              ${opts.hideUnavailable ? 'data-hide-unavailable' : ''} title="Show ${label} details">
         <div class="sysbar-head">
           <i data-lucide="${icon}"></i><span class="sysbar-label">${label}</span>
-          <span class="sysbar-val" id="sys-${id}-val">—</span>
+          <span class="sysbar-val" data-sys="${id}-val">—</span>
         </div>
-        <div class="meter"><div class="meter-fill" id="sys-${id}-bar" style="width:0%"></div></div>
-        <div class="sysbar-sub" id="sys-${id}-sub">—</div>
+        <div class="meter"><div class="meter-fill" data-sys="${id}-bar" style="width:0%"></div></div>
+        <div class="sysbar-sub" data-sys="${id}-sub">—</div>
         <i data-lucide="chevron-right" class="sysbar-more" aria-hidden="true"></i>
       </button>`;
-    const html = `
-      <div class="sysbar" id="sysbar">
-        ${tile('cpu', 'cpu', 'CPU', 'cpu')}
-        ${tile('gpu', 'gpu', 'GPU', 'gpu')}
-        ${tile('mem', 'memory-stick', 'Memory', 'memory')}
-        ${tile('temp', 'thermometer', 'Core Temp', 'thermal')}
-      </div>`;
+    };
+    const tiles = (opts.tiles?.length ? opts.tiles : Object.keys(TILES)).filter(t => TILES[t]);
+    const html = `<div class="sysbar">${tiles.map(tile).join('')}</div>`;
     // If we already have a snapshot, apply it after this HTML lands in the DOM.
     if (s) queueMicrotask(() => this.applySysbar(s));
     return html;
   }
 
-  // Update the bar's tiles in place from a snapshot (no full re-render).
+  // Update every sysbar tile in place from a snapshot (no full re-render).
   applySysbar(s) {
     if (!s) return;
-    const set = (id, val, pct, sub) => {
-      const v = document.getElementById(`sys-${id}-val`);
-      const b = document.getElementById(`sys-${id}-bar`);
-      const u = document.getElementById(`sys-${id}-sub`);
-      if (v) v.textContent = val;
-      if (b) {
+    const all = (sel) => document.querySelectorAll(`[data-sys="${sel}"]`);
+    const set = (id, val, pct, sub, available = true) => {
+      all(`${id}-val`).forEach(v => { v.textContent = val; });
+      all(`${id}-bar`).forEach(b => {
         b.style.width = `${pct == null ? 0 : Math.max(0, Math.min(100, pct))}%`;
         b.className = `meter-fill ${this.sysBand(pct)}`;
-      }
-      if (u) u.textContent = sub;
+      });
+      all(`${id}-sub`).forEach(u => { u.textContent = sub; });
+      document.querySelectorAll(`[data-sys-tile="${id}"][data-hide-unavailable]`)
+        .forEach(t => { t.hidden = !available; });
     };
     const pct = (n) => (n == null ? '—' : `${n}%`);
     const mb = (n) => (n == null ? '—' : n >= 1024 ? `${(n / 1024).toFixed(1)} GB` : `${Math.round(n)} MB`);
@@ -1539,7 +1673,7 @@ class App {
       set('gpu', pct(g.usage), g.usage,
         `${gmem}${g.temperature != null ? ` · ${g.temperature}°C` : ''}${name ? ` · ${name.slice(0, 22)}` : ''}`);
     } else {
-      set('gpu', 'n/a', null, 'no GPU detected');
+      set('gpu', 'n/a', null, 'no GPU detected', false);
     }
 
     // Memory
@@ -1548,7 +1682,7 @@ class App {
 
     // Core temperature — meter scaled against a 100°C ceiling.
     const t = cpu.temperature;
-    set('temp', t == null ? '—' : `${t}°C`, t, t == null ? 'unavailable' : 'CPU package');
+    set('temp', t == null ? '—' : `${t}°C`, t, t == null ? 'unavailable' : 'CPU package', t != null);
   }
 
   startSystemPolling() {
@@ -3650,10 +3784,73 @@ class App {
 
   // ── Portal (launcher for local self-hosted web services) ────────────────
 
-  async renderPortal() {
+  async renderPortal(page = {}) {
     // { path, accent, categories, services, errors, controlEnabled } — the
     // server has already validated portal.json; errors are surfaced, not fatal.
     const portal = await this.api.get('/portal');
+    // A layout portal page may narrow the catalog to some categories/keys, so one
+    // portal.json can back several pages ("Models", "Dev tools", …).
+    const filtered = !!(page.categories?.length || page.keys?.length);
+    const services = this.portalServices(portal, page);
+
+    // portal.json problems (bad JSON, invalid url/icon/unit) — shown above the
+    // cards so a typo is visible instead of a card silently vanishing.
+    const errorBox = (portal.errors || []).length ? `
+      <div class="card portal-errors">
+        <strong><i data-lucide="triangle-alert"></i> portal.json has ${portal.errors.length} problem${portal.errors.length > 1 ? 's' : ''}</strong>
+        <ul>${portal.errors.map(e => `<li>${esc(e)}</li>`).join('')}</ul>
+      </div>` : '';
+
+    if (!services.length) {
+      this.contentEl.innerHTML = `${this.layoutErrorBox()}${errorBox}<div class="empty-state">
+        <div class="empty-state-icon"><i data-lucide="layout-grid"></i></div>
+        <h3>No services yet</h3>
+        ${filtered
+          ? `<p>This page only shows ${page.categories?.length ? `categories <code>${esc(page.categories.join(', '))}</code>` : ''}${page.categories?.length && page.keys?.length ? ' and ' : ''}${page.keys?.length ? `keys <code>${esc(page.keys.join(', '))}</code>` : ''}
+             from <code>${esc(portal.path || 'portal.json')}</code>, and none match. Adjust the filter in <code>${esc(this.layout?.path || 'layout.json')}</code>.</p>`
+          : `<p>Add entries to the <code>services</code> block of <code>${esc(portal.path || 'portal.json')}</code> — each entry
+             <code>{ "url": "http://localhost:8081", "label": "Mautic", "icon": "megaphone", "category": "Marketing" }</code>
+             shows up here as a launch card.</p>`}
+      </div>`;
+      return;
+    }
+
+    // Group by category, preserving portalServices()' category order.
+    const groups = new Map();
+    for (const s of services) {
+      if (!groups.has(s.category)) groups.set(s.category, []);
+      groups.get(s.category).push(s);
+    }
+    const sections = [...groups.keys()].map(cat => `
+      <div class="portal-section">
+        <h3 class="section-title" style="margin-bottom:var(--space-md)">${esc(cat)}
+          <span style="color:var(--text-muted); font-weight:400">· ${groups.get(cat).length}</span>
+        </h3>
+        <div class="grid-3">${groups.get(cat).map(s => this.portalCard(s)).join('')}</div>
+      </div>`).join('');
+
+    const intro = page.intro
+      ? `<div class="layout-intro">${md(page.intro)}</div>`
+      : `<p style="color:var(--text-secondary); font-size:0.875rem; margin-bottom:var(--space-lg)">
+        Quick-launch the local web services running on this host. Cards come from
+        <code>${esc(portal.path || 'portal.json')}</code> — edit it and refresh, no restart needed.
+        Status dots are probed from the server every 3s.
+      </p>`;
+    this.contentEl.innerHTML = `${intro}${this.layoutErrorBox()}${errorBox}${sections}`;
+
+    this.wireServiceControls(this.contentEl);
+    // Paint the last known statuses immediately (no flash on re-render), then
+    // keep them fresh every 3s for as long as we're on the Portal.
+    if (this.svcStatus) this.applyServiceStatus(this.svcStatus);
+    this.startServicePolling();
+  }
+
+  /**
+   * Normalise portal.json into card models, sorted by category order then
+   * `order`/label, optionally narrowed by a layout `{ categories, keys }` filter
+   * (Portal pages and the Overview `services` widget share this).
+   */
+  portalServices(portal, filter = {}) {
     const configured = portal.services || {};
     // Service control is opt-in (serviceControl.enabled). When on, cards backed
     // by a systemd --user unit gain Start/Stop/Restart buttons. Mutations also
@@ -3688,6 +3885,9 @@ class App {
       } catch { return ''; }
     };
 
+    const cats = filter.categories?.length ? new Set(filter.categories) : null;
+    const keys = filter.keys?.length ? new Set(filter.keys) : null;
+
     // Normalize each entry into a card model; unset presentation fields fall
     // back to neutral defaults so a bare { "url": … } still renders sensibly.
     const services = Object.entries(configured).map(([key, v]) => {
@@ -3706,106 +3906,69 @@ class App {
         unit: controlEnabled ? (v.unit || '') : '',
         controllable: controlEnabled && v.controllable === true,
       };
-    }).filter(s => s.url);
+    }).filter(s => s.url && (!cats || cats.has(s.category)) && (!keys || keys.has(s.key)));
 
-    // portal.json problems (bad JSON, invalid url/icon/unit) — shown above the
-    // cards so a typo is visible instead of a card silently vanishing.
-    const errorBox = (portal.errors || []).length ? `
-      <div class="card portal-errors">
-        <strong><i data-lucide="triangle-alert"></i> portal.json has ${portal.errors.length} problem${portal.errors.length > 1 ? 's' : ''}</strong>
-        <ul>${portal.errors.map(e => `<li>${esc(e)}</li>`).join('')}</ul>
+    // Categories in portal.json order (unlisted ones A→Z after); within one,
+    // explicit `order` first (ascending), then by label.
+    const catRank = (c) => { const i = categoryOrder.indexOf(c); return i === -1 ? 1e9 : i; };
+    return services.sort((a, b) =>
+      catRank(a.category) - catRank(b.category) || a.category.localeCompare(b.category)
+      || (a.order ?? 1e9) - (b.order ?? 1e9) || a.label.localeCompare(b.label));
+  }
+
+  portalCard(s) {
+    const c = s.accent;
+    let host = s.url;
+    try { host = new URL(s.url).host || s.url; } catch { /* keep raw */ }
+    // Lifecycle control row (only when the card names a controllable unit).
+    // The card is an <a>; the click handler preventDefault()s so buttons act
+    // on the service instead of opening the tab.
+    const controls = s.unit ? `
+      <div class="portal-controls" data-svc-controls="${esc(s.key)}">
+        <span class="unit-chip" data-unit-state="${esc(s.key)}" title="systemd unit state">…</span>
+        <span class="portal-btns">
+          <button class="btn-svc" data-svc-action="start"   data-key="${esc(s.key)}" title="Start unit">Start</button>
+          <button class="btn-svc" data-svc-action="stop"    data-key="${esc(s.key)}" title="Stop unit">Stop</button>
+          <button class="btn-svc" data-svc-action="restart" data-key="${esc(s.key)}" title="Restart unit">Restart</button>
+          ${s.controllable ? `<button class="btn-svc" data-svc-action="__autostart" data-key="${esc(s.key)}" title="Toggle boot autostart">Autostart</button>` : ''}
+        </span>
       </div>` : '';
+    return `<a class="card portal-card" href="${esc(s.url)}" target="_blank" rel="noopener noreferrer"
+        title="Open ${esc(s.label)} — ${esc(s.url)}">
+      <div class="portal-top">
+        <span class="portal-icon" style="background:${c}18; color:${c}; border:1px solid ${c}33">
+          <i data-lucide="${esc(s.icon)}"></i>
+        </span>
+        ${this.svcStatusChip(s)}
+        <span class="portal-open"><i data-lucide="external-link"></i></span>
+      </div>
+      <div class="portal-title">${esc(s.label)}${s.enabled ? '' : ` ${badge('disabled', '#94A3B8')}`}</div>
+      ${s.description ? `<div class="portal-desc">${esc(s.description)}</div>` : ''}
+      <div class="portal-url"><i data-lucide="link"></i> ${esc(host)}</div>
+      ${controls}
+    </a>`;
+  }
 
-    if (!services.length) {
-      this.contentEl.innerHTML = `${errorBox}<div class="empty-state">
-        <div class="empty-state-icon"><i data-lucide="layout-grid"></i></div>
-        <h3>No services yet</h3>
-        <p>Add entries to the <code>services</code> block of <code>${esc(portal.path || 'portal.json')}</code> — each entry
-        <code>{ "url": "http://localhost:8081", "label": "Mautic", "icon": "megaphone", "category": "Marketing" }</code>
-        shows up here as a launch card.</p>
-      </div>`;
-      return;
-    }
+  // Status dot + text, filled in by applyServiceStatus().
+  svcStatusChip(s) {
+    return `<span class="svc-status ${s.enabled ? 'checking' : 'disabled'}" data-svc="${esc(s.key)}"
+              title="${s.enabled ? 'Checking…' : 'Monitoring disabled'}">
+          <span class="svc-dot"></span><span class="svc-text">${s.enabled ? 'checking' : 'disabled'}</span>
+        </span>`;
+  }
 
-    // Group by category, in a stable, human-friendly order.
-    const groups = new Map();
-    for (const s of services) {
-      if (!groups.has(s.category)) groups.set(s.category, []);
-      groups.get(s.category).push(s);
-    }
-    const orderedCats = [...groups.keys()].sort((a, b) => {
-      const ia = categoryOrder.indexOf(a), ib = categoryOrder.indexOf(b);
-      return (ia === -1 ? 1e9 : ia) - (ib === -1 ? 1e9 : ib) || a.localeCompare(b);
-    });
-    // Within a category: explicit `order` first (ascending), then by label.
-    for (const list of groups.values()) {
-      list.sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || a.label.localeCompare(b.label));
-    }
-
-    const card = (s) => {
-      const c = s.accent;
-      let host = s.url;
-      try { host = new URL(s.url).host || s.url; } catch { /* keep raw */ }
-      // Lifecycle control row (only when the card names a controllable unit).
-      // The card is an <a>; the click handler preventDefault()s so buttons act
-      // on the service instead of opening the tab.
-      const controls = s.unit ? `
-        <div class="portal-controls" data-svc-controls="${esc(s.key)}">
-          <span class="unit-chip" data-unit-state="${esc(s.key)}" title="systemd unit state">…</span>
-          <span class="portal-btns">
-            <button class="btn-svc" data-svc-action="start"   data-key="${esc(s.key)}" title="Start unit">Start</button>
-            <button class="btn-svc" data-svc-action="stop"    data-key="${esc(s.key)}" title="Stop unit">Stop</button>
-            <button class="btn-svc" data-svc-action="restart" data-key="${esc(s.key)}" title="Restart unit">Restart</button>
-            ${s.controllable ? `<button class="btn-svc" data-svc-action="__autostart" data-key="${esc(s.key)}" title="Toggle boot autostart">Autostart</button>` : ''}
-          </span>
-        </div>` : '';
-      return `<a class="card portal-card" href="${esc(s.url)}" target="_blank" rel="noopener noreferrer"
-          title="Open ${esc(s.label)} — ${esc(s.url)}">
-        <div class="portal-top">
-          <span class="portal-icon" style="background:${c}18; color:${c}; border:1px solid ${c}33">
-            <i data-lucide="${esc(s.icon)}"></i>
-          </span>
-          <span class="svc-status ${s.enabled ? 'checking' : 'disabled'}" data-svc="${esc(s.key)}"
-                title="${s.enabled ? 'Checking…' : 'Monitoring disabled'}">
-            <span class="svc-dot"></span><span class="svc-text">${s.enabled ? 'checking' : 'disabled'}</span>
-          </span>
-          <span class="portal-open"><i data-lucide="external-link"></i></span>
-        </div>
-        <div class="portal-title">${esc(s.label)}${s.enabled ? '' : ` ${badge('disabled', '#94A3B8')}`}</div>
-        ${s.description ? `<div class="portal-desc">${esc(s.description)}</div>` : ''}
-        <div class="portal-url"><i data-lucide="link"></i> ${esc(host)}</div>
-        ${controls}
-      </a>`;
-    };
-
-    const sections = orderedCats.map(cat => `
-      <div class="portal-section">
-        <h3 class="section-title" style="margin-bottom:var(--space-md)">${esc(cat)}
-          <span style="color:var(--text-muted); font-weight:400">· ${groups.get(cat).length}</span>
-        </h3>
-        <div class="grid-3">${groups.get(cat).map(card).join('')}</div>
-      </div>`).join('');
-
-    this.contentEl.innerHTML = `
-      <p style="color:var(--text-secondary); font-size:0.875rem; margin-bottom:var(--space-lg)">
-        Quick-launch the local web services running on this host. Cards come from
-        <code>${esc(portal.path || 'portal.json')}</code> — edit it and refresh, no restart needed.
-        Status dots are probed from the server every 3s.
-      </p>
-      ${errorBox}
-      ${sections}`;
-
-    // Wire lifecycle buttons (only present when service control is enabled and a
-    // card names a unit). The card is an <a>, so each button must swallow the
-    // click so it acts on the service instead of navigating.
-    this.contentEl.querySelectorAll('.btn-svc').forEach((btn) => {
+  // Wire lifecycle buttons (only present when service control is enabled and a
+  // card names a unit). The card is an <a>, so each button must swallow the
+  // click so it acts on the service instead of navigating.
+  wireServiceControls(root) {
+    root.querySelectorAll('.btn-svc').forEach((btn) => {
       btn.addEventListener('click', async (ev) => {
         ev.preventDefault(); ev.stopPropagation();
         const key = btn.getAttribute('data-key');
         let action = btn.getAttribute('data-svc-action');
         if (action === '__autostart') {
           // Flip based on the current chip: if it reads "enabled", disable; else enable.
-          const chip = this.contentEl.querySelector(`[data-unit-state="${key}"]`);
+          const chip = root.querySelector(`[data-unit-state="${key}"]`);
           action = (chip && /\benabled\b/i.test(chip.textContent)) ? 'disable' : 'enable';
         }
         const row = btn.closest('.portal-controls');
@@ -3823,11 +3986,6 @@ class App {
         }
       });
     });
-
-    // Paint the last known statuses immediately (no flash on re-render), then
-    // keep them fresh every 3s for as long as we're on the Portal.
-    if (this.svcStatus) this.applyServiceStatus(this.svcStatus);
-    this.startServicePolling();
   }
 
   // Map a probe result to a UI state: online | offline | disabled | unprobed | unknown.

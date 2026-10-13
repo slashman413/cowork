@@ -1,0 +1,37 @@
+{
+  "$comment": "Dashboard layout — nav sections, pages and Overview widgets. Live copy: ~/.cowork/layout.json (override with COWORK_LAYOUT); when absent THIS file is served, so copy it there to customise. Hot-reloaded on save (refresh the page). Page types: dashboard (rows of widgets) and portal (cards from portal.json, optionally filtered by categories/keys) can be added under any id; app pages (chat, inbox, workflows, goals, team, brains, roster, connections, config) keep their fixed id — omit one and it lands in a 'More' section, set hidden:true to drop it from the nav. Widgets: sysbar {tiles: cpu|gpu|memory|thermal, hideUnavailable}, stats {items: workers|openTasks|personas|failedTasks|waitingInput|scheduled|uptime}, dispatcher, activity {limit}, platforms, services {keys|categories, compact}, note {text (markdown)}; every widget also takes title and span (1-4). A row is a widget list or {minWidth, widgets}. See docs/dashboard.md#layout.",
+  "brand": { "title": "Cowork", "icon": "zap", "footer": "Cowork Server v1.0.0" },
+  "defaultPage": "overview",
+  "sections": [
+    { "label": "Operations", "pages": ["overview", "portal", "chat", "inbox", "workflows", "goals"] },
+    { "label": "AI Fleet", "pages": ["team", "brains", "roster"] },
+    { "label": "System", "pages": ["connections", "config"] }
+  ],
+  "pages": {
+    "overview": {
+      "type": "dashboard",
+      "label": "Overview",
+      "icon": "layout-dashboard",
+      "rows": [
+        [{ "type": "sysbar", "tiles": ["cpu", "gpu", "memory", "thermal"] }],
+        [{ "type": "stats", "items": ["workers", "openTasks", "personas"] }],
+        { "minWidth": 380, "widgets": [{ "type": "dispatcher" }, { "type": "activity", "limit": 12 }] },
+        [{ "type": "platforms" }]
+      ]
+    },
+    "portal": {
+      "type": "portal",
+      "label": "Portal",
+      "icon": "layout-grid"
+    },
+    "chat": { "label": "Chat", "icon": "message-square" },
+    "inbox": { "label": "Tasks", "icon": "inbox" },
+    "workflows": { "label": "Workflows", "icon": "workflow" },
+    "goals": { "label": "Goals", "icon": "target" },
+    "team": { "label": "Routing", "icon": "bot" },
+    "brains": { "label": "Brains", "icon": "cpu" },
+    "roster": { "label": "Personas", "icon": "users-round" },
+    "connections": { "label": "Workers", "icon": "plug" },
+    "config": { "label": "Configuration", "icon": "settings" }
+  }
+}

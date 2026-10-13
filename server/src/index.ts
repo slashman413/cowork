@@ -18,6 +18,7 @@ import { SystemMetrics } from './core/system-metrics.js';
 import { UsagePoller, isMeteredExec } from './core/usage-probe.js';
 import { probeServices, unitState } from './core/service-probe.js';
 import { PortalStore } from './core/portal-config.js';
+import { LayoutStore } from './core/layout-config.js';
 import { systemDetails, DETAIL_KINDS, type DetailKind } from './core/system-details.js';
 import { controlService } from './core/service-control.js';
 import { getObsidianVault } from './core/obsidian.js';
@@ -264,6 +265,12 @@ async function main() {
   app.get('/api/portal', (_req, res) => {
     res.json({ ...portal.get(), controlEnabled: config.serviceControl?.enabled === true });
   });
+
+  // ── Dashboard layout (layout.json: nav sections, pages, Overview widgets) ──
+  // Hot-reloaded like portal.json; served from the repo template until the
+  // operator drops a ~/.cowork/layout.json. See core/layout-config.ts.
+  const layout = new LayoutStore();
+  app.get('/api/layout', (_req, res) => res.json(layout.get()));
 
   // ── Service reachability for the Portal (probed from the host) ─────────────
   app.get('/api/services', async (_req, res) => {

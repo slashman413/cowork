@@ -5,7 +5,8 @@ is a single-page app with a left-hand nav. This is a reference for **every page*
 what it shows, and which REST endpoints back it — so you can drive the same
 behavior from scripts when you want to.
 
-Nav order and labels (from `server/public/index.html`):
+Nav sections, page order, labels and the Overview's widgets come from **`layout.json`**
+(see [Layout](#layout)); the default layout is:
 
 | Page | Label | Backing endpoints (main) |
 |------|-------|--------------------------|
@@ -22,6 +23,79 @@ Nav order and labels (from `server/public/index.html`):
 
 All pages consume the live SSE event stream (`GET /api/events`) so cards update in
 place as tasks are created, claimed, and completed.
+
+---
+
+## Layout
+
+Which pages exist, how the sidebar groups them and what the Overview shows are
+**config, not code**. Two files split the job:
+
+| File | Answers | Live copy |
+|------|---------|-----------|
+| `portal.json` | *what* runs on this host (services, probes, systemd units) | `~/.cowork/portal.json` (seeded) |
+| `layout.json` | *how* the dashboard presents it (brand, nav sections, pages, widgets) | `~/.cowork/layout.json` (override `COWORK_LAYOUT`) |
+
+`layout.json` is **not seeded**: while `~/.cowork/layout.json` is absent the repo
+file is served, so improvements to the default reach installs that never
+customised it. To customise, copy the repo file there and edit. It is
+hot-reloaded (`GET /api/layout`, re-read on mtime change) — save and refresh the
+page. Problems are listed in a warning box on dashboard/portal pages; a bad
+widget or page is dropped, the rest still renders; a file that fails to parse
+keeps serving the last good layout.
+
+```jsonc
+{
+  "brand": { "title": "Spark Ops", "icon": "server", "footer": "DGX Spark" },
+  "defaultPage": "home",                        // landing page for an empty #hash
+  "sections": [                                 // sidebar groups, in order
+    { "label": "Host", "pages": ["home", "models", "portal"] },
+    { "label": "Work", "pages": ["chat", "inbox", "workflows", "goals"] }
+  ],
+  "pages": {
+    "home": { "type": "dashboard", "label": "Home", "icon": "house", "rows": [
+      [{ "type": "sysbar", "tiles": ["cpu", "memory", "thermal"], "hideUnavailable": true }],
+      [{ "type": "stats", "items": ["openTasks", "waitingInput", "failedTasks", "uptime"] }],
+      { "minWidth": 320, "widgets": [
+        { "type": "services", "title": "Models", "categories": ["APIs & MCP"], "compact": true },
+        { "type": "note", "title": "Runbook", "text": "**Brain down?** check `docker ps`." }
+      ] }
+    ] },
+    "models": { "type": "portal", "label": "Models", "icon": "brain-circuit",
+                "categories": ["APIs & MCP"], "intro": "Inference endpoints on this host." },
+    "portal": { "type": "portal", "label": "All services" },
+    "config": { "hidden": true }                // off the nav, #config still works
+  }
+}
+```
+
+**Page types**
+
+- `dashboard` — any id, any number. `rows` is a list; each row is a widget list or
+  `{ "minWidth": px, "widgets": [...] }` (auto-fit grid, wraps below `minWidth`).
+- `portal` — any id, any number. Shows `portal.json` cards, optionally narrowed by
+  `categories` and/or `keys`; `intro` (markdown) replaces the default blurb.
+- App pages — `chat`, `inbox`, `workflows`, `goals`, `team`, `brains`, `roster`,
+  `connections`, `config`. Fixed ids (other code deep-links to `#inbox/<id>`); a
+  section can name them without an entry under `pages`, an entry only overrides
+  `label`/`icon`/`hidden`. One the layout never mentions is appended to a
+  **More** section, so a page added in a later release is never invisible.
+
+**Widgets** (every widget also takes `title` and `span` 1–4 columns)
+
+| Type | Options | Shows |
+|------|---------|-------|
+| `sysbar` | `tiles`: `cpu` `gpu` `memory` `thermal` (order kept); `hideUnavailable` | host load tiles + drill-down dialogs; hide the GPU/temp tile on hosts without one |
+| `stats` | `items`: `workers` `openTasks` `personas` `failedTasks` `waitingInput` `scheduled` `uptime` | counter cards |
+| `dispatcher` | — | dispatcher state, running tasks, role → brain chain |
+| `activity` | `limit` 1–30 | live SSE event feed |
+| `platforms` | — | per-platform up/down |
+| `services` | `categories`, `keys`, `compact` | portal.json cards (or a compact list) with live status dots |
+| `note` | `text` (markdown, required) | a runbook / pinned note |
+
+A page only fetches and polls what its widgets need (no `sysbar` → no
+`/api/system` polling). If `/api/layout` is unreachable the UI falls back to a
+built-in copy of the default layout.
 
 ---
 
