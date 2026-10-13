@@ -242,27 +242,35 @@ export class Dispatcher {
   }
 
   /**
-   * AUTOMATIC re-run of rate-limited failures the user opted into. For each failed
-   * task flagged `context.rateLimited` with `context.autoRerunOnReset`, re-queue it
+   * AUTOMATIC re-run of rate-limited failures. For each failed task flagged
+   * `context.rateLimited` with `context.autoRerunOnReset` (set by default at
+   * classification — see Store.classifyRateLimit — unless the user opted out or
+   * `orchestration.autoRerunRateLimited.enabled` is false), re-queue it
    * (Store.rerunTask resets it to the top of its chain) once its rate-limit window
-   * has reset. The reset time is the one classified at failure (`rateLimitResetsAt`);
-   * when that is unknown — the meters hadn't reported a reset — a fixed 1h backoff
-   * from `completedAt` still eventually retries so the opt-in never silently stalls.
+   * has reset plus a short grace. The reset time is the one classified at failure
+   * (`rateLimitResetsAt`); when that is unknown — the meters hadn't reported a
+   * reset — a fixed 1h backoff from `completedAt` still eventually retries so the
+   * re-run never silently stalls. Bounded by `maxAttempts` per task so a quota
+   * that never comes back doesn't loop forever.
    */
   private autoRerunRateLimited(): void {
+    const cfg = this.config.orchestration.autoRerunRateLimited || {};
     const now = Date.now();
     const fallbackMs = 60 * 60 * 1000;   // 1h when no reset time was discoverable
+    const graceMs = Math.max(0, cfg.graceSeconds ?? 120) * 1000;
+    const maxAttempts = cfg.maxAttempts ?? 6;
     for (const t of this.store.listTasks({ status: 'failed' })) {
       const ctx = t.context || {};
       if (ctx.autoRerunOnReset !== true || ctx.rateLimited !== true) continue;
+      if ((Number(ctx.autoRerunCount) || 0) >= maxAttempts) continue;
       const resetAt = typeof ctx.rateLimitResetsAt === 'string' ? Date.parse(ctx.rateLimitResetsAt) : NaN;
       const due = Number.isFinite(resetAt)
-        ? now >= resetAt
+        ? now >= resetAt + graceMs
         : (t.completedAt ? now >= Date.parse(t.completedAt) + fallbackMs : false);
       if (!due) continue;
       try {
-        const re = this.store.rerunTask(t.id);
-        if (re) console.log(`Dispatcher: auto re-ran rate-limited task ${t.id} — usage window reset, back to pending — ${t.title}`);
+        const re = this.store.rerunTask(t.id, undefined, { auto: true });
+        if (re) console.log(`Dispatcher: auto re-ran rate-limited task ${t.id} (#${re.context?.autoRerunCount}/${maxAttempts}) — usage window reset, back to pending — ${t.title}`);
       } catch (e) { console.error(`Dispatcher: auto-rerun of ${t.id} failed:`, e); }
     }
   }
@@ -374,7 +382,7 @@ export class Dispatcher {
     try { this.driveWaitInput(); }
     catch (e) { console.error('Dispatcher: driveWaitInput failed this tick:', e); }
 
-    // Re-run rate-limited failures the user opted into, once their window resets.
+    // Re-run rate-limited failures (default-on, per-task opt-out) once their window resets.
     // Independent of the concurrency gate below (it only re-queues to pending).
     try { this.autoRerunRateLimited(); }
     catch (e) { console.error('Dispatcher: autoRerunRateLimited failed this tick:', e); }

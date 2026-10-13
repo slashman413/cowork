@@ -2429,7 +2429,7 @@ class App {
           <input type="checkbox" data-autorerun="${esc(t.id)}" ${c.autoRerunOnReset ? 'checked' : ''} style="width:15px;height:15px;cursor:pointer;accent-color:#F97316">
           <span><i data-lucide="refresh-cw" style="width:12px;height:12px;vertical-align:-1px;margin-right:3px"></i>Auto re-run when the rate limit resets${rlResetOk ? ` <span style="color:var(--text-muted)">(≈ ${esc(rlReset.toLocaleString())})</span>` : ''}</span>
         </label>
-        <div style="font-size:0.72rem; color:var(--text-muted); margin-top:3px; padding-left:23px">Failed on a rate limit. When on, Cowork re-queues this task automatically once the usage window resets${rlResetOk ? '' : ' (re-checked hourly until a reset time is known)'}.</div>
+        <div style="font-size:0.72rem; color:var(--text-muted); margin-top:3px; padding-left:23px">Failed on a rate limit. On by default — Cowork re-queues this task automatically once the usage window resets${rlResetOk ? '' : ' (re-checked hourly until a reset time is known)'}. Untick to leave it failed.${c.autoRerunCount ? ` Auto re-runs so far: ${esc(String(c.autoRerunCount))}.` : ''}</div>
       </div>` : '';
 
       return `

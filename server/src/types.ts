@@ -308,6 +308,23 @@ export interface OrchestrationConfig {
    *  owner-only toggle, anything irreversible/legal) are ESCALATED honestly and
    *  left parked — never fabricated. See ADR-009. */
   autoAnswer?: AutoAnswerConfig;
+  /** Automatic re-run of chain-exhausted RATE-LIMITED failures once the usage
+   *  window resets. Default ON: a task that dies on a rate limit overnight is
+   *  re-queued at the reset without anyone ticking the card's toggle (which now
+   *  only opts a task OUT). Set `enabled: false` to restore the old opt-in. */
+  autoRerunRateLimited?: AutoRerunRateLimitedConfig;
+}
+
+/** Config for {@link OrchestrationConfig.autoRerunRateLimited}. */
+export interface AutoRerunRateLimitedConfig {
+  /** Default-on for every rate-limited failure. Default true. */
+  enabled?: boolean;
+  /** Max automatic re-runs per task before it is left failed for a person
+   *  (stops a permanently-exhausted quota looping forever). Default 6. */
+  maxAttempts?: number;
+  /** Grace after the reported reset before re-queuing, so the re-run doesn't
+   *  race the provider's own clock and burn an attempt. Default 120 s. */
+  graceSeconds?: number;
 }
 
 /** Config for the orchestrator's autonomous answering of `wait-input` tasks. */

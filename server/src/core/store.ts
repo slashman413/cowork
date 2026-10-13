@@ -316,6 +316,14 @@ export class Store {
       .filter((u): u is BrainUsage => !!u && Array.isArray(u.windows));
     const reset = this.earliestFutureReset(pool);
     if (reset) ctx.rateLimitResetsAt = reset; else delete ctx.rateLimitResetsAt;
+    // Auto re-run is DEFAULT-ON (orchestration.autoRerunRateLimited.enabled): the
+    // failure usually lands while nobody is watching, so an opt-in toggle the
+    // user has to tick before the reset in practice never got ticked. An explicit
+    // opt-out (autoRerunOnReset === false) is respected and never overwritten.
+    if (ctx.autoRerunOnReset === undefined
+        && this.config.orchestration?.autoRerunRateLimited?.enabled !== false) {
+      ctx.autoRerunOnReset = true;
+    }
     task.context = ctx;
   }
 
@@ -347,13 +355,16 @@ export class Store {
    * window resets (Dispatcher.autoRerunRateLimited). The dashboard only surfaces
    * the toggle on a failed card the server classified `context.rateLimited`, but
    * enabling is harmless on any task — it is a no-op until the task is both failed
-   * and rate-limited. Returns the updated task, or null when it does not exist.
+   * and rate-limited. Disabling stores an explicit `false` so the default-on
+   * classification (classifyRateLimit) doesn't silently re-enable it; enabling
+   * resets the auto re-run budget. Returns the updated task, or null when missing.
    */
   public setAutoRerun(taskId: string, enabled: boolean): Task | null {
     const task = this.getTask(taskId);
     if (!task) return null;
     const ctx = { ...(task.context || {}) };
-    if (enabled) ctx.autoRerunOnReset = true; else delete ctx.autoRerunOnReset;
+    ctx.autoRerunOnReset = enabled;
+    if (enabled) delete ctx.autoRerunCount;
     task.context = ctx;
     this.saveTask(task);
     this.eventBus.emitTaskCreated(task);   // nudge live dashboards to refresh
@@ -842,13 +853,17 @@ export class Store {
    * this behind an explicit confirmation. Returns null if the task is gone or is
    * not in a re-runnable (finished-failed) state.
    */
-  public rerunTask(taskId: string, brainOverride?: string, opts?: { scheduledAt?: string }): Task | null {
+  public rerunTask(taskId: string, brainOverride?: string, opts?: { scheduledAt?: string; auto?: boolean }): Task | null {
     const task = this.getTask(taskId);
     if (!task) return null;
     if (!isFailedTask(task)) return null;
 
     const ctx: Record<string, any> = { ...(task.context || {}) };
     delete ctx.failedBrains;
+    // Rate-limit auto re-run bookkeeping: the dispatcher's own re-run spends one
+    // unit of the per-task budget; a person's manual re-run starts it afresh.
+    if (opts?.auto) ctx.autoRerunCount = (Number(ctx.autoRerunCount) || 0) + 1;
+    else delete ctx.autoRerunCount;
     // Which brain claims the re-run. Default preserves a deliberate USER pin
     // (context.brain set WITHOUT brainAuto) and drops a dispatcher-published
     // chain pin (brainAuto, transient). The caller may override that default:
