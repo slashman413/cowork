@@ -219,6 +219,14 @@ Add to your AGY MCP settings:
 }
 ```
 
+**agy quota meter / token refresh.** To mint Antigravity access tokens, the usage
+probe and `deploy/remote-brain-client.mjs` need Google OAuth client values. These are
+the public values that ship with the agy and Gemini CLIs. They are not committed. Copy
+[`.env.example`](.env.example) to `~/.cowork/oauth-clients.env`, fill it in, and run
+`chmod 600`. Alternatively, export the same variables in the service environment;
+process env takes precedence. If no values are set, the agy meter only works while a
+cached CLI access token is still valid.
+
 ### Hermes Agent
 
 Configure the MCP endpoint in Hermes:

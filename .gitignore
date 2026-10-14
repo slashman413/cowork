@@ -40,3 +40,8 @@ server/*.py
 /*.py
 /*.db
 /__pycache__/
+
+# Local OAuth client values / secrets (see .env.example) — never commit.
+.env
+.env.*
+!.env.example
