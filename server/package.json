@@ -33,6 +33,9 @@
     "@hono/node-server": "^2.0.5",
     "@esbuild-kit/core-utils": {
       "esbuild": "^0.25.0"
+    },
+    "js-yaml": {
+      "argparse": "^2.0.1"
     }
   }
 }
