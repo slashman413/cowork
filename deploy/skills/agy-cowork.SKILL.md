@@ -60,18 +60,20 @@ glass.
 
 ## Registered Local Brains (via `agy.env`)
 
+One brain per `agy models` slug (agy 1.3.5, 2026-10-14). Re-check with `agy models` when
+Antigravity rotates models; retired ids resolve via `BRAIN_ID_ALIASES` in `server/src/config.ts`.
+
 | Brain ID | Model | Location |
 |----------|-------|----------|
-| `local-agy-gemini-3.6-flash-high` | Gemini 3.6 Flash (High) | local |
-| `local-agy-gemini-3.6-flash-medium` | Gemini 3.6 Flash (Medium) | local |
-| `local-agy-gemini-3.6-flash-low` | Gemini 3.6 Flash (Low) | local |
 | `local-agy-gemini-3.8-flash-high` | Gemini 3.8 Flash (High) | local |
 | `local-agy-gemini-3.8-flash-medium` | Gemini 3.8 Flash (Medium) | local |
 | `local-agy-gemini-3.8-flash-low` | Gemini 3.8 Flash (Low) | local |
-| `local-agy-gemini-3.1-pro-high` | Gemini 3.1 Pro (High) | local |
-| `local-agy-gemini-3.1-pro-low` | Gemini 3.1 Pro (Low) | local |
-| `local-agy-claude-sonnet-4-6` | Claude Sonnet 4.6 | local |
-| `local-agy-claude-opus-4-6-thinking` | Claude Opus 4.6 (Thinking) | local |
+| `local-agy-claude-opus-5-5-low` | Claude Opus 5.5 (Low) | local |
+| `local-agy-claude-opus-5-5-medium` | Claude Opus 5.5 (Medium) | local |
+| `local-agy-claude-opus-5-5-high` | Claude Opus 5.5 (High) | local |
+| `local-agy-claude-sonnet-5-5-low` | Claude Sonnet 5.5 (Low) | local |
+| `local-agy-claude-sonnet-5-5-medium` | Claude Sonnet 5.5 (Medium) | local |
+| `local-agy-claude-sonnet-5-5-high` | Claude Sonnet 5.5 (High) | local |
 | `local-agy-gpt-oss-120b-medium` | GPT-OSS 120B (Medium) | local |
 
 ---
@@ -121,30 +123,28 @@ register_agent(
   platform="antigravity",
   agent_name="local",
   capabilities=[
-    "local-agy-gemini-3.6-flash-high",
-    "local-agy-gemini-3.6-flash-medium",
-    "local-agy-gemini-3.6-flash-low",
     "local-agy-gemini-3.8-flash-high",
     "local-agy-gemini-3.8-flash-medium",
     "local-agy-gemini-3.8-flash-low",
-    "local-agy-gemini-3.1-pro-high",
-    "local-agy-gemini-3.1-pro-low",
-    "local-agy-claude-sonnet-4-6",
-    "local-agy-claude-opus-4-6-thinking",
+    "local-agy-claude-opus-5-5-low",
+    "local-agy-claude-opus-5-5-medium",
+    "local-agy-claude-opus-5-5-high",
+    "local-agy-claude-sonnet-5-5-low",
+    "local-agy-claude-sonnet-5-5-medium",
+    "local-agy-claude-sonnet-5-5-high",
     "local-agy-gpt-oss-120b-medium"
   ],
   brains=[
-    {"id": "local-agy-gemini-3.6-flash-high",   "location": "local", "exec": "agy", "model": "gemini-3.6-flash-high"},
-    {"id": "local-agy-gemini-3.6-flash-medium",  "location": "local", "exec": "agy", "model": "gemini-3.6-flash-medium"},
-    {"id": "local-agy-gemini-3.6-flash-low",     "location": "local", "exec": "agy", "model": "gemini-3.6-flash-low"},
-    {"id": "local-agy-gemini-3.8-flash-high",    "location": "local", "exec": "agy", "model": "gemini-3.8-flash-high"},
-    {"id": "local-agy-gemini-3.8-flash-medium",  "location": "local", "exec": "agy", "model": "gemini-3.8-flash-medium"},
-    {"id": "local-agy-gemini-3.8-flash-low",     "location": "local", "exec": "agy", "model": "gemini-3.8-flash-low"},
-    {"id": "local-agy-gemini-3.1-pro-high",      "location": "local", "exec": "agy", "model": "gemini-3.1-pro-high"},
-    {"id": "local-agy-gemini-3.1-pro-low",       "location": "local", "exec": "agy", "model": "gemini-3.1-pro-low"},
-    {"id": "local-agy-claude-sonnet-4-6",        "location": "local", "exec": "agy", "model": "claude-sonnet-4-6"},
-    {"id": "local-agy-claude-opus-4-6-thinking", "location": "local", "exec": "agy", "model": "claude-opus-4-6-thinking"},
-    {"id": "local-agy-gpt-oss-120b-medium",      "location": "local", "exec": "agy", "model": "gpt-oss-120b-medium"}
+    {"id": "local-agy-gemini-3.8-flash-high",      "location": "local", "exec": "agy", "model": "gemini-3.8-flash-high"},
+    {"id": "local-agy-gemini-3.8-flash-medium",    "location": "local", "exec": "agy", "model": "gemini-3.8-flash-medium"},
+    {"id": "local-agy-gemini-3.8-flash-low",       "location": "local", "exec": "agy", "model": "gemini-3.8-flash-low"},
+    {"id": "local-agy-claude-opus-5-5-low",        "location": "local", "exec": "agy", "model": "claude-opus-5-5-low"},
+    {"id": "local-agy-claude-opus-5-5-medium",     "location": "local", "exec": "agy", "model": "claude-opus-5-5-medium"},
+    {"id": "local-agy-claude-opus-5-5-high",       "location": "local", "exec": "agy", "model": "claude-opus-5-5-high"},
+    {"id": "local-agy-claude-sonnet-5-5-low",      "location": "local", "exec": "agy", "model": "claude-sonnet-5-5-low"},
+    {"id": "local-agy-claude-sonnet-5-5-medium",   "location": "local", "exec": "agy", "model": "claude-sonnet-5-5-medium"},
+    {"id": "local-agy-claude-sonnet-5-5-high",     "location": "local", "exec": "agy", "model": "claude-sonnet-5-5-high"},
+    {"id": "local-agy-gpt-oss-120b-medium",        "location": "local", "exec": "agy", "model": "gpt-oss-120b-medium"}
   ]
 )
 ```
@@ -243,12 +243,12 @@ lifecycle:
 {
   "platform": "antigravity",
   "agent_name": "local",
-  "capabilities": ["local-agy-gemini-3.1-pro-high"],
+  "capabilities": ["local-agy-gemini-3.8-flash-high"],
   "brains": [{
-    "id": "local-agy-gemini-3.1-pro-high",
+    "id": "local-agy-gemini-3.8-flash-high",
     "location": "local",
     "exec": "agy",
-    "model": "gemini-3.1-pro-high"
+    "model": "gemini-3.8-flash-high"
   }]
 }
 ```

@@ -301,7 +301,22 @@ export const BRAIN_ID_ALIASES: Readonly<Record<string, string>> = {
   // one canonical id for the Hermes qwen3.8 brain ("ha" read as Home Assistant).
   'local-ha-qwen3-8-27b': 'local-hermes-qwen3.8-27b',
   'local-ha-qwen38-27b': 'local-hermes-qwen3.8-27b',
-  'local-ha-qwen3.8-27b': 'local-hermes-qwen3.8-27b'
+  'local-ha-qwen3.8-27b': 'local-hermes-qwen3.8-27b',
+  // agy models retired upstream (no longer in `agy models`) → nearest live slug,
+  // so old task pins and stale client registrations don't fail "not recognized".
+  'local-agy-gemini-3.1-pro-high': 'local-agy-gemini-3.8-flash-high',
+  'local-agy-gemini-3.1-pro-low': 'local-agy-gemini-3.8-flash-low',
+  'local-agy-gemini-3.5-flash-high': 'local-agy-gemini-3.8-flash-high',
+  'local-agy-gemini-3.5-flash-medium': 'local-agy-gemini-3.8-flash-medium',
+  'local-agy-gemini-3.5-flash-low': 'local-agy-gemini-3.8-flash-low',
+  'local-agy-gemini-3.6-flash-high': 'local-agy-gemini-3.8-flash-high',
+  'local-agy-gemini-3.6-flash-medium': 'local-agy-gemini-3.8-flash-medium',
+  'local-agy-gemini-3.6-flash-low': 'local-agy-gemini-3.8-flash-low',
+  'local-agy-gemini-3.7-flash-high': 'local-agy-gemini-3.8-flash-high',
+  'local-agy-gemini-3.7-flash-medium': 'local-agy-gemini-3.8-flash-medium',
+  'local-agy-gemini-3.7-flash-low': 'local-agy-gemini-3.8-flash-low',
+  'local-agy-claude-sonnet-4-6': 'local-agy-claude-sonnet-5-5-medium',
+  'local-agy-claude-opus-4-6-thinking': 'local-agy-claude-opus-5-5-high'
 };
 
 /** Resolve a (possibly retired) brain id to its canonical id. Follows chained
@@ -344,6 +359,9 @@ export function migrateBrainAliases(config: Config): string[] {
     if (canon === id) continue;
     if (!brains[canon]) {
       brains[canon] = { ...brains[id], ...(brains[id].dynamic ? { clientId: brains[id].clientId || id } : {}) };
+      // An agy brain id IS its model slug — a renamed (retired) one must not
+      // keep forwarding the old `--model` agy no longer recognises.
+      if (brains[canon].exec === 'agy' && canon.startsWith('local-agy-')) brains[canon].model = canon.slice('local-agy-'.length);
     }
     delete brains[id];
     renamed.add(id);

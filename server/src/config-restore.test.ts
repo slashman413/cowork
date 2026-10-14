@@ -30,21 +30,21 @@ test('restoreClientBrains: rebuilds missing client-declared brains and persists 
     const config = loadConfig();
 
     const restored = restoreClientBrains(config, [
-      { id: 'agy-agent-1', platform: 'antigravity', capabilities: ['local-agy-gemini-3.6-flash-high', 'local-agy-claude-opus-4-6-thinking', 'not-a-brain'] },
+      { id: 'agy-agent-1', platform: 'antigravity', capabilities: ['local-agy-gemini-3.8-flash-high', 'local-agy-claude-opus-5-5-high', 'not-a-brain'] },
       { id: 'cc-agent-2', platform: 'claude', capabilities: ['local-cc-nova'] }
     ]);
 
-    assert.deepEqual(restored.sort(), ['local-agy-claude-opus-4-6-thinking', 'local-agy-gemini-3.6-flash-high', 'local-cc-nova']);
+    assert.deepEqual(restored.sort(), ['local-agy-claude-opus-5-5-high', 'local-agy-gemini-3.8-flash-high', 'local-cc-nova']);
     const b = config.orchestration.brains!;
-    assert.equal(b['local-agy-gemini-3.6-flash-high'].exec, 'agy');
-    assert.equal(b['local-agy-gemini-3.6-flash-high'].location, 'local');
-    assert.equal(b['local-agy-gemini-3.6-flash-high'].registeredBy, 'agy-agent-1');
+    assert.equal(b['local-agy-gemini-3.8-flash-high'].exec, 'agy');
+    assert.equal(b['local-agy-gemini-3.8-flash-high'].location, 'local');
+    assert.equal(b['local-agy-gemini-3.8-flash-high'].registeredBy, 'agy-agent-1');
     assert.equal(b['local-cc-nova'].exec, 'claude');
     assert.equal(b['not-a-brain'], undefined);
 
     // round-trips to disk (the durable registry the UI dropdown reads)
     const disk = JSON.parse(readFileSync(process.env.COWORK_CONFIG!, 'utf-8'));
-    assert.equal(disk.orchestration.brains['local-agy-gemini-3.6-flash-high'].exec, 'agy');
+    assert.equal(disk.orchestration.brains['local-agy-gemini-3.8-flash-high'].exec, 'agy');
   } finally {
     delete process.env.COWORK_CONFIG;
     rmSync(dir, { recursive: true, force: true });

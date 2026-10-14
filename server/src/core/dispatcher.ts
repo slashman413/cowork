@@ -10,6 +10,7 @@ import { verifyOutput, buildVerifierPrompt, parseLlmVerdict, detectInputRequest,
 import { buildLesson, appendLesson } from './lessons.js';
 import { canonicalBrainId } from '../config.js';
 import { STREAMING_EXECS, streamArgs, createStreamRenderer } from './progress-stream.js';
+import { AGY_MODEL_REJECTED_RE, diagnoseAgyModelFailure, listAgyModels } from './agy-models.js';
 
 /** Remove ANSI CSI/OSC escape sequences and lone carriage returns. */
 // eslint-disable-next-line no-control-regex
@@ -1410,9 +1411,10 @@ export class Dispatcher {
         //
         // --model: pin the model the brain ID names. Without it, EVERY local-agy-*
         // brain ran on agy's default model regardless of its configured `model`
-        // (e.g. local-agy-gemini-3.1-pro-high and local-agy-claude-opus-4-6-thinking
+        // (e.g. local-agy-gemini-3.8-flash-high and local-agy-claude-opus-5-5-high
         // both silently executed on the same default). The brain IDs already carry
-        // the exact agy model slug (effort baked in, e.g. `gemini-3.6-flash-high`),
+        // the exact agy model slug (effort baked in, e.g. `gemini-3.8-flash-high`;
+        // see `agy models`),
         // so we forward it verbatim. Only pass the flag when set — an empty model
         // would make agy reject `--model ''` instead of falling back to its default.
         return ['agy', '-p', prompt, '--print-timeout', `${this.config.orchestration.taskTimeoutMs}ms`,
@@ -1894,7 +1896,16 @@ export class Dispatcher {
     // (or, for a pinned brain, retry it up to inbox.maxRetries).
     const bound = plan.pinned ? this.config.inbox.maxRetries : plan.chainLen;
     if (!verdict.ok) {
-      const failReason = verdict.reason || output.text.slice(0, 300);
+      let failReason = verdict.reason || output.text.slice(0, 300);
+      // agy rejects valid models when its catalog fetch fails (503/429) — tell a
+      // transient outage (rate-limit class → auto re-run on reset) from a retired model.
+      if (plan.exec === 'agy' && AGY_MODEL_REJECTED_RE.test(output.text)) {
+        const diag = diagnoseAgyModelFailure(plan.model || '', output.text, await listAgyModels());
+        if (diag) {
+          failReason = diag;
+          console.warn(`Dispatcher: ${plan.brainId} — ${diag}`);
+        }
+      }
       this.recordFailedBrain(task.id, { brain: plan.brainId, agent: plan.agent, attempt: plan.attempt + 1, reason: failReason });
       this.recordLesson(task.id, { kind: 'verify-fail', brain: plan.brainId, agent: plan.agent, attempt: plan.attempt + 1, reason: failReason, resultText: output.text });
       const fresh = this.store.getTask(task.id);
