@@ -22,8 +22,24 @@ import { spawn } from 'node:child_process';
 
 export const AGY_MODEL_REJECTED_RE = /is not recognized as a known model|invalid model selection/i;
 
+/** agy's rejection is the whole of its output (a line or two, maybe a short
+ *  banner). Matching the regex anywhere would also catch a normal deliverable
+ *  that merely QUOTES the error (a review/report about agy), turning its genuine
+ *  verify-fail into a transient re-run — so require a short output with the
+ *  error in its first lines. */
+const AGY_ERROR_MAX_CHARS = 800;
+const AGY_ERROR_MAX_LINES = 6;
+export function isAgyModelRejection(text: string): boolean {
+  const t = (text || '').trim();
+  if (!t || t.length > AGY_ERROR_MAX_CHARS) return false;
+  const lines = t.split('\n').map(l => l.trim()).filter(Boolean);
+  if (lines.length > AGY_ERROR_MAX_LINES) return false;
+  return lines.slice(0, 3).some(l => AGY_MODEL_REJECTED_RE.test(l));
+}
+
 const CACHE_MS = 10 * 60 * 1000;
 let cache: { at: number; models: string[] } | null = null;
+let inflight: Promise<string[] | null> | null = null;
 
 /** Parse `agy models` output: one `<slug>\t<display name>` per line. */
 export function parseAgyModels(stdout: string): string[] {
@@ -38,7 +54,9 @@ export function parseAgyModels(stdout: string): string[] {
  *  non-empty listing is cached, so an outage is re-checked on the next failure. */
 export function listAgyModels(timeoutMs = 60000): Promise<string[] | null> {
   if (cache && Date.now() - cache.at < CACHE_MS) return Promise.resolve(cache.models);
-  return new Promise((resolve) => {
+  // A burst of failing agy tasks shares one `agy models` probe instead of each spawning its own.
+  if (inflight) return inflight;
+  inflight = new Promise<string[] | null>((resolve) => {
     let out = '';
     let child;
     try { child = spawn('agy', ['models'], { stdio: ['ignore', 'pipe', 'ignore'] }); }
@@ -53,7 +71,8 @@ export function listAgyModels(timeoutMs = 60000): Promise<string[] | null> {
       cache = { at: Date.now(), models };
       resolve(models);
     });
-  });
+  }).finally(() => { inflight = null; });
+  return inflight;
 }
 
 /**
@@ -62,7 +81,7 @@ export function listAgyModels(timeoutMs = 60000): Promise<string[] | null> {
  * isn't that failure.
  */
 export function diagnoseAgyModelFailure(model: string, text: string, models: string[] | null): string | null {
-  if (!AGY_MODEL_REJECTED_RE.test(text)) return null;
+  if (!isAgyModelRejection(text)) return null;
   if (model && models && !models.includes(model)) {
     return `agy model "${model}" is retired — not in \`agy models\` (available: ${models.join(', ')}). ` +
       `Update this brain's model or re-register the agy brain client.`;
@@ -72,4 +91,4 @@ export function diagnoseAgyModelFailure(model: string, text: string, models: str
 }
 
 /** Test hook. */
-export function _resetAgyModelCache(): void { cache = null; }
+export function _resetAgyModelCache(): void { cache = null; inflight = null; }

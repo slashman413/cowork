@@ -10,7 +10,7 @@ import { verifyOutput, buildVerifierPrompt, parseLlmVerdict, detectInputRequest,
 import { buildLesson, appendLesson } from './lessons.js';
 import { canonicalBrainId } from '../config.js';
 import { STREAMING_EXECS, streamArgs, createStreamRenderer } from './progress-stream.js';
-import { AGY_MODEL_REJECTED_RE, diagnoseAgyModelFailure, listAgyModels } from './agy-models.js';
+import { isAgyModelRejection, diagnoseAgyModelFailure, listAgyModels } from './agy-models.js';
 
 /** Remove ANSI CSI/OSC escape sequences and lone carriage returns. */
 // eslint-disable-next-line no-control-regex
@@ -1899,7 +1899,11 @@ export class Dispatcher {
       let failReason = verdict.reason || output.text.slice(0, 300);
       // agy rejects valid models when its catalog fetch fails (503/429) — tell a
       // transient outage (rate-limit class → auto re-run on reset) from a retired model.
-      if (plan.exec === 'agy' && AGY_MODEL_REJECTED_RE.test(output.text)) {
+      // Only agy's own short error output qualifies, not a deliverable quoting it.
+      // The `agy models` probe (≤60 s) runs after this task's slot was released
+      // (running.delete above) and execute() is fire-and-forget, so it only delays
+      // this task's own completion — never other tasks' dispatch or completion.
+      if (plan.exec === 'agy' && isAgyModelRejection(output.text)) {
         const diag = diagnoseAgyModelFailure(plan.model || '', output.text, await listAgyModels());
         if (diag) {
           failReason = diag;
