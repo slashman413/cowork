@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseAgyModels, diagnoseAgyModelFailure, AGY_MODEL_REJECTED_RE, isAgyModelRejection } from './agy-models.js';
+import { EventEmitter } from 'node:events';
+import { parseAgyModels, diagnoseAgyModelFailure, AGY_MODEL_REJECTED_RE, isAgyModelRejection,
+  listAgyModels, _resetAgyModelCache, _agyModelCache } from './agy-models.js';
 import { isRateLimitFailure } from './result-verifier.js';
 import { canonicalBrainId, migrateBrainAliases } from '../config.js';
 
@@ -61,4 +63,45 @@ test('isAgyModelRejection: agy\'s own short error matches, a report quoting it d
   // Short but the quote is buried after other content → still not agy's own error.
   assert.equal(isAgyModelRejection(`Summary: done.\nNotes:\n- a\n- b\nQuoted: ${REJECTED}`), false);
   assert.equal(isAgyModelRejection(''), false);
+});
+
+/** A fake `agy models` child: the test drives stdout/close/error by hand. */
+function fakeChild() {
+  const child: any = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.killed = false;
+  child.kill = () => { child.killed = true; return true; };
+  return child;
+}
+
+test('listAgyModels: timeout resolves null and a late close with partial stdout is not cached', async () => {
+  _resetAgyModelCache();
+  const child = fakeChild();
+  const p = listAgyModels(20, () => child);
+  child.stdout.emit('data', Buffer.from('gemini-3.8-flash-high\tGemini 3.8 Flash (High)\n'));
+  assert.equal(await p, null);
+  assert.equal(child.killed, true);
+  // The killed child closes afterwards with the truncated listing.
+  child.emit('close', null, 'SIGTERM');
+  assert.equal(_agyModelCache(), null, 'truncated list must not be cached');
+  // Next probe spawns afresh rather than serving the partial list.
+  const child2 = fakeChild();
+  const p2 = listAgyModels(1000, () => child2);
+  child2.stdout.emit('data', Buffer.from('gemini-3.8-flash-high\tA\nclaude-opus-5-5-medium\tB\n'));
+  child2.emit('close', 0, null);
+  assert.deepEqual(await p2, ['gemini-3.8-flash-high', 'claude-opus-5-5-medium']);
+  assert.deepEqual(_agyModelCache(), ['gemini-3.8-flash-high', 'claude-opus-5-5-medium']);
+  _resetAgyModelCache();
+});
+
+test('listAgyModels: close after a spawn error neither caches nor resolves a list', async () => {
+  _resetAgyModelCache();
+  const child = fakeChild();
+  const p = listAgyModels(1000, () => child);
+  child.stdout.emit('data', Buffer.from('gemini-3.8-flash-high\tGemini\n'));
+  child.emit('error', new Error('EPIPE'));
+  child.emit('close', 1, null);
+  assert.equal(await p, null);
+  assert.equal(_agyModelCache(), null);
+  _resetAgyModelCache();
 });

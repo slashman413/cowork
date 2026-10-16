@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
 
 /**
  * agy (Antigravity CLI) resolves `--model <slug>` against a model catalog it
@@ -50,26 +50,38 @@ export function parseAgyModels(stdout: string): string[] {
     .filter(s => /^[a-z0-9][a-z0-9.\-]*$/i.test(s));
 }
 
+type Spawner = (cmd: string, args: string[], opts: SpawnOptions) => ChildProcess;
+
 /** Live agy model slugs, or null when the catalog can't be fetched. Only a
- *  non-empty listing is cached, so an outage is re-checked on the next failure. */
-export function listAgyModels(timeoutMs = 60000): Promise<string[] | null> {
+ *  non-empty listing from a run that exited on its own is cached: after a
+ *  timeout (or spawn error) the child's late 'close' still fires with partial
+ *  stdout, and caching that truncated list would mark valid models "retired"
+ *  for CACHE_MS — so the first outcome settles the probe and later events are
+ *  ignored. `spawner` is injectable for tests. */
+export function listAgyModels(timeoutMs = 60000, spawner: Spawner = spawn): Promise<string[] | null> {
   if (cache && Date.now() - cache.at < CACHE_MS) return Promise.resolve(cache.models);
   // A burst of failing agy tasks shares one `agy models` probe instead of each spawning its own.
   if (inflight) return inflight;
   inflight = new Promise<string[] | null>((resolve) => {
     let out = '';
-    let child;
-    try { child = spawn('agy', ['models'], { stdio: ['ignore', 'pipe', 'ignore'] }); }
-    catch { return resolve(null); }
-    const timer = setTimeout(() => { child.kill('SIGTERM'); resolve(null); }, timeoutMs);
-    child.stdout.on('data', d => { out += d.toString(); });
-    child.on('error', () => { clearTimeout(timer); resolve(null); });
-    child.on('close', () => {
+    let settled = false;
+    const settle = (models: string[] | null) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
-      const models = parseAgyModels(out);
-      if (!models.length) return resolve(null);
-      cache = { at: Date.now(), models };
+      if (models) cache = { at: Date.now(), models };
       resolve(models);
+    };
+    let child: ChildProcess;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try { child = spawner('agy', ['models'], { stdio: ['ignore', 'pipe', 'ignore'] }); }
+    catch { return resolve(null); }
+    timer = setTimeout(() => { settle(null); child.kill('SIGTERM'); }, timeoutMs);
+    child.stdout?.on('data', d => { if (!settled) out += d.toString(); });
+    child.on('error', () => settle(null));
+    child.on('close', () => {
+      const models = parseAgyModels(out);
+      settle(models.length ? models : null);
     });
   }).finally(() => { inflight = null; });
   return inflight;
@@ -92,3 +104,6 @@ export function diagnoseAgyModelFailure(model: string, text: string, models: str
 
 /** Test hook. */
 export function _resetAgyModelCache(): void { cache = null; inflight = null; }
+
+/** Test hook: the cached catalog, if any. */
+export function _agyModelCache(): string[] | null { return cache?.models ?? null; }
