@@ -1,9 +1,12 @@
 import fs from 'fs';
-import { execFileSync } from 'child_process';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import os from 'os';
 import path from 'path';
 import type { BrainUsage, BrainUsageWindow, BrainConfig } from '../types.js';
 import type { Store } from './store.js';
+
+const execFileAsync = promisify(execFile);
 
 /**
  * Rate-limit usage prober for METERED brain execs, feeding the Connections
@@ -55,24 +58,23 @@ const AGY_QUOTA_HOSTS = ['daily-cloudcode-pa.googleapis.com', 'cloudcode-pa.goog
 // gates Argon on a minimum CLI version, so keep this at a version that works.
 const AGY_FALLBACK_VERSION = '1.3.6';
 
-let agyUA: string | null = null;
-/** The User-Agent agy itself sends, built from the installed agy's version.
- *  AGY_USER_AGENT overrides it. Exported for tests. */
+/** The User-Agent agy itself sends for a given agy version (fallback when
+ *  unknown). AGY_USER_AGENT overrides it. Exported for tests. */
 export function agyUserAgent(version?: string): string {
   const env = process.env.AGY_USER_AGENT?.trim();
   if (env) return env;
-  if (!version && agyUA) return agyUA;
-  let ver = version;
-  if (!ver) {
-    try {
-      const out = execFileSync('agy', ['--version'], { encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'ignore'] });
-      ver = out.match(/\d+\.\d+\.\d+/)?.[0];
-    } catch { /* agy not installed here */ }
-  }
   const arch = process.arch === 'x64' ? 'amd64' : process.arch;
-  const ua = `antigravity/cli/${ver || AGY_FALLBACK_VERSION} (aidev_client; os_type=${process.platform}; arch=${arch})`;
-  if (!version) agyUA = ua;
-  return ua;
+  return `antigravity/cli/${version || AGY_FALLBACK_VERSION} (aidev_client; os_type=${process.platform}; arch=${arch})`;
+}
+
+let agyUA: Promise<string> | null = null;
+/** agyUserAgent() for the installed agy. `agy --version` runs once, async, so
+ *  the first probe doesn't block the server's event loop for up to 10 s. */
+function installedAgyUserAgent(): Promise<string> {
+  agyUA ??= execFileAsync('agy', ['--version'], { encoding: 'utf8', timeout: 10000 })
+    .then(({ stdout }) => stdout.match(/\d+\.\d+\.\d+/)?.[0], () => undefined /* agy not installed here */)
+    .then(ver => agyUserAgent(ver));
+  return agyUA;
 }
 
 /** Clamp + round a percent into 0–100 with one decimal. */
@@ -554,6 +556,7 @@ async function agyAccessToken(): Promise<string | null> {
 async function probeAgy(): Promise<BrainUsageWindow[] | null> {
   const token = await agyAccessToken();
   if (!token) return null;
+  const userAgent = await installedAgyUserAgent();
   const merged: BrainUsageWindow[] = [];
   for (const host of AGY_QUOTA_HOSTS) {
     try {
@@ -562,7 +565,7 @@ async function probeAgy(): Promise<BrainUsageWindow[] | null> {
         headers: {
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json',
-          'User-Agent': agyUserAgent()   // gates the RPC and the Argon group — see AGY_QUOTA_HOSTS
+          'User-Agent': userAgent   // gates the RPC and the Argon group — see AGY_QUOTA_HOSTS
         },
         body: '{}',
         signal: AbortSignal.timeout(15000)
