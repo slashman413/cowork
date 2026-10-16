@@ -60,11 +60,15 @@ glass.
 
 ## Registered Local Brains (via `agy.env`)
 
-One brain per `agy models` slug (agy 1.3.5, 2026-10-14). Re-check with `agy models` when
+One brain per `agy models` slug (agy 1.3.6, 2026-10-16). Gemini 4 Argon has its own weekly
+quota, separate from the Gemini Models group (see the dashboard's agy meter). Re-check with `agy models` when
 Antigravity rotates models; retired ids resolve via `BRAIN_ID_ALIASES` in `server/src/config.ts`.
 
 | Brain ID | Model | Location |
 |----------|-------|----------|
+| `local-agy-gemini-4-argon-high` | Gemini 4 Argon (High) | local |
+| `local-agy-gemini-4-argon-medium` | Gemini 4 Argon (Medium) | local |
+| `local-agy-gemini-4-argon-low` | Gemini 4 Argon (Low) | local |
 | `local-agy-gemini-3.8-flash-high` | Gemini 3.8 Flash (High) | local |
 | `local-agy-gemini-3.8-flash-medium` | Gemini 3.8 Flash (Medium) | local |
 | `local-agy-gemini-3.8-flash-low` | Gemini 3.8 Flash (Low) | local |
@@ -123,6 +127,9 @@ register_agent(
   platform="antigravity",
   agent_name="local",
   capabilities=[
+    "local-agy-gemini-4-argon-high",
+    "local-agy-gemini-4-argon-medium",
+    "local-agy-gemini-4-argon-low",
     "local-agy-gemini-3.8-flash-high",
     "local-agy-gemini-3.8-flash-medium",
     "local-agy-gemini-3.8-flash-low",
@@ -135,6 +142,9 @@ register_agent(
     "local-agy-gpt-oss-120b-medium"
   ],
   brains=[
+    {"id": "local-agy-gemini-4-argon-high",        "location": "local", "exec": "agy", "model": "gemini-4-argon-high"},
+    {"id": "local-agy-gemini-4-argon-medium",      "location": "local", "exec": "agy", "model": "gemini-4-argon-medium"},
+    {"id": "local-agy-gemini-4-argon-low",         "location": "local", "exec": "agy", "model": "gemini-4-argon-low"},
     {"id": "local-agy-gemini-3.8-flash-high",      "location": "local", "exec": "agy", "model": "gemini-3.8-flash-high"},
     {"id": "local-agy-gemini-3.8-flash-medium",    "location": "local", "exec": "agy", "model": "gemini-3.8-flash-medium"},
     {"id": "local-agy-gemini-3.8-flash-low",       "location": "local", "exec": "agy", "model": "gemini-3.8-flash-low"},

@@ -365,6 +365,24 @@ async function agyAccessToken() {
   return null;
 }
 
+// The User-Agent agy itself sends (AGY_USER_AGENT overrides). The quota
+// backend only returns the "Gemini 4 Argon" group to a recent CLI version, so
+// fall back to one that works when agy isn't installed here.
+let agyUA = null;
+function agyUserAgent() {
+  const env = process.env.AGY_USER_AGENT?.trim();
+  if (env) return env;
+  if (agyUA) return agyUA;
+  let ver = null;
+  try {
+    const r = spawnSync('agy', ['--version'], { encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'ignore'] });
+    ver = (r.stdout || '').match(/\d+\.\d+\.\d+/)?.[0] || null;
+  } catch { /* agy not installed */ }
+  const arch = process.arch === 'x64' ? 'amd64' : process.arch;
+  agyUA = `antigravity/cli/${ver || '1.3.6'} (aidev_client; os_type=${process.platform}; arch=${arch})`;
+  return agyUA;
+}
+
 async function probeAgyUsage() {
   // Antigravity has NO local quota file. Its quota lives behind the Code Assist
   // RPC cloudcode-pa/v1internal:retrieveUserQuotaSummary and the CLI renders it
@@ -400,17 +418,20 @@ async function probeAgyUsage() {
     const note = desc && !/Models within this group:/i.test(desc) ? desc : null;
     return { name, models, note };
   };
-  // The RPC is gated behind a User-Agent containing "antigravity" (else 403).
-  // The hosts report DIFFERENT group subsets (the `daily-` host omits "Gemini
-  // Models"), so query both and merge — plain first, matching `agy /usage`.
-  const hosts = ['cloudcode-pa.googleapis.com', 'daily-cloudcode-pa.googleapis.com'];
+  // The RPC 403s without an Antigravity User-Agent, and only the `daily-` host
+  // given agy's real UA (`antigravity/cli/<recent version> (…)`) returns every
+  // `agy /usage` group, incl. the separately metered "Gemini 4 Argon". Ask
+  // `daily-` first; the plain host only fills in groups it didn't report.
+  // Same logic as agyUserAgent()/AGY_QUOTA_HOSTS in server/src/core/usage-probe.ts.
+  const hosts = ['daily-cloudcode-pa.googleapis.com', 'cloudcode-pa.googleapis.com'];
+  const ua = agyUserAgent();
   const windows = [];
   const seen = new Set();
   for (const host of hosts) {
    try {
     const res = await fetch(`https://${host}/v1internal:retrieveUserQuotaSummary`, {
       method: 'POST', body: '{}',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'User-Agent': 'antigravity-cli/1.0' },
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'User-Agent': ua },
       signal: AbortSignal.timeout(15000)
     });
     if (!res.ok) continue;

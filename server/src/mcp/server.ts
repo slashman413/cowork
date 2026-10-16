@@ -176,6 +176,8 @@ function buildServer(config: Config, store: Store, eventBus: EventBus, goals?: G
           remainingPct: z.number().optional(),
           group: z.string().optional(),
           groupModels: z.array(z.string()).optional(),
+          groupNote: z.string().optional(),
+          title: z.string().optional(),
           disabledNote: z.string().optional()
         })).max(12)
       })).optional()
@@ -202,6 +204,8 @@ function buildServer(config: Config, store: Store, eventBus: EventBus, goals?: G
                 ...(w.remainingPct != null ? { remainingPct: Math.max(0, Math.min(100, w.remainingPct)) } : {}),
                 ...(w.group ? { group: w.group.slice(0, 48) } : {}),
                 ...(w.groupModels?.length ? { groupModels: w.groupModels.slice(0, 12).map(m => m.slice(0, 48)) } : {}),
+                ...(w.groupNote ? { groupNote: w.groupNote.slice(0, 300) } : {}),
+                ...(w.title ? { title: w.title.slice(0, 64) } : {}),
                 ...(w.disabledNote ? { disabledNote: w.disabledNote.slice(0, 200) } : {})
               }))
             });

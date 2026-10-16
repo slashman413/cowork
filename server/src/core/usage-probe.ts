@@ -1,4 +1,5 @@
 import fs from 'fs';
+import { execFileSync } from 'child_process';
 import os from 'os';
 import path from 'path';
 import type { BrainUsage, BrainUsageWindow, BrainConfig } from '../types.js';
@@ -40,15 +41,39 @@ import type { Store } from './store.js';
 
 const CLAUDE_USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
 // Antigravity's quota lives behind Code Assist's `retrieveUserQuotaSummary`.
-// The two hosts return DIFFERENT group subsets (checked 2026-10-16: the plain
-// host has "Gemini Models" + "Claude and GPT models", the `daily-` host only
-// the latter), so we query BOTH and merge — plain first, which matches the
-// group order of `agy /usage`. The RPC is
-// gated behind a client User-Agent that identifies as Antigravity: a generic
-// UA (or node's default) returns 403 PERMISSION_DENIED, so we MUST send one
-// containing "antigravity". This was why the meter silently never appeared.
-const AGY_QUOTA_HOSTS = ['cloudcode-pa.googleapis.com', 'daily-cloudcode-pa.googleapis.com'];
-const AGY_USER_AGENT = 'antigravity-cli/1.0';
+// What it returns depends on the host AND the User-Agent (checked 2026-10-16):
+//   - The RPC 403s unless the UA identifies as Antigravity.
+//   - Only the `daily-` host, given agy's real UA shape
+//     `antigravity/cli/<version> (…)` with a recent version, returns every
+//     group `agy /usage` shows: Gemini Models, Claude and GPT models, and the
+//     separately metered "Gemini 4 Argon". agy 1.2.0 (or any other UA shape)
+//     gets no Argon group, and the plain host never returns it.
+// So we ask `daily-` first with the installed agy's version. The plain host is
+// a fallback: merged in after, it only adds groups `daily-` didn't report.
+const AGY_QUOTA_HOSTS = ['daily-cloudcode-pa.googleapis.com', 'cloudcode-pa.googleapis.com'];
+// Used when `agy --version` can't be read (agy not on PATH here). The backend
+// gates Argon on a minimum CLI version, so keep this at a version that works.
+const AGY_FALLBACK_VERSION = '1.3.6';
+
+let agyUA: string | null = null;
+/** The User-Agent agy itself sends, built from the installed agy's version.
+ *  AGY_USER_AGENT overrides it. Exported for tests. */
+export function agyUserAgent(version?: string): string {
+  const env = process.env.AGY_USER_AGENT?.trim();
+  if (env) return env;
+  if (!version && agyUA) return agyUA;
+  let ver = version;
+  if (!ver) {
+    try {
+      const out = execFileSync('agy', ['--version'], { encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'ignore'] });
+      ver = out.match(/\d+\.\d+\.\d+/)?.[0];
+    } catch { /* agy not installed here */ }
+  }
+  const arch = process.arch === 'x64' ? 'amd64' : process.arch;
+  const ua = `antigravity/cli/${ver || AGY_FALLBACK_VERSION} (aidev_client; os_type=${process.platform}; arch=${arch})`;
+  if (!version) agyUA = ua;
+  return ua;
+}
 
 /** Clamp + round a percent into 0–100 with one decimal. */
 function pct(n: unknown): number | null {
@@ -537,7 +562,7 @@ async function probeAgy(): Promise<BrainUsageWindow[] | null> {
         headers: {
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json',
-          'User-Agent': AGY_USER_AGENT   // gates the RPC — see AGY_USER_AGENT note
+          'User-Agent': agyUserAgent()   // gates the RPC and the Argon group — see AGY_QUOTA_HOSTS
         },
         body: '{}',
         signal: AbortSignal.timeout(15000)
@@ -550,9 +575,10 @@ async function probeAgy(): Promise<BrainUsageWindow[] | null> {
   return windows.length ? windows : null;
 }
 
-/** Combine the windows from several quota hosts: the hosts report DIFFERENT
- *  subsets of groups (the `daily-` host omits "Gemini Models"), so neither one
- *  alone matches `agy /usage`. The first host to report a given
+/** Combine the windows from several quota hosts: the hosts can report
+ *  DIFFERENT subsets of groups (only `daily-` has "Gemini 4 Argon"; with an old
+ *  UA it also omits "Gemini Models"), so the merge keeps whatever either one
+ *  reports. The first host to report a given
  *  group+window wins; host order therefore sets the group order. Exported for
  *  tests. */
 export function mergeAgyWindows(windows: BrainUsageWindow[]): BrainUsageWindow[] {

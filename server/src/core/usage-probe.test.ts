@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { normalizeClaudeUsage, normalizeCodexRateLimits, normalizeAgyQuota, mergeAgyWindows, isMeteredExec, findRateLimitsSnapshot, discoverAgyRefreshToken, readCachedAgyToken, agyOAuthClients, UsagePoller } from './usage-probe.js';
+import { normalizeClaudeUsage, normalizeCodexRateLimits, normalizeAgyQuota, mergeAgyWindows, agyUserAgent, isMeteredExec, findRateLimitsSnapshot, discoverAgyRefreshToken, readCachedAgyToken, agyOAuthClients, UsagePoller } from './usage-probe.js';
 
 // Shape captured from a live GET /api/oauth/usage response (values trimmed).
 const CLAUDE_LIVE_SHAPE = {
@@ -419,3 +419,34 @@ test('UsagePoller: defaults to 30s interval', () => {
   assert.equal((poller as any).intervalMs, 30000);
 });
 
+
+test('agy: User-Agent mirrors agy\'s own `antigravity/cli/<version> (…)` shape (gates the Argon group)', () => {
+  const prev = process.env.AGY_USER_AGENT;
+  delete process.env.AGY_USER_AGENT;
+  try {
+    assert.match(agyUserAgent('1.3.6'), /^antigravity\/cli\/1\.3\.6 \(aidev_client; os_type=\w+; arch=\w+\)$/);
+    process.env.AGY_USER_AGENT = 'custom/1';
+    assert.equal(agyUserAgent('1.3.6'), 'custom/1');
+  } finally {
+    if (prev === undefined) delete process.env.AGY_USER_AGENT; else process.env.AGY_USER_AGENT = prev;
+  }
+});
+
+test('agy: live daily- host shape with all three groups incl. Gemini 4 Argon', () => {
+  const w = normalizeAgyQuota({
+    groups: [
+      { displayName: 'Gemini Models', description: 'Models within this group: Gemini Flash, Gemini Pro',
+        buckets: [{ bucketId: 'gemini-weekly', displayName: 'Weekly Limit Remaining', window: 'weekly', remainingFraction: 1 }] },
+      { displayName: 'Claude and GPT models', description: 'Models within this group: Claude Opus, Claude Sonnet, GPT-OSS',
+        buckets: [{ bucketId: '3p-weekly', displayName: 'Weekly Limit Remaining', window: 'weekly', remainingFraction: 0, resetTime: '2026-10-20T03:08:29Z' }] },
+      { displayName: 'Gemini 4 Argon', description: 'For paid Pro plans, Argon quota is separate. Higher Argon quota (included as part of the larger Gemini quota bucket) is available on Ultra plans.',
+        buckets: [{ bucketId: 'gemini-argon-wtu-weekly', displayName: 'Gemini 4 Argon Weekly Limit', window: 'weekly', resetTime: '2026-10-23T01:47:51Z', remainingFraction: 1 }] }
+    ]
+  });
+  assert.deepEqual(w.map(x => x.group), ['Gemini Models', 'Claude and GPT models', 'Gemini 4 Argon']);
+  const argon = w[2];
+  assert.equal(argon.label, '7d');
+  assert.equal(argon.title, 'Gemini 4 Argon Weekly Limit');
+  assert.equal(argon.remainingPct, 100);
+  assert.match(argon.groupNote!, /^For paid Pro plans, Argon quota is separate/);
+});
