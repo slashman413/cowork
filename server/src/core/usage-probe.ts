@@ -39,13 +39,15 @@ import type { Store } from './store.js';
  */
 
 const CLAUDE_USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
-// Antigravity's quota lives behind Code Assist's `retrieveUserQuotaSummary`. The
-// consumer/Antigravity tier is served by the `daily-` host; the older paid
-// gemini-cli path used the plain host — try both (daily first). The RPC is
+// Antigravity's quota lives behind Code Assist's `retrieveUserQuotaSummary`.
+// The two hosts return DIFFERENT group subsets (checked 2026-10-16: the plain
+// host has "Gemini Models" + "Claude and GPT models", the `daily-` host only
+// the latter), so we query BOTH and merge — plain first, which matches the
+// group order of `agy /usage`. The RPC is
 // gated behind a client User-Agent that identifies as Antigravity: a generic
 // UA (or node's default) returns 403 PERMISSION_DENIED, so we MUST send one
 // containing "antigravity". This was why the meter silently never appeared.
-const AGY_QUOTA_HOSTS = ['daily-cloudcode-pa.googleapis.com', 'cloudcode-pa.googleapis.com'];
+const AGY_QUOTA_HOSTS = ['cloudcode-pa.googleapis.com', 'daily-cloudcode-pa.googleapis.com'];
 const AGY_USER_AGENT = 'antigravity-cli/1.0';
 
 /** Clamp + round a percent into 0–100 with one decimal. */
@@ -281,7 +283,7 @@ function durationToSeconds(v: unknown): number | null {
  *  line. Antigravity names the group under groupName/groupDescription/
  *  displayName and lists its models under one of a few repeated fields, each
  *  entry either a bare string or an object with a display name. */
-function agyGroupInfo(group: any): { name?: string; models: string[] } {
+function agyGroupInfo(group: any): { name?: string; models: string[]; note?: string } {
   const name = String(
     group?.groupName || group?.groupDescription || group?.displayName
     || group?.tierDisplayName || group?.quotaId || ''
@@ -300,7 +302,11 @@ function agyGroupInfo(group: any): { name?: string; models: string[] } {
     const m = group.description.match(/Models within this group:\s*(.+)$/i);
     if (m) models.push(...m[1].split(',').map((s: string) => s.trim()).filter(Boolean));
   }
-  return { name, models };
+  // Some groups carry prose instead of a model list ("Gemini 4 Argon": "For
+  // paid Pro plans, Argon quota is separate…") — keep it as a note.
+  const desc = typeof group?.description === 'string' ? group.description.trim() : '';
+  const note = desc && !/Models within this group:/i.test(desc) ? desc : undefined;
+  return { name, models, note };
 }
 
 /**
@@ -325,17 +331,17 @@ export function normalizeAgyQuota(raw: any): BrainUsageWindow[] {
     raw?.quotaSummaryGroups || raw?.groups,
     raw?.quotaSummaryGroup
   );
-  const pairs: { b: any; g: any }[] = [];
+  const pairs: { b: any; g: any; flat?: boolean }[] = [];
   for (const g of groups) {
     for (const b of asArray(g?.quotaSummaryBuckets || g?.buckets, g?.quotaSummaryBucket)) {
       pairs.push({ b, g });
     }
   }
   for (const b of asArray(raw?.quotaSummaryBuckets || raw?.buckets, null)) {
-    pairs.push({ b, g: raw });
+    pairs.push({ b, g: raw, flat: true });
   }
   const windows: BrainUsageWindow[] = [];
-  for (const { b, g } of pairs) {
+  for (const { b, g, flat } of pairs) {
     // A fraction (0–1) and an already-scaled percent (0–100) are reported under
     // different names; scale the fraction, trust the percent as-is.
     const frac = firstNum(b?.remainingFraction, b?.bucketInfo?.remainingFraction, b?.quotaInfo?.remainingFraction);
@@ -354,7 +360,8 @@ export function normalizeAgyQuota(raw: any): BrainUsageWindow[] {
     // Skip buckets that carry neither a usable remaining value nor a disabled note.
     if (remaining == null && !disabledNote) continue;
 
-    const { name, models } = agyGroupInfo(g);
+    const { name, models, note } = agyGroupInfo(g);
+    const title = String(b?.displayName || '').trim();
     const win: BrainUsageWindow = {
       label: agyLabel(b, g),
       usedPct: remaining != null ? pct(100 - remaining)! : 100,
@@ -363,10 +370,17 @@ export function normalizeAgyQuota(raw: any): BrainUsageWindow[] {
     // A disabled bucket (e.g. the 5-hour window once the weekly cap is hit) may
     // still report remainingFraction:1 — showing a green "100%" bar would be
     // misleading, so we render the disabled note instead of a bar for it.
-    if (remaining != null && !disabled) win.remainingPct = remaining;
+    // remainingPct keeps 2 decimals — the agy UI prints "97.58%".
+    if (remaining != null && !disabled) {
+      win.remainingPct = frac != null ? Math.round(Math.max(0, Math.min(1, frac)) * 10000) / 100 : remaining;
+    }
     if (disabledNote) win.disabledNote = disabledNote;
     if (name) win.group = name;
     if (models.length) win.groupModels = models;
+    // The response-level description is generic prose about all groups — only
+    // a real group's own description is a group note.
+    if (note && !flat) win.groupNote = note;
+    if (title) win.title = title;
     windows.push(win);
   }
   return windows;
@@ -515,6 +529,7 @@ async function agyAccessToken(): Promise<string | null> {
 async function probeAgy(): Promise<BrainUsageWindow[] | null> {
   const token = await agyAccessToken();
   if (!token) return null;
+  const merged: BrainUsageWindow[] = [];
   for (const host of AGY_QUOTA_HOSTS) {
     try {
       const res = await fetch(`https://${host}/v1internal:retrieveUserQuotaSummary`, {
@@ -528,11 +543,26 @@ async function probeAgy(): Promise<BrainUsageWindow[] | null> {
         signal: AbortSignal.timeout(15000)
       });
       if (!res.ok) continue;  // 403 on the wrong host/tier → try the next
-      const windows = normalizeAgyQuota(await res.json());
-      if (windows.length) return windows;
+      merged.push(...normalizeAgyQuota(await res.json()));
     } catch { /* network/timeout → try the next host */ }
   }
-  return null;
+  const windows = mergeAgyWindows(merged);
+  return windows.length ? windows : null;
+}
+
+/** Combine the windows from several quota hosts: the hosts report DIFFERENT
+ *  subsets of groups (the `daily-` host omits "Gemini Models"), so neither one
+ *  alone matches `agy /usage`. The first host to report a given
+ *  group+window wins; host order therefore sets the group order. Exported for
+ *  tests. */
+export function mergeAgyWindows(windows: BrainUsageWindow[]): BrainUsageWindow[] {
+  const seen = new Set<string>();
+  return windows.filter(w => {
+    const key = `${w.group ?? ''}\u0000${w.label}\u0000${w.title ?? ''}`.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 /** Execs we know how to meter on THIS host. */

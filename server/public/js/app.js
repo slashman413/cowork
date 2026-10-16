@@ -192,47 +192,51 @@ function agyWindowRank(label) {
   return 2;
 }
 
-// Grouped Antigravity quota body: one section per model-group, each showing its
-// member models and a "remaining" bar per window (weekly / five-hour), or a
-// disabled note when a window no longer applies. Mirrors the Antigravity IDE's
-// rate-limit panel. `remainingPct` drives the bar (high remaining = green).
+// Grouped Antigravity quota body, laid out like `agy /usage`: one section per
+// model-group (name, then its member models or the group's note), and per
+// window its title, a "remaining" bar with a 2-decimal percent, and a status
+// line — "Quota available" when full, "Refreshes in 97h 35m" otherwise — or
+// "Disabled: …" when the window doesn't currently apply. `remainingPct`
+// drives the bar (high remaining = green).
 function agyGroupedBody(u) {
   const groups = new Map();
   for (const w of u.windows || []) {
     const key = w.group || 'Antigravity';
-    if (!groups.has(key)) groups.set(key, { models: w.groupModels || [], windows: [] });
+    if (!groups.has(key)) groups.set(key, { models: [], note: '', windows: [] });
     const entry = groups.get(key);
-    if ((!entry.models || !entry.models.length) && w.groupModels?.length) entry.models = w.groupModels;
+    if (!entry.models.length && w.groupModels?.length) entry.models = w.groupModels;
+    if (!entry.note && w.groupNote) entry.note = w.groupNote;
     entry.windows.push(w);
   }
-  return [...groups.entries()].map(([name, { models, windows }]) => {
+  return [...groups.entries()].map(([name, { models, note, windows }]) => {
     const rows = windows.slice().sort((a, b) => agyWindowRank(a.label) - agyWindowRank(b.label)).map(w => {
-      const label = agyWindowLabel(w.label);
+      const label = w.title || agyWindowLabel(w.label);
       if (w.disabledNote != null && w.remainingPct == null) {
         return `<div class="agy-win">
           <div class="agy-win-label">${esc(label)}</div>
-          <div class="agy-win-disabled">${esc(w.disabledNote)}</div>
+          <div class="agy-win-disabled">Disabled: ${esc(w.disabledNote)}</div>
         </div>`;
       }
       const rem = Math.max(0, Math.min(100, Number(w.remainingPct != null ? w.remainingPct : (100 - w.usedPct))));
       const color = rem >= 50 ? '#22C55E' : rem >= 20 ? '#EAB308' : '#EF4444';
-      const precise = Number.isInteger(rem) ? `${rem}` : rem.toFixed(2);
-      const reset = w.resetsAt ? `Refreshes in ${resetsInHM(w.resetsAt)}` : 'reset time unknown';
-      return `<div class="agy-win" title="${esc(label)} · ${w.resetsAt ? `refreshes ${new Date(w.resetsAt).toLocaleString()}` : 'reset time unknown'}">
+      const status = rem >= 100 ? 'Quota available'
+        : w.resetsAt ? `Refreshes in ${resetsInHM(w.resetsAt)}`
+        : rem <= 0 ? 'Quota exhausted' : 'Refresh time unknown';
+      return `<div class="agy-win" title="${esc(label)} · ${w.resetsAt ? `refreshes ${new Date(w.resetsAt).toLocaleString()}` : 'refresh time unknown'}">
         <div class="agy-win-label">${esc(label)}</div>
         <div class="agy-bar-row">
           <div class="agy-bar"><div class="agy-bar-fill" style="width:${rem}%;background:${color}"></div></div>
-          <span class="agy-bar-pct" style="color:${color}">${precise}<span class="usage-pct-sign">%</span></span>
+          <span class="agy-bar-pct" style="color:${color}">${rem.toFixed(2)}<span class="usage-pct-sign">%</span></span>
         </div>
-        <div class="agy-win-meta">${Math.round(rem)}% remaining · ${esc(reset)}</div>
+        <div class="agy-win-meta">${esc(status)}</div>
       </div>`;
     }).join('');
-    const modelsLine = (models && models.length)
+    const subLine = models.length
       ? `<div class="agy-group-models">Models within this group: ${models.map(esc).join(', ')}</div>`
-      : '';
+      : note ? `<div class="agy-group-models">${esc(note)}</div>` : '';
     return `<div class="agy-group">
       <div class="agy-group-name">${esc(name)}</div>
-      ${modelsLine}
+      ${subLine}
       ${rows}
     </div>`;
   }).join('');

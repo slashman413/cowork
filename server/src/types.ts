@@ -152,6 +152,17 @@ export interface BrainUsageWindow {
   /** Member model display names for `group` ("Models within this group: …"). */
   groupModels?: string[];
   /**
+   * Free-text group description when it is NOT a member-model list — e.g. the
+   * "Gemini 4 Argon" group's "For paid Pro plans, Argon quota is separate…".
+   */
+  groupNote?: string;
+  /**
+   * The source's own display name for this window ("Weekly Limit Remaining",
+   * "Gemini 4 Argon Weekly Limit"). The UI prefers it over a name derived
+   * from `label`, so non-standard buckets keep their exact wording.
+   */
+  title?: string;
+  /**
    * When set, this window is not currently metered (e.g. the 5-hour limit no
    * longer applies once the weekly cap is hit). The UI shows this note in place
    * of a progress bar.

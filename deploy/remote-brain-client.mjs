@@ -395,11 +395,17 @@ async function probeAgyUsage() {
       const mm = g.description.match(/Models within this group:\s*(.+)$/i);
       if (mm) models.push(...mm[1].split(',').map((s) => s.trim()).filter(Boolean));
     }
-    return { name, models };
+    // Prose instead of a model list (the "Gemini 4 Argon" group) → a note.
+    const desc = typeof g?.description === 'string' ? g.description.trim() : '';
+    const note = desc && !/Models within this group:/i.test(desc) ? desc : null;
+    return { name, models, note };
   };
-  // The consumer/Antigravity tier is on the `daily-` host; the RPC is gated
-  // behind a User-Agent containing "antigravity" (else 403). Try both hosts.
-  const hosts = ['daily-cloudcode-pa.googleapis.com', 'cloudcode-pa.googleapis.com'];
+  // The RPC is gated behind a User-Agent containing "antigravity" (else 403).
+  // The hosts report DIFFERENT group subsets (the `daily-` host omits "Gemini
+  // Models"), so query both and merge — plain first, matching `agy /usage`.
+  const hosts = ['cloudcode-pa.googleapis.com', 'daily-cloudcode-pa.googleapis.com'];
+  const windows = [];
+  const seen = new Set();
   for (const host of hosts) {
    try {
     const res = await fetch(`https://${host}/v1internal:retrieveUserQuotaSummary`, {
@@ -413,9 +419,8 @@ async function probeAgyUsage() {
     const pairs = [];
     for (const g of arr(raw?.quotaSummaryGroups || raw?.groups, raw?.quotaSummaryGroup))
       for (const b of arr(g?.quotaSummaryBuckets || g?.buckets, g?.quotaSummaryBucket)) pairs.push([b, g]);
-    for (const b of arr(raw?.quotaSummaryBuckets || raw?.buckets, null)) pairs.push([b, raw]);
-    const windows = [];
-    for (const [b, g] of pairs) {
+    for (const b of arr(raw?.quotaSummaryBuckets || raw?.buckets, null)) pairs.push([b, raw, true]);
+    for (const [b, g, flat] of pairs) {
       const frac = num(b?.remainingFraction, b?.bucketInfo?.remainingFraction, b?.quotaInfo?.remainingFraction);
       const rawPct = num(b?.remaining, b?.remainingPercent, b?.percentRemaining, b?.bucketInfo?.remaining, b?.quotaInfo?.remaining);
       const remaining = frac != null ? clampPct(frac * 100) : (rawPct != null ? clampPct(rawPct) : null);
@@ -423,22 +428,30 @@ async function probeAgyUsage() {
       const disabledNote = disabled ? String(b?.disabledReason || b?.disabledMessage || b?.message || b?.description || 'Disabled — this limit does not currently apply.') : null;
       if (remaining == null && !disabledNote) continue;
       const resetsAt = b?.resetTime || b?.resetsAt || b?.bucketInfo?.resetTime || g?.resetTime || null;
-      const { name, models } = groupInfo(g);
+      const { name, models, note } = groupInfo(g);
+      const title = String(b?.displayName || '').trim();
+      const label = agyLabel(b, g);
+      // First host to report a group+window wins (see usage-probe mergeAgyWindows).
+      const key = `${name ?? ''}\u0000${label}\u0000${title}`.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
       windows.push({
-        label: agyLabel(b, g),
+        label,
         usedPct: remaining != null ? clampPct(100 - remaining) : 100,
         ...(resetsAt ? { resetsAt } : {}),
         // A disabled bucket may still report 100% remaining — show the note, not a bar.
-        ...(remaining != null && !disabled ? { remainingPct: remaining } : {}),
+        // remainingPct keeps 2 decimals — the agy UI prints "97.58%".
+        ...(remaining != null && !disabled ? { remainingPct: frac != null ? Math.round(Math.max(0, Math.min(1, frac)) * 10000) / 100 : remaining } : {}),
         ...(disabledNote ? { disabledNote } : {}),
         ...(name ? { group: name } : {}),
-        ...(models.length ? { groupModels: models } : {})
+        ...(models.length ? { groupModels: models } : {}),
+        ...(note && !flat ? { groupNote: note } : {}),
+        ...(title ? { title } : {})
       });
     }
-    if (windows.length) return windows;
    } catch { /* network/timeout → try the next host */ }
   }
-  return null;
+  return windows.length ? windows : null;
 }
 
 async function refreshUsage() {

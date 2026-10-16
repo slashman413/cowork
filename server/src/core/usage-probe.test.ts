@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { normalizeClaudeUsage, normalizeCodexRateLimits, normalizeAgyQuota, isMeteredExec, findRateLimitsSnapshot, discoverAgyRefreshToken, readCachedAgyToken, agyOAuthClients, UsagePoller } from './usage-probe.js';
+import { normalizeClaudeUsage, normalizeCodexRateLimits, normalizeAgyQuota, mergeAgyWindows, isMeteredExec, findRateLimitsSnapshot, discoverAgyRefreshToken, readCachedAgyToken, agyOAuthClients, UsagePoller } from './usage-probe.js';
 
 // Shape captured from a live GET /api/oauth/usage response (values trimmed).
 const CLAUDE_LIVE_SHAPE = {
@@ -192,11 +192,11 @@ test('agy: real schema — remainingFraction, groups, member models, disabled 5h
   });
   assert.equal(w.length, 4);
   assert.deepEqual(w[0], {
-    label: '7d', usedPct: 25.8, resetsAt: '2026-08-13T00:00:00Z', remainingPct: 74.2,
+    label: '7d', usedPct: 25.8, resetsAt: '2026-08-13T00:00:00Z', remainingPct: 74.15,
     group: 'Gemini Models', groupModels: ['Gemini Flash', 'Gemini Pro']
   });
   assert.equal(w[1].label, '5h');            // 18000s = 300min → 5h
-  assert.equal(w[1].remainingPct, 91.6);
+  assert.equal(w[1].remainingPct, 91.61);
   assert.equal(w[2].remainingPct, 0);        // weekly cap hit
   assert.equal(w[2].group, 'Claude and GPT Models');
   assert.deepEqual(w[2].groupModels, ['Claude Opus', 'Claude Sonnet', 'GPT-OSS']);
@@ -234,7 +234,7 @@ test('agy: live daily schema — window strings, models in group description, di
   });
   assert.equal(w.length, 4);
   assert.deepEqual(w[0], {
-    label: '7d', usedPct: 25.8, resetsAt: '2026-08-13T06:16:47Z', remainingPct: 74.2,
+    label: '7d', usedPct: 25.8, resetsAt: '2026-08-13T06:16:47Z', remainingPct: 74.15,
     group: 'Gemini Models', groupModels: ['Gemini Flash', 'Gemini Pro']
   });
   assert.equal(w[1].label, '5h');
@@ -245,6 +245,45 @@ test('agy: live daily schema — window strings, models in group description, di
   assert.equal(w[3].label, '5h');
   assert.equal(w[3].remainingPct, undefined, 'disabled 5h bucket must not carry a remaining bar');
   assert.match(w[3].disabledNote, /5-hour limit does not currently apply/);
+});
+
+test('agy: bucket displayName → title; prose group description (Argon) → groupNote', () => {
+  const w = normalizeAgyQuota({
+    description: 'Within each group, models share a weekly limit and a 5-hour limit.',
+    groups: [
+      {
+        displayName: 'Gemini Models',
+        description: 'Models within this group: Gemini Flash, Gemini Pro',
+        buckets: [{ bucketId: 'gemini-weekly', displayName: 'Weekly Limit Remaining', window: 'weekly', remainingFraction: 1 }]
+      },
+      {
+        displayName: 'Gemini 4 Argon',
+        description: 'For paid Pro plans, Argon quota is separate.',
+        buckets: [{ bucketId: 'argon-weekly', displayName: 'Gemini 4 Argon Weekly Limit', window: 'weekly', remainingFraction: 1 }]
+      }
+    ],
+    buckets: [{ bucketId: 'flat', window: '5h', remainingFraction: 0.5 }]
+  });
+  assert.equal(w[0].title, 'Weekly Limit Remaining');
+  assert.equal(w[0].groupNote, undefined, 'a model-list description is not a note');
+  assert.equal(w[1].group, 'Gemini 4 Argon');
+  assert.equal(w[1].title, 'Gemini 4 Argon Weekly Limit');
+  assert.equal(w[1].groupNote, 'For paid Pro plans, Argon quota is separate.');
+  assert.equal(w[1].groupModels, undefined);
+  assert.equal(w[2].groupNote, undefined, 'the response-level description is not a group note');
+});
+
+test('agy: mergeAgyWindows unions hosts, first host wins per group+window', () => {
+  const plain = normalizeAgyQuota({ groups: [
+    { displayName: 'Gemini Models', buckets: [{ window: 'weekly', remainingFraction: 0.97 }, { window: '5h', remainingFraction: 0.99 }] },
+    { displayName: 'Claude and GPT models', buckets: [{ window: 'weekly', remainingFraction: 0 }] }
+  ] });
+  const daily = normalizeAgyQuota({ groups: [
+    { displayName: 'Claude and GPT models', buckets: [{ window: 'weekly', remainingFraction: 0.5 }] }
+  ] });
+  const m = mergeAgyWindows([...plain, ...daily]);
+  assert.deepEqual(m.map(w => `${w.group}/${w.label}`), ['Gemini Models/7d', 'Gemini Models/5h', 'Claude and GPT models/7d']);
+  assert.equal(m[2].remainingPct, 0, 'first host wins');
 });
 
 test('agy: readCachedAgyToken honours nested antigravity + flat gemini shapes and expiry', () => {
@@ -278,7 +317,7 @@ test('agy: accepts flat buckets, alias fields, and slug labels; clamps + skips g
     ]
   });
   assert.equal(w.length, 2);
-  assert.deepEqual(w[0], { label: 'Gemini 3 Pro', usedPct: 0, resetsAt: undefined, remainingPct: 100 });
+  assert.deepEqual(w[0], { label: 'Gemini 3 Pro', usedPct: 0, resetsAt: undefined, remainingPct: 100, title: 'Gemini 3 Pro Requests' });
   assert.equal(w[1].usedPct, 100);
   assert.equal(w[1].remainingPct, 0);
   assert.deepEqual(normalizeAgyQuota(null), []);
