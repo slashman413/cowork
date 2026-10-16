@@ -1275,6 +1275,10 @@ export class Store {
    *   • not finished (pending/claimed/in-progress)
    *   • finished more recently than `olderThanDays`
    *   • it is tagged `keep`/`important`/`pinned` (explicit "this is meaningful")
+   *   • it belongs to a goal whose record still exists (`context.goalId`) — the
+   *     goal's phases point at these tasks and its Judger minutes live in their
+   *     artifacts, so purging them erases a live goal's history. Deleting the
+   *     goal (withTasks) is the way to drop them.
    * NOTE: having artifacts no longer protects a task — an old finished task is
    * purged whether or not it produced files (its artifacts are deleted with it).
    * The dashboard therefore warns before deleting. Pass dryRun to preview
@@ -1289,16 +1293,23 @@ export class Store {
     const keepTags = new Set(['keep', 'important', 'pinned']);
     const purged: Array<{ id: string; title: string; completedAt?: string }> = [];
     let keptCount = 0;
+    const goalsDir = this.config.paths.goals;
+    const liveGoal = (goalId: unknown): boolean =>
+      typeof goalId === 'string' && !!goalsDir && /^[\w-]+$/.test(goalId)
+      && fs.existsSync(path.join(goalsDir, `${goalId}.json`));
 
     for (const task of this.listTasks({})) {
       const finished = task.status === 'done' || task.status === 'rejected';
       const when = new Date(task.completedAt || task.createdAt).getTime();
       const tagged = (task.tags || []).some(t => keepTags.has(String(t).toLowerCase()));
       // Artifacts no longer keep a task alive — old finished tasks go regardless.
-      if (!finished || when >= cutoff || tagged) { keptCount++; continue; }
+      if (!finished || when >= cutoff || tagged || liveGoal(task.context?.goalId)) { keptCount++; continue; }
 
       purged.push({ id: task.id, title: task.title, completedAt: task.completedAt });
       if (!opts.dryRun) this.deleteTask(task.id);
+    }
+    if (!opts.dryRun && purged.length) {
+      console.log(`Store: purged ${purged.length} finished task(s) older than ${days}d: ${purged.map(p => p.id.slice(0, 8)).join(' ')}`);
     }
     return { purged, keptCount, dryRun: !!opts.dryRun };
   }

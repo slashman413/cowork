@@ -292,8 +292,12 @@ export function createApiRouter(store: Store, eventBus: EventBus): Router {
 
   // Delete one task + its artifacts + its input files.
   router.delete('/inbox/:id', (req, res) => {
+    const task = store.getTask(req.params.id);
     const out = store.deleteTask(req.params.id);
     if (!out.deleted) return res.status(404).json({ error: 'Task not found' });
+    // Leave a trace: inbox/ is gitignored, so without this a deleted task is
+    // unattributable later ("where did my scheduled task go?").
+    console.log(`Store: deleted task ${task?.id} (${task?.status}) via API — ${task?.title}`);
     res.json({ ok: true, ...out });
   });
 
