@@ -76,6 +76,18 @@ function resetsInHM(iso) {
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
 
+// "4 days, 1 hour" / "3 hours, 5 minutes" — the long form agy /usage uses in
+// its "will fully refresh in …" sentence.
+function resetsInLong(iso) {
+  const s = Math.floor((new Date(iso).getTime() - Date.now()) / 1000);
+  if (!(s > 0)) return 'a moment';
+  const unit = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+  if (d > 0) return h ? `${unit(d, 'day')}, ${unit(h, 'hour')}` : unit(d, 'day');
+  if (h > 0) return m ? `${unit(h, 'hour')}, ${unit(m, 'minute')}` : unit(h, 'hour');
+  return unit(Math.max(1, m), 'minute');
+}
+
 // "remote-ai-code-gen-cc-fable" → "cc-fable"; "local-cc-opus-5-5" → "cc-opus".
 // Falls back to the raw id when no exec marker is present.
 function shortBrain(id) {
@@ -209,12 +221,19 @@ function agyGroupedBody(u) {
     entry.windows.push(w);
   }
   return [...groups.entries()].map(([name, { models, note, windows }]) => {
+    const weekly = windows.find(w => agyWindowRank(w.label) === 0 && w.resetsAt);
     const rows = windows.slice().sort((a, b) => agyWindowRank(a.label) - agyWindowRank(b.label)).map(w => {
       const label = w.title || agyWindowLabel(w.label);
       if (w.disabledNote != null && w.remainingPct == null) {
+        // The API text may already carry a "Disabled:" prefix — don't double it.
+        let text = String(w.disabledNote).replace(/^\s*Disabled\s*[:\u2014\u2013-]\s*/i, '');
+        // agy /usage appends when the weekly cap lifts; add it if the API didn't.
+        if (weekly && !/refresh/i.test(text)) {
+          text = `${text.replace(/\s*$/, '').replace(/([^.!?])$/, '$1.')} Your weekly limit will fully refresh in ${resetsInLong(weekly.resetsAt)}.`;
+        }
         return `<div class="agy-win">
           <div class="agy-win-label">${esc(label)}</div>
-          <div class="agy-win-disabled">Disabled: ${esc(w.disabledNote)}</div>
+          <div class="agy-win-disabled">Disabled: ${esc(text)}</div>
         </div>`;
       }
       const rem = Math.max(0, Math.min(100, Number(w.remainingPct != null ? w.remainingPct : (100 - w.usedPct))));
