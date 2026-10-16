@@ -397,8 +397,8 @@
             ${history.length ? `<div><h5>Recent runs <span class="cal-muted">(this view)</span></h5><ul>${history.map(listRow).join('')}</ul></div>` : ''}
           </div>` : ''}
           <div class="cal-detail-actions">
-            <a class="btn" href="#inbox/${encodeURIComponent(e.taskId)}"><i data-lucide="inbox"></i> Open in Tasks</a>
-            ${e.seriesId && e.seriesId !== e.taskId ? `<a class="btn" href="#inbox/${encodeURIComponent(e.seriesId)}"><i data-lucide="repeat"></i> Open schedule</a>` : ''}
+            <a class="btn" href="#tasks/${encodeURIComponent(e.taskId)}"><i data-lucide="inbox"></i> Open in Tasks</a>
+            ${e.seriesId && e.seriesId !== e.taskId ? `<a class="btn" href="#tasks/${encodeURIComponent(e.seriesId)}"><i data-lucide="repeat"></i> Open schedule</a>` : ''}
             ${e.kind === 'planned' ? `<button class="btn" data-edit="${esc(e.taskId)}">✎ Edit schedule</button>
               <button class="btn" data-runnow="${esc(e.taskId)}" style="color:#22C55E">▶ Run now</button>` : ''}
             <button class="btn" id="cal-close">Close</button>
@@ -470,7 +470,7 @@
       root.querySelectorAll('[data-ev]').forEach((b) => b.addEventListener('click', (ev) => { ev.stopPropagation(); this._calOpenDetail(b.dataset.ev); }));
       root.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => {
         const head = (c.data?.events || []).find((e) => e.taskId === b.dataset.open && e.head);
-        if (head) this._calOpenDetail(head.id); else window.location.hash = `#inbox/${encodeURIComponent(b.dataset.open)}`;
+        if (head) this._calOpenDetail(head.id); else window.location.hash = `#tasks/${encodeURIComponent(b.dataset.open)}`;
       }));
       root.querySelectorAll('[data-runnow]').forEach((b) => b.addEventListener('click', () => this._calRunNow(b.dataset.runnow)));
       root.querySelectorAll('[data-edit]').forEach((b) => b.addEventListener('click', () => this.editTaskModal(b.dataset.edit)));

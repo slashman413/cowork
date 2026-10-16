@@ -19,7 +19,7 @@ import { fileURLToPath } from 'url';
  * last good layout with the error reported — a typo never blanks the sidebar.
  *
  * Built-in "app" pages (Tasks, Config, …) are singletons with fixed ids because
- * other code deep-links to them (#inbox/<taskId>). One a custom layout doesn't
+ * other code deep-links to them (#tasks/<taskId>). One a custom layout doesn't
  * mention is appended to a "More" nav section rather than silently vanishing —
  * so a page added in a later release is never invisible on an old layout. Set
  * `hidden: true` to drop it from the nav on purpose (its route still works).
@@ -36,7 +36,16 @@ export function activeLayoutPath(): string {
 }
 
 /** Singleton app pages: id === type, at most one each, rendered by app.js. */
-export const APP_PAGES = ['chat', 'inbox', 'calendar', 'workflows', 'goals', 'team', 'brains', 'roster', 'connections', 'config'] as const;
+export const APP_PAGES = ['chat', 'tasks', 'calendar', 'workflows', 'goals', 'routing', 'brains', 'personas', 'workers', 'config'] as const;
+/**
+ * Pre-2026-10-16 app-page ids, renamed so each URL matches its nav label
+ * (#inbox showed "Tasks", …). Old ids in a user's layout.json are rewritten
+ * to the new ones; app.js redirects old bookmarks the same way.
+ */
+export const LEGACY_PAGE_IDS: Record<string, string> = {
+  inbox: 'tasks', team: 'routing', roster: 'personas', connections: 'workers',
+};
+const renamed = (id: string) => (Object.hasOwn(LEGACY_PAGE_IDS, id) ? LEGACY_PAGE_IDS[id] : id);
 /** Composable page types: any number, any id. */
 export const COMPOSABLE_PAGES = ['dashboard', 'portal'] as const;
 const PAGE_TYPES = new Set<string>([...APP_PAGES, ...COMPOSABLE_PAGES]);
@@ -44,14 +53,14 @@ const PAGE_TYPES = new Set<string>([...APP_PAGES, ...COMPOSABLE_PAGES]);
 /** Fallback label/icon for an app page the layout doesn't describe. */
 const APP_PAGE_DEFAULTS: Record<string, { label: string; icon: string }> = {
   chat: { label: 'Chat', icon: 'message-square' },
-  inbox: { label: 'Tasks', icon: 'inbox' },
+  tasks: { label: 'Tasks', icon: 'inbox' },
   calendar: { label: 'Calendar', icon: 'calendar-days' },
   workflows: { label: 'Workflows', icon: 'workflow' },
   goals: { label: 'Goals', icon: 'target' },
-  team: { label: 'Routing', icon: 'bot' },
+  routing: { label: 'Routing', icon: 'bot' },
   brains: { label: 'Brains', icon: 'cpu' },
-  roster: { label: 'Personas', icon: 'users-round' },
-  connections: { label: 'Workers', icon: 'plug' },
+  personas: { label: 'Personas', icon: 'users-round' },
+  workers: { label: 'Workers', icon: 'plug' },
   config: { label: 'Configuration', icon: 'settings' },
 };
 
@@ -176,10 +185,13 @@ export function normalizeLayout(raw: unknown, file: string, source: LayoutView['
   };
 
   const pages: Record<string, LayoutPage> = {};
-  for (const [id, p] of Object.entries(doc.pages && typeof doc.pages === 'object' ? doc.pages : {}) as [string, any][]) {
-    if (!ID_RE.test(id)) { errors.push(`page id "${id}" must match ${ID_RE}`); continue; }
-    if (!p || typeof p !== 'object') { errors.push(`page ${id}: must be an object`); continue; }
-    const type = str(p.type, 40) || (PAGE_TYPES.has(id) ? id : '');
+  for (const [rawId, p] of Object.entries(doc.pages && typeof doc.pages === 'object' ? doc.pages : {}) as [string, any][]) {
+    if (!ID_RE.test(rawId)) { errors.push(`page id "${rawId}" must match ${ID_RE}`); continue; }
+    if (!p || typeof p !== 'object') { errors.push(`page ${rawId}: must be an object`); continue; }
+    const rawType = str(p.type, 40);
+    const type = rawType ? renamed(rawType) : (PAGE_TYPES.has(renamed(rawId)) ? renamed(rawId) : '');
+    // Only app pages were renamed — a custom dashboard that happens to be called "team" keeps its id.
+    const id = (APP_PAGES as readonly string[]).includes(type) ? renamed(rawId) : rawId;
     if (!PAGE_TYPES.has(type)) { errors.push(`page ${id}: unknown type "${type}" (known: ${[...PAGE_TYPES].join(', ')})`); continue; }
     if ((APP_PAGES as readonly string[]).includes(type) && id !== type) {
       errors.push(`page ${id}: app page "${type}" must use the id "${type}" (other links point at #${type})`); continue;
@@ -231,7 +243,8 @@ export function normalizeLayout(raw: unknown, file: string, source: LayoutView['
   (Array.isArray(doc.sections) ? doc.sections : []).forEach((s: any, si: number) => {
     if (!s || typeof s !== 'object' || !Array.isArray(s.pages)) { errors.push(`section ${si + 1}: needs a "pages" list`); return; }
     const ids: string[] = [];
-    for (const pid of s.pages) {
+    for (const raw of s.pages) {
+      const pid = typeof raw === 'string' && !pages[raw] ? renamed(raw) : raw;
       if (typeof pid !== 'string' || !pages[pid]) { errors.push(`section ${si + 1}: unknown page "${String(pid)}"`); continue; }
       if (placed.has(pid)) { errors.push(`section ${si + 1}: page "${pid}" is already in another section`); continue; }
       if (pages[pid].hidden) continue;
@@ -246,8 +259,9 @@ export function normalizeLayout(raw: unknown, file: string, source: LayoutView['
   if (more.length) sections.push({ label: 'More', pages: more });
 
   let defaultPage = str(doc.defaultPage, 40) || '';
+  if (defaultPage && !pages[defaultPage]) defaultPage = renamed(defaultPage);
   if (defaultPage && !pages[defaultPage]) { errors.push(`defaultPage "${defaultPage}" is not a defined page`); defaultPage = ''; }
-  if (!defaultPage) defaultPage = sections[0]?.pages[0] || 'inbox';
+  if (!defaultPage) defaultPage = sections[0]?.pages[0] || 'tasks';
 
   return { path: file, source, brand, defaultPage, sections, pages, errors };
 }

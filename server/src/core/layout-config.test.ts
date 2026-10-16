@@ -20,7 +20,7 @@ test('repo default layout.json is valid and reproduces the built-in nav', () => 
   assert.equal(v.defaultPage, 'overview');
   assert.deepEqual(v.sections.map((s) => s.label), ['Operations', 'AI Fleet', 'System']);
   assert.deepEqual(v.sections.flatMap((s) => s.pages),
-    ['overview', 'portal', 'chat', 'inbox', 'calendar', 'workflows', 'goals', 'team', 'brains', 'roster', 'connections', 'config']);
+    ['overview', 'portal', 'chat', 'tasks', 'calendar', 'workflows', 'goals', 'routing', 'brains', 'personas', 'workers', 'config']);
   assert.equal(v.pages.overview.type, 'dashboard');
   assert.deepEqual(v.pages.overview.rows!.map((r) => r.widgets.map((w) => w.type)),
     [['sysbar'], ['stats'], ['dispatcher', 'activity'], ['platforms']]);
@@ -41,7 +41,7 @@ test('bad pages/widgets/options are dropped with an error; good ones survive', (
         ],
       },
       models: { type: 'portal', label: 'Models', categories: ['APIs & MCP'] },
-      tasks: { type: 'inbox' },            // app page under a foreign id
+      jobs: { type: 'tasks' },             // app page under a foreign id
       'Bad Id': { type: 'dashboard', rows: [] },
       weird: { type: 'iframe' },
     },
@@ -54,18 +54,18 @@ test('bad pages/widgets/options are dropped with an error; good ones survive', (
   assert.deepEqual(r2.widgets, [{ type: 'activity' }]);
   assert.deepEqual(r3.widgets, [{ type: 'services', categories: ['Dev'] }]);
   assert.deepEqual(v.pages.models.categories, ['APIs & MCP']);
-  assert.equal(v.pages.tasks, undefined);
+  assert.equal(v.pages.jobs, undefined);
   assert.equal(v.defaultPage, 'home');
-  // tiles, bogus, minWidth, limit, color, note, span, ghost, dup home, tasks, Bad Id, weird, defaultPage
+  // tiles, bogus, minWidth, limit, color, note, span, ghost, dup home, jobs, Bad Id, weird, defaultPage
   assert.equal(v.errors.length, 13, v.errors.join('\n'));
 });
 
 test('omitted app pages land in "More"; hidden ones stay routable but off the nav', () => {
   const v = normalizeLayout({
-    sections: [{ label: 'Ops', pages: ['overview', 'inbox'] }],
+    sections: [{ label: 'Ops', pages: ['overview', 'tasks'] }],
     pages: {
       overview: { type: 'dashboard', rows: [] },
-      inbox: {},
+      tasks: {},
       config: { hidden: true },
       extra: { type: 'portal' },
     },
@@ -75,22 +75,42 @@ test('omitted app pages land in "More"; hidden ones stay routable but off the na
   assert.ok(more.pages.includes('extra'), 'defined-but-unplaced page is still reachable');
   for (const t of APP_PAGES) {
     assert.ok(v.pages[t], `app page ${t} always routable`);
-    if (!['inbox', 'config'].includes(t)) assert.ok(more.pages.includes(t), `${t} appended to More`);
+    if (!['tasks', 'config'].includes(t)) assert.ok(more.pages.includes(t), `${t} appended to More`);
   }
   assert.ok(!v.sections.some((s) => s.pages.includes('config')), 'hidden page is not in the nav');
-  assert.equal(v.pages.inbox.label, 'Tasks');
+  assert.equal(v.pages.tasks.label, 'Tasks');
 });
 
 test('sections may name app pages without declaring them under "pages"', () => {
   const v = normalizeLayout({
-    sections: [{ label: 'Work', pages: ['chat', 'inbox'] }],
+    sections: [{ label: 'Work', pages: ['chat', 'tasks'] }],
     pages: { home: { type: 'dashboard', rows: [] } },
   }, 'mem');
   assert.deepEqual(v.errors, []);
-  assert.deepEqual(v.sections[0], { label: 'Work', pages: ['chat', 'inbox'] });
+  assert.deepEqual(v.sections[0], { label: 'Work', pages: ['chat', 'tasks'] });
   assert.equal(v.pages.chat.label, 'Chat');
   const more = v.sections.find((s) => s.label === 'More')!;
   assert.ok(more.pages.includes('home') && !more.pages.includes('chat'));
+});
+
+test('pre-rename app-page ids (inbox/team/roster/connections) migrate to the new ones', () => {
+  const v = normalizeLayout({
+    defaultPage: 'inbox',
+    sections: [{ label: 'Ops', pages: ['inbox', 'team', 'roster', 'connections', 'mine'] }],
+    pages: {
+      inbox: { label: 'My Tasks' },
+      connections: { type: 'connections', icon: 'plug' },
+      mine: { type: 'dashboard', rows: [] },
+      team: { type: 'dashboard', rows: [] },   // custom page that merely shares an old id
+    },
+  }, 'mem');
+  assert.deepEqual(v.errors, []);
+  assert.equal(v.defaultPage, 'tasks');
+  assert.deepEqual(v.sections[0].pages, ['tasks', 'team', 'personas', 'workers', 'mine']);
+  assert.equal(v.pages.tasks.label, 'My Tasks');
+  assert.equal(v.pages.workers.type, 'workers');
+  assert.equal(v.pages.team.type, 'dashboard');
+  for (const old of ['inbox', 'roster', 'connections']) assert.equal(v.pages[old], undefined);
 });
 
 test('store serves the template until a live file exists, then hot-reloads it', () => {

@@ -726,9 +726,9 @@ class App {
     } catch (e) {
       // Mirrors the repo layout.json, so an older server without /api/layout
       // (or a failed fetch) still gets the familiar nav.
-      const app = { chat: ['Chat', 'message-square'], inbox: ['Tasks', 'inbox'], calendar: ['Calendar', 'calendar-days'], workflows: ['Workflows', 'workflow'],
-        goals: ['Goals', 'target'], team: ['Routing', 'bot'], brains: ['Brains', 'cpu'], roster: ['Personas', 'users-round'],
-        connections: ['Workers', 'plug'], config: ['Configuration', 'settings'] };
+      const app = { chat: ['Chat', 'message-square'], tasks: ['Tasks', 'inbox'], calendar: ['Calendar', 'calendar-days'], workflows: ['Workflows', 'workflow'],
+        goals: ['Goals', 'target'], routing: ['Routing', 'bot'], brains: ['Brains', 'cpu'], personas: ['Personas', 'users-round'],
+        workers: ['Workers', 'plug'], config: ['Configuration', 'settings'] };
       const pages = {
         overview: { id: 'overview', type: 'dashboard', label: 'Overview', icon: 'layout-dashboard',
           rows: [{ widgets: [{ type: 'sysbar' }] }, { widgets: [{ type: 'stats' }] },
@@ -737,9 +737,9 @@ class App {
       };
       for (const [id, [label, icon]] of Object.entries(app)) pages[id] = { id, type: id, label, icon };
       this.layout = { brand: { title: 'Cowork', icon: 'zap', footer: 'Cowork Server' }, defaultPage: 'overview', pages,
-        sections: [{ label: 'Operations', pages: ['overview', 'portal', 'chat', 'inbox', 'calendar', 'workflows', 'goals'] },
-                   { label: 'AI Fleet', pages: ['team', 'brains', 'roster'] },
-                   { label: 'System', pages: ['connections', 'config'] }],
+        sections: [{ label: 'Operations', pages: ['overview', 'portal', 'chat', 'tasks', 'calendar', 'workflows', 'goals'] },
+                   { label: 'AI Fleet', pages: ['routing', 'brains', 'personas'] },
+                   { label: 'System', pages: ['workers', 'config'] }],
         errors: [], fallback: e.message };
       console.warn('layout.json unavailable, using built-in default:', e.message);
     }
@@ -1285,7 +1285,7 @@ class App {
         const routeNote = brain ? `pinned to ${brain}` : target ? `routed to ${target}` : 'auto-routed via the brain chain';
         const fileNote = inputs.length ? ` · ${inputs.length} file(s) attached` : '';
         this.toast('task created', `${when ? `Scheduled for ${new Date(when).toLocaleString()}` : 'Queued'} — ${routeNote}${fileNote}.`);
-        if (this.currentView === 'inbox') this.renderInbox();
+        if (this.currentView === 'tasks') this.renderInbox();
         if (this.currentView === 'calendar') this.renderCalendar();
       } catch (err) {
         okBtn.disabled = false;
@@ -1414,7 +1414,7 @@ class App {
           ? `Scheduled for ${new Date(updated.scheduledAt).toLocaleString()}`
           : `Saved — now ${updated.status}`;
         this.toast('task updated', timing + '.');
-        if (this.currentView === 'inbox') this.renderInbox();
+        if (this.currentView === 'tasks') this.renderInbox();
         if (this.currentView === 'calendar') this.renderCalendar();
       } catch (err) {
         okBtn.disabled = false;
@@ -1427,17 +1427,24 @@ class App {
     const pages = this.layout?.pages || {};
     const fallback = this.layout?.defaultPage || 'overview';
     const raw = window.location.hash.replace('#', '') || fallback;
-    // A hash may carry a sub-path: `#inbox/<taskId>` deep-links to one task so a
+    // A hash may carry a sub-path: `#tasks/<taskId>` deep-links to one task so a
     // workflow run's OUTPUT panel can open the exact task in a new tab.
     const [view, ...rest] = raw.split('/');
-    // "#dashboard" was the Overview's old name — keep old bookmarks working
-    // unless a layout defines a page with that id. Unknown ids land on the
+    // Old page ids — "#dashboard" (the Overview) and the app pages renamed so
+    // each URL matches its label (#inbox → #tasks, …). Keep old bookmarks and
+    // deep links working unless a layout defines a page with that id, and
+    // rewrite the address bar to the canonical URL. Unknown ids land on the
     // default page rather than a blank view.
-    let id = (view === 'dashboard' && !pages.dashboard) ? 'overview' : view;
+    const legacy = { dashboard: 'overview', inbox: 'tasks', team: 'routing', roster: 'personas', connections: 'workers' };
+    if (Object.hasOwn(legacy, view) && !pages[view]) {
+      history.replaceState(null, '', '#' + [legacy[view], ...rest].join('/'));
+      return this.navigate();
+    }
+    let id = view;
     if (!pages[id]) id = fallback;
     this.currentView = id;
     this.currentPage = pages[id] || { id, type: 'dashboard', label: id, rows: [] };
-    this.pendingTask = (this.currentView === 'inbox' && rest.length)
+    this.pendingTask = (this.currentView === 'tasks' && rest.length)
       ? decodeURIComponent(rest.join('/')) : null;
     if (this.pendingTask) this._focusRetried = false;
     document.querySelectorAll('.nav-item').forEach(item => {
@@ -1474,14 +1481,14 @@ class App {
         case 'dashboard': await this.renderDashboard(this.currentPage); break;
         case 'portal': await this.renderPortal(this.currentPage); break;
         case 'chat': await this.renderChat(); break;
-        case 'connections': await this.renderConnections(); break;
-        case 'inbox': await this.renderInbox(); break;
+        case 'workers': await this.renderConnections(); break;
+        case 'tasks': await this.renderInbox(); break;
         case 'calendar': await this.renderCalendar(); break;
         case 'workflows': await this.renderWorkflows(); break;
         case 'goals': await this.renderGoals(); break;
-        case 'team': await this.renderTeam(); break;
+        case 'routing': await this.renderTeam(); break;
         case 'brains': await this.renderBrains(); break;
-        case 'roster': await this.renderRoster(); break;
+        case 'personas': await this.renderRoster(); break;
         case 'config': await this.renderConfig(); break;
         default: await this.renderDashboard(this.currentPage); break;
       }
@@ -2289,11 +2296,11 @@ class App {
     const meta = m.meta ? `<div style="font-size:0.66rem;opacity:.6;margin-bottom:3px">${esc(m.meta)}</div>` : '';
     // Every assistant reply is the result of a real task; surface a deep-link to it
     // so the user can check status, verify the output/artifacts, and act on it. The
-    // `#inbox/<id>` hash is handled by navigate()/focusInboxTask (opens the exact
+    // `#tasks/<id>` hash is handled by navigate()/focusInboxTask (opens the exact
     // task, expanded). Shown while running too — the id is stamped at dispatch.
     const taskLink = (!user && m.taskId)
       ? `<div style="margin-top:6px;font-size:0.72rem;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-          <a href="#inbox/${encodeURIComponent(m.taskId)}" target="_blank" rel="noopener" title="Open this task in Tasks — status, full result, inputs and downloadable artifacts" style="display:inline-flex;align-items:center;gap:4px;color:#0EA5E9;text-decoration:none"><i data-lucide="external-link" style="width:12px;height:12px"></i>Related task ↗</a>
+          <a href="#tasks/${encodeURIComponent(m.taskId)}" target="_blank" rel="noopener" title="Open this task in Tasks — status, full result, inputs and downloadable artifacts" style="display:inline-flex;align-items:center;gap:4px;color:#0EA5E9;text-decoration:none"><i data-lucide="external-link" style="width:12px;height:12px"></i>Related task ↗</a>
           <span class="copyable" data-copy="${esc(m.taskId)}" title="Task ID — click to copy" style="cursor:pointer;opacity:.65;font-family:ui-monospace,SFMono-Regular,Menlo,monospace">#${esc(m.taskId.slice(0, 8))}</span>
         </div>`
       : '';
@@ -2568,7 +2575,7 @@ class App {
       // context.scheduledParentId. We surface that ONE stable parent reference (no
       // run-to-run "previous/next" chain that made the list scroll up and down).
       const parentLink = c.scheduledParentId
-        ? `<a href="#inbox/${encodeURIComponent(c.scheduledParentId)}" title="This run was produced by a recurring scheduled task — open it" style="display:inline-flex; align-items:center; gap:3px; color:#6366F1; text-decoration:none; font-family:inherit"><i data-lucide="repeat" style="width:11px;height:11px;vertical-align:-1px"></i>scheduled task</a>`
+        ? `<a href="#tasks/${encodeURIComponent(c.scheduledParentId)}" title="This run was produced by a recurring scheduled task — open it" style="display:inline-flex; align-items:center; gap:3px; color:#6366F1; text-decoration:none; font-family:inherit"><i data-lucide="repeat" style="width:11px;height:11px;vertical-align:-1px"></i>scheduled task</a>`
         : '';
       // Files can be attached while a task is still schedulable, or to a failed one
       // (attach context, then re-run).
@@ -2989,7 +2996,7 @@ class App {
     }));
   }
 
-  // Deep-link target from a workflow run's OUTPUT panel (#inbox/<taskId>): scroll
+  // Deep-link target from a workflow run's OUTPUT panel (#tasks/<taskId>): scroll
   // that task into view and flash it. If it's not on the current page
   // (older than the loaded window, or hidden by a status filter), widen the net
   // once — clear the filter and raise the limit — then retry.
@@ -3580,8 +3587,8 @@ class App {
         const t = await this.api.get(`/inbox/${encodeURIComponent(node.dataset.wfTask)}`);
         const arts = Array.isArray(t.artifacts) ? t.artifacts : [];
         // Deep link into the full task in the Inbox — opens in a new tab so the
-        // run view stays put. `#inbox/<id>` is handled by navigate()/focusInboxTask.
-        const taskUrl = `#inbox/${encodeURIComponent(t.id)}`;
+        // run view stays put. `#tasks/<id>` is handled by navigate()/focusInboxTask.
+        const taskUrl = `#tasks/${encodeURIComponent(t.id)}`;
         const artHtml = arts.length ? `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin:8px 0 2px">
             <span style="font-size:0.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.03em">Artifacts</span>
             ${arts.map(f => artifactChip(t.id, f, '0.8rem')).join('')}

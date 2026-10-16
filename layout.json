@@ -1,11 +1,11 @@
 {
-  "$comment": "Dashboard layout — nav sections, pages and Overview widgets. Live copy: ~/.cowork/layout.json (override with COWORK_LAYOUT); when absent THIS file is served, so copy it there to customise. Hot-reloaded on save (refresh the page). Page types: dashboard (rows of widgets) and portal (cards from portal.json, optionally filtered by categories/keys) can be added under any id; app pages (chat, inbox, calendar, workflows, goals, team, brains, roster, connections, config) keep their fixed id — omit one and it lands in a 'More' section, set hidden:true to drop it from the nav. Widgets: sysbar {tiles: cpu|gpu|memory|thermal, hideUnavailable}, stats {items: workers|openTasks|personas|failedTasks|waitingInput|scheduled|uptime}, dispatcher, activity {limit}, platforms, services {keys|categories, compact}, note {text (markdown)}; every widget also takes title and span (1-4). A row is a widget list or {minWidth, widgets}. See docs/dashboard.md#layout.",
+  "$comment": "Dashboard layout — nav sections, pages and Overview widgets. Live copy: ~/.cowork/layout.json (override with COWORK_LAYOUT); when absent THIS file is served, so copy it there to customise. Hot-reloaded on save (refresh the page). Page types: dashboard (rows of widgets) and portal (cards from portal.json, optionally filtered by categories/keys) can be added under any id; app pages (chat, tasks, calendar, workflows, goals, routing, brains, personas, workers, config) keep their fixed id — omit one and it lands in a 'More' section, set hidden:true to drop it from the nav. Widgets: sysbar {tiles: cpu|gpu|memory|thermal, hideUnavailable}, stats {items: workers|openTasks|personas|failedTasks|waitingInput|scheduled|uptime}, dispatcher, activity {limit}, platforms, services {keys|categories, compact}, note {text (markdown)}; every widget also takes title and span (1-4). A row is a widget list or {minWidth, widgets}. See docs/dashboard.md#layout.",
   "brand": { "title": "Cowork", "icon": "zap", "footer": "Cowork Server v1.0.0" },
   "defaultPage": "overview",
   "sections": [
-    { "label": "Operations", "pages": ["overview", "portal", "chat", "inbox", "calendar", "workflows", "goals"] },
-    { "label": "AI Fleet", "pages": ["team", "brains", "roster"] },
-    { "label": "System", "pages": ["connections", "config"] }
+    { "label": "Operations", "pages": ["overview", "portal", "chat", "tasks", "calendar", "workflows", "goals"] },
+    { "label": "AI Fleet", "pages": ["routing", "brains", "personas"] },
+    { "label": "System", "pages": ["workers", "config"] }
   ],
   "pages": {
     "overview": {
@@ -25,14 +25,14 @@
       "icon": "layout-grid"
     },
     "chat": { "label": "Chat", "icon": "message-square" },
-    "inbox": { "label": "Tasks", "icon": "inbox" },
+    "tasks": { "label": "Tasks", "icon": "inbox" },
     "calendar": { "label": "Calendar", "icon": "calendar-days" },
     "workflows": { "label": "Workflows", "icon": "workflow" },
     "goals": { "label": "Goals", "icon": "target" },
-    "team": { "label": "Routing", "icon": "bot" },
+    "routing": { "label": "Routing", "icon": "bot" },
     "brains": { "label": "Brains", "icon": "cpu" },
-    "roster": { "label": "Personas", "icon": "users-round" },
-    "connections": { "label": "Workers", "icon": "plug" },
+    "personas": { "label": "Personas", "icon": "users-round" },
+    "workers": { "label": "Workers", "icon": "plug" },
     "config": { "label": "Configuration", "icon": "settings" }
   }
 }

@@ -51,7 +51,7 @@ keeps serving the last good layout.
   "defaultPage": "home",                        // landing page for an empty #hash
   "sections": [                                 // sidebar groups, in order
     { "label": "Host", "pages": ["home", "models", "portal"] },
-    { "label": "Work", "pages": ["chat", "inbox", "workflows", "goals"] }
+    { "label": "Work", "pages": ["chat", "tasks", "workflows", "goals"] }
   ],
   "pages": {
     "home": { "type": "dashboard", "label": "Home", "icon": "house", "rows": [
@@ -76,8 +76,11 @@ keeps serving the last good layout.
   `{ "minWidth": px, "widgets": [...] }` (auto-fit grid, wraps below `minWidth`).
 - `portal` — any id, any number. Shows `portal.json` cards, optionally narrowed by
   `categories` and/or `keys`; `intro` (markdown) replaces the default blurb.
-- App pages — `chat`, `inbox`, `calendar`, `workflows`, `goals`, `team`, `brains`, `roster`,
-  `connections`, `config`. Fixed ids (other code deep-links to `#inbox/<id>`); a
+- App pages — `chat`, `tasks`, `calendar`, `workflows`, `goals`, `routing`, `brains`,
+  `personas`, `workers`, `config`. Fixed ids, each matching its nav label (other code
+  deep-links to `#tasks/<id>`). The pre-2026-10-16 ids `inbox`, `team`, `roster` and
+  `connections` are still accepted in a layout file and as URLs (old bookmarks
+  redirect to the new hash); a
   section can name them without an entry under `pages`, an entry only overrides
   `label`/`icon`/`hidden`. One the layout never mentions is appended to a
   **More** section, so a page added in a later release is never invisible.
