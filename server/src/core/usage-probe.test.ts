@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { normalizeClaudeUsage, normalizeCodexRateLimits, normalizeAgyQuota, mergeAgyWindows, agyUserAgent, isMeteredExec, findRateLimitsSnapshot, discoverAgyRefreshToken, readCachedAgyToken, agyOAuthClients, UsagePoller } from './usage-probe.js';
+import { normalizeClaudeUsage, normalizeCodexRateLimits, normalizeAgyQuota, mergeAgyWindows, agyUserAgent, installedAgyUserAgent, _resetAgyUserAgent, isMeteredExec, findRateLimitsSnapshot, discoverAgyRefreshToken, readCachedAgyToken, agyOAuthClients, UsagePoller } from './usage-probe.js';
 
 // Shape captured from a live GET /api/oauth/usage response (values trimmed).
 const CLAUDE_LIVE_SHAPE = {
@@ -449,4 +449,26 @@ test('agy: live daily- host shape with all three groups incl. Gemini 4 Argon', (
   assert.equal(argon.title, 'Gemini 4 Argon Weekly Limit');
   assert.equal(argon.remainingPct, 100);
   assert.match(argon.groupNote!, /^For paid Pro plans, Argon quota is separate/);
+});
+
+test('installedAgyUserAgent: a failed version lookup is retried, a successful one memoised', async () => {
+  const saved = process.env.AGY_USER_AGENT;
+  delete process.env.AGY_USER_AGENT;
+  try {
+    _resetAgyUserAgent();
+    let calls = 0;
+    const fail = async () => { calls++; throw new Error('ETIMEDOUT'); };
+    assert.match(await installedAgyUserAgent(fail), /antigravity\/cli\/1\.3\.6 /);
+    const ok = async () => { calls++; return { stdout: 'agy 1.9.2\n' }; };
+    assert.match(await installedAgyUserAgent(ok), /antigravity\/cli\/1\.9\.2 /, 'fallback must not be pinned');
+    assert.match(await installedAgyUserAgent(fail), /antigravity\/cli\/1\.9\.2 /, 'success is memoised');
+    assert.equal(calls, 2);
+    // Unparseable output is a failure too.
+    _resetAgyUserAgent();
+    assert.match(await installedAgyUserAgent(async () => ({ stdout: 'garbage' })), /1\.3\.6/);
+    assert.match(await installedAgyUserAgent(ok), /1\.9\.2/);
+  } finally {
+    if (saved === undefined) delete process.env.AGY_USER_AGENT; else process.env.AGY_USER_AGENT = saved;
+    _resetAgyUserAgent();
+  }
 });

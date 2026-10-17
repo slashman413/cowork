@@ -53,7 +53,8 @@ export function parseAgyModels(stdout: string): string[] {
 type Spawner = (cmd: string, args: string[], opts: SpawnOptions) => ChildProcess;
 
 /** Live agy model slugs, or null when the catalog can't be fetched. Only a
- *  non-empty listing from a run that exited on its own is cached: after a
+ *  non-empty listing from a run that exited on its own with code 0 is cached
+ *  (a non-zero exit may have printed a partial list before failing): after a
  *  timeout (or spawn error) the child's late 'close' still fires with partial
  *  stdout, and caching that truncated list would mark valid models "retired"
  *  for CACHE_MS — so the first outcome settles the probe and later events are
@@ -79,8 +80,8 @@ export function listAgyModels(timeoutMs = 60000, spawner: Spawner = spawn): Prom
     timer = setTimeout(() => { settle(null); child.kill('SIGTERM'); }, timeoutMs);
     child.stdout?.on('data', d => { if (!settled) out += d.toString(); });
     child.on('error', () => settle(null));
-    child.on('close', () => {
-      const models = parseAgyModels(out);
+    child.on('close', (code: number | null) => {
+      const models = code === 0 ? parseAgyModels(out) : [];
       settle(models.length ? models : null);
     });
   }).finally(() => { inflight = null; });

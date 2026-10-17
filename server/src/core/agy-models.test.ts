@@ -105,3 +105,14 @@ test('listAgyModels: close after a spawn error neither caches nor resolves a lis
   assert.equal(_agyModelCache(), null);
   _resetAgyModelCache();
 });
+
+test('listAgyModels: a non-zero exit with stdout is neither cached nor returned', async () => {
+  _resetAgyModelCache();
+  const child = fakeChild();
+  const p = listAgyModels(1000, () => child);
+  child.stdout.emit('data', Buffer.from('gemini-3.8-flash-high\tGemini\n'));
+  child.emit('close', 1, null);
+  assert.equal(await p, null);
+  assert.equal(_agyModelCache(), null, 'listing from a failed run must not be cached');
+  _resetAgyModelCache();
+});

@@ -68,14 +68,28 @@ export function agyUserAgent(version?: string): string {
 }
 
 let agyUA: Promise<string> | null = null;
-/** agyUserAgent() for the installed agy. `agy --version` runs once, async, so
- *  the first probe doesn't block the server's event loop for up to 10 s. */
-function installedAgyUserAgent(): Promise<string> {
-  agyUA ??= execFileAsync('agy', ['--version'], { encoding: 'utf8', timeout: 10000 })
+type VersionReader = () => Promise<{ stdout: string }>;
+const readAgyVersion: VersionReader = () => execFileAsync('agy', ['--version'], { encoding: 'utf8', timeout: 10000 });
+/** agyUserAgent() for the installed agy. `agy --version` runs async, so the
+ *  first probe doesn't block the server's event loop for up to 10 s. Only a
+ *  successful lookup is memoised: a failed or timed-out one would otherwise pin
+ *  the fallback version (and Argon's min-CLI gate) until the server restarts,
+ *  so the next probe retries. Concurrent callers share one in-flight lookup.
+ *  `read` is injectable for tests. */
+export function installedAgyUserAgent(read: VersionReader = readAgyVersion): Promise<string> {
+  if (agyUA) return agyUA;
+  const p = read()
     .then(({ stdout }) => stdout.match(/\d+\.\d+\.\d+/)?.[0], () => undefined /* agy not installed here */)
-    .then(ver => agyUserAgent(ver));
-  return agyUA;
+    .then(ver => {
+      if (!ver && agyUA === p) agyUA = null;
+      return agyUserAgent(ver);
+    });
+  agyUA = p;
+  return p;
 }
+
+/** Test hook. */
+export function _resetAgyUserAgent(): void { agyUA = null; }
 
 /** Clamp + round a percent into 0–100 with one decimal. */
 function pct(n: unknown): number | null {
