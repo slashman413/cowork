@@ -1,18 +1,20 @@
-# 🤝 Multi-Agent Cowork Framework
+# 🤝 Cowork — one task inbox for Claude Code, Codex, Gemini CLI & Hermes agents
 
-📬 Get AI tips & prompt templates — subscribe to the Slashman Tools newsletter: https://slashmantools.us/subscribe
-> ## 🛍️ **Cowork Pro — the production package**
-> The MCP server above is the open-source core. **[Cowork Pro ($59)](https://slashmaster6.gumroad.com/l/xfhfps)** adds the full production stack: advanced workflows, priority support & lifetime updates. Also included in the **[AI Developer Stack Bundle ($79)](https://slashmaster6.gumroad.com/l/nulyms)**.
+**A self-hosted MCP server + web dashboard that lets different AI coding agents share one task
+queue.** Dispatch a task from any of them (or from the UI); a dispatcher routes it to a named
+*brain* (model × CLI × machine), runs it, verifies the result, and falls back to the next brain
+on rate limits. Workflows, artifacts, remote machines and cost/usage meters are built in.
 
+- **Mixed-vendor agents, one inbox:** Claude Code, Codex, Gemini CLI / Antigravity, Hermes, Ollama.
+- **Brain routing with fallback chains:** route by role, pin by task, fail over on quota errors.
+- **Plain files on disk:** the task store is files. No database to run.
+- **Remote brains:** another machine joins with one command and offers its models
+  ([JOIN-AS-A-BRAIN.md](JOIN-AS-A-BRAIN.md)):
+  `COWORK_URL=http://<host>:6868 HOST=<you> node cowork/deploy/remote-brain-client.mjs`
 
-A filesystem-based MCP server + Web UI dashboard that enables multi-platform AI
-agents to coordinate, dispatch tasks, and share results — all through a single
-pane of glass.
-
-> **Are you an LLM instance on another machine wanting to contribute your models?**
-> See **[JOIN-AS-A-BRAIN.md](JOIN-AS-A-BRAIN.md)** — zero-config, it auto-detects your
-> model CLIs (claude/hermes/agy) and declares your brains in the registration handshake:
-> `COWORK_URL=http://<host>:6868 HOST=<you> node cowork/deploy/remote-brain-client.mjs`
+Jump to: [Quick Start](#quick-start) · [Connecting agents](#connecting-ai-agents) ·
+[Dispatcher](#task-execution--the-dispatcher) · [Brains](#brains--named-execution-identities-model--platform--location) ·
+[Workflows](#workflows--declarative-pipelines-two-execution-modes) · [MCP tools](#mcp-tools-reference)
 
 ## Screenshots
 
@@ -926,8 +928,11 @@ restart; set `0` to rescan on every query, or a larger value to reduce disk work
 
 ---
 
-### 🛒 相關產品
-- [Cowork Pro ($59)](https://slashmaster6.gumroad.com/l/xfhfps?utm_source=github&utm_medium=referral) - Full production stack for the multi-agent cowork framework: advanced workflows, priority support & lifetime updates.
+### Cowork Pro
+
+[Cowork Pro ($59)](https://slashmaster6.gumroad.com/l/cowork-pro?utm_source=github&utm_medium=readme) is the production
+package: advanced workflows, priority support and lifetime updates. It is also part of the
+[AI Developer Stack Bundle ($79)](https://slashmaster6.gumroad.com/l/ai-dev-stack?utm_source=github&utm_medium=readme).
 
 ## License
 
