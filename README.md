@@ -79,6 +79,18 @@ non-destructively (add `--url http://<host>:6868` for a remote server; `--client
 to target one). The numbered steps below are the same thing, broken out for when you want
 to do it by hand.
 
+### Container (hub only)
+
+```bash
+docker run -d -p 6868:6868 -v cowork-data:/data ghcr.io/slashman413/cowork:1.0.0
+```
+
+The image (amd64 + arm64) runs the MCP server, dashboard and task inbox with the local
+dispatcher off: agents connect to `http://<host>:6868/mcp`, and machines offer their brains
+with `deploy/remote-brain-client.mjs` (see [JOIN-AS-A-BRAIN.md](JOIN-AS-A-BRAIN.md)). Config
+and all state live in the `/data` volume; set `COWORK_API_KEY` to require a key. Images are
+built from `v*` tags by `.github/workflows/release.yml` on a digest-pinned base.
+
 ### 1. Install Dependencies
 
 ```bash
@@ -936,4 +948,5 @@ package: advanced workflows, priority support and lifetime updates. It is also p
 
 ## License
 
-Internal tool — part of the slashman413 workspace automation suite.
+[MIT](LICENSE) © 2026 slashman413. The core server, dashboard and remote-brain client are
+free and open source; Cowork Pro (above) is the separate paid add-on.

@@ -2,6 +2,7 @@
   "name": "cowork-mcp-server",
   "version": "1.0.0",
   "description": "Multi-Agent Cowork MCP Server with Web UI Dashboard",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
