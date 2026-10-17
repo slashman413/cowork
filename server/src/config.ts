@@ -170,6 +170,10 @@ export function loadConfig(): Config {
     const p = parseInt(process.env.COWORK_PORT, 10);
     if (Number.isFinite(p) && p > 0) config.server.port = p;
   }
+  // COWORK_HOST lets a container bind 0.0.0.0 without editing the seeded config.
+  if (process.env.COWORK_HOST) {
+    config.server.host = process.env.COWORK_HOST;
+  }
 
   for (const key of Object.keys(config.paths) as (keyof Config['paths'])[]) {
     config.paths[key] = resolvePath(config.paths[key]);

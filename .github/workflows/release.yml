@@ -1,0 +1,69 @@
+name: Release image + MCP Registry
+
+# Push a v* tag (matching server.json's version) to build ghcr.io/slashman413/cowork for
+# amd64 + arm64 and publish that version to the official MCP Registry.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/slashman413/cowork
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+      - name: Commit time (reproducible layer timestamps)
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: VERSION=${{ steps.meta.outputs.version }}
+          provenance: true
+          outputs: type=image,rewrite-timestamp=true
+        env:
+          SOURCE_DATE_EPOCH: ${{ env.SOURCE_DATE_EPOCH }}
+
+  registry:
+    needs: image
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check server.json matches the tag
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          jq -e --arg v "$v" '.version == $v and .packages[0].identifier == "ghcr.io/slashman413/cowork:" + $v' server.json
+      - name: Install mcp-publisher
+        run: curl -sL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" | tar xz mcp-publisher
+      - run: ./mcp-publisher login github-oidc
+      - run: ./mcp-publisher publish
