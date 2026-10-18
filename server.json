@@ -8,11 +8,11 @@
     "source": "github"
   },
   "websiteUrl": "https://github.com/slashman413/cowork",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "packages": [
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/slashman413/cowork:1.0.0",
+      "identifier": "ghcr.io/slashman413/cowork:1.0.1",
       "transport": {
         "type": "streamable-http",
         "url": "http://localhost:6868/mcp"
@@ -24,8 +24,8 @@
       "environmentVariables": [
         {
           "name": "COWORK_API_KEY",
-          "description": "Optional bearer key required on /api and /mcp requests",
-          "isRequired": false,
+          "description": "Bearer key required on /api and /mcp. If unset, a key is generated on first start, saved to /data/api-key and printed once in the container log.",
+          "isRequired": true,
           "isSecret": true
         }
       ]

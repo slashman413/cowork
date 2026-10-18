@@ -82,13 +82,17 @@ to do it by hand.
 ### Container (hub only)
 
 ```bash
-docker run -d -p 6868:6868 -v cowork-data:/data ghcr.io/slashman413/cowork:1.0.0
+docker run -d -p 6868:6868 -v cowork-data:/data ghcr.io/slashman413/cowork:1.0.1
+docker logs <container>   # first start prints the generated API key once
 ```
 
 The image (amd64 + arm64) runs the MCP server, dashboard and task inbox with the local
 dispatcher off: agents connect to `http://<host>:6868/mcp`, and machines offer their brains
 with `deploy/remote-brain-client.mjs` (see [JOIN-AS-A-BRAIN.md](JOIN-AS-A-BRAIN.md)). Config
-and all state live in the `/data` volume; set `COWORK_API_KEY` to require a key. Images are
+and all state live in the `/data` volume. `/api` and `/mcp` always require a key: pass your own
+with `-e COWORK_API_KEY=…`, or the server generates one on first start, saves it to
+`/data/api-key` and prints it once. Clients send `Authorization: Bearer <key>` (the brain client
+reads `COWORK_API_KEY`); open `http://<host>:6868/?apiKey=<key>` once to log the dashboard in. Images are
 built from `v*` tags by `.github/workflows/release.yml` on a digest-pinned base.
 
 ### 1. Install Dependencies
@@ -116,7 +120,7 @@ Edit `~/.cowork/config.json` to match your environment:
     "host": "0.0.0.0",     // ← Bind address (0.0.0.0 = all interfaces)
     "name": "cowork-mcp",
     "version": "1.0.0",
-    "apiKey": null          // ← Set a string to require API key auth, or null for open
+    "apiKey": null          // ← Set a string to require API key auth (see below for null)
   },
   "paths": {
     "agencyAgents": "./agency-agents",  // ← Path to agency-agents repo
@@ -139,7 +143,8 @@ Edit `~/.cowork/config.json` to match your environment:
 |---------|---------|-------------|
 | `server.port` | `6868` | HTTP port for MCP endpoint + Web UI |
 | `server.host` | `0.0.0.0` | Bind address (`127.0.0.1` for local-only) |
-| `server.apiKey` | `null` | API key for authentication (null = no auth) |
+| `server.apiKey` | `null` | API key for /api and /mcp. When null and `host` is not loopback, a key is generated into `api-key` beside the config and printed once |
+| `server.allowUnauthenticated` | `false` | Serve a non-loopback host with no key (also `COWORK_ALLOW_NO_AUTH=1`). Only for a trusted, firewalled network |
 | `paths.agencyAgents` | `./agency-agents` | Path to the agency-agents repo |
 | `platforms.*.enabled` | `true` | Enable/disable individual platforms |
 | `platforms.*.agentsDir` | varies | Where platform-specific agents live on disk |
@@ -485,8 +490,11 @@ systemctl --user enable --now cowork-mcp
 
 With `server.host: "0.0.0.0"` the dashboard is reachable from other machines at
 `http://<host-ip>:6868/` (LAN or Tailscale IP — `0.0.0.0` itself is a bind
-address, not a URL). Set `server.apiKey` (or `COWORK_API_KEY`) if the host is
-reachable beyond trusted networks.
+address, not a URL). A non-loopback host always requires a key: set `server.apiKey`
+(or `COWORK_API_KEY`), or use the one generated into `api-key` beside the config on first
+start. Log the dashboard in once with `http://<host-ip>:6868/?apiKey=<key>` (it sets a
+same-site cookie). `server.allowUnauthenticated: true` opts out; anyone who can reach the port
+can then create tasks for your brains.
 
 ### Switching from HTTP to HTTPS
 

@@ -3,7 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import http from 'http';
 import https from 'https';
-import { loadConfig, persistRegistries, removeBrainCascade, restoreClientBrains } from './config.js';
+import { activeConfigPath, loadConfig, persistRegistries, removeBrainCascade, restoreClientBrains } from './config.js';
 import { EventBus } from './core/events.js';
 import { Store } from './core/store.js';
 import { Dispatcher } from './core/dispatcher.js';
@@ -22,6 +22,7 @@ import { LayoutStore } from './core/layout-config.js';
 import { systemDetails, DETAIL_KINDS, type DetailKind } from './core/system-details.js';
 import { controlService } from './core/service-control.js';
 import { getObsidianVault } from './core/obsidian.js';
+import { AUTH_COOKIE, keyMatches, readCookie, resolveApiKey } from './core/auth.js';
 
 async function main() {
   const config = loadConfig();
@@ -58,15 +59,26 @@ async function main() {
   const app = express();
   app.use(express.json());
 
-  // Optional API-key auth: guards /api and /mcp when server.apiKey is set.
-  // Accepts "Authorization: Bearer <key>", "X-API-Key: <key>", or "?apiKey=<key>"
-  // (query form exists for browser EventSource, which can't set headers).
-  if (config.server.apiKey) {
+  // API-key auth on /api and /mcp. Required whenever the server listens on a
+  // non-loopback address: with no server.apiKey a key is generated once and
+  // saved beside the config (see core/auth.ts). Accepts "Authorization: Bearer
+  // <key>", "X-API-Key: <key>", "?apiKey=<key>" (browser EventSource can't set
+  // headers) or the dashboard cookie set by opening /?apiKey=<key> once.
+  const auth = resolveApiKey({
+    apiKey: config.server.apiKey,
+    host: config.server.host,
+    allowUnauthenticated: config.server.allowUnauthenticated,
+    keyFile: path.join(path.dirname(activeConfigPath()), 'api-key')
+  });
+  config.server.apiKey = auth.key;
+  if (auth.key) {
+    const apiKey = auth.key;
     const requireKey = (req: express.Request, res: express.Response, next: express.NextFunction) => {
       const header = req.headers.authorization;
       const bearer = header?.startsWith('Bearer ') ? header.slice(7) : undefined;
-      const provided = bearer || (req.headers['x-api-key'] as string) || (req.query.apiKey as string);
-      if (provided !== config.server.apiKey) {
+      const provided = bearer || (req.headers['x-api-key'] as string) || (req.query.apiKey as string)
+        || readCookie(req.headers.cookie, AUTH_COOKIE);
+      if (!keyMatches(provided, apiKey)) {
         res.status(401).json({ error: 'unauthorized' });
         return;
       }
@@ -74,7 +86,31 @@ async function main() {
     };
     app.use('/api', requireKey);
     app.use('/mcp', requireKey);
-    console.log('API key auth: enabled');
+    // Dashboard login: /?apiKey=<key> stores the key in a same-site cookie and
+    // redirects to the clean URL, so every same-origin fetch, EventSource and
+    // download link carries it without the page handling the key.
+    app.get('/', (req, res, next) => {
+      if (typeof req.query.apiKey !== 'string') return next();
+      if (!keyMatches(req.query.apiKey, apiKey)) { res.status(401).send('unauthorized'); return; }
+      res.cookie(AUTH_COOKIE, req.query.apiKey, {
+        httpOnly: true, sameSite: 'strict', secure: !!config.server.tls, maxAge: 365 * 24 * 3600 * 1000
+      });
+      res.redirect('/');
+    });
+    if (auth.source === 'generated') {
+      console.log('='.repeat(72));
+      console.log(` No server.apiKey set and host ${config.server.host} is not loopback.`);
+      console.log(` Generated an API key (saved to ${auth.file}, shown only this once):`);
+      console.log(`\n   ${apiKey}\n`);
+      console.log(' Clients: "Authorization: Bearer <key>" (or COWORK_API_KEY for the brain client).');
+      console.log(' Dashboard: open /?apiKey=<key> once.');
+      console.log('='.repeat(72));
+    } else {
+      console.log(`API key auth: enabled${auth.source === 'file' ? ` (key in ${auth.file})` : ''}`);
+    }
+  } else if (auth.openOptOut) {
+    console.warn(`WARNING: listening on ${config.server.host} with NO API key (allowUnauthenticated). ` +
+      'Anyone who can reach this port can create tasks for your brains.');
   }
 
   // SSE

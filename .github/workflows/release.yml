@@ -64,6 +64,8 @@ jobs:
           v="${GITHUB_REF_NAME#v}"
           jq -e --arg v "$v" '.version == $v and .packages[0].identifier == "ghcr.io/slashman413/cowork:" + $v' server.json
       - name: Install mcp-publisher
-        run: curl -sL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" | tar xz mcp-publisher
+        env:
+          MCP_PUBLISHER_VERSION: v1.8.1
+        run: curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz" | tar xz mcp-publisher
       - run: ./mcp-publisher login github-oidc
       - run: ./mcp-publisher publish

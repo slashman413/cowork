@@ -366,6 +366,9 @@ export interface Config {
     name: string;
     version: string;
     apiKey: string | null;
+    /** Opt out of the generated key when host is not loopback and apiKey is
+     *  null: serve /api and /mcp open on the network. Default false. */
+    allowUnauthenticated?: boolean;
     corsOrigin: string;
     /** Optional TLS. When both files exist the server binds https:// instead of
      *  http://. Browsers only grant clipboard (and other secure-context) access
