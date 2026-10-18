@@ -1300,7 +1300,10 @@ export class Dispatcher {
     // these localhost calls must too. We pass the CA cert to curl to verify the
     // self-signed cert on localhost.
     const selfBase = `${this.config.server.tls ? 'https' : 'http'}://localhost:${port}`;
-    const curlFlags = this.config.server.tls ? `-s --cacert "${this.config.server.tls.certFile}"` : '-s';
+    // With an API key the child gets it as $COWORK_API_KEY (see runTask env) and
+    // the curl references the variable, so the key never lands in the prompt.
+    const curlFlags = (this.config.server.tls ? `-s --cacert "${this.config.server.tls.certFile}"` : '-s')
+      + (this.config.server.apiKey ? ' -H "Authorization: Bearer $COWORK_API_KEY"' : '');
     const role = plan.agent;
     const artifactsDir = this.artifactsDir(task.id);
     const lines: string[] = [];
@@ -1809,7 +1812,10 @@ export class Dispatcher {
           // brains (claude CLI, exec:script pipelines) must trust it to reach
           // COWORK_API — add the cert as an extra CA rather than disabling
           // verification. Harmless when tls is off.
-          ...(this.config.server.tls ? { NODE_EXTRA_CA_CERTS: this.config.server.tls.certFile } : {})
+          ...(this.config.server.tls ? { NODE_EXTRA_CA_CERTS: this.config.server.tls.certFile } : {}),
+          // Children that call COWORK_API (orchestrator curls, scripts) send this
+          // as "Authorization: Bearer $COWORK_API_KEY".
+          ...(this.config.server.apiKey ? { COWORK_API_KEY: this.config.server.apiKey } : {})
         },
         stdio: ['ignore', 'pipe', 'pipe']
       });

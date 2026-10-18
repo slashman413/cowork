@@ -496,6 +496,14 @@ start. Log the dashboard in once with `http://<host-ip>:6868/?apiKey=<key>` (it 
 same-site cookie). `server.allowUnauthenticated: true` opts out; anyone who can reach the port
 can then create tasks for your brains.
 
+**Moving a running open hub to a key without locking anyone out:** set the key *and* keep
+`allowUnauthenticated: true`. That is soft (migration) mode: a valid key is accepted, a wrong key
+gets 401, and keyless requests still pass but are listed at `GET /api/auth/keyless` (key required).
+Give the key to every client (brain clients: `COWORK_API_KEY`; MCP configs: an
+`Authorization: Bearer <key>` header, e.g. `deploy/install-skill.sh --key <key>`; dashboards:
+`/?apiKey=<key>` once). Dispatched tasks get `COWORK_API_KEY` in their env automatically. When
+`/api/auth/keyless` stays empty, drop `allowUnauthenticated` and restart to enforce.
+
 ### Switching from HTTP to HTTPS
 
 By default the server listens over plain `http://`. That is fine over `localhost`,

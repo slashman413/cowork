@@ -22,7 +22,7 @@ import { LayoutStore } from './core/layout-config.js';
 import { systemDetails, DETAIL_KINDS, type DetailKind } from './core/system-details.js';
 import { controlService } from './core/service-control.js';
 import { getObsidianVault } from './core/obsidian.js';
-import { AUTH_COOKIE, keyMatches, readCookie, resolveApiKey } from './core/auth.js';
+import { AUTH_COOKIE, KeylessLog, keyMatches, readCookie, resolveApiKey } from './core/auth.js';
 
 async function main() {
   const config = loadConfig();
@@ -73,11 +73,23 @@ async function main() {
   config.server.apiKey = auth.key;
   if (auth.key) {
     const apiKey = auth.key;
+    // Soft (migration) mode: keyless requests pass but are recorded; see
+    // GET /api/auth/keyless for which clients still need the key.
+    const authSince = new Date().toISOString();
+    const keyless = auth.soft
+      ? new KeylessLog((c) => console.warn(`auth(soft): keyless request from ${c.ip} "${c.userAgent}" ${c.lastPath}`))
+      : null;
     const requireKey = (req: express.Request, res: express.Response, next: express.NextFunction) => {
       const header = req.headers.authorization;
       const bearer = header?.startsWith('Bearer ') ? header.slice(7) : undefined;
       const provided = bearer || (req.headers['x-api-key'] as string) || (req.query.apiKey as string)
         || readCookie(req.headers.cookie, AUTH_COOKIE);
+      if (keyless && !provided) {
+        keyless.record(req.ip || req.socket.remoteAddress || '?', String(req.headers['user-agent'] || ''),
+          req.originalUrl.split('?')[0]);
+        next();
+        return;
+      }
       if (!keyMatches(provided, apiKey)) {
         res.status(401).json({ error: 'unauthorized' });
         return;
@@ -86,6 +98,16 @@ async function main() {
     };
     app.use('/api', requireKey);
     app.use('/mcp', requireKey);
+    if (keyless) {
+      // Key required to read the list itself (a keyless caller just gets recorded).
+      app.get('/api/auth/keyless', (req, res) => {
+        const header = req.headers.authorization;
+        const provided = (header?.startsWith('Bearer ') ? header.slice(7) : undefined)
+          || (req.headers['x-api-key'] as string) || readCookie(req.headers.cookie, AUTH_COOKIE);
+        if (!keyMatches(provided, apiKey)) { res.status(401).json({ error: 'unauthorized' }); return; }
+        res.json({ mode: 'soft', since: authSince, callers: keyless.list() });
+      });
+    }
     // Dashboard login: /?apiKey=<key> stores the key in a same-site cookie and
     // redirects to the clean URL, so every same-origin fetch, EventSource and
     // download link carries it without the page handling the key.
@@ -105,6 +127,9 @@ async function main() {
       console.log(' Clients: "Authorization: Bearer <key>" (or COWORK_API_KEY for the brain client).');
       console.log(' Dashboard: open /?apiKey=<key> once.');
       console.log('='.repeat(72));
+    } else if (auth.soft) {
+      console.warn('API key auth: SOFT (migration) mode: a valid key is accepted, keyless requests still pass ' +
+        'and are listed at /api/auth/keyless. Drop allowUnauthenticated to enforce.');
     } else {
       console.log(`API key auth: enabled${auth.source === 'file' ? ` (key in ${auth.file})` : ''}`);
     }

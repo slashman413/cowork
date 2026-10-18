@@ -12,6 +12,8 @@ is `~/workspace/github/slashman413/cowork`.
 Require the `cowork` MCP server to be configured for this Codex session before calling
 its tools. If it is unavailable, say so and use the dashboard or REST endpoints only
 when the user has requested that alternative.
+REST calls need `-H "Authorization: Bearer $COWORK_API_KEY"` (dispatched tasks and brain
+clients get the key in env; never paste it into task text or output).
 
 > **Operating rules:** every task you execute runs under [CONVENTIONS.md](https://github.com/slashman413/cowork/blob/main/CONVENTIONS.md) —
 > put output in `$COWORK_ARTIFACTS_DIR`, use your full permissions freely, and ask

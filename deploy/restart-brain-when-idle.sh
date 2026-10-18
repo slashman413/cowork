@@ -20,11 +20,13 @@
 # Usage: restart-brain-when-idle.sh [<instance>] [<poll-seconds>]
 #   <instance>      systemd template instance (default: claude → cowork-remote-brain@claude)
 #   <poll-seconds>  how often to re-check for idleness (default: 15)
+# COWORK_BRAIN_UNIT_PREFIX picks the template (default cowork-remote-brain; the
+# hub host's own clients run as cowork-local-brain@<name>).
 set -euo pipefail
 
 INSTANCE="${1:-claude}"
 POLL="${2:-15}"
-UNIT="cowork-remote-brain@${INSTANCE}"
+UNIT="${COWORK_BRAIN_UNIT_PREFIX:-cowork-remote-brain}@${INSTANCE}"
 
 MAIN_PID="$(systemctl --user show -p MainPID --value "$UNIT")"
 if [ -z "$MAIN_PID" ] || [ "$MAIN_PID" = "0" ]; then

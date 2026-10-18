@@ -21,6 +21,7 @@
 #   deploy/install-skill.sh --client claude         # one client
 #   deploy/install-skill.sh --client all            # every known client
 #   deploy/install-skill.sh --url http://box:6868   # non-default server URL
+#   deploy/install-skill.sh --key <hub api key>     # send "Authorization: Bearer <key>" (default: $COWORK_API_KEY)
 #   deploy/install-skill.sh --skill-only            # copy skill, don't touch MCP config
 #   deploy/install-skill.sh --mcp-only              # wire MCP config, don't copy skill
 #
@@ -32,6 +33,7 @@ SKILLS_DIR="$REPO/deploy/skills"
 
 CLIENT=""            # empty => auto-detect
 URL="http://localhost:6868"
+KEY="${COWORK_API_KEY:-}"
 DO_SKILL=1
 DO_MCP=1
 
@@ -39,6 +41,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --client)     CLIENT="${2:-}"; shift 2 ;;
     --url)        URL="${2:-}"; shift 2 ;;
+    --key)        KEY="${2:-}"; shift 2 ;;
     --skill-only) DO_MCP=0; shift ;;
     --mcp-only)   DO_SKILL=0; shift ;;
     -h|--help)    sed -n '2,30p' "$0"; exit 0 ;;
@@ -83,14 +86,15 @@ wire_claude_mcp() {
   local cfg="$HOME/.claude.json"
   node -e '
     const fs = require("fs");
-    const [cfg, url] = [process.argv[1], process.argv[2]];
+    const [cfg, url, key] = [process.argv[1], process.argv[2], process.argv[3]];
     let j = {};
     try { j = JSON.parse(fs.readFileSync(cfg, "utf8")); } catch {}
     j.mcpServers = j.mcpServers || {};
-    j.mcpServers.cowork = { url, transport: "streamable-http" };
-    fs.writeFileSync(cfg, JSON.stringify(j, null, 2) + "\n");
-  ' "$cfg" "$MCP_URL"
-  echo "  ✓ MCP  → $cfg  (mcpServers.cowork = $MCP_URL)"
+    j.mcpServers.cowork = { url, transport: "streamable-http",
+      ...(key ? { headers: { Authorization: "Bearer " + key } } : {}) };
+    fs.writeFileSync(cfg, JSON.stringify(j, null, 2) + "\n", { mode: 0o600 });
+  ' "$cfg" "$MCP_URL" "$KEY"
+  echo "  ✓ MCP  → $cfg  (mcpServers.cowork = $MCP_URL${KEY:+, with API key header})"
 }
 
 wire_mcp() {
@@ -100,9 +104,9 @@ wire_mcp() {
       if command -v node >/dev/null 2>&1; then wire_claude_mcp
       else echo "  ! node not found — add manually to ~/.claude.json: mcpServers.cowork.url = $MCP_URL"; fi ;;
     hermes)
-      echo "  → add to your Hermes MCP config:  \"mcp_endpoints\": { \"cowork\": \"$MCP_URL\" }" ;;
+      echo "  → add to ~/.hermes/config.yaml mcp_servers:  cowork: { transport: http, url: $MCP_URL${KEY:+, headers: { Authorization: \"Bearer <key>\" \}} }" ;;
     agy)
-      echo "  → add to your Antigravity MCP config:  \"mcpServers\": { \"cowork\": { \"url\": \"$MCP_URL\" } }" ;;
+      echo "  → add to your Antigravity MCP config:  \"mcpServers\": { \"cowork\": { \"url\": \"$MCP_URL\"${KEY:+, \"headers\": { \"Authorization\": \"Bearer <key>\" \}} } }" ;;
   esac
 }
 
@@ -133,4 +137,4 @@ done
 
 echo
 echo "Done. Restart the client if it was running so it picks up the skill + MCP server."
-echo "Verify:  curl -s $URL/api/status   (server must be up — see deploy/install-server.sh)"
+echo "Verify:  curl -s ${KEY:+-H \"Authorization: Bearer \$COWORK_API_KEY\" }$URL/api/status   (server must be up — see deploy/install-server.sh)"

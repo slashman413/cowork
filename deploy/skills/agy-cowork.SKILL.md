@@ -33,7 +33,7 @@ glass.
 
 - **Cowork MCP server**: systemd user service `cowork-mcp.service` (auto-starts at boot)
   - Config: `~/.cowork/config.json`
-  - Port: 6868, no API key required
+  - Port: 6868. API key: send `Authorization: Bearer $COWORK_API_KEY` (dispatched tasks and brain clients have it in env; the hub on a non-loopback host requires it)
 - **Antigravity MCP endpoint**: `~/.gemini/config/mcp.json` →
   `{ "mcpServers": { "cowork": { "url": "http://localhost:6868/mcp" } } }`
 - **Brain client service**: `cowork-local-brain@agy.service` (systemd user unit)
@@ -612,7 +612,7 @@ or `GET /api/artifacts/:taskId/:file`.
 
 - Server must be running — check with `curl -s http://localhost:6868/api/status`
 - MCP endpoint: `/mcp` (Streamable HTTP). REST API: `/api/...`. Do not mix.
-- `apiKey` in config.json: if set, all requests need `Authorization: Bearer ***` header.
+- API key: every /api and /mcp request needs `Authorization: Bearer $COWORK_API_KEY` (or `X-API-Key`). Dispatched tasks and brain clients get `COWORK_API_KEY` in env; never paste the key into task text or output.
 - Task lifecycle: `scheduled` / `wait-input` → `pending` → `claimed` → `in-progress` →
   `done` / `rejected`; a task whose whole chain was rejected finishes `failed: true`
   (re-queue with `POST /api/inbox/:id/rerun`). `scheduled` and `wait-input` are held OUT

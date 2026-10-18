@@ -264,8 +264,9 @@ curl -s localhost:6868/api/status | jq              # health
 cd ~/workspace/github/slashman413/cowork/server && npm test   # engine tests
 ```
 
-Pitfalls: `/mcp` is MCP, `/api` is REST — don't mix. If `server.apiKey` is set every
-request needs `Authorization: Bearer …`. Port is 6868. A missing `agency-agents`
+Pitfalls: `/mcp` is MCP, `/api` is REST — don't mix. Every request needs
+`-H "Authorization: Bearer $COWORK_API_KEY"` (dispatched tasks and brain clients get it in
+env; never paste the key into task text or output). Port is 6868. A missing `agency-agents`
 submodule makes the Agencies empty (`git submodule update --init`). Canonical copies of
 this skill live in `deploy/skills/` — edit there and re-run `deploy/install-skill.sh`,
 or keep both in sync by hand.

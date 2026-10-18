@@ -40,7 +40,7 @@ dispatch cross-platform tasks, heartbeat, and query agencies/inbox.
 
 - Cowork MCP server: systemd service `cowork-mcp.service` (auto-starts at boot)
   - Config: `~/.cowork/config.json` (real per-server; repo `config.json` is a template)
-  - Port: 6868, no API key required
+  - Port: 6868. API key: send `Authorization: Bearer $COWORK_API_KEY` (dispatched tasks and brain clients have it in env; the hub on a non-loopback host requires it)
 - `agency-agents` — a git submodule at `./agency-agents` (init: `git submodule update --init`)
 - Hermes MCP endpoint: `mcp_endpoints: { cowork: "http://localhost:6868/mcp" }`
 - Hermes model CLIs: `hermes` (qwen35b), optional `claude`, `agy`, `codex`, `ollama`
@@ -372,7 +372,7 @@ The flat `from_platform` / `from_agent` / `to_platform` / `to_agent` form is the
 
 - Server must be running — check with `curl -s http://localhost:6868/api/status`
 - MCP endpoint: `/mcp` (Streamable HTTP). REST API: `/api/...`. Do not mix.
-- `apiKey` in config.json: if set, all requests need `Authorization: Bearer ***` header.
+- API key: every /api and /mcp request needs `Authorization: Bearer $COWORK_API_KEY` (or `X-API-Key`). Dispatched tasks and brain clients get `COWORK_API_KEY` in env; never paste the key into task text or output.
 - Task lifecycle: `scheduled` / `wait-input` → `pending` → `claimed` → `in-progress` →
   `done` / `rejected`; a task whose whole chain was rejected finishes `failed: true`
   (re-queue with `POST /api/inbox/:id/rerun`). `scheduled` and `wait-input` are held OUT

@@ -11,6 +11,11 @@ import path from 'path';
  * key is generated once, saved beside the config (mode 0600) and printed once.
  * Running open on a network address needs an explicit opt-out:
  * server.allowUnauthenticated: true or COWORK_ALLOW_NO_AUTH=1.
+ *
+ * Setting a key AND the opt-out is the migration ("soft") mode: a valid key is
+ * accepted, a wrong key is rejected, and a request with no key still passes but
+ * is recorded, so an operator can see which clients still need the key before
+ * dropping the opt-out.
  */
 
 export const AUTH_COOKIE = 'cowork_key';
@@ -27,6 +32,8 @@ export interface ResolvedKey {
   file?: string;
   /** No key on a network address because the operator opted out. */
   openOptOut?: boolean;
+  /** Key set but keyless requests still allowed (migration mode). */
+  soft?: boolean;
 }
 
 export function resolveApiKey(opts: {
@@ -35,9 +42,10 @@ export function resolveApiKey(opts: {
   allowUnauthenticated?: boolean;
   keyFile: string;
 }): ResolvedKey {
-  if (opts.apiKey) return { key: opts.apiKey, source: 'config' };
+  const optOut = !!opts.allowUnauthenticated || process.env.COWORK_ALLOW_NO_AUTH === '1';
+  if (opts.apiKey) return { key: opts.apiKey, source: 'config', ...(optOut ? { soft: true } : {}) };
   if (isLoopbackHost(opts.host)) return { key: null, source: 'none' };
-  if (opts.allowUnauthenticated || process.env.COWORK_ALLOW_NO_AUTH === '1') {
+  if (optOut) {
     return { key: null, source: 'none', openOptOut: true };
   }
   try {
@@ -68,4 +76,40 @@ export function readCookie(header: string | undefined, name: string): string | u
     }
   }
   return undefined;
+}
+
+export interface KeylessCaller {
+  ip: string;
+  userAgent: string;
+  count: number;
+  firstSeen: string;
+  lastSeen: string;
+  lastPath: string;
+}
+
+/** Soft-mode record of requests that arrived without a key, one row per
+ *  (ip, user agent). onNew fires the first time a caller is seen. */
+export class KeylessLog {
+  private callers = new Map<string, KeylessCaller>();
+  constructor(private onNew?: (c: KeylessCaller) => void, private max = 500) {}
+
+  record(ip: string, userAgent: string, path: string, now = new Date()): void {
+    const id = `${ip}|${userAgent}`;
+    const ts = now.toISOString();
+    const c = this.callers.get(id);
+    if (c) {
+      c.count++;
+      c.lastSeen = ts;
+      c.lastPath = path;
+      return;
+    }
+    if (this.callers.size >= this.max) return;
+    const row = { ip, userAgent, count: 1, firstSeen: ts, lastSeen: ts, lastPath: path };
+    this.callers.set(id, row);
+    this.onNew?.(row);
+  }
+
+  list(): KeylessCaller[] {
+    return [...this.callers.values()].sort((a, b) => b.lastSeen.localeCompare(a.lastSeen));
+  }
 }
