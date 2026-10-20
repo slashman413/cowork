@@ -1,6 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { verifyOutput, parseLlmVerdict, buildVerifierPrompt, DEFAULT_FAIL_PATTERNS, detectInputRequest, DEFAULT_QUESTION_PATTERNS, detectBackgroundWait, DEFAULT_BACKGROUND_WAIT_PATTERNS, parseStatusFooter } from './result-verifier.js';
+import {
+  verifyOutput, parseLlmVerdict, buildVerifierPrompt, DEFAULT_FAIL_PATTERNS,
+  detectInputRequest, DEFAULT_QUESTION_PATTERNS, detectBackgroundWait, DEFAULT_BACKGROUND_WAIT_PATTERNS,
+  parseStatusFooter, truncateHeadTail, extractEvidenceBlock, parseSpecVerdict,
+  selectSpecJudge, selectSpecJudges, isSmallSpecTask, DEFAULT_SPEC_JUDGES,
+} from './result-verifier.js';
 
 /**
  * The result verifier is the fix for "a rate-limit reply looked like a done
@@ -131,7 +136,7 @@ test('buildVerifierPrompt includes task + result and asks for PASS/FAIL', () => 
   const p = buildVerifierPrompt({ title: 'Write X', description: 'details' }, 'the deliverable');
   assert.match(p, /Write X/);
   assert.match(p, /the deliverable/);
-  assert.match(p, /PASS or FAIL/);
+  assert.match(p, /PASS\|FAIL\|UNVERIFIABLE/);
 });
 
 /* ── input-request detection (wait-input) ──────────────────────────────────── */
@@ -328,3 +333,160 @@ test('parseStatusFooter: collects RULING lines (bulleted / bold), deduped', () =
   ].join('\n'));
   assert.deepEqual(f.rulings, ['chose A — cheaper — redo in B', 'skip the backfill — no readers — one rerun']);
 });
+
+// ── P1-1: spec-compliance verifier prompt, parser, and cross-family judge selection ──
+
+test('buildVerifierPrompt (spec mode): includes acceptance criteria, artifacts with byte sizes, EVIDENCE, head+tail result, and never says "PASS even if imperfect"', () => {
+  const longBody = 'HEAD_MARKER '.repeat(500) + 'MIDDLE_NOISE '.repeat(500) + 'TAIL_MARKER '.repeat(500);
+  const result = `${longBody}\nSTATUS: DONE\nEVIDENCE:\n- npm test → 42 passed\n- artifacts/report.md → 1280 bytes`;
+  const prompt = buildVerifierPrompt(
+    { title: 'Ship P1-1', description: 'Build spec verifier' },
+    result,
+    {
+      acceptance: ['npm test passes', 'report.md is created and non-empty'],
+      artifacts: [{ name: 'report.md', size: 1280 }, { name: 'empty.txt', size: 0 }],
+    },
+  );
+  assert.doesNotMatch(prompt, /PASS even if imperfect/i);
+  assert.match(prompt, /1\. npm test passes/);
+  assert.match(prompt, /2\. report\.md is created and non-empty/);
+  assert.match(prompt, /- report\.md \(1280 bytes\)/);
+  assert.match(prompt, /- empty\.txt \(0 bytes\)/);
+  assert.match(prompt, /npm test → 42 passed/);
+  assert.match(prompt, /HEAD_MARKER/);
+  assert.match(prompt, /TAIL_MARKER/);
+  assert.match(prompt, /truncated \d+ chars/);
+  assert.match(prompt, /VERDICT:\s*APPROVED/);
+  assert.match(prompt, /VERDICT:\s*CHANGES_REQUESTED/);
+});
+
+test('extractEvidenceBlock extracts EVIDENCE lines until CONCERNS / STATUS / next heading', () => {
+  const text = [
+    'Summary here',
+    'STATUS: DONE_WITH_CONCERNS',
+    'EVIDENCE:',
+    '- cmd 1 → ok',
+    '- cmd 2 → 200',
+    'CONCERNS: minor latency',
+  ].join('\n');
+  assert.equal(extractEvidenceBlock(text), 'cmd 1 → ok\ncmd 2 → 200');
+  assert.equal(extractEvidenceBlock('No footer here'), '');
+});
+
+test('truncateHeadTail keeps short text intact and slices head + tail on long text', () => {
+  assert.equal(truncateHeadTail('short text', 100), 'short text');
+  const long = 'A'.repeat(6000) + 'B'.repeat(6000);
+  const out = truncateHeadTail(long, 8000);
+  assert.ok(out.startsWith('A'.repeat(4000)));
+  assert.ok(out.endsWith('B'.repeat(4000)));
+  assert.match(out, /truncated 4000 chars/);
+});
+
+test('parseSpecVerdict: parses criterion lines + VERDICT: APPROVED / CHANGES_REQUESTED', () => {
+  const approvedReply = [
+    '1. PASS — npm test output shows 42 passed',
+    '2. PASS — report.md is 1280 bytes (> 0)',
+    'VERDICT: APPROVED',
+  ].join('\n');
+  const v1 = parseSpecVerdict(approvedReply, ['tests pass', 'report.md non-empty']);
+  assert.equal(v1.ok, true);
+  assert.equal(v1.verdict, 'APPROVED');
+  assert.equal(v1.criteria.length, 2);
+  assert.deepEqual(v1.criteria[0], {
+    criterion: 'tests pass',
+    status: 'PASS',
+    reason: 'npm test output shows 42 passed',
+  });
+
+  const rejectedReply = [
+    '1. PASS — tests ran',
+    '2. FAIL — report.md is 0 bytes (empty file)',
+    'VERDICT: CHANGES_REQUESTED',
+  ].join('\n');
+  const v2 = parseSpecVerdict(rejectedReply, ['tests pass', 'report.md non-empty']);
+  assert.equal(v2.ok, false);
+  assert.equal(v2.verdict, 'CHANGES_REQUESTED');
+  assert.equal(v2.criteria.length, 2);
+  assert.equal(v2.criteria[1].status, 'FAIL');
+  assert.match(v2.reason || '', /report\.md is 0 bytes/);
+});
+
+test('parseSpecVerdict: any FAIL line forces CHANGES_REQUESTED even if judge wrote APPROVED', () => {
+  const inconsistent = [
+    '1. PASS — build succeeded',
+    '2. FAIL — missing migration file',
+    'VERDICT: APPROVED',
+  ].join('\n');
+  const v = parseSpecVerdict(inconsistent);
+  assert.equal(v.ok, false);
+  assert.equal(v.verdict, 'CHANGES_REQUESTED');
+  assert.match(v.reason || '', /missing migration file/);
+});
+
+test('parseSpecVerdict: all UNVERIFIABLE or crash/empty output returns UNVERIFIABLE and ok=true (fail-open)', () => {
+  const unv = parseSpecVerdict('1. UNVERIFIABLE — cannot inspect external DB\nVERDICT: UNVERIFIABLE');
+  assert.equal(unv.ok, true);
+  assert.equal(unv.verdict, 'UNVERIFIABLE');
+
+  const garbled = parseSpecVerdict('', ['c1'], true);
+  assert.equal(garbled.ok, true);
+  assert.equal(garbled.verdict, 'UNVERIFIABLE');
+  assert.equal(garbled.crashed, true);
+});
+
+test('selectSpecJudge: cross-family judge selection matrix + cooldown/disabled skip + small-task fallback', () => {
+  const brains: Record<string, any> = {
+    'local-cc-opus-5-5': { location: 'local', exec: 'claude', model: 'claude-opus-5-5' },
+    'local-agy-claude-opus-5-5-medium': { location: 'local', exec: 'agy', model: 'claude-opus-5-5-medium' },
+    'remote-ai-code-gen-cc-opus-5-5': { location: 'remote', exec: 'claude' },
+    'local-agy-gemini-4-argon-medium': { location: 'local', exec: 'agy', model: 'gemini-4-argon-medium' },
+    'local-agy-gemini-3.8-flash-high': { location: 'local', exec: 'agy', model: 'gemini-3.8-flash-high' },
+    'local-dsh-qwen3-8-27b': { location: 'local', exec: 'dsh', model: 'qwen3.8-27b' },
+    'local-hermes-qwen3.8-27b': { location: 'local', exec: 'hermes', model: 'qwen3.8-27b' },
+    'remote-codex-gpt-5-4': { location: 'remote', exec: 'codex', model: 'gpt-5.4' },
+  };
+  const judges = DEFAULT_SPEC_JUDGES as any;
+
+  // Claude executors (local-cc-*, local-agy-claude-*, remote-*-cc-*) -> Gemini Argon, then Flash
+  assert.deepEqual(selectSpecJudges('local-cc-opus-5-5', { brains, judges }), [
+    'local-agy-gemini-4-argon-medium',
+    'local-agy-gemini-3.8-flash-high',
+  ]);
+  assert.equal(selectSpecJudge('local-agy-claude-opus-5-5-medium', { brains, judges }), 'local-agy-gemini-4-argon-medium');
+  assert.equal(selectSpecJudge('remote-ai-code-gen-cc-opus-5-5', { brains, judges }), 'local-agy-gemini-4-argon-medium');
+
+  // Gemini or qwen3.8-27b -> Claude Opus 5.5 medium (agy), then cc
+  assert.deepEqual(selectSpecJudges('local-agy-gemini-4-argon-medium', { brains, judges }), [
+    'local-agy-claude-opus-5-5-medium',
+    'local-cc-opus-5-5',
+  ]);
+  assert.equal(selectSpecJudge('local-dsh-qwen3-8-27b', { brains, judges }), 'local-agy-claude-opus-5-5-medium');
+  assert.equal(selectSpecJudge('local-hermes-qwen3.8-27b', { brains, judges }), 'local-agy-claude-opus-5-5-medium');
+
+  // Anything else (codex / gpt-oss / deepseek) -> default (Opus 5.5)
+  assert.equal(selectSpecJudge('remote-codex-gpt-5-4', { brains, judges }), 'local-agy-claude-opus-5-5-medium');
+
+  // Small task (result < 2 KB and <= 2 criteria) tries cheaper fallback first
+  assert.equal(isSmallSpecTask('short result', ['c1', 'c2']), true);
+  assert.equal(isSmallSpecTask('x'.repeat(2500), ['c1']), false);
+  assert.equal(isSmallSpecTask('short result', ['c1', 'c2', 'c3']), false);
+  assert.equal(
+    selectSpecJudge('local-cc-opus-5-5', { brains, judges, smallTask: true }),
+    'local-agy-gemini-3.8-flash-high',
+  );
+
+  // Cooling judge is skipped -> falls back to second judge
+  const cooling = new Set(['local-agy-gemini-4-argon-medium']);
+  assert.equal(
+    selectSpecJudge('local-cc-opus-5-5', { brains, judges, isCooling: id => cooling.has(id) }),
+    'local-agy-gemini-3.8-flash-high',
+  );
+
+  // Disabled judge is skipped; if all judges are unavailable -> null
+  const allCooling = new Set(['local-agy-gemini-4-argon-medium', 'local-agy-gemini-3.8-flash-high']);
+  assert.equal(
+    selectSpecJudge('local-cc-opus-5-5', { brains, judges, isCooling: id => allCooling.has(id) }),
+    null,
+  );
+});
+

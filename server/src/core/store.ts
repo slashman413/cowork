@@ -866,6 +866,7 @@ export class Store {
     delete ctx.claimCount; delete ctx.lastClaimAt; delete ctx.failedCount;
     delete ctx.remoteWaitSince;
     delete ctx.ranAgent; delete ctx.ranDivision; delete ctx.ranBrain; delete ctx.isRoster;
+    delete ctx.specVerdict; delete ctx.specFindings;
     delete ctx.dispatched; delete ctx.inputFiles;
     delete ctx.humanInput; delete ctx.awaitingInput; delete ctx.inputQuestions;
     delete ctx.attempts; delete ctx.continuedFrom; delete ctx.continuedInto;
@@ -919,6 +920,7 @@ export class Store {
     ctx.dispatched = false;
     delete ctx.remoteWaitSince;
     delete ctx.ranAgent; delete ctx.ranDivision; delete ctx.ranBrain; delete ctx.isRoster;
+    delete ctx.specVerdict; delete ctx.specFindings;
 
     task.context = ctx;
     task.status = 'pending';

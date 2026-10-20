@@ -2661,6 +2661,15 @@ class App {
             : closedNoRun ? `<span class="badge" title="Done, but closed administratively without ever running a brain — so it has no artifacts and no result.md. The full explanation is in this task's result field below." style="background:#94A3B818; color:#94A3B8; border:1px solid #94A3B840">done · closed (never ran)</span>`
             : badge(t.status, STATUS_COLORS[t.status] || '#94A3B8')}
           ${!failed && c.qualityFlag === 'concerns' ? `<span class="badge" title="${esc('Done with concerns: ' + (c.concerns || '(no CONCERNS text)'))}" style="background:#F59E0B18; color:#F59E0B; border:1px solid #F59E0B40">⚠ concerns</span>` : ''}
+          ${c.specVerdict && c.specVerdict.verdict ? (() => {
+            const sv = c.specVerdict;
+            const v = String(sv.verdict).toUpperCase();
+            const col = v === 'APPROVED' ? '#22C55E' : v === 'CHANGES_REQUESTED' ? '#EF4444' : '#94A3B8';
+            const icon = v === 'APPROVED' ? '✓' : v === 'CHANGES_REQUESTED' ? '✗' : '?';
+            const lbl = v === 'APPROVED' ? 'spec: approved' : v === 'CHANGES_REQUESTED' ? 'spec: changes' : 'spec: unverifiable';
+            const tip = `Spec verifier (${sv.mode || 'shadow'}, judge: ${sv.judgeBrain || 'none'}): ${sv.summary || v}`;
+            return `<span class="badge" title="${esc(tip)}" style="background:${col}18; color:${col}; border:1px solid ${col}40">${icon} ${lbl}</span>`;
+          })() : ''}
           ${t.status === 'scheduled' && t.scheduledAt ? badge(`⏰ ${new Date(t.scheduledAt).toLocaleString()}`, '#6366F1') : ''}
           ${t.recurrence ? badge(`🔁 ${describeRecurrence(t.recurrence)}`, '#3B82F6')
             : t.loopIntervalHours ? badge(`🔁 every ${t.loopIntervalHours}h`, '#3B82F6') : ''}

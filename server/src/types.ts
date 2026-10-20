@@ -233,6 +233,33 @@ export interface VerifierConfig {
     /** Wall-clock budget for one verification (ms). Default 300000. */
     timeoutMs?: number;
   };
+  /** Spec-compliance verifier (P1-1): cross-family judge for tasks with acceptance criteria. */
+  spec?: SpecVerifierConfig;
+}
+
+export interface SpecVerifierJudgesConfig {
+  claude?: string[];
+  gemini?: string[];
+  qwen?: string[];
+  default?: string[];
+  [family: string]: string[] | undefined;
+}
+
+export interface SpecVerifierConfig {
+  /** Master switch for the spec-compliance verifier (P1-1). */
+  enabled?: boolean;
+  /** "shadow" stores context.specVerdict + appends lessons.jsonl kind:"quality-shadow"
+   *  without rejecting; "enforce" rejects CHANGES_REQUESTED and hands over to the next
+   *  brain with failing criteria appended to the brief. Default "shadow". */
+  mode?: 'shadow' | 'enforce';
+  /** ISO-8601 timestamp when the shadow review task evaluates and may enable enforce. */
+  enforceAfter?: string;
+  /** Maximum false-reject rate (0..1) for the shadow review task to enable enforce. Default 0.10. */
+  maxFalseRejectRate?: number;
+  /** Wall-clock budget for one judge run (ms). Default 300000 (5 min). */
+  timeoutMs?: number;
+  /** Judge brain fallback chains keyed by executor model family. */
+  judges?: SpecVerifierJudgesConfig;
 }
 
 export interface ClassifierConfig {

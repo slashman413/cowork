@@ -38,7 +38,7 @@ export function assertTier(v: unknown, field = 'context.tier'): void {
 /** Model family of a brain: claude / gemini / qwen / openai / deepseek / other. */
 export function brainFamily(b: Pick<BrainConfig, 'exec' | 'model'> | undefined, id = ''): string {
   const s = `${b?.model || ''} ${id}`.toLowerCase();
-  if (/claude|opus|sonnet|haiku|fable/.test(s)) return 'claude';
+  if (b?.exec === 'claude' || /(?:^|-)cc(?:-|$)|claude|opus|sonnet|haiku|fable/.test(s)) return 'claude';
   if (/gemini|argon/.test(s)) return 'gemini';
   if (/qwen/.test(s)) return 'qwen';
   if (/deepseek/.test(s)) return 'deepseek';

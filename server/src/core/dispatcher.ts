@@ -6,9 +6,9 @@ import type { EventBus } from './events.js';
 import type { Store, CompletionDecision } from './store.js';
 import type { Workflows } from './workflows.js';
 import type { Goals } from './goals.js';
-import { verifyOutput, buildVerifierPrompt, parseLlmVerdict, detectInputRequest, detectBackgroundWait, isRateLimitFailure, parseStatusFooter, type StatusFooter, type VerifyVerdict, type InputOptions, type InputRequest, type BackgroundOptions, type BackgroundWait } from './result-verifier.js';
+import { verifyOutput, buildVerifierPrompt, parseLlmVerdict, parseSpecVerdict, selectSpecJudges, extractEvidenceBlock, detectInputRequest, detectBackgroundWait, isRateLimitFailure, parseStatusFooter, type StatusFooter, type VerifyVerdict, type VerifierArtifact, type SpecVerdictRecord, type InputOptions, type InputRequest, type BackgroundOptions, type BackgroundWait } from './result-verifier.js';
 import { buildLesson, appendLesson } from './lessons.js';
-import { BRIEF_KEYS, renderBriefSections } from './brief.js';
+import { BRIEF_KEYS, parseBrief, renderBriefSections } from './brief.js';
 import { taskTier, mergeTierChain, reviewChain, type TierName } from './tiers.js';
 import { canonicalBrainId } from '../config.js';
 import { STREAMING_EXECS, streamArgs, createStreamRenderer } from './progress-stream.js';
@@ -1397,7 +1397,7 @@ export class Dispatcher {
     // humanInput as a dedicated "answers" section (below), and the brief fields
     // as their own sections — drop them from the raw context dump so they aren't
     // duplicated or lost as noise in the JSON blob.
-    for (const k of ['persona', 'brainAuto', 'remoteWaitSince', 'dispatched', 'attempts', 'agentName', 'ranAgent', 'ranDivision', 'ranBrain', 'isRoster', 'inputFiles', 'humanInput', 'awaitingInput', 'inputQuestions', 'backgroundWait', ...BRIEF_KEYS]) delete shownCtx[k];
+    for (const k of ['persona', 'brainAuto', 'remoteWaitSince', 'dispatched', 'attempts', 'agentName', 'ranAgent', 'ranDivision', 'ranBrain', 'isRoster', 'inputFiles', 'humanInput', 'awaitingInput', 'inputQuestions', 'backgroundWait', 'specVerdict', 'specFindings', ...BRIEF_KEYS]) delete shownCtx[k];
     // The brief contract (P0-3) gets its own sections right under the task text.
     lines.push(...renderBriefSections(task.context));
     if (Object.keys(shownCtx).length > 0) {
@@ -1561,10 +1561,10 @@ export class Dispatcher {
    * composition of the two gates for callers that have already ruled out an input
    * request (or don't care).
    */
-  private async verifyResult(task: Task, output: { ok: boolean; text: string }): Promise<VerifyVerdict> {
+  private async verifyResult(task: Task, output: { ok: boolean; text: string }, executorBrainId = ''): Promise<VerifyVerdict> {
     const det = this.deterministicVerdict(output);
     if (!det.ok) return det;
-    return this.llmVerdict(task, output.text);
+    return this.qualityGateVerdict(task, output.text, executorBrainId, (Number(task.context?.attempts) || 0) + 1);
   }
 
   /** Gate 1 — cheap, deterministic exit-code + pattern/emptiness check. Catches
@@ -1580,11 +1580,256 @@ export class Dispatcher {
     });
   }
 
-  /** Gate 2 (optional, config-gated) — an LLM verifier agent judges whether the
-   *  output GENUINELY completes the task. Fails open ({ ok: true }) when disabled
-   *  or on any error so a real deliverable is never discarded by a flaky verifier.
-   *  Only run on a result that has passed the deterministic gate AND is not an
-   *  input request (see the class doc + call sites). */
+  /** Acceptance criteria carried by `task` (P0-3), or [] for legacy tasks. */
+  private taskAcceptance(task: Task): string[] {
+    const fromCtx = parseBrief(task.context).brief.acceptance;
+    if (fromCtx && fromCtx.length) return fromCtx;
+    const direct = (task as any).acceptance;
+    if (Array.isArray(direct)) return direct.map((s: any) => String(s || '').trim()).filter(Boolean);
+    return [];
+  }
+
+  /** Collect artifacts produced by `task` with byte sizes (for the spec verifier). */
+  private collectArtifactsWithSizes(task: Task): VerifierArtifact[] {
+    const seen = new Map<string, number>();
+    const artRoot = this.config.paths?.artifacts;
+    if (artRoot && task.id) {
+      const dir = this.artifactsDir(task.id);
+      try {
+        for (const f of readdirSync(dir)) {
+          if (f === 'progress.log' || f === 'result.md') continue;
+          const st = statSync(join(dir, f));
+          if (st.isFile()) seen.set(f, st.size);
+        }
+      } catch { /* no artifacts dir on disk */ }
+    }
+    const extra = Array.isArray((task as any).artifacts)
+      ? (task as any).artifacts
+      : Array.isArray(task.context?.artifacts)
+        ? task.context!.artifacts
+        : [];
+    for (const item of extra) {
+      if (typeof item === 'string' && item && !seen.has(item)) {
+        let size = 0;
+        if (artRoot && task.id) {
+          try { size = statSync(join(this.artifactsDir(task.id), item)).size; } catch { /* ignore */ }
+        }
+        seen.set(item, size);
+      } else if (item && typeof item === 'object' && typeof item.name === 'string' && !seen.has(item.name)) {
+        seen.set(item.name, Number(item.size) || 0);
+      }
+    }
+    return Array.from(seen.entries()).map(([name, size]) => ({ name, size }));
+  }
+
+  /** Spawn a single spec-judge brain through the normal exec path with a short timeout. */
+  private runSpecJudge(judgeId: string, prompt: string, timeoutMs: number): Promise<{ ok: boolean; text: string }> {
+    const b = this.config.orchestration.brains?.[judgeId];
+    const exec = (b?.exec || 'hermes') as RoleConfig['exec'];
+    const model = b?.model || '';
+    const argv = this.buildArgv({ exec, model, command: b?.command }, prompt);
+    return new Promise((resolve) => {
+      try {
+        const child = spawn(argv[0], argv.slice(1), { env: { ...process.env }, stdio: ['ignore', 'pipe', 'pipe'] });
+        let out = '';
+        let err = '';
+        let timedOut = false;
+        const timer = setTimeout(() => { timedOut = true; child.kill('SIGTERM'); }, timeoutMs);
+        child.stdout.on('data', d => { out += d.toString(); });
+        child.stderr.on('data', d => { err += d.toString(); });
+        child.on('error', e => { clearTimeout(timer); resolve({ ok: false, text: `SPAWN ERROR: ${e.message}` }); });
+        child.on('close', code => {
+          clearTimeout(timer);
+          if (timedOut) { resolve({ ok: false, text: `TIMEOUT after ${timeoutMs}ms` }); return; }
+          const clean = stripAnsi(out).trim();
+          if (code === 0 && clean) resolve({ ok: true, text: clean });
+          else resolve({ ok: false, text: clean || stripAnsi(err).trim() || `exit code ${code}` });
+        });
+      } catch (e: any) {
+        resolve({ ok: false, text: `SPAWN ERROR: ${e?.message || e}` });
+      }
+    });
+  }
+
+  /** Save `context.specVerdict` onto both the in-memory task and the stored task. */
+  private persistSpecVerdict(task: Task, record: SpecVerdictRecord): void {
+    task.context = { ...(task.context || {}), specVerdict: record };
+    const stored = this.store.getTask(task.id);
+    if (stored) {
+      stored.context = { ...(stored.context || {}), specVerdict: record };
+      this.store.saveTask(stored);
+    }
+  }
+
+  /** Append failing criteria from an enforce-mode CHANGES_REQUESTED verdict to the task's brief. */
+  private appendSpecFindingsToBrief(task: Task, record: SpecVerdictRecord, attemptNumber: number): void {
+    const items = record.failedCriteria.length ? record.failedCriteria : [record.summary || 'CHANGES_REQUESTED'];
+    const block = [
+      `# Spec verifier findings (attempt ${attemptNumber} rejected by ${record.judgeBrain || 'spec-verifier'} — fix these failing criteria)`,
+      ...items.map(f => `- ${f}`),
+    ].join('\n');
+    const appendTo = (desc: string | undefined) => {
+      const base = (desc || '').trimEnd();
+      return base ? `${base}\n\n${block}` : block;
+    };
+    task.description = appendTo(task.description);
+    task.context = { ...(task.context || {}), specVerdict: record, specFindings: items };
+    const stored = this.store.getTask(task.id);
+    if (stored) {
+      stored.description = task.description;
+      stored.context = { ...(stored.context || {}), specVerdict: record, specFindings: items };
+      this.store.saveTask(stored);
+    }
+  }
+
+  /**
+   * Gate 2 — quality verification.
+   *   - Tasks carrying `acceptance` (P0-3) when `orchestration.verifier.spec.enabled`
+   *     is true run the cross-family spec-compliance verifier (P1-1).
+   *   - Legacy tasks (no `acceptance`) keep today's behaviour (`llmVerdict`).
+   */
+  private async qualityGateVerdict(task: Task, text: string, executorBrainId: string, attemptNumber: number): Promise<VerifyVerdict> {
+    const acceptance = this.taskAcceptance(task);
+    const specCfg = this.config.orchestration.verifier?.spec;
+    if (acceptance.length > 0 && specCfg?.enabled) {
+      return this.specVerdict(task, text, executorBrainId, attemptNumber, acceptance);
+    }
+    return this.llmVerdict(task, text);
+  }
+
+  /**
+   * P1-1 spec-compliance verifier. Selects a cross-family judge brain, runs the
+   * spec prompt, and records `context.specVerdict`.
+   *   - shadow mode: appends `lessons.jsonl` `kind: "quality-shadow"` and never rejects.
+   *   - enforce mode: rejects `CHANGES_REQUESTED` and appends failing criteria to the brief.
+   *   - no available judge or judge crash/timeout: records `UNVERIFIABLE` and fails open.
+   */
+  private async specVerdict(
+    task: Task,
+    text: string,
+    executorBrainId: string,
+    attemptNumber: number,
+    acceptance: string[]
+  ): Promise<VerifyVerdict> {
+    const specCfg = this.config.orchestration.verifier?.spec || {};
+    const mode: 'shadow' | 'enforce' = specCfg.mode === 'enforce' ? 'enforce' : 'shadow';
+    const agent = this.resolveAgent(task)
+      || (typeof task.context?.agentName === 'string' ? task.context.agentName : '')
+      || executorBrainId;
+    const artifacts = this.collectArtifactsWithSizes(task);
+    const evidence = extractEvidenceBlock(text);
+    const prompt = buildVerifierPrompt(task, text, { acceptance, artifacts, evidence });
+
+    const candidates = selectSpecJudges(executorBrainId, {
+      brains: this.config.orchestration.brains,
+      judges: specCfg.judges,
+      isCooling: id => !!this.cooldownUntil(id),
+      result: text,
+      acceptance,
+    });
+
+    if (candidates.length === 0) {
+      const record: SpecVerdictRecord = {
+        verdict: 'UNVERIFIABLE',
+        mode,
+        judgeBrain: null,
+        executorBrain: executorBrainId,
+        criteria: acceptance.map(c => ({ criterion: c, status: 'UNVERIFIABLE', reason: 'no judge brain available (disabled or cooling)' })),
+        failedCriteria: [],
+        summary: 'UNVERIFIABLE — no judge brain available (disabled or cooling)',
+        at: new Date().toISOString(),
+      };
+      this.persistSpecVerdict(task, record);
+      if (mode === 'shadow') {
+        this.recordLesson(task.id, {
+          kind: 'quality-shadow', brain: executorBrainId, agent, attempt: attemptNumber,
+          reason: `UNVERIFIABLE (judge=none): ${record.summary}`, resultText: text,
+        });
+      }
+      return { ok: true };
+    }
+
+    const timeoutMs = specCfg.timeoutMs || 300_000;
+    let usedJudgeId: string | null = null;
+    let parsed: ReturnType<typeof parseSpecVerdict> | null = null;
+
+    for (const judgeId of candidates) {
+      let judgeOut: { ok: boolean; text: string };
+      try {
+        judgeOut = await this.runSpecJudge(judgeId, prompt, timeoutMs);
+      } catch (e: any) {
+        console.error(`Dispatcher: spec judge ${judgeId} threw (trying next / failing open):`, e);
+        judgeOut = { ok: false, text: `JUDGE ERROR: ${e?.message || e}` };
+      }
+      const soft = verifyOutput(judgeOut.text, judgeOut.ok);
+      if (!judgeOut.ok || !soft.ok) {
+        if (isRateLimitFailure(judgeOut.text)) {
+          this.noteRateLimit(judgeId, soft.reason || 'spec judge rate-limited', judgeOut.text, true);
+        }
+        continue;
+      }
+      const p = parseSpecVerdict(judgeOut.text, acceptance, false);
+      if (p.crashed) continue;
+      usedJudgeId = judgeId;
+      parsed = p;
+      break;
+    }
+
+    if (!parsed || !usedJudgeId) {
+      const record: SpecVerdictRecord = {
+        verdict: 'UNVERIFIABLE',
+        mode,
+        judgeBrain: candidates[0] || null,
+        executorBrain: executorBrainId,
+        criteria: acceptance.map(c => ({ criterion: c, status: 'UNVERIFIABLE', reason: 'judge crashed or timed out (fail-open)' })),
+        failedCriteria: [],
+        summary: 'UNVERIFIABLE — judge crashed or timed out (fail-open)',
+        at: new Date().toISOString(),
+        crashed: true,
+      };
+      this.persistSpecVerdict(task, record);
+      if (mode === 'shadow') {
+        this.recordLesson(task.id, {
+          kind: 'quality-shadow', brain: executorBrainId, agent, attempt: attemptNumber,
+          reason: `UNVERIFIABLE (judge=${record.judgeBrain || 'none'}, crashed): ${record.summary}`, resultText: text,
+        });
+      }
+      return { ok: true };
+    }
+
+    const record: SpecVerdictRecord = {
+      verdict: parsed.verdict,
+      mode,
+      judgeBrain: usedJudgeId,
+      executorBrain: executorBrainId,
+      criteria: parsed.criteria,
+      failedCriteria: parsed.failedCriteria,
+      summary: parsed.summary,
+      at: new Date().toISOString(),
+    };
+    this.persistSpecVerdict(task, record);
+
+    if (mode === 'shadow') {
+      this.recordLesson(task.id, {
+        kind: 'quality-shadow', brain: executorBrainId, agent, attempt: attemptNumber,
+        reason: `${record.verdict} (judge=${usedJudgeId}): ${record.summary}`, resultText: text,
+      });
+      return { ok: true };
+    }
+
+    if (record.verdict === 'CHANGES_REQUESTED') {
+      this.appendSpecFindingsToBrief(task, record, attemptNumber);
+      return {
+        ok: false,
+        reason: `spec verifier (${usedJudgeId}): CHANGES_REQUESTED — ${record.summary}`,
+      };
+    }
+    return { ok: true };
+  }
+
+  /** Gate 2 (legacy, config-gated) — an LLM verifier agent judges whether the
+   *  output GENUINELY completes a legacy task (one without `acceptance`). Fails
+   *  open ({ ok: true }) when disabled or on any error. */
   private async llmVerdict(task: Task, text: string): Promise<VerifyVerdict> {
     const cfg = this.config.orchestration.verifier;
     if (!cfg?.llm?.enabled) return { ok: true };
@@ -1694,21 +1939,22 @@ export class Dispatcher {
    * is guarded and errors are swallowed after logging. Deterministic — no LLM.
    */
   private recordLesson(taskId: string, input: {
-    kind: 'verify-fail' | 'wait-input' | 'blocked';
+    kind: 'verify-fail' | 'wait-input' | 'blocked' | 'quality-shadow';
     brain: string;
     agent: string;
     attempt: number;
+    title?: string;
     reason?: string;
     resultText?: string;
     questions?: string[];
   }): void {
     try {
+      if (!this.config.paths?.decisions) return;
       const t = this.store.getTask(taskId);
-      if (!t) return;
       const lesson = buildLesson({
         kind: input.kind,
         task: taskId,
-        title: t.title || '',
+        title: t?.title || input.title || '',
         agent: input.agent,
         brain: input.brain,
         attempt: input.attempt,
@@ -1807,8 +2053,16 @@ export class Dispatcher {
         console.log(`Dispatcher: reported result for task ${task.id} on ${brainId} is STATUS: BLOCKED → failed, no handover (${(footer.reason || '').slice(0, 80)})`);
         return { action: 'complete', result: this.blockedResult(footer, text), context: this.footerContext(footer) };
       }
-      verdict = await this.llmVerdict(task, text);
-      if (verdict.ok) return { action: 'complete', context: this.footerContext(footer) };
+      verdict = await this.qualityGateVerdict(task, text, brainId, (Number(task.context?.attempts) || 0) + 1);
+      if (verdict.ok) {
+        return {
+          action: 'complete',
+          context: {
+            ...this.footerContext(footer),
+            ...(task.context?.specVerdict ? { specVerdict: task.context.specVerdict } : {})
+          }
+        };
+      }
     }
 
     const failReason = verdict.reason || (result || '').slice(0, 300);
@@ -2016,7 +2270,7 @@ export class Dispatcher {
       ? detVerdict
       : inputReq.needsInput || bgDefer || blocked
         ? { ok: true }                                 // question / bg-wait / blocked → skip the LLM gate
-        : await this.llmVerdict(task, output.text);
+        : await this.qualityGateVerdict(task, output.text, plan.brainId, plan.attempt + 1);
     if (output.ok && !verdict.ok) {
       console.log(`Dispatcher: verifier REJECTED task ${task.id} result on ${plan.brainId} — ${verdict.reason}`);
     }

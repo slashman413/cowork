@@ -13,10 +13,63 @@
  *      that judges whether the output actually satisfies the task.
  */
 
+import type { BrainConfig, SpecVerifierJudgesConfig } from '../types.js';
+import { brainFamily } from './tiers.js';
+
 export interface VerifyVerdict {
   ok: boolean;
   /** Set when ok === false: why the result was rejected (logged + stored on the task). */
   reason?: string;
+}
+
+export interface VerifierArtifact {
+  name: string;
+  size: number;
+}
+
+export type SpecCriterionStatus = 'PASS' | 'FAIL' | 'UNVERIFIABLE';
+export type SpecVerdictStatus = 'APPROVED' | 'CHANGES_REQUESTED' | 'UNVERIFIABLE';
+
+export interface SpecCriterionVerdict {
+  criterion: string;
+  status: SpecCriterionStatus;
+  reason: string;
+}
+
+export interface SpecVerdictRecord {
+  verdict: SpecVerdictStatus;
+  mode: 'shadow' | 'enforce';
+  judgeBrain: string | null;
+  executorBrain: string;
+  criteria: SpecCriterionVerdict[];
+  failedCriteria: string[];
+  summary: string;
+  at: string;
+  crashed?: boolean;
+}
+
+export interface ParsedSpecVerdict extends VerifyVerdict {
+  verdict: SpecVerdictStatus;
+  criteria: SpecCriterionVerdict[];
+  failedCriteria: string[];
+  summary: string;
+  crashed?: boolean;
+}
+
+export interface VerifierTaskInput {
+  title: string;
+  description?: string;
+  acceptance?: string[];
+  context?: Record<string, any>;
+  artifacts?: Array<string | VerifierArtifact>;
+  evidence?: string;
+}
+
+export interface VerifierPromptOptions {
+  acceptance?: string[];
+  artifacts?: Array<string | VerifierArtifact>;
+  evidence?: string;
+  maxResultChars?: number;
 }
 
 export interface VerifyOptions {
@@ -205,32 +258,328 @@ function firstLine(text: string): string {
 }
 
 /**
- * Build the prompt for the optional LLM "verifier agent". It reads the task and
- * the produced result and answers PASS / FAIL — a quality gate stacked on top of
- * the deterministic check for cases a pattern can't catch (e.g. a fluent but
- * off-topic or refusal answer). Parse the reply with {@link parseLlmVerdict}.
+ * Format a result string for the spec verifier: full text when within
+ * `maxChars`, or head + tail when longer so both the opening summary and the
+ * closing STATUS/EVIDENCE footer stay visible.
  */
-export function buildVerifierPrompt(task: { title: string; description: string }, result: string): string {
+export function truncateHeadTail(text: string, maxChars = 6000): string {
+  const s = text || '';
+  if (s.length <= maxChars) return s;
+  const half = Math.floor(maxChars / 2);
+  const dropped = s.length - half * 2;
+  return `${s.slice(0, half)}\n…[truncated ${dropped} chars]…\n${s.slice(s.length - half)}`;
+}
+
+/**
+ * Extract the text of the `EVIDENCE:` block from a result string (P0-2).
+ */
+export function extractEvidenceBlock(text: string): string {
+  const lines = (text || '').split('\n');
+  let statusIdx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(FOOTER_KEY);
+    if (m && m[1].toUpperCase() === 'STATUS') {
+      const rest = m[2].trim();
+      if (STATUS_VALUE.test(rest) && !/\|\s*(DONE|BLOCKED)/i.test(rest)) statusIdx = i;
+    }
+  }
+  return blockAfter(lines, statusIdx >= 0 ? statusIdx : 0, 'EVIDENCE');
+}
+
+/**
+ * Build the prompt for the spec-compliance verifier (P1-1).
+ *
+ * Inputs:
+ *   - task acceptance criteria (P0-3)
+ *   - artifact list with byte sizes
+ *   - the EVIDENCE block (P0-2)
+ *   - the result (head+tail if long)
+ *
+ * Output contract:
+ *   One line per criterion `PASS|FAIL|UNVERIFIABLE — reason`, then
+ *   `VERDICT: APPROVED | CHANGES_REQUESTED`.
+ */
+export function buildVerifierPrompt(
+  task: VerifierTaskInput,
+  result: string,
+  opts: VerifierPromptOptions = {}
+): string {
+  const rawAcceptance = opts.acceptance
+    ?? task.acceptance
+    ?? (Array.isArray(task.context?.acceptance) ? task.context!.acceptance : []);
+  const acceptance = rawAcceptance.map(c => String(c || '').trim()).filter(Boolean);
+  const rawArtifacts = opts.artifacts ?? task.artifacts ?? [];
+  const artifactLines = rawArtifacts.length
+    ? rawArtifacts.map(a => typeof a === 'string' ? `- ${a}` : `- ${a.name} (${a.size} bytes)`)
+    : ['- (none)'];
+  const evidence = (opts.evidence !== undefined ? opts.evidence : (task.evidence !== undefined ? task.evidence : extractEvidenceBlock(result))).trim();
+  const maxChars = opts.maxResultChars ?? 6000;
+
   return [
-    `You are a strict RESULT VERIFIER in a multi-agent company. Judge ONLY whether the RESULT below is a genuine, on-topic completion of the TASK.`,
-    `FAIL it if the result is a rate-limit / quota / overloaded notice, an error or refusal, empty, truncated mid-thought, or does not actually address the task.`,
-    `PASS it if it is a real, on-topic deliverable (even if imperfect).`,
+    `You are a strict SPEC-COMPLIANCE VERIFIER in a multi-agent company. Judge whether the RESULT, EVIDENCE, and ARTIFACTS below satisfy EVERY acceptance criterion of the TASK.`,
+    `Do NOT give the benefit of the doubt for unverified claims, missing evidence, empty/missing artifacts, rate-limit/quota notices, errors, or refusals.`,
     ``,
     `TASK: ${task.title}`,
     (task.description || '').slice(0, 2000),
     ``,
-    `RESULT:`,
-    (result || '').slice(0, 6000),
+    `ACCEPTANCE CRITERIA:`,
+    ...(acceptance.length ? acceptance.map((c, i) => `${i + 1}. ${c}`) : [`1. Deliverable genuinely and completely addresses the task`]),
     ``,
-    `Answer with exactly one word on the first line: PASS or FAIL. On a second line, give a short reason.`,
+    `ARTIFACTS PRODUCED (with sizes):`,
+    ...artifactLines,
+    ``,
+    `EVIDENCE BLOCK:`,
+    evidence || '(none reported)',
+    ``,
+    `RESULT:`,
+    truncateHeadTail(result || '', maxChars),
+    ``,
+    `Reply using this EXACT output contract:`,
+    `- First, output one line per acceptance criterion in order: \`<n>. PASS|FAIL|UNVERIFIABLE — <short reason>\``,
+    `- Last line: \`VERDICT: APPROVED\` (only if no criterion is FAIL) or \`VERDICT: CHANGES_REQUESTED\` (if any criterion is FAIL).`,
   ].join('\n');
 }
 
+const VERDICT_LINE_RE = /^\s*(?:[-*+]\s+)?(?:#{1,6}\s*)?\**\s*VERDICT\s*\**\s*:\s*\**\s*(APPROVED|CHANGES_REQUESTED|UNVERIFIABLE)\b/i;
+const CRITERION_LINE_RE = /^\s*(?:[-*+]\s+)?\**(?:(?:criterion\s*)?(\d+)\s*[.):\s-]+)?\**\s*(PASS|FAIL|UNVERIFIABLE)\b\**\s*(?:[—–:-]+\s*|\s+)(.*)$/i;
+const CRITERION_SUFFIX_RE = /^\s*(?:[-*+]\s+)?\**(?:(?:criterion\s*)?(\d+)\s*[.):\s-]+)?(.+?)\s*[—–:-]+\s*\**(PASS|FAIL|UNVERIFIABLE)\**\s*(?:[—–:-]+\s*(.*))?$/i;
+
 /**
- * Turn a verifier LLM reply into a verdict. Conservative: only an explicit,
- * unambiguous FAIL rejects the result — a blank/garbled reply from the verifier
- * brain must not discard a real deliverable (fail-open), so anything that isn't a
- * clear FAIL passes.
+ * Parse the spec-compliance verifier's reply (P1-1).
+ *
+ * Fail-open ONLY when the judge itself crashes/times out (`judgeCrashed` or
+ * empty/rate-limit reply). When the judge runs normally:
+ *   - Any criterion `FAIL` or `VERDICT: CHANGES_REQUESTED` → ok:false, CHANGES_REQUESTED
+ *   - `VERDICT: APPROVED` (and no FAIL criterion) → ok:true, APPROVED
+ *   - All criteria `UNVERIFIABLE` (or `VERDICT: UNVERIFIABLE`) → ok:true, UNVERIFIABLE
+ *   - Unparseable non-crash reply → ok:false, CHANGES_REQUESTED
+ */
+export function parseSpecVerdict(
+  reply: string,
+  acceptance: string[] = [],
+  judgeCrashed = false
+): ParsedSpecVerdict {
+  const text = (reply || '').trim();
+  const softCheck = verifyOutput(text, !judgeCrashed);
+  if (judgeCrashed || !text || !softCheck.ok) {
+    const why = judgeCrashed ? 'judge crashed or timed out' : !text ? 'empty judge reply' : (softCheck.reason || 'judge soft failure');
+    return {
+      ok: true,
+      verdict: 'UNVERIFIABLE',
+      criteria: acceptance.map(c => ({ criterion: c, status: 'UNVERIFIABLE', reason: `${why} (fail-open)` })),
+      failedCriteria: [],
+      summary: `UNVERIFIABLE — ${why} (fail-open)`,
+      crashed: true,
+    };
+  }
+
+  const lines = text.split('\n');
+  let explicitVerdict: SpecVerdictStatus | undefined;
+  const parsedCriteria: Array<{ index?: number; label?: string; status: SpecCriterionStatus; reason: string }> = [];
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    // Skip echoed template lines containing pipes like "PASS|FAIL|UNVERIFIABLE" or "APPROVED | CHANGES_REQUESTED".
+    if (/\bPASS\s*\|\s*FAIL\b/i.test(line) || /\bAPPROVED\s*\|\s*CHANGES_REQUESTED\b/i.test(line)) continue;
+
+    const vm = line.match(VERDICT_LINE_RE);
+    if (vm) {
+      explicitVerdict = vm[1].toUpperCase() as SpecVerdictStatus;
+      continue;
+    }
+
+    const cm = line.match(CRITERION_LINE_RE);
+    if (cm) {
+      const idx = cm[1] ? parseInt(cm[1], 10) - 1 : undefined;
+      const status = cm[2].toUpperCase() as SpecCriterionStatus;
+      const reason = (cm[3] || '').replace(/\*+$/, '').trim() || status;
+      parsedCriteria.push({ index: idx, status, reason });
+      continue;
+    }
+
+    const sm = line.match(CRITERION_SUFFIX_RE);
+    if (sm) {
+      const idx = sm[1] ? parseInt(sm[1], 10) - 1 : undefined;
+      const label = (sm[2] || '').replace(/\*+/g, '').trim();
+      const status = sm[3].toUpperCase() as SpecCriterionStatus;
+      const reason = (sm[4] || label || status).replace(/\*+$/, '').trim();
+      parsedCriteria.push({ index: idx, label, status, reason });
+    }
+  }
+
+  const criteria: SpecCriterionVerdict[] = [];
+  if (acceptance.length > 0) {
+    for (let i = 0; i < acceptance.length; i++) {
+      const byIdx = parsedCriteria.find(p => p.index === i);
+      const fallback = parsedCriteria[i];
+      const pick = byIdx || fallback;
+      criteria.push({
+        criterion: acceptance[i],
+        status: pick ? pick.status : (explicitVerdict === 'APPROVED' ? 'PASS' : explicitVerdict === 'CHANGES_REQUESTED' ? 'FAIL' : 'UNVERIFIABLE'),
+        reason: pick ? pick.reason : (explicitVerdict || 'not scored by judge'),
+      });
+    }
+    // Include any extra FAIL lines beyond acceptance.length so no finding is lost.
+    for (let i = acceptance.length; i < parsedCriteria.length; i++) {
+      const p = parsedCriteria[i];
+      if (p.index !== undefined && p.index < acceptance.length) continue;
+      criteria.push({
+        criterion: p.label || `Criterion ${i + 1}`,
+        status: p.status,
+        reason: p.reason,
+      });
+    }
+  } else {
+    for (let i = 0; i < parsedCriteria.length; i++) {
+      const p = parsedCriteria[i];
+      criteria.push({
+        criterion: p.label || `Criterion ${(p.index ?? i) + 1}`,
+        status: p.status,
+        reason: p.reason,
+      });
+    }
+  }
+
+  const failedCriteria = criteria
+    .filter(c => c.status === 'FAIL')
+    .map(c => c.criterion ? `${c.criterion} — ${c.reason}` : c.reason);
+
+  const hasFail = failedCriteria.length > 0 || explicitVerdict === 'CHANGES_REQUESTED';
+  if (hasFail) {
+    if (!failedCriteria.length) {
+      const extraReason = lines
+        .map(l => l.trim())
+        .filter(l => l && !VERDICT_LINE_RE.test(l))
+        .join('; ')
+        .slice(0, 300) || 'CHANGES_REQUESTED';
+      failedCriteria.push(extraReason);
+    }
+    const summary = failedCriteria.join('; ').slice(0, 500);
+    return {
+      ok: false,
+      verdict: 'CHANGES_REQUESTED',
+      criteria,
+      failedCriteria,
+      summary,
+      reason: `spec verifier: CHANGES_REQUESTED — ${summary}`,
+    };
+  }
+
+  const allUnverifiable =
+    explicitVerdict === 'UNVERIFIABLE' ||
+    (parsedCriteria.length > 0 && parsedCriteria.every(c => c.status === 'UNVERIFIABLE') && explicitVerdict !== 'APPROVED');
+  if (allUnverifiable) {
+    const reasons = criteria.map(c => c.reason).filter(Boolean).join('; ').slice(0, 300) || 'UNVERIFIABLE';
+    return {
+      ok: true,
+      verdict: 'UNVERIFIABLE',
+      criteria,
+      failedCriteria: [],
+      summary: `UNVERIFIABLE — ${reasons}`,
+    };
+  }
+
+  if (explicitVerdict === 'APPROVED' || (parsedCriteria.length > 0 && parsedCriteria.some(c => c.status === 'PASS'))) {
+    const passCount = criteria.filter(c => c.status === 'PASS').length;
+    const total = criteria.length || parsedCriteria.length;
+    const summary = `APPROVED (${passCount}/${total} passed)`;
+    return {
+      ok: true,
+      verdict: 'APPROVED',
+      criteria,
+      failedCriteria: [],
+      summary,
+    };
+  }
+
+  // Non-empty, non-crash reply with no recognizable verdict or criterion lines: do NOT fail open.
+  const first = firstLine(text) || 'unparseable verifier output';
+  return {
+    ok: false,
+    verdict: 'CHANGES_REQUESTED',
+    criteria,
+    failedCriteria: [first],
+    summary: `unparseable spec verdict: ${first}`,
+    reason: `spec verifier: unparseable verdict — ${first}`,
+  };
+}
+
+/**
+ * Default cross-family judge chains by executor model family (CEO ruling 2026-10-20, P1-1):
+ *   - claude (`local-cc-*`, `local-agy-claude-*`, `remote-*-cc-*`) → Gemini judge:
+ *     `local-agy-gemini-4-argon-medium`, fallback `local-agy-gemini-3.8-flash-high`
+ *   - gemini or qwen3.8-27b (`local-agy-gemini-*`, `local-dsh-qwen3-8-27b`, `local-hermes-qwen3.8-27b`)
+ *     → opus-class judge: `local-agy-claude-opus-5-5-medium`, fallback `local-cc-opus-5-5`
+ *   - anything else (gpt-oss, codex, deepseek, other) → opus-class judge (RULING).
+ */
+export const DEFAULT_SPEC_JUDGES: Readonly<Record<string, readonly string[]>> = {
+  claude: ['local-agy-gemini-4-argon-medium', 'local-agy-gemini-3.8-flash-high'],
+  gemini: ['local-agy-claude-opus-5-5-medium', 'local-cc-opus-5-5'],
+  qwen: ['local-agy-claude-opus-5-5-medium', 'local-cc-opus-5-5'],
+  'qwen3.8-27b': ['local-agy-claude-opus-5-5-medium', 'local-cc-opus-5-5'],
+  default: ['local-agy-claude-opus-5-5-medium', 'local-cc-opus-5-5'],
+};
+
+/** True when a task is small enough (result < 2 KB and ≤ 2 criteria) to try the cheaper fallback judge first. */
+export function isSmallSpecTask(result: string, acceptance: string[]): boolean {
+  return Buffer.byteLength(result || '', 'utf8') < 2048 && (acceptance?.length ?? 0) <= 2;
+}
+
+export interface SelectSpecJudgeOptions {
+  brains?: Record<string, BrainConfig>;
+  judges?: SpecVerifierJudgesConfig;
+  isCooling?: (brainId: string) => boolean;
+  smallTask?: boolean;
+  result?: string;
+  acceptance?: string[];
+}
+
+/**
+ * Return the ordered list of available judge brains for `executorBrainId`.
+ * Skips judges that are disabled, remote (cannot be spawned locally by the
+ * verifier), cooling after a rate limit (P0-1), or identical to the executor.
+ */
+export function selectSpecJudges(executorBrainId: string, opts: SelectSpecJudgeOptions = {}): string[] {
+  const family = brainFamily(opts.brains?.[executorBrainId], executorBrainId);
+  const cfg = opts.judges;
+  let raw: readonly string[];
+  if (family === 'claude') {
+    raw = cfg?.claude?.length ? cfg.claude : DEFAULT_SPEC_JUDGES.claude;
+  } else if (family === 'gemini') {
+    raw = cfg?.gemini?.length ? cfg.gemini : DEFAULT_SPEC_JUDGES.gemini;
+  } else if (family === 'qwen') {
+    raw = (cfg?.qwen?.length ? cfg.qwen : cfg?.['qwen3.8-27b']?.length ? cfg['qwen3.8-27b'] : undefined) ?? DEFAULT_SPEC_JUDGES.qwen;
+  } else {
+    raw = (cfg?.[family]?.length ? cfg[family]! : cfg?.default?.length ? cfg.default : undefined) ?? DEFAULT_SPEC_JUDGES.default;
+  }
+
+  const small = opts.smallTask ?? (opts.result !== undefined && opts.acceptance !== undefined
+    ? isSmallSpecTask(opts.result, opts.acceptance)
+    : false);
+  const ordered = small && raw.length > 1 ? [...raw.slice(1), raw[0]] : [...raw];
+
+  const out: string[] = [];
+  for (const id of ordered) {
+    if (!id || id === executorBrainId || out.includes(id)) continue;
+    if (opts.brains) {
+      const b = opts.brains[id];
+      if (!b || b.disabled || b.location === 'remote') continue;
+    }
+    if (opts.isCooling && opts.isCooling(id)) continue;
+    out.push(id);
+  }
+  return out;
+}
+
+/** Pick the primary available judge brain for `executorBrainId`, or null when none is available. */
+export function selectSpecJudge(executorBrainId: string, opts: SelectSpecJudgeOptions = {}): string | null {
+  return selectSpecJudges(executorBrainId, opts)[0] ?? null;
+}
+
+/**
+ * Turn a legacy verifier LLM reply into a verdict (used only for legacy tasks
+ * without `acceptance` when `verifier.llm.enabled` is true).
  */
 export function parseLlmVerdict(reply: string): VerifyVerdict {
   const text = (reply || '').trim();

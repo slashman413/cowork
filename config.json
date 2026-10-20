@@ -70,6 +70,31 @@
         "exec": "hermes",
         "model": "qwen3.8-27b",
         "timeoutMs": 120000
+      },
+      "spec": {
+        "enabled": true,
+        "mode": "shadow",
+        "enforceAfter": "2026-10-27T02:10:00.000Z",
+        "maxFalseRejectRate": 0.1,
+        "timeoutMs": 300000,
+        "judges": {
+          "claude": [
+            "local-agy-gemini-4-argon-medium",
+            "local-agy-gemini-3.8-flash-high"
+          ],
+          "gemini": [
+            "local-agy-claude-opus-5-5-medium",
+            "local-cc-opus-5-5"
+          ],
+          "qwen": [
+            "local-agy-claude-opus-5-5-medium",
+            "local-cc-opus-5-5"
+          ],
+          "default": [
+            "local-agy-claude-opus-5-5-medium",
+            "local-cc-opus-5-5"
+          ]
+        }
       }
     },
     "staleClaimMs": 600000,
