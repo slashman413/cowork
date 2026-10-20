@@ -97,6 +97,11 @@
         }
       }
     },
+    "sharpener": {
+      "enabled": true,
+      "mode": "shadow",
+      "brain": "local-agy-gemini-3.8-flash-high"
+    },
     "staleClaimMs": 600000,
     "hardClaimMs": 5400000,
     "maxWorkflowSteps": 12,

@@ -66,7 +66,22 @@ test('computeQualityMetrics: classes, repeat rate-limit share, wait-input mix, t
   assert.deepEqual(m.waitInput, { total: 2, permissionChoice: 1, humanOnly: 1, other: 0 });
   assert.equal(m.blocked, 1);
   assert.deepEqual(m.done, { count: 2, withEvidence: 1, evidencePct: 50, doneWithConcerns: 1 });
-  assert.deepEqual(m.acceptance, { tasks: 3, withAcceptance: 1, pct: 33.3 });
+  assert.deepEqual(m.acceptance, {
+    tasks: 3,
+    withAcceptance: 1,
+    pct: 33.3,
+    bySource: {
+      human: { withAcceptance: 1, pct: 33.3 },
+      sharpened: { withAcceptance: 0, pct: 0 }
+    }
+  });
+  assert.deepEqual(m.specVerdicts, {
+    total: 0,
+    bySource: {
+      human: { total: 0, judged: 0, approved: 0, changesRequested: 0, unverifiable: 0 },
+      sharpened: { total: 0, judged: 0, approved: 0, changesRequested: 0, unverifiable: 0 }
+    }
+  });
   assert.equal(m.timeouts.count, 1);
   assert.ok(Math.abs(m.timeouts.perWeek! - 1) < 0.05);
   assert.deepEqual({ tagged: m.tiers.tagged, att: m.tiers.mechanicalAttempts, opus: m.tiers.mechanicalOpusAttempts }, { tagged: 1, att: 2, opus: 1 });
@@ -91,4 +106,51 @@ test('readLessons skips NUL-padded / torn lines; metricsWindow parses days / fro
   assert.deepEqual(metricsWindow({}, now), { from: now - 7 * 86_400_000, to: now });
   assert.deepEqual(metricsWindow({ days: '30' }, now), { from: now - 30 * 86_400_000, to: now });
   assert.equal(metricsWindow({ from: '2026-08-04T00:00:00+08:00' }, now).from, Date.parse('2026-08-03T16:00:00Z'));
+});
+
+test('computeQualityMetrics: splits acceptance and spec-verdicts by acceptanceSource', () => {
+  const tasks = [
+    {
+      id: 'h1', status: 'done', createdAt: at(0), completedAt: at(5),
+      context: {
+        dispatched: true, acceptance: ['criterion 1'],
+        specVerdict: { verdict: 'APPROVED', at: at(5) }
+      }
+    },
+    {
+      id: 's1', status: 'done', createdAt: at(10), completedAt: at(15),
+      context: {
+        dispatched: true, acceptance: ['sharpened 1', 'sharpened 2'], acceptanceSource: 'sharpened',
+        specVerdict: { verdict: 'CHANGES_REQUESTED', at: at(15) }
+      }
+    },
+    {
+      id: 's2', status: 'done', createdAt: at(20), completedAt: at(25),
+      context: {
+        dispatched: true, acceptance: ['sharpened 3'], acceptanceSource: 'sharpened',
+        specVerdict: { verdict: 'UNVERIFIABLE', at: at(25) }
+      }
+    },
+    {
+      id: 'n1', status: 'done', createdAt: at(30), completedAt: at(35),
+      context: { dispatched: true }
+    }
+  ] as unknown as Task[];
+
+  const m = computeQualityMetrics([], tasks, T0, T0 + 86_400_000);
+  assert.equal(m.acceptance.tasks, 4);
+  assert.equal(m.acceptance.withAcceptance, 3);
+  assert.equal(m.acceptance.pct, 75);
+  assert.deepEqual(m.acceptance.bySource, {
+    human: { withAcceptance: 1, pct: 25 },
+    sharpened: { withAcceptance: 2, pct: 50 }
+  });
+
+  assert.equal(m.specVerdicts.total, 3);
+  assert.deepEqual(m.specVerdicts.bySource.human, {
+    total: 1, judged: 1, approved: 1, changesRequested: 0, unverifiable: 0
+  });
+  assert.deepEqual(m.specVerdicts.bySource.sharpened, {
+    total: 2, judged: 1, approved: 0, changesRequested: 1, unverifiable: 1
+  });
 });

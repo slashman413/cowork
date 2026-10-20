@@ -102,6 +102,10 @@ export class Store {
     this.roster = new Roster(config.paths.agencyAgents);
   }
 
+  public getConfig(): Config {
+    return this.config;
+  }
+
   public initialize(): void {
     const dirs = [
       this.config.paths.inbox,
@@ -979,6 +983,8 @@ export class Store {
     brain?: string | null;
     scheduledAt?: string | null;
     loopIntervalHours?: number | null;
+    /** Acceptance criteria update (PS-1). */
+    acceptance?: string[] | null;
     /** A flexible recurrence spec (see core/recurrence.ts), or null/'none' to
      *  clear the cadence. Takes precedence over `loopIntervalHours` when both are
      *  supplied. Invalid specs throw. */
@@ -1021,6 +1027,15 @@ export class Store {
       } else {
         delete ctx.brain;
         delete ctx.brainAuto;
+      }
+    }
+    if (patch.acceptance !== undefined) {
+      if (patch.acceptance === null || (Array.isArray(patch.acceptance) && patch.acceptance.length === 0)) {
+        delete ctx.acceptance;
+        delete ctx.acceptanceSource;
+      } else if (Array.isArray(patch.acceptance)) {
+        ctx.acceptance = patch.acceptance.map(s => String(s || '').trim()).filter(Boolean);
+        ctx.acceptanceSource = 'human';
       }
     }
     task.context = ctx;

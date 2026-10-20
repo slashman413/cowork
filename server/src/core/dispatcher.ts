@@ -11,6 +11,7 @@ import { verifyOutput, buildVerifierPrompt, parseLlmVerdict, parseSpecVerdict, s
 import { buildLesson, appendLesson } from './lessons.js';
 import { describeAutoAnswer, logAutoAnswer } from './rulings.js';
 import { BRIEF_KEYS, parseBrief, renderBriefSections } from './brief.js';
+import { shouldSharpenTask, sharpenTask } from './sharpener.js';
 import { taskTier, mergeTierChain, reviewChain, type TierName } from './tiers.js';
 import { canonicalBrainId } from '../config.js';
 import { STREAMING_EXECS, streamArgs, createStreamRenderer } from './progress-stream.js';
@@ -1465,7 +1466,7 @@ export class Dispatcher {
     // humanInput as a dedicated "answers" section (below), and the brief fields
     // as their own sections — drop them from the raw context dump so they aren't
     // duplicated or lost as noise in the JSON blob.
-    for (const k of ['persona', 'brainAuto', 'remoteWaitSince', 'dispatched', 'attempts', 'agentName', 'ranAgent', 'ranDivision', 'ranBrain', 'isRoster', 'inputFiles', 'humanInput', 'awaitingInput', 'inputQuestions', 'backgroundWait', 'specVerdict', 'specFindings', 'gate', 'gateFindings', 'gateReviewFor', 'gateStepKey', 'gateRound', 'gateMaxRounds', 'judgeFamily', 'judgeBrain', 'escalated', 'escalatedAtRound', 'escalatedBrain', ...BRIEF_KEYS]) delete shownCtx[k];
+    for (const k of ['persona', 'brainAuto', 'remoteWaitSince', 'dispatched', 'attempts', 'agentName', 'ranAgent', 'ranDivision', 'ranBrain', 'isRoster', 'inputFiles', 'humanInput', 'awaitingInput', 'inputQuestions', 'backgroundWait', 'specVerdict', 'specFindings', 'gate', 'gateFindings', 'gateReviewFor', 'gateStepKey', 'gateRound', 'gateMaxRounds', 'judgeFamily', 'judgeBrain', 'escalated', 'escalatedAtRound', 'escalatedBrain', 'acceptanceSource', 'outsideCheck', 'deliverable', 'playbook', 'openChoices', 'sharpen', ...BRIEF_KEYS]) delete shownCtx[k];
     // The brief contract (P0-3 / P1-3) gets its own sections right under the task text.
     // Default timeboxMin = taskTimeoutMs / 60000 - 5 (e.g. 50 min cap → 45 min timebox).
     const timeoutMs = Number(this.config.orchestration?.taskTimeoutMs) || 3_000_000;
@@ -1796,7 +1797,12 @@ export class Dispatcher {
     acceptance: string[]
   ): Promise<VerifyVerdict> {
     const specCfg = this.config.orchestration.verifier?.spec || {};
-    const mode: 'shadow' | 'enforce' = specCfg.mode === 'enforce' ? 'enforce' : 'shadow';
+    const sharpenerCfg = this.config.orchestration.sharpener;
+    const isSharpened = task.context?.acceptanceSource === 'sharpened';
+    let mode: 'shadow' | 'enforce' = specCfg.mode === 'enforce' ? 'enforce' : 'shadow';
+    if (isSharpened) {
+      mode = sharpenerCfg?.mode === 'enforce' ? 'enforce' : 'shadow';
+    }
     const agent = this.resolveAgent(task)
       || (typeof task.context?.agentName === 'string' ? task.context.agentName : '')
       || executorBrainId;
@@ -2239,6 +2245,13 @@ export class Dispatcher {
     // Mark the claim as dispatcher-owned so startup handover can reclaim it
     claimed.context = { ...(claimed.context || {}), dispatched: true };
     this.store.saveTask(claimed);
+
+    // Intake brief sharpener (PS-1): pre-pass on cheap brain if acceptance criteria missing
+    if (shouldSharpenTask(task, this.config)) {
+      await sharpenTask(task, { config: this.config, decisionsDir: this.config.paths?.decisions });
+      claimed.context = { ...(claimed.context || {}), ...(task.context || {}) };
+      this.store.saveTask(claimed);
+    }
 
     // Surface the worker as its own active agent so the dashboard shows WHO
     // is working (e.g. hermes/engineer · local-cc-opus-5-5), not just the coordinator.

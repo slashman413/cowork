@@ -363,6 +363,20 @@ export interface OrchestrationConfig {
    *  on the tier list followed by its normal chain. `review` is resolved at
    *  runtime to a different model family than the executor (core/tiers.ts). */
   tiers?: Record<string, string[]>;
+  /** Brief sharpener at intake (PS-1): pre-pass on a cheap brain to generate acceptance criteria. */
+  sharpener?: SharpenerConfig;
+}
+
+/** Config for {@link OrchestrationConfig.sharpener} (PS-1). */
+export interface SharpenerConfig {
+  /** Master switch for the brief sharpener. Default true. */
+  enabled?: boolean;
+  /** 'shadow' | 'enforce'. Default 'shadow'. Sharpened criteria start in shadow. */
+  mode?: 'shadow' | 'enforce';
+  /** Cheap brain to run sharpening on (default: first enabled mechanical tier brain). */
+  brain?: string;
+  /** Timeout in ms. Default 60000. */
+  timeoutMs?: number;
 }
 
 /** Config for {@link OrchestrationConfig.brainCooldown}. */
@@ -546,6 +560,18 @@ export interface TaskBrief {
   timeboxMin?: number;
   /** Paths/systems the worker may write to, and ones it must not touch. */
   scope?: { write?: string[]; forbid?: string[] };
+  /** Origin of acceptance criteria: 'human' or 'sharpened' (PS-1). */
+  acceptanceSource?: 'human' | 'sharpened';
+  /** Exactly one outside check that the result is right (PS-1). */
+  outsideCheck?: string;
+  /** Expected deliverable filenames or shape (PS-1). */
+  deliverable?: string;
+  /** Method / playbook key (PS-1 / PS-4). */
+  playbook?: string;
+  /** Unresolved choices that belong to the user (PS-1). */
+  openChoices?: string[];
+  /** Opt-out flag for scheduled recurring ops jobs or user opt-out (PS-1). */
+  sharpen?: boolean;
 }
 
 export interface Task {

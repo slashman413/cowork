@@ -74,6 +74,27 @@ const pct = (n: number, d: number) => d ? Math.round((n / d) * 1000) / 10 : null
 const ms = (s?: string) => { const t = s ? Date.parse(s) : NaN; return Number.isFinite(t) ? t : NaN; };
 const inWin = (t: number, from: number, to: number) => t >= from && t <= to;
 
+export interface AcceptanceBySource {
+  human: { withAcceptance: number; pct: number | null };
+  sharpened: { withAcceptance: number; pct: number | null };
+}
+
+export interface SpecVerdictSourceInputs {
+  total: number;
+  judged: number;
+  approved: number;
+  changesRequested: number;
+  unverifiable: number;
+}
+
+export interface SpecVerdictMetrics {
+  total: number;
+  bySource: {
+    human: SpecVerdictSourceInputs;
+    sharpened: SpecVerdictSourceInputs;
+  };
+}
+
 export interface QualityMetrics {
   window: { from: string; to: string; days: number; weeks: number };
   rejections: { total: number; byClass: Record<RejectionClass, number>; byClassPct: Record<RejectionClass, number | null> };
@@ -81,7 +102,8 @@ export interface QualityMetrics {
   waitInput: { total: number; permissionChoice: number; humanOnly: number; other: number };
   blocked: number;
   done: { count: number; withEvidence: number; evidencePct: number | null; doneWithConcerns: number };
-  acceptance: { tasks: number; withAcceptance: number; pct: number | null };
+  acceptance: { tasks: number; withAcceptance: number; pct: number | null; bySource: AcceptanceBySource };
+  specVerdicts: SpecVerdictMetrics;
   timeouts: { count: number; perWeek: number | null };
   tiers: { tagged: number; byTier: Record<string, number>; mechanicalAttempts: number; mechanicalOpusAttempts: number; mechanicalOpusShare: number | null };
   sources: { lessons: number; lessonsSkipped: number; tasks: number };
@@ -132,6 +154,14 @@ export function computeQualityMetrics(
 
   let doneCount = 0, withEvidence = 0, concerns = 0;
   let created = 0, withAcceptance = 0;
+  let humanWithAcceptance = 0, sharpenedWithAcceptance = 0;
+  const specVerdicts: SpecVerdictMetrics = {
+    total: 0,
+    bySource: {
+      human: { total: 0, judged: 0, approved: 0, changesRequested: 0, unverifiable: 0 },
+      sharpened: { total: 0, judged: 0, approved: 0, changesRequested: 0, unverifiable: 0 },
+    }
+  };
   const byTier: Record<string, number> = {};
   let tagged = 0, mechAttempts = 0, mechOpus = 0;
   for (const t of tasks) {
@@ -144,7 +174,11 @@ export function computeQualityMetrics(
     if (inWin(ms(t.createdAt), from, to)) {
       if (ctx.dispatched || ctx.ranBrain || ctx.attempts) {
         created++;
-        if (Array.isArray(ctx.acceptance) && ctx.acceptance.length) withAcceptance++;
+        if (Array.isArray(ctx.acceptance) && ctx.acceptance.length) {
+          withAcceptance++;
+          if (ctx.acceptanceSource === 'sharpened') sharpenedWithAcceptance++;
+          else humanWithAcceptance++;
+        }
       }
       const tier = taskTier(ctx);
       if (tier) {
@@ -160,6 +194,24 @@ export function computeQualityMetrics(
         }
       }
     }
+    if (ctx.specVerdict) {
+      const svAt = ms(ctx.specVerdict.at) || ms(t.completedAt) || ms(t.createdAt);
+      if (inWin(svAt, from, to)) {
+        const srcKey = ctx.acceptanceSource === 'sharpened' ? 'sharpened' : 'human';
+        specVerdicts.total++;
+        specVerdicts.bySource[srcKey].total++;
+        const v = String(ctx.specVerdict.verdict || '').toUpperCase();
+        if (v === 'APPROVED') {
+          specVerdicts.bySource[srcKey].approved++;
+          specVerdicts.bySource[srcKey].judged++;
+        } else if (v === 'CHANGES_REQUESTED') {
+          specVerdicts.bySource[srcKey].changesRequested++;
+          specVerdicts.bySource[srcKey].judged++;
+        } else if (v === 'UNVERIFIABLE') {
+          specVerdicts.bySource[srcKey].unverifiable++;
+        }
+      }
+    }
   }
 
   return {
@@ -169,7 +221,16 @@ export function computeQualityMetrics(
     waitInput: wait,
     blocked,
     done: { count: doneCount, withEvidence, evidencePct: pct(withEvidence, doneCount), doneWithConcerns: concerns },
-    acceptance: { tasks: created, withAcceptance, pct: pct(withAcceptance, created) },
+    acceptance: {
+      tasks: created,
+      withAcceptance,
+      pct: pct(withAcceptance, created),
+      bySource: {
+        human: { withAcceptance: humanWithAcceptance, pct: pct(humanWithAcceptance, created) },
+        sharpened: { withAcceptance: sharpenedWithAcceptance, pct: pct(sharpenedWithAcceptance, created) },
+      }
+    },
+    specVerdicts,
     timeouts: { count: byClass.timeout, perWeek: weeks > 0 ? Math.round((byClass.timeout / weeks) * 10) / 10 : null },
     tiers: { tagged, byTier, mechanicalAttempts: mechAttempts, mechanicalOpusAttempts: mechOpus, mechanicalOpusShare: pct(mechOpus, mechAttempts) },
     sources: { lessons: inRange.length, lessonsSkipped: opts.lessonsSkipped ?? 0, tasks: tasks.length }

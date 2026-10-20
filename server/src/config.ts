@@ -86,6 +86,11 @@ const defaultConfig: Config = {
     autoAnswer: {
       enabled: false,
       maxAttempts: 3
+    },
+    sharpener: {
+      enabled: true,
+      mode: 'shadow',
+      brain: 'local-agy-gemini-3.8-flash-high'
     }
   }
 };
@@ -146,6 +151,11 @@ export function loadConfig(): Config {
       autoAnswer: {
         ...defaultConfig.orchestration.autoAnswer!,
         ...(loadedConfig.orchestration?.autoAnswer || {})
+      },
+      sharpener: loadedConfig.orchestration?.sharpener || {
+        enabled: true,
+        mode: 'shadow',
+        brain: 'local-agy-gemini-3.8-flash-high'
       }
     }
   };

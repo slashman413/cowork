@@ -7,6 +7,7 @@ import type { EventBus } from '../core/events.js';
 import type { Goals } from '../core/goals.js';
 import { registerBrain, removeBrainCascade, clientTaskView } from '../config.js';
 import { getObsidianVault } from '../core/obsidian.js';
+import { shouldSharpenTask, sharpenTask } from '../core/sharpener.js';
 
 // Stateless streamable-HTTP pattern: build a fresh McpServer + transport per
 // request. Sharing one McpServer across concurrent transports cross-wires
@@ -317,6 +318,10 @@ function buildServer(config: Config, store: Store, eventBus: EventBus, goals?: G
           loopIntervalHours: args.loop_interval_hours,
           recurrence: args.recurrence as any
         });
+        if (shouldSharpenTask(task, config)) {
+          await sharpenTask(task, { config, decisionsDir: config.paths?.decisions });
+          store.saveTask(task);
+        }
         return { content: [{ type: 'text', text: JSON.stringify(task) }] };
       } catch (e: any) {
         return { content: [{ type: 'text', text: e.message }], isError: true };

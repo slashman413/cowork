@@ -89,7 +89,7 @@ function harness(mode: SpecVerdictMode = 'shadow') {
 
   store.setCompletionGuard((t, r) => (dispatcher as any).verifyReportedCompletion(t, r));
 
-  const createInProgress = (opts: { acceptance?: string[]; description?: string } = {}): Task => {
+  const createInProgress = (opts: { acceptance?: string[]; description?: string; acceptanceSource?: 'human' | 'sharpened' } = {}): Task => {
     const t = store.createTask({
       title: 'Implement feature X',
       description: opts.description ?? 'Build feature X and write report.md.',
@@ -104,6 +104,7 @@ function harness(mode: SpecVerdictMode = 'shadow') {
       brainAuto: true,
       attempts: 0,
       ...(opts.acceptance ? { acceptance: opts.acceptance } : {}),
+      ...(opts.acceptanceSource ? { acceptanceSource: opts.acceptanceSource } : {}),
     };
     store.saveTask(t);
     return t;
@@ -273,4 +274,65 @@ test('legacy task without acceptance criteria is untouched by spec verifier and 
   assert.equal(out!.context!.specVerdict, undefined, 'specVerdict not set on legacy tasks');
   assert.equal(h.specCalls.length, 0, 'spec judge not called on legacy tasks');
   assert.equal(h.legacyLlmCalls(), 1, 'legacy llmVerdict still runs');
+});
+
+test('sharpened criteria are judged in shadow even when spec verifier mode is enforce (PS-1 shadow override)', async () => {
+  const h = harness('enforce');
+  h.setSpecJudge(async () => ({
+    ok: true,
+    text: [
+      '1. FAIL — Missing tests',
+      'VERDICT: CHANGES_REQUESTED',
+    ].join('\n'),
+  }));
+
+  const t = h.createInProgress({
+    acceptance: ['Tests pass with 100% coverage'],
+    acceptanceSource: 'sharpened',
+  });
+
+  const out = await h.store.completeTask({
+    taskId: t.id,
+    result: 'Detailed work report. '.repeat(140) + '\nSTATUS: DONE\nEVIDENCE:\n- npm test → pass',
+  });
+
+  // Must NOT reject because sharpened criteria run in shadow mode even under enforce
+  assert.equal(out!.status, 'done', 'sharpened criteria must not reject under spec.mode=enforce when sharpener.mode=shadow');
+  assert.equal(out!.context!.specVerdict?.mode, 'shadow');
+  assert.equal(out!.context!.specVerdict?.verdict, 'CHANGES_REQUESTED');
+
+  // Verify that quality-shadow was recorded in lessons
+  const lessons = h.lessons();
+  const shadowLesson = lessons.find(l => l.kind === 'quality-shadow');
+  assert.ok(shadowLesson, 'must record quality-shadow lesson');
+  assert.equal(shadowLesson!.task, t.id);
+});
+
+test('sharpened criteria enforce when orchestration.sharpener.mode is explicitly enforce', async () => {
+  const h = harness('enforce');
+  (h.config.orchestration as any).sharpener = { enabled: true, mode: 'enforce' };
+
+  h.setSpecJudge(async () => ({
+    ok: true,
+    text: [
+      '1. FAIL — Missing tests',
+      'VERDICT: CHANGES_REQUESTED',
+    ].join('\n'),
+  }));
+
+  const t = h.createInProgress({
+    acceptance: ['Tests pass with 100% coverage'],
+    acceptanceSource: 'sharpened',
+  });
+
+  const out = await h.store.completeTask({
+    taskId: t.id,
+    result: 'Detailed work report. '.repeat(140) + '\nSTATUS: DONE\nEVIDENCE:\n- npm test → pass',
+  });
+
+  // When sharpener.mode === 'enforce', CHANGES_REQUESTED rejects and hands over
+  assert.equal(out!.status, 'pending', 'rejected task re-enters pending pool for next brain');
+  assert.equal(out!.context!.attempts, 1, 'attempt counter advanced');
+  assert.equal(out!.context!.specVerdict?.mode, 'enforce');
+  assert.equal(out!.context!.specVerdict?.verdict, 'CHANGES_REQUESTED');
 });
