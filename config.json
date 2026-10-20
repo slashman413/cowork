@@ -138,7 +138,7 @@
         ]
       },
       "remote-example-cc-sonnet-5-5": {
-        "description": "EXAMPLE remote brain \u2014 a Claude Code client on another machine. Delete or edit; remote brains normally auto-register via register_agent (see JOIN-AS-A-BRAIN.md).",
+        "description": "EXAMPLE remote brain — a Claude Code client on another machine. Delete or edit; remote brains normally auto-register via register_agent (see JOIN-AS-A-BRAIN.md).",
         "location": "remote",
         "exec": "claude",
         "model": "claude-sonnet-5-5",
@@ -148,6 +148,21 @@
     "brainCooldown": {
       "enabled": true,
       "defaultMs": 1800000
+    },
+    "tiers": {
+      "mechanical": [
+        "local-dsh-qwen3-8-27b",
+        "local-agy-gemini-3.8-flash-high",
+        "local-agy-gemini-3.8-flash-medium"
+      ],
+      "standard": [
+        "local-agy-gemini-4-argon-medium",
+        "local-agy-claude-opus-5-5-medium"
+      ],
+      "judgment": [
+        "local-cc-opus-5-5",
+        "remote-ai-code-gen-cc-opus-5-5"
+      ]
     }
   }
 }

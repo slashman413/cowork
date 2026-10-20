@@ -9,6 +9,7 @@ import type { Goals } from './goals.js';
 import { verifyOutput, buildVerifierPrompt, parseLlmVerdict, detectInputRequest, detectBackgroundWait, isRateLimitFailure, parseStatusFooter, type StatusFooter, type VerifyVerdict, type InputOptions, type InputRequest, type BackgroundOptions, type BackgroundWait } from './result-verifier.js';
 import { buildLesson, appendLesson } from './lessons.js';
 import { BRIEF_KEYS, renderBriefSections } from './brief.js';
+import { taskTier, mergeTierChain, reviewChain, type TierName } from './tiers.js';
 import { canonicalBrainId } from '../config.js';
 import { STREAMING_EXECS, streamArgs, createStreamRenderer } from './progress-stream.js';
 import { isAgyModelRejection, diagnoseAgyModelFailure, listAgyModels } from './agy-models.js';
@@ -211,7 +212,7 @@ export class Dispatcher {
    *                        division's override, else the global default chain.
    *   Disabled brains are silently stripped from the resolved chain so they are
    *   never dispatched. */
-  private chainFor(agent: string, division?: string): string[] {
+  private chainFor(agent: string, division?: string, ctx?: Record<string, any>): string[] {
     const orch = this.config.orchestration;
     const brains = orch.brains || {};
     let raw: string[];
@@ -223,10 +224,24 @@ export class Dispatcher {
       else {
         const div = division || '';
         raw = (orch.divisionChains && orch.divisionChains[div]) || orch.defaultChain || [];
+        // P1-4: a tier-tagged task tries its tier's brains first, then the normal chain.
+        const tier = taskTier(ctx);
+        if (tier) raw = mergeTierChain(this.tierList(tier, ctx), raw);
       }
     }
     // Strip disabled brains so the dispatcher never schedules them.
     return raw.filter(id => !brains[id]?.disabled);
+  }
+
+  /** Brains of a tier. `review` = a different family than context.reviewOf
+   *  (the executor brain being judged), else the judgment list. */
+  private tierList(tier: TierName, ctx?: Record<string, any>): string[] {
+    const orch = this.config.orchestration;
+    if (tier === 'review') {
+      const of = typeof ctx?.reviewOf === 'string' ? canonicalBrainId(this.config, ctx.reviewOf) : '';
+      return of ? reviewChain(of, orch.tiers, orch.brains || {}) : (orch.tiers?.judgment || []);
+    }
+    return orch.tiers?.[tier] || [];
   }
 
   /** The chosen agent for a task: a special agent name, or a roster agent slug. */
@@ -595,7 +610,7 @@ export class Dispatcher {
     //     saturated LOCAL brain, in which case the overflow is load-balanced onto
     //     the next local rung with spare capacity.
     if (agentName) {
-      const chain = this.chainFor(agentName, division);
+      const chain = this.chainFor(agentName, division, task.context);
       if (!chain.length || attempt >= chain.length) return { action: 'skip' };  // exhausted / misconfigured
       // Skip rungs whose brain is cooling after a rate limit, like disabled rungs —
       // without consuming an attempt. If EVERY remaining rung is cooling, wait for
@@ -1440,10 +1455,11 @@ export class Dispatcher {
         `# Orchestrator instructions`,
         `Decompose this request into concrete subtasks and dispatch them to the company via the Cowork REST API — one POST per subtask. Leave the agent UNASSIGNED and the company's router will pick the best specialist from its 250-agent Agencies automatically (or set context.division/context.agent yourself if you know exactly who should do it):`,
         '```bash',
-        `curl ${curlFlags} -X POST ${selfBase}/api/inbox -H 'Content-Type: application/json' -d '{"title":"...","description":"...(goal + full standalone instructions)...","from":{"platform":"claude","agent":"orchestrator"},"to":{},"priority":"normal","context":{"acceptance":["<checkable criterion: artifact name, command, URL>"],"verify":["<command or check that proves it>"]}}'`,
+        `curl ${curlFlags} -X POST ${selfBase}/api/inbox -H 'Content-Type: application/json' -d '{"title":"...","description":"...(goal + full standalone instructions)...","from":{"platform":"claude","agent":"orchestrator"},"to":{},"priority":"normal","context":{"acceptance":["<checkable criterion: artifact name, command, URL>"],"verify":["<command or check that proves it>"],"tier":"standard"}}'`,
         '```',
         `Each subtask description must be fully standalone — the executing specialist sees ONLY that description.`,
         `Every subtask POST must carry the brief: the goal (in the description) plus context.acceptance (2-5 concrete, checkable criteria) and context.verify (the commands/URLs/checks that prove them). Optional: context.timeboxMin (minutes) and context.scope {"write":[...],"forbid":[...]}. A subtask you cannot write acceptance for is not scoped yet — scope it further before dispatching it.`,
+        `Tag every subtask with context.tier so it runs on the right class of brain: "mechanical" (formatting, file moves, scripted renders, data copying — cheap local brains), "standard" (most building and writing), "judgment" (design decisions, ambiguous briefs, final whole-run review — opus-class), or "review" (judging another subtask's output; add context.reviewOf = the brain id that produced it, and a brain of a different model family is picked). Default to the lowest tier that can do the job.`,
         `To make a subtask wait for others (e.g. a final synthesis step), add their task ids to its context: {"dependsOn":["<id1>","<id2>"]} — the API response to each POST gives the created task's id; dependencies' results are shown to the dependent agent.`,
         `After dispatching, output a summary of the plan. Check existing tasks first: curl ${curlFlags} ${selfBase}/api/inbox?limit=20`,
         ``
@@ -1808,7 +1824,7 @@ export class Dispatcher {
     // A user-pinned brain (context.brain WITHOUT brainAuto) retries itself up to
     // inbox.maxRetries; a chain rung (brainAuto) advances to the next brain.
     const pinned = !task.context?.brainAuto;
-    const chain = pinned ? [] : this.chainFor(agent, division);
+    const chain = pinned ? [] : this.chainFor(agent, division, task.context);
     const bound = pinned ? this.config.inbox.maxRetries : chain.length;
     const nextAttempt = attempt + 1;
 
@@ -2030,7 +2046,7 @@ export class Dispatcher {
       if (fresh) {
         const nextAttempt = plan.attempt + 1;
         if (nextAttempt < bound) {
-          const nextBrain = plan.pinned ? plan.brainId : (this.chainFor(plan.agent, plan.division)[nextAttempt] || '?');
+          const nextBrain = plan.pinned ? plan.brainId : (this.chainFor(plan.agent, plan.division, fresh.context)[nextAttempt] || '?');
           fresh.status = 'pending';
           delete fresh.claimedAt;
           delete fresh.claimedBy;

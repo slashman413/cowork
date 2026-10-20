@@ -5,6 +5,7 @@ import { v4 as uuidv4 } from 'uuid';
 import type { Config, WorkflowDef, WorkflowStep, WorkflowRun, WorkflowRunRecord, WorkflowDecision, Task, TaskBrief } from '../types.js';
 import type { Store } from './store.js';
 import { parseBrief } from './brief.js';
+import { assertTier } from './tiers.js';
 
 /** Fill {{param}} placeholders from the run params (missing → left as-is). */
 function interpolate(tpl: string, params: Record<string, string>): string {
@@ -133,6 +134,7 @@ export class Workflows {
       if (keys.has(s.key)) errors.push(`duplicate step key "${s.key}"`);
       keys.add(s.key);
       errors.push(...parseBrief(s as Record<string, any>, `step "${s.key}" `).errors);
+      try { assertTier(s.tier, `step "${s.key}" tier`); } catch (e: any) { errors.push(e.message); }
     }
     for (const s of def.steps) {
       for (const d of s.dependsOn || []) {
@@ -182,7 +184,7 @@ export class Workflows {
     const description = interpolate(s.description || s.title || s.key, params);
     return {
       title, description,
-      agent: s.agent, division: s.division, brain: s.brain,
+      agent: s.agent, division: s.division, brain: s.brain, tier: s.tier,
       priority: s.priority || 'normal',
       dependsOnKeys: s.dependsOn || [],
       // Brief contract (P0-3), {{param}}-filled like the title/description.
@@ -213,7 +215,7 @@ export class Workflows {
     if (opts.dryRun) {
       const steps = order.map(s => {
         const c = this.compileStep(def, s, params);
-        return { key: s.key, title: c.title, description: c.description, agent: c.agent, division: c.division, brain: c.brain, dependsOn: c.dependsOnKeys, ...c.brief };
+        return { key: s.key, title: c.title, description: c.description, agent: c.agent, division: c.division, brain: c.brain, tier: c.tier, dependsOn: c.dependsOnKeys, ...c.brief };
       });
       return { runId, workflowId: def.id, mode: 'dag', dryRun: true, steps };
     }
@@ -227,6 +229,7 @@ export class Workflows {
       if (c.agent) context.agent = c.agent;
       if (c.division) context.division = c.division;
       if (c.brain) context.brain = c.brain;
+      if (c.tier) context.tier = c.tier;
       const deps = c.dependsOnKeys.map(k => keyToTaskId.get(k)).filter(Boolean) as string[];
       if (deps.length) context.dependsOn = deps;
       const task = this.store.createTask({
@@ -357,6 +360,7 @@ export class Workflows {
     if (c.agent) context.agent = c.agent;
     if (c.division) context.division = c.division;
     if (c.brain) context.brain = c.brain;
+    if (c.tier) context.tier = c.tier;
     // Wire deps to the tasks that already ran those steps (only completed ones).
     const doneByKey = new Map(record.history.filter(h => h.stepKey && h.taskId).map(h => [h.stepKey!, h.taskId!]));
     const deps = (step.dependsOn || []).map(k => doneByKey.get(k)).filter(Boolean) as string[];

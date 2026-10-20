@@ -731,7 +731,7 @@ class App {
         workers: ['Workers', 'plug'], config: ['Configuration', 'settings'] };
       const pages = {
         overview: { id: 'overview', type: 'dashboard', label: 'Overview', icon: 'layout-dashboard',
-          rows: [{ widgets: [{ type: 'sysbar' }] }, { widgets: [{ type: 'stats' }] },
+          rows: [{ widgets: [{ type: 'sysbar' }] }, { widgets: [{ type: 'stats' }] }, { widgets: [{ type: 'quality', days: 7 }] },
                  { minWidth: 380, widgets: [{ type: 'dispatcher' }, { type: 'activity' }] }, { widgets: [{ type: 'platforms' }] }] },
         portal: { id: 'portal', type: 'portal', label: 'Portal', icon: 'layout-grid' },
       };
@@ -1513,13 +1513,15 @@ class App {
   async renderDashboard(page) {
     const widgets = (page.rows || []).flatMap(r => r.widgets);
     const has = (t) => widgets.some(w => w.type === t);
-    const [status, dispatcher, portal] = await Promise.all([
+    const qw = widgets.find(w => w.type === 'quality');
+    const [status, dispatcher, portal, quality] = await Promise.all([
       (has('stats') || has('platforms')) ? this.api.get('/status') : null,
       has('dispatcher') ? this.api.get('/dispatcher').catch(() => null) : null,
       has('services') ? this.api.get('/portal').catch(() => null) : null,
       has('activity') ? this.refreshAgents() : null,
+      qw ? this.api.get(`/metrics/quality?days=${qw.days || 7}`).catch(() => null) : null,
     ]);
-    const ctx = { status, dispatcher, portal };
+    const ctx = { status, dispatcher, portal, quality };
 
     const rows = (page.rows || []).map((row) => {
       const cells = row.widgets.map((w) => {
@@ -1551,7 +1553,7 @@ class App {
 
   // One widget's HTML. Options were validated server-side (layout-config.ts);
   // every string that reaches the DOM still goes through esc()/md().
-  renderWidget(w, { status, dispatcher, portal }) {
+  renderWidget(w, { status, dispatcher, portal, quality }) {
     const head = (icon, title, extra = '') => `
       <div style="display:flex; align-items:center; gap:8px; margin-bottom:var(--space-md)">
         <i data-lucide="${icon}" style="width:18px;height:18px;color:var(--text-muted)"></i>
@@ -1587,6 +1589,24 @@ class App {
             <div><div class="stat-value">${esc(value ?? '—')}</div><div class="stat-label">${esc(label)}</div></div>
           </div>`;
         }).join('')}</div>`;
+      }
+
+      // Improvement-plan §5 quality metrics (GET /api/metrics/quality).
+      case 'quality': {
+        const q = quality;
+        const p = (v) => v == null ? '—' : `${v}%`;
+        const cards = q ? [
+          ['shield-x', q.rejections.total, `Rejections (${q.rejections.byClass.rateLimit} rate-limit · ${q.rejections.byClass.timeout} timeout · ${q.rejections.byClass.quality} quality)`],
+          ['repeat', p(q.repeatRateLimit.share), `Repeat rate-limit hits (${q.repeatRateLimit.repeats}/${q.repeatRateLimit.hits})`],
+          ['message-circle-question', q.waitInput.total, `Wait-input (${q.waitInput.permissionChoice} permission · ${q.waitInput.humanOnly} human-only)`],
+          ['badge-check', p(q.done.evidencePct), `Done with EVIDENCE (${q.done.count} done · ${q.done.doneWithConcerns} with concerns)`],
+          ['list-checks', p(q.acceptance.pct), `Tasks with acceptance (${q.acceptance.withAcceptance}/${q.acceptance.tasks})`],
+          ['timer-off', q.timeouts.perWeek ?? '—', 'Timeouts / week'],
+        ] : [];
+        return `${head('gauge', w.title || `Quality · last ${w.days || 7} days`)}${q ? `<div class="grid-4">${cards.map(([icon, value, label]) => `<div class="card stat-card">
+            <div class="stat-icon"><i data-lucide="${icon}"></i></div>
+            <div><div class="stat-value">${esc(value ?? '—')}</div><div class="stat-label">${esc(label)}</div></div>
+          </div>`).join('')}</div>` : '<p style="color:var(--text-muted); font-size:0.85rem">Quality metrics unavailable</p>'}`;
       }
 
       case 'dispatcher': {

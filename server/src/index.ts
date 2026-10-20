@@ -7,6 +7,7 @@ import { activeConfigPath, loadConfig, persistRegistries, removeBrainCascade, re
 import { EventBus } from './core/events.js';
 import { Store } from './core/store.js';
 import { Dispatcher } from './core/dispatcher.js';
+import { computeQualityMetrics, metricsWindow, readLessons } from './core/quality-metrics.js';
 import { createMcpServer } from './mcp/server.js';
 import { createApiRouter } from './api/router.js';
 import { createWorkflowRouter } from './api/workflows.js';
@@ -273,8 +274,17 @@ async function main() {
   app.get('/api/chains', (_req, res) => res.json({
     defaultChain: config.orchestration.defaultChain || [],
     divisionChains: config.orchestration.divisionChains || {},
-    agentChains: config.orchestration.agentChains || {}
+    agentChains: config.orchestration.agentChains || {},
+    tiers: config.orchestration.tiers || {}
   }));
+
+  // ── Quality metrics (improvement plan §5): rejections by class, repeat
+  //    rate-limit share, wait-input mix, EVIDENCE / acceptance coverage. ─────
+  app.get('/api/metrics/quality', (req, res) => {
+    const { from, to } = metricsWindow(req.query as Record<string, unknown>);
+    const { lessons, skipped } = readLessons(config.paths.decisions);
+    res.json(computeQualityMetrics(lessons, store.listTasks(), from, to, { lessonsSkipped: skipped }));
+  });
 
   const validChain = (brains: any): string[] => {
     if (!Array.isArray(brains)) throw new Error('brains (string[]) required');

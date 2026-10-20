@@ -10,6 +10,7 @@ import { normalizeRecurrence, recurrenceFromLegacyHours, nextRunAt, type TaskRec
 import { isRateLimitFailure } from './result-verifier.js';
 import { canonicalBrainId } from '../config.js';
 import { normalizeContextBrief } from './brief.js';
+import { assertTier } from './tiers.js';
 import { buildLesson, appendLesson } from './lessons.js';
 
 /**
@@ -573,6 +574,8 @@ export class Store {
     // Brief contract (P0-3): validate + normalize context.acceptance/verify/
     // timeboxMin/scope (throws → 400 on the API / isError on MCP).
     task.context = normalizeContextBrief(task.context);
+    assertTier(task.context?.tier);
+    if (task.context?.tier) task.context = { ...task.context, tier: String(task.context.tier).trim().toLowerCase() };
     if (task.context === undefined) delete task.context;
     // An orchestrator subtask must say how it will be judged. Not rejected yet —
     // warn and count it in the lesson ledger so the miss rate is measurable.

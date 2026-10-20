@@ -144,6 +144,18 @@ expected to carry `acceptance` + `verify`; a missing `acceptance` is logged and
 counted in `decisions/lessons.jsonl` as `kind: "brief-missing-acceptance"`
 (warning only, not rejected yet).
 
+### Brain tier (`context.tier`)
+
+`context.tier` (or a workflow step's `tier`) is one of `mechanical`,
+`standard`, `judgment` or `review`. When the task has no pinned
+`context.brain` and its agent has no `agentChains` override, it runs on
+`orchestration.tiers[<tier>]` first, then its normal chain (duplicates
+dropped, disabled brains stripped). `review` picks brains of a different model
+family than `context.reviewOf`: Gemini judges Claude, and opus-class judges
+Gemini and qwen. Without `reviewOf` it uses the judgment list. An unknown tier
+returns 400. A task with no tier keeps its chain unchanged. Measured by
+`GET /api/metrics/quality?days=7` (`tiers.mechanicalOpusShare`).
+
 ### Priority Levels
 
 | Priority | Use When |

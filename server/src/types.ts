@@ -331,6 +331,11 @@ export interface OrchestrationConfig {
    *  rate/session-limit notice is skipped by the chain planner until its window
    *  resets (parsed from the notice) or `defaultMs` passes. Default ON. */
   brainCooldown?: BrainCooldownConfig;
+  /** Role → brain tiers (P1-4): mechanical / standard / judgment brain lists.
+   *  A task with context.tier (and no pinned brain / agentChains override) runs
+   *  on the tier list followed by its normal chain. `review` is resolved at
+   *  runtime to a different model family than the executor (core/tiers.ts). */
+  tiers?: Record<string, string[]>;
 }
 
 /** Config for {@link OrchestrationConfig.brainCooldown}. */
@@ -628,6 +633,8 @@ export interface WorkflowStep {
   priority?: 'low' | 'normal' | 'high' | 'urgent';
   /** Step keys (NOT task ids) this step waits for — the DAG edges. */
   dependsOn?: string[];
+  /** Brain tier (P1-4: mechanical / standard / judgment / review) — copied to context.tier. */
+  tier?: string;
   /** Brief contract (P0-3) — copied into the expanded task's context. */
   acceptance?: TaskBrief['acceptance'];
   verify?: TaskBrief['verify'];
