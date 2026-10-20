@@ -30,7 +30,12 @@
       ],
       "verify": ["wc -w article.md  # 600-900", "grep -c '^## ' article.md  # >= 3"],
       "division": "marketing",
-      "dependsOn": ["research"]
+      "dependsOn": ["research"],
+      "gate": {
+        "reviewer": "code-reviewer",
+        "maxRounds": 3,
+        "escalateBrainAt": 2
+      }
     },
     {
       "key": "review",

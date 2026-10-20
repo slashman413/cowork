@@ -238,11 +238,11 @@ export interface VerifierConfig {
 }
 
 export interface SpecVerifierJudgesConfig {
-  claude?: string[];
-  gemini?: string[];
-  qwen?: string[];
-  default?: string[];
-  [family: string]: string[] | undefined;
+  claude?: readonly string[] | string[];
+  gemini?: readonly string[] | string[];
+  qwen?: readonly string[] | string[];
+  default?: readonly string[] | string[];
+  [family: string]: readonly string[] | string[] | undefined;
 }
 
 export interface SpecVerifierConfig {
@@ -662,11 +662,71 @@ export interface WorkflowStep {
   dependsOn?: string[];
   /** Brain tier (P1-4: mechanical / standard / judgment / review) — copied to context.tier. */
   tier?: string;
+  /** Review→fix gate (P1-2: superpowers SDD fix rounds). */
+  gate?: WorkflowStepGate;
   /** Brief contract (P0-3) — copied into the expanded task's context. */
   acceptance?: TaskBrief['acceptance'];
   verify?: TaskBrief['verify'];
   timeboxMin?: TaskBrief['timeboxMin'];
   scope?: TaskBrief['scope'];
+}
+
+/**
+ * Review→fix gate option on a workflow step (P1-2).
+ * After the gated step finishes, a review task runs under `reviewer` (judge
+ * family per the P1-1 mapping; brief = the step's acceptance + its result +
+ * artifacts). On `CHANGES_REQUESTED` the engine re-queues the gated step with
+ * findings attached and a scoped re-review up to `maxRounds`; from round
+ * `escalateBrainAt` it escalates to the `judgment` tier (P1-4). At the cap,
+ * residual non-blocker findings are recorded as `RULING` lines and the run
+ * continues; a finding marked `BLOCKER` parks the run on `wait-input`.
+ */
+export interface WorkflowStepGate {
+  /** Agent slug that runs the review task (e.g. "engineering-code-reviewer"). */
+  reviewer: string;
+  /** Maximum review rounds before cap handling applies (default 3). */
+  maxRounds?: number;
+  /** 1-based round number from which the gated step escalates to the judgment tier (default 2). */
+  escalateBrainAt?: number;
+}
+
+export interface WorkflowGateRoundRecord {
+  round: number;
+  taskId: string;
+  reviewTaskId: string;
+  reviewer: string;
+  executorBrain?: string;
+  reviewerBrain?: string;
+  judgeBrain?: string | null;
+  judgeFamily?: string;
+  verdict: import('./core/result-verifier.js').SpecVerdictStatus;
+  criteria: import('./core/result-verifier.js').SpecCriterionVerdict[];
+  failedCriteria: string[];
+  findings?: string[];
+  summary: string;
+  escalated?: boolean;
+  action: 'approved' | 'requeue' | 'rulings' | 'wait-input';
+  rulings?: string[];
+  blockerFindings?: string[];
+  at: string;
+}
+
+export interface WorkflowGateRecord {
+  stepKey: string;
+  taskId: string;
+  reviewer: string;
+  maxRounds: number;
+  escalateBrainAt: number;
+  currentRound: number;
+  status: 'pending' | 'reviewing' | 'fixing' | 'approved' | 'ruled' | 'wait-input';
+  verdict?: import('./core/result-verifier.js').SpecVerdictStatus;
+  escalated?: boolean;
+  escalatedAtRound?: number;
+  escalatedBrain?: string;
+  activeReviewTaskId?: string;
+  rounds: WorkflowGateRoundRecord[];
+  rulings?: string[];
+  blockerFindings?: string[];
 }
 
 /**
@@ -710,18 +770,22 @@ export interface WorkflowDecision {
 }
 
 /**
- * Persistent state for an ORCHESTRATED run. DAG runs need no record (they are
- * reconstructed from task context), but an adaptive run's goal and decision
- * history live nowhere else, so they are written to workflow-runs/<runId>.json.
+ * Persistent state for a workflow run in workflow-runs/<runId>.json.
+ * Written for orchestrated runs (goal + decision history) and for DAG runs that
+ * carry review→fix gates (P1-2: per-step gate rounds, verdicts, and rulings).
  */
 export interface WorkflowRunRecord {
   runId: string;
   workflowId: string;
-  mode: 'orchestrated';
+  mode: 'dag' | 'orchestrated';
   goal?: string;
   params: Record<string, string>;
-  status: 'running' | 'done' | 'failed';
+  status: 'running' | 'done' | 'failed' | 'wait-input';
   history: WorkflowDecision[];
+  /** Per-step review→fix gate state and round/verdict history (P1-2). */
+  gates?: Record<string, WorkflowGateRecord>;
+  /** Residual non-blocker findings recorded as RULING lines when a gate hits maxRounds (P1-2). */
+  rulings?: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -732,11 +796,13 @@ export interface WorkflowRun {
   workflowId: string;
   createdAt: string;
   tasks: Task[];
-  status: 'running' | 'done' | 'failed';
+  status: 'running' | 'done' | 'failed' | 'wait-input';
   /** `orchestrated` runs carry their mode, goal, and decision log; DAG runs omit these. */
   mode?: 'dag' | 'orchestrated';
   goal?: string;
   history?: WorkflowDecision[];
+  gates?: Record<string, WorkflowGateRecord>;
+  rulings?: string[];
 }
 
 export type CoworkEventType = keyof CoworkEventPayloads;

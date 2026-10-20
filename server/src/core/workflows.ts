@@ -2,10 +2,32 @@ import fs from 'fs';
 import path from 'path';
 import { globSync } from 'glob';
 import { v4 as uuidv4 } from 'uuid';
-import type { Config, WorkflowDef, WorkflowStep, WorkflowRun, WorkflowRunRecord, WorkflowDecision, Task, TaskBrief } from '../types.js';
-import type { Store } from './store.js';
+import type {
+  Config,
+  WorkflowDef,
+  WorkflowStep,
+  WorkflowStepGate,
+  WorkflowGateRecord,
+  WorkflowGateRoundRecord,
+  WorkflowRun,
+  WorkflowRunRecord,
+  WorkflowDecision,
+  Task,
+  TaskBrief
+} from '../types.js';
+import { isFailedTask, type Store } from './store.js';
+import type { EventBus } from './events.js';
 import { parseBrief } from './brief.js';
-import { assertTier } from './tiers.js';
+import { assertTier, brainFamily, reviewChain } from './tiers.js';
+import {
+  buildVerifierPrompt,
+  parseSpecVerdict,
+  selectSpecJudges,
+  extractEvidenceBlock,
+  DEFAULT_SPEC_JUDGES,
+  type VerifierArtifact,
+  type ParsedSpecVerdict
+} from './result-verifier.js';
 
 /** Fill {{param}} placeholders from the run params (missing → left as-is). */
 function interpolate(tpl: string, params: Record<string, string>): string {
@@ -28,10 +50,22 @@ function interpolate(tpl: string, params: Record<string, string>): string {
 export class Workflows {
   private config: Config;
   private store: Store;
+  private eventBus?: EventBus;
 
-  constructor(config: Config, store: Store) {
+  constructor(config: Config, store: Store, eventBus?: EventBus) {
     this.config = config;
     this.store = store;
+    const bus = eventBus || (store as any)?.eventBus as EventBus | undefined;
+    if (bus && typeof bus.on === 'function') {
+      this.eventBus = bus;
+      bus.on('taskCompleted', (evt: any) => {
+        try {
+          if (evt?.payload?.task) this.onTaskCompleted(evt.payload.task);
+        } catch (e) {
+          console.error('Workflows: taskCompleted handler failed:', e);
+        }
+      });
+    }
   }
 
   private dir(): string {
@@ -135,6 +169,21 @@ export class Workflows {
       keys.add(s.key);
       errors.push(...parseBrief(s as Record<string, any>, `step "${s.key}" `).errors);
       try { assertTier(s.tier, `step "${s.key}" tier`); } catch (e: any) { errors.push(e.message); }
+      if (s.gate !== undefined) {
+        if (!s.gate || typeof s.gate !== 'object') {
+          errors.push(`step "${s.key}" gate must be an object`);
+        } else {
+          if (!s.gate.reviewer || typeof s.gate.reviewer !== 'string' || !s.gate.reviewer.trim()) {
+            errors.push(`step "${s.key}" gate.reviewer (non-empty string) is required`);
+          }
+          if (s.gate.maxRounds !== undefined && (!Number.isInteger(s.gate.maxRounds) || s.gate.maxRounds < 1)) {
+            errors.push(`step "${s.key}" gate.maxRounds must be a positive integer`);
+          }
+          if (s.gate.escalateBrainAt !== undefined && (!Number.isInteger(s.gate.escalateBrainAt) || s.gate.escalateBrainAt < 1)) {
+            errors.push(`step "${s.key}" gate.escalateBrainAt must be a positive integer`);
+          }
+        }
+      }
     }
     for (const s of def.steps) {
       for (const d of s.dependsOn || []) {
@@ -182,11 +231,19 @@ export class Workflows {
   private compileStep(def: WorkflowDef, s: WorkflowStep, params: Record<string, string>) {
     const title = interpolate(s.title || s.key, params);
     const description = interpolate(s.description || s.title || s.key, params);
+    const gate: Required<WorkflowStepGate> | undefined = s.gate
+      ? {
+          reviewer: s.gate.reviewer.trim(),
+          maxRounds: s.gate.maxRounds ?? 3,
+          escalateBrainAt: s.gate.escalateBrainAt ?? 2
+        }
+      : undefined;
     return {
       title, description,
       agent: s.agent, division: s.division, brain: s.brain, tier: s.tier,
       priority: s.priority || 'normal',
       dependsOnKeys: s.dependsOn || [],
+      gate,
       // Brief contract (P0-3), {{param}}-filled like the title/description.
       brief: interpolateBrief(parseBrief(s as Record<string, any>).brief, params)
     };
@@ -215,7 +272,18 @@ export class Workflows {
     if (opts.dryRun) {
       const steps = order.map(s => {
         const c = this.compileStep(def, s, params);
-        return { key: s.key, title: c.title, description: c.description, agent: c.agent, division: c.division, brain: c.brain, tier: c.tier, dependsOn: c.dependsOnKeys, ...c.brief };
+        return {
+          key: s.key,
+          title: c.title,
+          description: c.description,
+          agent: c.agent,
+          division: c.division,
+          brain: c.brain,
+          tier: c.tier,
+          dependsOn: c.dependsOnKeys,
+          ...(c.gate ? { gate: c.gate } : {}),
+          ...c.brief
+        };
       });
       return { runId, workflowId: def.id, mode: 'dag', dryRun: true, steps };
     }
@@ -223,6 +291,7 @@ export class Workflows {
     // Real run: create bottom-up so each step's dependency task ids already exist.
     const keyToTaskId = new Map<string, string>();
     const tasks: Task[] = [];
+    const gates: Record<string, WorkflowGateRecord> = {};
     for (const s of order) {
       const c = this.compileStep(def, s, params);
       const context: Record<string, any> = { workflowId: def.id, workflowRunId: runId, stepKey: s.key, ...c.brief };
@@ -230,6 +299,17 @@ export class Workflows {
       if (c.division) context.division = c.division;
       if (c.brain) context.brain = c.brain;
       if (c.tier) context.tier = c.tier;
+      if (c.gate) {
+        context.gate = {
+          reviewer: c.gate.reviewer,
+          maxRounds: c.gate.maxRounds,
+          escalateBrainAt: c.gate.escalateBrainAt,
+          round: 1,
+          status: 'pending',
+          originalDescription: c.description,
+          originalTier: c.tier
+        };
+      }
       const deps = c.dependsOnKeys.map(k => keyToTaskId.get(k)).filter(Boolean) as string[];
       if (deps.length) context.dependsOn = deps;
       const task = this.store.createTask({
@@ -243,9 +323,36 @@ export class Workflows {
       });
       keyToTaskId.set(s.key, task.id);
       tasks.push(task);
+      if (c.gate) {
+        gates[s.key] = {
+          stepKey: s.key,
+          taskId: task.id,
+          reviewer: c.gate.reviewer,
+          maxRounds: c.gate.maxRounds,
+          escalateBrainAt: c.gate.escalateBrainAt,
+          currentRound: 1,
+          status: 'pending',
+          rounds: []
+        };
+      }
+    }
+    if (Object.keys(gates).length > 0) {
+      const now = new Date().toISOString();
+      this.saveRecord({
+        runId,
+        workflowId: def.id,
+        mode: 'dag',
+        params,
+        status: 'running',
+        history: [],
+        gates,
+        rulings: [],
+        createdAt: now,
+        updatedAt: now
+      });
     }
     console.log(`Workflows: expanded "${def.id}" → run ${runId} (${tasks.length} tasks)`);
-    return { runId, workflowId: def.id, mode: 'dag', dryRun: false, steps: order.map(s => ({ key: s.key })), tasks };
+    return { runId, workflowId: def.id, mode: 'dag', dryRun: false, steps: order.map(s => ({ key: s.key, ...(s.gate ? { gate: { reviewer: s.gate.reviewer, maxRounds: s.gate.maxRounds ?? 3, escalateBrainAt: s.gate.escalateBrainAt ?? 2 } } : {}) })), tasks };
   }
 
   // ── Orchestrated (adaptive) runs ──────────────────────────────────────────
@@ -298,11 +405,16 @@ export class Workflows {
    */
   runsAwaitingDecision(): WorkflowRunRecord[] {
     return this.listRecords().filter(rec => {
-      if (rec.status !== 'running') return false;
+      if (rec.mode !== 'orchestrated' || rec.status !== 'running') return false;
       const openTaskIds = rec.history.map(h => h.taskId).filter(Boolean) as string[];
       return openTaskIds.every(id => {
         const t = this.store.getTask(id);
-        return !t || t.status === 'done' || t.status === 'rejected';
+        if (!t) return true;
+        if (t.status === 'rejected') return true;
+        if (t.status !== 'done') return false;
+        const gate = t.context?.gate as { status?: string } | undefined;
+        if (gate && gate.status !== 'approved' && gate.status !== 'ruled') return false;
+        return true;
       });
     });
   }
@@ -361,6 +473,17 @@ export class Workflows {
     if (c.division) context.division = c.division;
     if (c.brain) context.brain = c.brain;
     if (c.tier) context.tier = c.tier;
+    if (c.gate) {
+      context.gate = {
+        reviewer: c.gate.reviewer,
+        maxRounds: c.gate.maxRounds,
+        escalateBrainAt: c.gate.escalateBrainAt,
+        round: 1,
+        status: 'pending',
+        originalDescription: c.description,
+        originalTier: c.tier
+      };
+    }
     // Wire deps to the tasks that already ran those steps (only completed ones).
     const doneByKey = new Map(record.history.filter(h => h.stepKey && h.taskId).map(h => [h.stepKey!, h.taskId!]));
     const deps = (step.dependsOn || []).map(k => doneByKey.get(k)).filter(Boolean) as string[];
@@ -375,6 +498,19 @@ export class Workflows {
       context,
       tags: ['workflow', def.id, 'orchestrated']
     });
+    if (c.gate) {
+      record.gates = record.gates || {};
+      record.gates[step.key] = {
+        stepKey: step.key,
+        taskId: task.id,
+        reviewer: c.gate.reviewer,
+        maxRounds: c.gate.maxRounds,
+        escalateBrainAt: c.gate.escalateBrainAt,
+        currentRound: 1,
+        status: 'pending',
+        rounds: []
+      };
+    }
     record.history.push({ stepKey: step.key, reason: choice.reason, taskId: task.id, decidedAt: at });
     this.saveRecord(record);
     console.log(`Workflows: orchestrated run ${runId} → step "${step.key}" (task ${task.id})`);
@@ -383,7 +519,7 @@ export class Workflows {
 
   /** All runs currently on disk, newest first. Orchestrated runs come from their
    *  persisted records (goal + decision log); DAG runs are reconstructed from
-   *  task context. A runId with a record is always rendered as orchestrated. */
+   *  task context (plus any persisted gate record). */
   listRuns(): WorkflowRun[] {
     const records = new Map(this.listRecords().map(r => [r.runId, r]));
     const byRun = new Map<string, Task[]>();
@@ -396,7 +532,7 @@ export class Workflows {
       runs.push(this.runFromRecord(rec, byRun.get(runId) || []));
     }
     for (const [runId, tasks] of byRun) {
-      if (records.has(runId)) continue;   // already emitted as an orchestrated run
+      if (records.has(runId)) continue;   // already emitted from its run record
       tasks.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
       runs.push(this.runFromTasks(runId, tasks));
     }
@@ -435,10 +571,16 @@ export class Workflows {
     console.log(`Workflows: deleted all runs (${tasks.length} tasks removed)`);
   }
 
+  private deriveDagStatus(tasks: Task[], rec?: WorkflowRunRecord): WorkflowRun['status'] {
+    if (rec?.status === 'wait-input' || tasks.some(t => t.status === 'wait-input')) return 'wait-input';
+    if (rec?.status === 'failed' || tasks.some(t => t.status === 'rejected' || isFailedTask(t))) return 'failed';
+    const gatesReady = !rec?.gates || Object.values(rec.gates).every(g => g.status === 'approved' || g.status === 'ruled');
+    const allDone = tasks.length > 0 && tasks.every(t => t.status === 'done') && gatesReady;
+    return allDone ? 'done' : 'running';
+  }
+
   private runFromTasks(runId: string, tasks: Task[]): WorkflowRun {
-    const failed = tasks.some(t => t.status === 'rejected');
-    const allDone = tasks.every(t => t.status === 'done');
-    const status: WorkflowRun['status'] = failed ? 'failed' : allDone ? 'done' : 'running';
+    const status = this.deriveDagStatus(tasks);
     return {
       runId,
       workflowId: String(tasks[0]?.context?.workflowId || '?'),
@@ -449,10 +591,22 @@ export class Workflows {
     };
   }
 
-  /** Build the UI run view for an orchestrated run: the record's own status +
-   *  goal + decision history, ordered by the run's own tasks. */
+  /** Build the UI run view for a persisted run record (orchestrated or gated DAG). */
   private runFromRecord(rec: WorkflowRunRecord, tasks: Task[]): WorkflowRun {
     tasks.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+    if (rec.mode === 'dag') {
+      const status = this.deriveDagStatus(tasks, rec);
+      return {
+        runId: rec.runId,
+        workflowId: rec.workflowId,
+        createdAt: rec.createdAt,
+        tasks,
+        status,
+        mode: 'dag',
+        ...(rec.gates ? { gates: rec.gates } : {}),
+        ...(rec.rulings && rec.rulings.length ? { rulings: rec.rulings } : {})
+      };
+    }
     return {
       runId: rec.runId,
       workflowId: rec.workflowId,
@@ -461,8 +615,631 @@ export class Workflows {
       status: rec.status,
       mode: 'orchestrated',
       goal: rec.goal,
-      history: rec.history
+      history: rec.history,
+      ...(rec.gates ? { gates: rec.gates } : {}),
+      ...(rec.rulings && rec.rulings.length ? { rulings: rec.rulings } : {})
     };
+  }
+
+  // ── Review→fix gate primitive (P1-2) ──────────────────────────────────────
+
+  /**
+   * Event-driven review→fix gate handler. Called whenever any inbox task finishes
+   * (`taskCompleted` event from Store). Idempotent so duplicate deliveries or
+   * direct calls from tests / Dispatcher are safe.
+   *
+   * Handles two task shapes:
+   *  1. A gated workflow step (`task.context.gate` present, not a review task):
+   *     spawns a review task assigned to `gate.reviewer` on the `review` tier
+   *     (cross-family judge per P1-1) with a brief built from the step's
+   *     `acceptance` + `result` + `artifacts` (and scoped to prior findings on
+   *     round > 1).
+   *  2. A gate review task (`task.context.gateReviewFor` present):
+   *     parses the reviewer's output using P1-1's `parseSpecVerdict`.
+   *     - `APPROVED` (or `UNVERIFIABLE` crash fail-open): marks the gate approved,
+   *       records the round in `workflow-runs/<runId>.json`, unblocking dependents.
+   *     - `CHANGES_REQUESTED` with `round < maxRounds`: increments round, attaches
+   *       findings + scoped re-review instructions to the gated step, escalates the
+   *       gated step to `tier: 'judgment'` when `nextRound >= escalateBrainAt`, and
+   *       re-queues the gated step (`status = 'pending'`).
+   *     - `CHANGES_REQUESTED` at cap (`round >= maxRounds`):
+   *       - if any finding is marked `BLOCKER`, parks the gated step and run on
+   *         `wait-input`;
+   *       - otherwise records residual non-blocker findings as `RULING` lines on
+   *         the task and run record (`gate.status = 'ruled'`) and lets the run
+   *         continue.
+   */
+  onTaskCompleted(task: Task): void {
+    if (!task || !task.context) return;
+    if (typeof task.context.gateReviewFor === 'string') {
+      this.handleGateReviewCompleted(task);
+      return;
+    }
+    if (task.context.gate && typeof task.context.gate === 'object') {
+      this.handleGatedStepCompleted(task);
+    }
+  }
+
+  /** Collect artifacts for a completed gated step (from disk if available, else task.artifacts). */
+  private collectStepArtifacts(stepTask: Task): VerifierArtifact[] {
+    const seen = new Map<string, number>();
+    const artRoot = this.config.paths?.artifacts;
+    if (artRoot && stepTask.id) {
+      const dir = path.join(artRoot, stepTask.id);
+      try {
+        if (fs.existsSync(dir)) {
+          for (const f of fs.readdirSync(dir)) {
+            if (f === 'progress.log' || f === 'result.md') continue;
+            const st = fs.statSync(path.join(dir, f));
+            if (st.isFile()) seen.set(f, st.size);
+          }
+        }
+      } catch { /* ignore */ }
+    }
+    for (const f of (stepTask as any).artifacts || []) {
+      if (typeof f === 'string' && f !== 'progress.log' && f !== 'result.md' && !seen.has(f)) {
+        seen.set(f, 0);
+      }
+    }
+    return Array.from(seen.entries()).map(([name, size]) => ({ name, size }));
+  }
+
+  /** Ensure a `WorkflowRunRecord` exists for `runId` so gate rounds and verdicts are persisted in `workflow-runs/<runId>.json`. */
+  private ensureRunRecord(stepTask: Task): WorkflowRunRecord {
+    const runId = String(stepTask.context?.workflowRunId || `run-${stepTask.id.slice(0, 8)}`);
+    const workflowId = String(stepTask.context?.workflowId || 'custom');
+    const existing = this.loadRecord(runId);
+    if (existing) {
+      existing.gates = existing.gates || {};
+      existing.rulings = existing.rulings || [];
+      return existing;
+    }
+    const now = new Date().toISOString();
+    const rec: WorkflowRunRecord = {
+      runId,
+      workflowId,
+      mode: stepTask.context?.orchestrated ? 'orchestrated' : 'dag',
+      params: {},
+      status: 'running',
+      history: [],
+      gates: {},
+      rulings: [],
+      createdAt: stepTask.createdAt || now,
+      updatedAt: now
+    };
+    return rec;
+  }
+
+  /** Resolve the cross-family judge brain and family for a completed gated step per P1-1. */
+  private selectGateJudge(executorBrainId: string): { judgeFamily: string; judgeBrain?: string; judgeChain: string[] } {
+    const orch = this.config.orchestration || ({} as Config['orchestration']);
+    const brains = orch.brains || {};
+    const execFam = brainFamily(brains[executorBrainId], executorBrainId);
+    // P1-1 mapping: claude -> gemini, gemini -> claude, qwen/other -> claude
+    const judgeFamily = execFam === 'claude' ? 'gemini' : 'claude';
+    const configuredJudges = orch.verifier?.spec?.judges
+      ? { ...DEFAULT_SPEC_JUDGES, ...orch.verifier.spec.judges }
+      : DEFAULT_SPEC_JUDGES;
+    const specChain = selectSpecJudges(executorBrainId, { judges: configuredJudges, brains });
+    const tierRev = executorBrainId ? reviewChain(executorBrainId, orch.tiers, brains) : [];
+    const merged: string[] = [];
+    const seen = new Set<string>();
+    for (const id of [...specChain, ...tierRev]) {
+      if (id && !seen.has(id) && !brains[id]?.disabled) {
+        seen.add(id);
+        merged.push(id);
+      }
+    }
+    return { judgeFamily, judgeBrain: merged[0], judgeChain: merged };
+  }
+
+  /** Build the prompt/description for a gate review task. */
+  private buildGateReviewBrief(
+    stepTask: Task,
+    round: number,
+    maxRounds: number,
+    priorFindings: string[],
+    artifacts: VerifierArtifact[]
+  ): string {
+    const acceptance = Array.isArray(stepTask.context?.acceptance)
+      ? (stepTask.context!.acceptance as string[]).map(s => String(s || '').trim()).filter(Boolean)
+      : [];
+    const criteria = acceptance.length > 0
+      ? acceptance
+      : [`Deliverable satisfies step "${stepTask.title}" without blockers`];
+    const resultText = stepTask.result || '';
+    const evidenceBlock = extractEvidenceBlock(resultText);
+
+    const basePrompt = buildVerifierPrompt(
+      {
+        title: stepTask.title,
+        description: String(stepTask.context?.gate?.originalDescription || stepTask.description || ''),
+        acceptance: criteria,
+      },
+      resultText,
+      { acceptance: criteria, artifacts, evidence: evidenceBlock }
+    );
+
+    const lines: string[] = [
+      `# Workflow Review Gate — Round ${round}/${maxRounds} for step "${stepTask.context?.stepKey || stepTask.title}"`,
+      ``
+    ];
+    if (round > 1 && priorFindings.length > 0) {
+      lines.push(
+        `## Scoped Re-Review (Round ${round} of ${maxRounds})`,
+        `Previous review round (${round - 1}) returned \`CHANGES_REQUESTED\` with the following findings:`,
+        ...priorFindings.map((f, i) => `${i + 1}. ${f}`),
+        ``,
+        `Verify specifically whether each prior finding above has been resolved in the updated result and artifacts, and check that no new regressions or blockers were introduced.`,
+        ``
+      );
+    }
+    lines.push(
+      `## Severity Tagging for Findings`,
+      `If you return \`"verdict": "CHANGES_REQUESTED"\`, prefix any critical, ship-stopping criterion reason with \`BLOCKER:\` (for example: \`"reason": "BLOCKER: missing migration breaks startup"\`). Non-blocker findings should state the concrete fix without the \`BLOCKER:\` prefix.`,
+      ``,
+      basePrompt
+    );
+    return lines.join('\n');
+  }
+
+  private handleGatedStepCompleted(stepTask: Task): void {
+    const fresh = this.store.getTask(stepTask.id) || stepTask;
+    if (fresh.status !== 'done' || isFailedTask(fresh)) return;
+    const gateCtx = fresh.context?.gate as Record<string, any> | undefined;
+    if (!gateCtx || typeof gateCtx !== 'object') return;
+    // Idempotency: only spawn a review task when the gate is waiting to review this round.
+    if (gateCtx.status === 'reviewing' || gateCtx.status === 'approved' || gateCtx.status === 'ruled' || gateCtx.status === 'wait-input') {
+      return;
+    }
+
+    const stepKey = String(fresh.context?.stepKey || fresh.title || fresh.id);
+    const runId = String(fresh.context?.workflowRunId || `run-${fresh.id.slice(0, 8)}`);
+    const workflowId = String(fresh.context?.workflowId || 'custom');
+    const reviewer = String(gateCtx.reviewer || 'code-reviewer').trim();
+    const maxRounds = Number(gateCtx.maxRounds) || 3;
+    const escalateBrainAt = Number(gateCtx.escalateBrainAt) || 2;
+    const round = Number(gateCtx.round) || 1;
+    const priorFindings = Array.isArray(fresh.context?.gateFindings) ? (fresh.context!.gateFindings as string[]) : [];
+    const executorBrainId = String(fresh.context?.ranBrain || fresh.context?.brain || '');
+    const { judgeFamily, judgeBrain } = this.selectGateJudge(executorBrainId);
+    const artifacts = this.collectStepArtifacts(fresh);
+    const reviewDescription = this.buildGateReviewBrief(fresh, round, maxRounds, priorFindings, artifacts);
+
+    const reviewContext: Record<string, any> = {
+      workflowId,
+      workflowRunId: runId,
+      stepKey: `${stepKey}:review:${round}`,
+      gateReviewFor: fresh.id,
+      gateStepKey: stepKey,
+      gateRound: round,
+      gateMaxRounds: maxRounds,
+      agent: reviewer,
+      tier: 'review',
+      ...(executorBrainId ? { reviewOf: executorBrainId } : {}),
+      judgeFamily,
+      ...(judgeBrain ? { judgeBrain } : {}),
+      dependsOn: [fresh.id]
+    };
+
+    const reviewTask = this.store.createTask({
+      title: `Review (${round}/${maxRounds}): ${fresh.title}`,
+      description: reviewDescription,
+      from: { platform: 'cowork', agent: 'workflow-gate' },
+      to: {},
+      priority: fresh.priority || 'normal',
+      context: reviewContext,
+      tags: ['workflow', workflowId, 'gate-review']
+    });
+
+    fresh.context = {
+      ...(fresh.context || {}),
+      gate: {
+        ...gateCtx,
+        reviewer,
+        maxRounds,
+        escalateBrainAt,
+        round,
+        status: 'reviewing',
+        activeReviewTaskId: reviewTask.id,
+        judgeFamily,
+        ...(judgeBrain ? { judgeBrain } : {})
+      }
+    };
+    this.store.saveTask(fresh);
+
+    const rec = this.ensureRunRecord(fresh);
+    const gateRec: WorkflowGateRecord = rec.gates![stepKey] || {
+      stepKey,
+      taskId: fresh.id,
+      reviewer,
+      maxRounds,
+      escalateBrainAt,
+      currentRound: round,
+      status: 'reviewing',
+      rounds: []
+    };
+    gateRec.taskId = fresh.id;
+    gateRec.currentRound = round;
+    gateRec.status = 'reviewing';
+    rec.gates![stepKey] = gateRec;
+    this.saveRecord(rec);
+    console.log(`Workflows: gate review spawned for step "${stepKey}" round ${round}/${maxRounds} → task ${reviewTask.id} (reviewer=${reviewer}, judgeFamily=${judgeFamily})`);
+  }
+
+  /** Inspect a `CHANGES_REQUESTED` verdict and raw reviewer text for any `BLOCKER` finding. */
+  private extractGateFindings(verdict: ParsedSpecVerdict, rawText: string): { findings: string[]; blockers: string[] } {
+    const findings: string[] = [];
+    const blockers: string[] = [];
+    const isBlockerReason = (text: string): boolean => {
+      if (!text) return false;
+      // Ignore explicit negations like "no blockers", "0 blockers", "non-blocker", "without blockers", "blocker: none".
+      const cleaned = text
+        .replace(/\bno\s+blockers?\b/gi, '')
+        .replace(/\b0\s+blockers?\b/gi, '')
+        .replace(/\bnon[-\s]?blockers?\b/gi, '')
+        .replace(/\bwithout\s+(?:any\s+)?blockers?\b/gi, '')
+        .replace(/\bblockers?\s*:\s*(?:none|0|n\/a|nil)\b/gi, '');
+      return /\bBLOCKERS?\b/i.test(cleaned);
+    };
+
+    for (const c of verdict.criteria) {
+      if (c.status === 'PASS') continue;
+      const formatted = c.reason ? `${c.criterion} — ${c.reason}` : c.criterion;
+      findings.push(formatted);
+      // Inspect the reviewer's reason (not the static acceptance criterion text, which may mention the word "blocker").
+      if (isBlockerReason(c.reason || '')) {
+        blockers.push(formatted);
+      }
+    }
+
+    // Also scan raw reviewer lines for explicit `BLOCKER:` or `[BLOCKER]` markers outside criteria reasons.
+    for (const rawLine of (rawText || '').split('\n')) {
+      const line = rawLine.trim();
+      if (!line) continue;
+      if (/^(?:[-*•]\s*)?(?:\[BLOCKER\]|BLOCKER\s*:)/i.test(line) && isBlockerReason(line)) {
+        if (!blockers.includes(line)) blockers.push(line);
+        if (!findings.includes(line)) findings.push(line);
+      }
+    }
+
+    if (findings.length === 0) {
+      const fallback = (rawText || '').trim().slice(0, 300) || 'Reviewer requested changes without structured criteria.';
+      findings.push(fallback);
+      if (isBlockerReason(fallback)) blockers.push(fallback);
+    }
+
+    return { findings, blockers };
+  }
+
+  /** Pick the first enabled brain in the `judgment` tier for round escalation. */
+  private pickJudgmentBrain(): string | undefined {
+    const orch = this.config.orchestration;
+    const brains = orch?.brains || {};
+    for (const id of orch?.tiers?.judgment || []) {
+      if (id && !brains[id]?.disabled) return id;
+    }
+    return undefined;
+  }
+
+  private handleGateReviewCompleted(reviewTask: Task): void {
+    const freshReview = this.store.getTask(reviewTask.id) || reviewTask;
+    if (freshReview.status !== 'done') return;
+
+    const gatedTaskId = String(freshReview.context?.gateReviewFor || '');
+    if (!gatedTaskId) return;
+    const stepTask = this.store.getTask(gatedTaskId);
+    if (!stepTask) return;
+
+    const gateCtx = (stepTask.context?.gate || {}) as Record<string, any>;
+    // Idempotency: ignore if this review task was already processed.
+    if (gateCtx.lastProcessedReviewTaskId === freshReview.id) return;
+    if (gateCtx.activeReviewTaskId && gateCtx.activeReviewTaskId !== freshReview.id) return;
+
+    const stepKey = String(stepTask.context?.stepKey || freshReview.context?.gateStepKey || stepTask.title || stepTask.id);
+    const round = Number(freshReview.context?.gateRound || gateCtx.round) || 1;
+    const maxRounds = Number(gateCtx.maxRounds || freshReview.context?.gateMaxRounds) || 3;
+    const escalateBrainAt = Number(gateCtx.escalateBrainAt) || 2;
+    const reviewer = String(gateCtx.reviewer || freshReview.context?.agent || 'code-reviewer');
+    const executorBrain = String(stepTask.context?.ranBrain || stepTask.context?.brain || '');
+    const reviewerBrain = String(freshReview.context?.ranBrain || freshReview.context?.brain || freshReview.context?.judgeBrain || '');
+    const judgeFamily = String(freshReview.context?.judgeFamily || gateCtx.judgeFamily || '');
+
+    const rawText = freshReview.result || '';
+    const reviewerFailed = isFailedTask(freshReview);
+    const acceptance = Array.isArray(stepTask.context?.acceptance)
+      ? (stepTask.context!.acceptance as string[]).map(s => String(s || '').trim()).filter(Boolean)
+      : [];
+    const parsed: ParsedSpecVerdict = reviewerFailed
+      ? {
+          verdict: 'UNVERIFIABLE',
+          ok: true,
+          criteria: acceptance.map(c => ({ criterion: c, status: 'UNVERIFIABLE', reason: 'review task failed or exhausted its brain chain (fail-open)' })),
+          failedCriteria: [],
+          summary: 'UNVERIFIABLE — review task failed or exhausted its brain chain (fail-open)',
+          crashed: true,
+        }
+      : parseSpecVerdict(rawText, acceptance);
+
+    const rec = this.ensureRunRecord(stepTask);
+    const gateRec: WorkflowGateRecord = rec.gates![stepKey] || {
+      stepKey,
+      taskId: stepTask.id,
+      reviewer,
+      maxRounds,
+      escalateBrainAt,
+      currentRound: round,
+      status: 'reviewing',
+      rounds: []
+    };
+    // Guard against duplicate round entries in the persisted record.
+    if (gateRec.rounds.some(r => r.reviewTaskId === freshReview.id)) return;
+
+    const now = new Date().toISOString();
+
+    // Case 1: APPROVED (or UNVERIFIABLE fail-open on reviewer crash)
+    if (parsed.ok) {
+      const roundRec: WorkflowGateRoundRecord = {
+        round,
+        taskId: stepTask.id,
+        reviewTaskId: freshReview.id,
+        reviewer,
+        ...(reviewerBrain ? { reviewerBrain } : {}),
+        ...(reviewerBrain ? { judgeBrain: reviewerBrain } : {}),
+        ...(judgeFamily ? { judgeFamily } : {}),
+        ...(executorBrain ? { executorBrain } : {}),
+        verdict: parsed.verdict,
+        criteria: parsed.criteria,
+        failedCriteria: [],
+        findings: [],
+        summary: parsed.summary,
+        escalated: !!stepTask.context?.escalated,
+        action: 'approved',
+        at: now
+      };
+      gateRec.rounds.push(roundRec);
+      gateRec.currentRound = round;
+      gateRec.status = 'approved';
+      rec.gates![stepKey] = gateRec;
+
+      stepTask.context = {
+        ...(stepTask.context || {}),
+        specVerdict: {
+          verdict: parsed.verdict,
+          judgeBrain: reviewerBrain || reviewer,
+          judgeFamily,
+          executorBrain,
+          criteria: parsed.criteria,
+          failedCriteria: [],
+          at: now
+        },
+        gate: {
+          ...gateCtx,
+          round,
+          status: 'approved',
+          lastProcessedReviewTaskId: freshReview.id,
+          lastVerdict: parsed.verdict,
+          decidedAt: now
+        }
+      };
+      this.store.saveTask(stepTask);
+      this.saveRecord(rec);
+      console.log(`Workflows: gate APPROVED for step "${stepKey}" in round ${round}/${maxRounds}`);
+      return;
+    }
+
+    // CHANGES_REQUESTED
+    const { findings, blockers } = this.extractGateFindings(parsed, rawText);
+
+    // Case 2: Under the round cap (`round < maxRounds`) → re-queue gated step for a fix round.
+    if (round < maxRounds) {
+      const nextRound = round + 1;
+      const shouldEscalate = nextRound >= escalateBrainAt;
+      const escalatedBrain = shouldEscalate ? this.pickJudgmentBrain() : undefined;
+
+      const roundRec: WorkflowGateRoundRecord = {
+        round,
+        taskId: stepTask.id,
+        reviewTaskId: freshReview.id,
+        reviewer,
+        ...(reviewerBrain ? { reviewerBrain } : {}),
+        ...(reviewerBrain ? { judgeBrain: reviewerBrain } : {}),
+        ...(judgeFamily ? { judgeFamily } : {}),
+        ...(executorBrain ? { executorBrain } : {}),
+        verdict: 'CHANGES_REQUESTED',
+        criteria: parsed.criteria,
+        failedCriteria: parsed.failedCriteria,
+        findings,
+        summary: parsed.summary,
+        ...(blockers.length ? { blockerFindings: blockers } : {}),
+        escalated: shouldEscalate,
+        action: 'requeue',
+        at: now
+      };
+      gateRec.rounds.push(roundRec);
+      gateRec.currentRound = nextRound;
+      gateRec.status = 'fixing';
+      if (shouldEscalate && !gateRec.escalatedAtRound) {
+        gateRec.escalatedAtRound = nextRound;
+        if (escalatedBrain) gateRec.escalatedBrain = escalatedBrain;
+      }
+      rec.gates![stepKey] = gateRec;
+
+      const baseDescription = String(gateCtx.originalDescription || stepTask.description || '');
+      const fixSection = [
+        ``,
+        `# Review Gate Findings (Round ${round}/${maxRounds} → Fix Round ${nextRound}/${maxRounds})`,
+        `The reviewer (${reviewer}) returned \`CHANGES_REQUESTED\`. Address every finding below and update the artifacts/deliverable so the scoped re-review passes:`,
+        ...findings.map((f, i) => `${i + 1}. ${f}`),
+        ``,
+        `Focus on fixing the findings above without breaking already-passing acceptance criteria.`
+      ].join('\n');
+
+      stepTask.description = `${baseDescription}\n${fixSection}`;
+      stepTask.status = 'pending';
+      delete stepTask.claimedAt;
+      delete stepTask.claimedBy;
+      delete stepTask.completedAt;
+
+      const nextContext: Record<string, any> = {
+        ...(stepTask.context || {}),
+        attempts: 0,
+        dispatched: false,
+        remoteWaitSince: undefined,
+        brainAuto: undefined,
+        gateFindings: findings,
+        specFindings: findings,
+        specVerdict: {
+          verdict: 'CHANGES_REQUESTED',
+          judgeBrain: reviewerBrain || reviewer,
+          judgeFamily,
+          executorBrain,
+          criteria: parsed.criteria,
+          failedCriteria: findings,
+          at: now
+        },
+        gate: {
+          ...gateCtx,
+          round: nextRound,
+          status: 'fixing',
+          lastProcessedReviewTaskId: freshReview.id,
+          lastVerdict: 'CHANGES_REQUESTED',
+          findings,
+          ...(shouldEscalate ? { escalated: true, escalatedAtRound: gateCtx.escalatedAtRound || nextRound } : {})
+        }
+      };
+
+      if (shouldEscalate) {
+        nextContext.tier = 'judgment';
+        nextContext.escalated = true;
+        nextContext.escalatedAtRound = gateCtx.escalatedAtRound || nextRound;
+        if (escalatedBrain) nextContext.escalatedBrain = escalatedBrain;
+        // Clear any auto brain pin so planFor selects from the escalated judgment tier.
+        delete nextContext.brain;
+      }
+
+      stepTask.context = nextContext;
+      this.store.saveTask(stepTask);
+      this.saveRecord(rec);
+      console.log(`Workflows: gate CHANGES_REQUESTED for step "${stepKey}" (round ${round}/${maxRounds}) → re-queued for round ${nextRound}${shouldEscalate ? ' [escalated to judgment tier]' : ''}`);
+      return;
+    }
+
+    // Case 3: Cap reached (`round >= maxRounds`)
+    if (blockers.length > 0) {
+      // Any BLOCKER finding at the cap parks the gated step and run on wait-input.
+      const roundRec: WorkflowGateRoundRecord = {
+        round,
+        taskId: stepTask.id,
+        reviewTaskId: freshReview.id,
+        reviewer,
+        ...(reviewerBrain ? { reviewerBrain } : {}),
+        ...(reviewerBrain ? { judgeBrain: reviewerBrain } : {}),
+        ...(judgeFamily ? { judgeFamily } : {}),
+        ...(executorBrain ? { executorBrain } : {}),
+        verdict: 'CHANGES_REQUESTED',
+        criteria: parsed.criteria,
+        failedCriteria: parsed.failedCriteria,
+        findings,
+        summary: parsed.summary,
+        blockerFindings: blockers,
+        escalated: !!stepTask.context?.escalated,
+        action: 'wait-input',
+        at: now
+      };
+      gateRec.rounds.push(roundRec);
+      gateRec.currentRound = round;
+      gateRec.status = 'wait-input';
+      gateRec.blockerFindings = blockers;
+      rec.gates![stepKey] = gateRec;
+      rec.status = 'wait-input';
+
+      const questions = blockers.map(b => `Gate "${stepKey}" hit maxRounds (${maxRounds}) with unresolved BLOCKER: ${b}. How should we proceed?`);
+      stepTask.context = {
+        ...(stepTask.context || {}),
+        gateFindings: findings,
+        specFindings: findings,
+        gate: {
+          ...gateCtx,
+          round,
+          status: 'wait-input',
+          lastProcessedReviewTaskId: freshReview.id,
+          lastVerdict: 'CHANGES_REQUESTED',
+          findings,
+          blockers,
+          decidedAt: now
+        }
+      };
+      this.store.saveTask(stepTask);
+      if (typeof (this.store as any).parkForInput === 'function') {
+        (this.store as any).parkForInput({
+          taskId: stepTask.id,
+          questions,
+          result: stepTask.result || `Parked on wait-input after ${maxRounds} review rounds due to BLOCKER: ${blockers.join('; ')}`
+        });
+      } else {
+        stepTask.status = 'wait-input';
+        stepTask.context = { ...(stepTask.context || {}), awaitingInput: true, inputQuestions: questions };
+        this.store.saveTask(stepTask);
+      }
+      this.saveRecord(rec);
+      console.log(`Workflows: gate BLOCKER at cap (${round}/${maxRounds}) for step "${stepKey}" → parked on wait-input`);
+      return;
+    }
+
+    // Residual non-blocker findings at cap → record as RULING lines and continue the run.
+    const rulings = findings.map(
+      f => `Accept residual review finding on step "${stepKey}" after ${maxRounds}/${maxRounds} rounds (${f}) — non-blocker finding at gate cap — follow-up cleanup if needed`
+    );
+    const rulingLines = rulings.map(r => `RULING: ${r}`);
+
+    const roundRec: WorkflowGateRoundRecord = {
+      round,
+      taskId: stepTask.id,
+      reviewTaskId: freshReview.id,
+      reviewer,
+      ...(reviewerBrain ? { reviewerBrain } : {}),
+      ...(reviewerBrain ? { judgeBrain: reviewerBrain } : {}),
+      ...(judgeFamily ? { judgeFamily } : {}),
+      ...(executorBrain ? { executorBrain } : {}),
+      verdict: 'CHANGES_REQUESTED',
+      criteria: parsed.criteria,
+      failedCriteria: parsed.failedCriteria,
+      findings,
+      summary: parsed.summary,
+      rulings,
+      escalated: !!stepTask.context?.escalated,
+      action: 'rulings',
+      at: now
+    };
+    gateRec.rounds.push(roundRec);
+    gateRec.currentRound = round;
+    gateRec.status = 'ruled';
+    gateRec.rulings = rulings;
+    rec.gates![stepKey] = gateRec;
+    rec.rulings = [...(rec.rulings || []), ...rulings];
+
+    const existingRulings = Array.isArray(stepTask.context?.rulings) ? (stepTask.context!.rulings as string[]) : [];
+    const mergedRulings = [...existingRulings, ...rulings];
+    stepTask.result = [stepTask.result || '', '', ...rulingLines].join('\n').trim();
+    stepTask.context = {
+      ...(stepTask.context || {}),
+      rulings: mergedRulings,
+      gateFindings: findings,
+      gate: {
+        ...gateCtx,
+        round,
+        status: 'ruled',
+        lastProcessedReviewTaskId: freshReview.id,
+        lastVerdict: 'CHANGES_REQUESTED',
+        findings,
+        rulings,
+        decidedAt: now
+      }
+    };
+    this.store.saveTask(stepTask);
+    this.saveRecord(rec);
+    console.log(`Workflows: gate cap reached (${round}/${maxRounds}) for step "${stepKey}" with ${rulings.length} non-blocker finding(s) → recorded RULINGs and continuing`);
   }
 }
 

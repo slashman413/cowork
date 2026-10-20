@@ -150,7 +150,7 @@ async function main() {
   if (!fs.existsSync(config.paths.workflows)) {
     try { fs.mkdirSync(config.paths.workflows, { recursive: true }); } catch { /* ignore */ }
   }
-  const workflows = new Workflows(config, store);
+  const workflows = new Workflows(config, store, eventBus);
   app.use('/api', createWorkflowRouter(workflows));
 
   // Goals: long-lived, phase-tracked objectives beneath Workflows. State lives in

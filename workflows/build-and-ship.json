@@ -36,7 +36,12 @@
         "git -C <repo path from manifest.md> log --oneline -1  # repo exists"
       ],
       "agent": "orchestrator",
-      "dependsOn": ["architecture"]
+      "dependsOn": ["architecture"],
+      "gate": {
+        "reviewer": "engineering-code-reviewer",
+        "maxRounds": 3,
+        "escalateBrainAt": 2
+      }
     },
     {
       "key": "ci",
@@ -54,7 +59,12 @@
         "python3 -c 'import yaml,sys; [yaml.safe_load(open(f)) for f in sys.argv[1:]]' <repo>/.github/workflows/*.yml  # parses"
       ],
       "agent": "engineering-devops-automator",
-      "dependsOn": ["build"]
+      "dependsOn": ["build"],
+      "gate": {
+        "reviewer": "engineering-code-reviewer",
+        "maxRounds": 3,
+        "escalateBrainAt": 2
+      }
     },
     {
       "key": "review",
@@ -70,6 +80,7 @@
         "every file path cited in review.md exists in the repo (ls <path>)"
       ],
       "agent": "engineering-code-reviewer",
+      "tier": "judgment",
       "dependsOn": ["build", "ci"]
     },
     {
@@ -89,6 +100,23 @@
       ],
       "agent": "engineering-git-workflow-master",
       "dependsOn": ["review"]
+    },
+    {
+      "key": "final-review",
+      "title": "Final whole-run audit against the spec",
+      "description": "Perform the final whole-run audit of the shipped product against the original spec (\"{{spec}}\"), architecture plan, code review, and release notes. Verify end-to-end spec compliance, confirm all review gate findings and rulings were properly resolved or documented, and write final-review.md with the ship verdict.",
+      "acceptance": [
+        "final-review.md is saved in the artifacts dir with a criterion-by-criterion audit against the spec and architecture",
+        "All prior review findings and any gate rulings are accounted for with commit SHA or artifact references",
+        "A final ship verdict (APPROVED or BLOCKED) is stated with supporting CI and repository evidence"
+      ],
+      "verify": [
+        "test -s final-review.md && grep -ciE 'APPROVED|BLOCKED' final-review.md",
+        "grep -ciE 'spec|architecture|ci' final-review.md"
+      ],
+      "agent": "engineering-code-reviewer",
+      "tier": "judgment",
+      "dependsOn": ["push-verify"]
     }
   ]
 }

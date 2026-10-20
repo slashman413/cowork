@@ -6,7 +6,7 @@ import type { EventBus } from './events.js';
 import type { Store, CompletionDecision } from './store.js';
 import type { Workflows } from './workflows.js';
 import type { Goals } from './goals.js';
-import { verifyOutput, buildVerifierPrompt, parseLlmVerdict, parseSpecVerdict, selectSpecJudges, extractEvidenceBlock, detectInputRequest, detectBackgroundWait, isRateLimitFailure, parseStatusFooter, type StatusFooter, type VerifyVerdict, type VerifierArtifact, type SpecVerdictRecord, type InputOptions, type InputRequest, type BackgroundOptions, type BackgroundWait } from './result-verifier.js';
+import { verifyOutput, buildVerifierPrompt, parseLlmVerdict, parseSpecVerdict, selectSpecJudges, DEFAULT_SPEC_JUDGES, extractEvidenceBlock, detectInputRequest, detectBackgroundWait, isRateLimitFailure, parseStatusFooter, type StatusFooter, type VerifyVerdict, type VerifierArtifact, type SpecVerdictRecord, type InputOptions, type InputRequest, type BackgroundOptions, type BackgroundWait } from './result-verifier.js';
 import { buildLesson, appendLesson } from './lessons.js';
 import { BRIEF_KEYS, parseBrief, renderBriefSections } from './brief.js';
 import { taskTier, mergeTierChain, reviewChain, type TierName } from './tiers.js';
@@ -218,16 +218,26 @@ export class Dispatcher {
     const orch = this.config.orchestration;
     const brains = orch.brains || {};
     let raw: string[];
-    if (this.isSpecial(agent)) raw = orch.agents[agent].brains || [];
-    else {
+    const tier = taskTier(ctx);
+    if (this.isSpecial(agent)) {
+      raw = orch.agents[agent].brains || [];
+      // P1-2: when a gated workflow step escalates to `judgment` tier at round >= escalateBrainAt,
+      // prepend the judgment tier brains even for special agents (e.g. orchestrator).
+      if (ctx?.escalated && tier === 'judgment') {
+        raw = mergeTierChain(this.tierList('judgment', ctx), raw);
+      }
+    } else {
       // A roster agent's own override wins over its division and the global default.
       const own = orch.agentChains && orch.agentChains[agent];
-      if (own && own.length) raw = own;
-      else {
+      if (own && own.length) {
+        raw = own;
+        if (ctx?.escalated && tier === 'judgment') {
+          raw = mergeTierChain(this.tierList('judgment', ctx), raw);
+        }
+      } else {
         const div = division || '';
         raw = (orch.divisionChains && orch.divisionChains[div]) || orch.defaultChain || [];
         // P1-4: a tier-tagged task tries its tier's brains first, then the normal chain.
-        const tier = taskTier(ctx);
         if (tier) raw = mergeTierChain(this.tierList(tier, ctx), raw);
       }
     }
@@ -241,7 +251,15 @@ export class Dispatcher {
     const orch = this.config.orchestration;
     if (tier === 'review') {
       const of = typeof ctx?.reviewOf === 'string' ? canonicalBrainId(this.config, ctx.reviewOf) : '';
-      return of ? reviewChain(of, orch.tiers, orch.brains || {}) : (orch.tiers?.judgment || []);
+      if (of) {
+        const fromTiers = reviewChain(of, orch.tiers, orch.brains || {});
+        const judges = orch.verifier?.spec?.judges
+          ? { ...DEFAULT_SPEC_JUDGES, ...orch.verifier.spec.judges }
+          : DEFAULT_SPEC_JUDGES;
+        const fromJudges = selectSpecJudges(of, { judges, brains: orch.brains || {} });
+        return mergeTierChain(fromTiers, fromJudges);
+      }
+      return orch.tiers?.judgment || [];
     }
     return orch.tiers?.[tier] || [];
   }
@@ -1379,13 +1397,24 @@ export class Dispatcher {
 
   /**
    * `context.dependsOn: ["<task-id>", …]` gates dispatch until every listed
-   * task is done. The dependent task's prompt gets the dependencies' results
-   * appended, so an integrator subtask actually sees its inputs.
+   * task is done. For gated workflow steps (P1-2), downstream steps also wait
+   * until the step's review→fix gate reaches `approved` or `ruled` (while the
+   * gate's own review task `context.gateReviewFor === id` is allowed to run
+   * immediately once the step itself finishes).
    */
   private depsSatisfied(task: Task): boolean {
     const deps = task.context?.dependsOn;
     if (!Array.isArray(deps) || deps.length === 0) return true;
-    return deps.every((id: string) => this.store.getTask(id)?.status === 'done');
+    return deps.every((id: string) => {
+      const dep = this.store.getTask(id);
+      if (!dep || dep.status !== 'done') return false;
+      if (task.context?.gateReviewFor === id) return true;
+      const gate = dep.context?.gate as { status?: string } | undefined;
+      if (gate && typeof gate === 'object') {
+        return gate.status === 'approved' || gate.status === 'ruled';
+      }
+      return true;
+    });
   }
 
   /** The operating rules every executing agent must follow (CONVENTIONS.md at the
@@ -1430,7 +1459,7 @@ export class Dispatcher {
     // humanInput as a dedicated "answers" section (below), and the brief fields
     // as their own sections — drop them from the raw context dump so they aren't
     // duplicated or lost as noise in the JSON blob.
-    for (const k of ['persona', 'brainAuto', 'remoteWaitSince', 'dispatched', 'attempts', 'agentName', 'ranAgent', 'ranDivision', 'ranBrain', 'isRoster', 'inputFiles', 'humanInput', 'awaitingInput', 'inputQuestions', 'backgroundWait', 'specVerdict', 'specFindings', ...BRIEF_KEYS]) delete shownCtx[k];
+    for (const k of ['persona', 'brainAuto', 'remoteWaitSince', 'dispatched', 'attempts', 'agentName', 'ranAgent', 'ranDivision', 'ranBrain', 'isRoster', 'inputFiles', 'humanInput', 'awaitingInput', 'inputQuestions', 'backgroundWait', 'specVerdict', 'specFindings', 'gate', 'gateFindings', 'gateReviewFor', 'gateStepKey', 'gateRound', 'gateMaxRounds', 'judgeFamily', 'judgeBrain', 'escalated', 'escalatedAtRound', 'escalatedBrain', ...BRIEF_KEYS]) delete shownCtx[k];
     // The brief contract (P0-3 / P1-3) gets its own sections right under the task text.
     // Default timeboxMin = taskTimeoutMs / 60000 - 5 (e.g. 50 min cap → 45 min timebox).
     const timeoutMs = Number(this.config.orchestration?.taskTimeoutMs) || 3_000_000;
