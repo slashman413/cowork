@@ -377,6 +377,10 @@ export interface OrchestrationConfig {
   tiers?: Record<string, string[]>;
   /** Brief sharpener at intake (PS-1): pre-pass on a cheap brain to generate acceptance criteria. */
   sharpener?: SharpenerConfig;
+  /** PS-7: at goal phase close, a different-family brain reviews the phase's
+   *  decisions.tsv and writes an Attention section into the phase report.
+   *  Default ON; `false` turns the review task off (the trail is always kept). */
+  goalAttention?: boolean;
 }
 
 /** Config for {@link OrchestrationConfig.sharpener} (PS-1). */
@@ -938,6 +942,13 @@ export interface GoalPhase {
   judgerTaskId?: string;
   /** Pointer into the Judger task's artifacts dir, "<taskId>/report-<key>.md". */
   reportArtifact?: string;
+  /** PS-7: the cross-family Attention review of this phase's decision trail. */
+  attentionTaskId?: string;
+  /** "<taskId>/attention-<key>.md" once the review finished. */
+  attentionArtifact?: string;
+  /** The review's "## Attention" section, kept so it can be merged into the
+   *  report whichever of Judger / Attention finishes last. */
+  attention?: string;
 }
 
 /** One row of a goal's audit trail — every autonomous move is recorded so the

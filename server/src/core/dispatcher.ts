@@ -7,6 +7,7 @@ import type { Store, CompletionDecision } from './store.js';
 import { isFailedTask } from './store.js';
 import type { Workflows } from './workflows.js';
 import type { Goals } from './goals.js';
+import { FIGURE_IT_OUT_RULES } from './goals.js';
 import { verifyOutput, buildVerifierPrompt, parseLlmVerdict, parseSpecVerdict, selectSpecJudges, DEFAULT_SPEC_JUDGES, extractEvidenceBlock, detectInputRequest, detectBackgroundWait, unaccountedFailedDeps, isRateLimitFailure, parseStatusFooter, type StatusFooter, type VerifyVerdict, type VerifierArtifact, type SpecVerdictRecord, type InputOptions, type InputRequest, type BackgroundOptions, type BackgroundWait } from './result-verifier.js';
 import { buildLesson, appendLesson, type LessonPanel } from './lessons.js';
 import { buildPanelReviewerPrompt, buildLeadJudgmentPrompt, parseLeadJudgment } from './review-panel.js';
@@ -1163,6 +1164,8 @@ export class Dispatcher {
       `// OR`,
       `{ "kind": "block", "reason": "the concrete obstacle you cannot clear yourself", "unblockCriteria": "the specific, checkable condition that must hold to resume" }`,
       '```',
+      FIGURE_IT_OUT_RULES,
+      '',
       `Rules: answer evaluate{met:true} ONLY when the criteria are genuinely met (this ENDS the goal). Emit the current phase's real work as a small batch — the last task automatically completes the phase and triggers the Judger. Do not repeat completed work. If no phase is workable, plan one.`,
       '',
       `EXECUTE, don't just describe: producing a PLAN, ANALYSIS, STRATEGY, REPORT, or SUMMARY is NOT achieving the goal — it is at most the setup for the task that does. When the goal is to build / ship / optimize / automate / grow something, it is met ONLY once that work has actually been CARRIED OUT and then VERIFIED — by a test, a review, or a real check that actually ran and passed (a live URL that loads, a green run, a dated snapshot read from the real source). So the tasks you emit must be the real work itself ("build X", "change Y", "run Z", "deploy", "publish"), and every batch of execution must be followed — this phase or the next — by a concrete verification/test/review task that proves it works. NEVER emit only planning or reporting tasks, and NEVER answer evaluate{met:true} while any build, execution, integration, or verification step is still unrun. If the only thing that has happened so far is that plans and reports were written, the goal is NOT met — emit the execution work now.`,

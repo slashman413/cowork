@@ -348,9 +348,9 @@ test('the Judger is read-mostly: it never counts against the execution budget', 
   const term = goals.generatedTasks(g.goalId).find(t => t.context!.completesPhase)!;
   store.finish(term.id);
   goals.onTaskCompleted(store.getTask(term.id)!);
-  // 2 execution tasks + 1 Judger exist, but only the 2 execution tasks are budgeted.
-  assert.equal(goals.generatedTasks(g.goalId).length, 3);
-  assert.equal(goals.overBudget(g.goalId), false, 'Judger does not consume the budget');
+  // 2 execution tasks + 1 Judger + 1 PS-7 Attention review exist, but only the 2 execution tasks are budgeted.
+  assert.equal(goals.generatedTasks(g.goalId).length, 4);
+  assert.equal(goals.overBudget(g.goalId), false, 'Judger / Attention review do not consume the budget');
 });
 
 test('the Judger brief forces a decisive NEXT MOVE and judges execution over description', () => {
