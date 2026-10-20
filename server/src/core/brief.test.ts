@@ -265,11 +265,11 @@ test('workflow validation rejects a malformed step brief', () => {
   assert.equal(parseBrief({ acceptance: 'ok' }).errors.length, 0);   // a lone string alone is fine
 });
 
-test('shipped templates: all 14 load, none invalid, the 5 backfilled carry acceptance + verify on every step', () => {
+test('shipped templates: all 15 load, none invalid, the 5 backfilled carry acceptance + verify on every step', () => {
   const dir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../workflows');
   const { wf } = makeWorkflows(dir);
   assert.deepEqual(wf.listInvalid(), []);
-  assert.equal(wf.list().length, 14);
+  assert.equal(wf.list().length, 15);
   for (const id of ['build-and-ship', 'content-pipeline', 'plan-execution', 'daily-fantasy-vlog', 'product-spec']) {
     const def = wf.get(id)!;
     assert.ok(def, `${id} missing`);

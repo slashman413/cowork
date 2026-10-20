@@ -162,6 +162,17 @@
           "./deploy/video-pipeline.sh"
         ]
       },
+      "local-script-eval-harness": {
+        "description": "Eval harness (P2-1) — runs the steps of the eval-prompt-change workflow only. Do not route other tasks here.",
+        "location": "local",
+        "exec": "script",
+        "command": [
+          "node",
+          "dist/eval-cli.js",
+          "step"
+        ],
+        "maxConcurrent": 2
+      },
       "remote-example-cc-sonnet-5-5": {
         "description": "EXAMPLE remote brain — a Claude Code client on another machine. Delete or edit; remote brains normally auto-register via register_agent (see JOIN-AS-A-BRAIN.md).",
         "location": "remote",
