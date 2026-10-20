@@ -21,7 +21,9 @@ import { canonicalBrainId } from '../config.js';
  * an interaction packet instead of marking it done or handing it off.
  */
 export type CompletionDecision =
-  | { action: 'complete'; result?: string }
+  /** `context` is merged into the task's context on completion (e.g. the
+   *  STATUS-footer quality flag / rulings — see parseStatusFooter). */
+  | { action: 'complete'; result?: string; context?: Record<string, unknown> }
   | { action: 'handover' }
   | { action: 'wait-input'; questions?: string[] }
   /** The agent is still waiting on long background work it launched — DEFER the
@@ -791,6 +793,7 @@ export class Store {
         return this.deferForBackground({ taskId: task.id, note: decision.note, result: params.result, pollMs: decision.pollMs });
       }
       if (decision.result !== undefined) result = decision.result;
+      if (decision.context) task.context = { ...(task.context || {}), ...decision.context };
     }
 
     task.status = 'done';

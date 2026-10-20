@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { verifyOutput, parseLlmVerdict, buildVerifierPrompt, DEFAULT_FAIL_PATTERNS, detectInputRequest, DEFAULT_QUESTION_PATTERNS, detectBackgroundWait, DEFAULT_BACKGROUND_WAIT_PATTERNS } from './result-verifier.js';
+import { verifyOutput, parseLlmVerdict, buildVerifierPrompt, DEFAULT_FAIL_PATTERNS, detectInputRequest, DEFAULT_QUESTION_PATTERNS, detectBackgroundWait, DEFAULT_BACKGROUND_WAIT_PATTERNS, parseStatusFooter } from './result-verifier.js';
 
 /**
  * The result verifier is the fix for "a rate-limit reply looked like a done
@@ -282,4 +282,49 @@ test('custom backgroundPatterns merge with the built-ins', () => {
 test('DEFAULT_BACKGROUND_WAIT_PATTERNS is non-empty and matched case-insensitively', () => {
   assert.ok(DEFAULT_BACKGROUND_WAIT_PATTERNS.length > 0);
   assert.equal(detectBackgroundWait('THE BACKGROUND TASK IS STILL RUNNING').waiting, true);
+});
+
+// ── STATUS / EVIDENCE footer + RULING lines (P0-2 / P0-4) ──────────────────────
+
+test('parseStatusFooter: DONE with evidence', () => {
+  const f = parseStatusFooter('work\nSTATUS: DONE\nEVIDENCE:\n- npm test → 12 passed');
+  assert.equal(f.status, 'DONE');
+  assert.equal(f.hasEvidence, true);
+  assert.equal(f.reason, undefined);
+  assert.equal(f.concerns, undefined);
+});
+
+test('parseStatusFooter: DONE_WITH_CONCERNS carries the CONCERNS block', () => {
+  const f = parseStatusFooter('**STATUS:** DONE_WITH_CONCERNS\n**EVIDENCE:**\n- x → y\nCONCERNS: flaky test\n  retried twice');
+  assert.equal(f.status, 'DONE_WITH_CONCERNS');
+  assert.equal(f.concerns, 'flaky test\nretried twice');
+  assert.equal(f.hasEvidence, true);
+});
+
+test('parseStatusFooter: BLOCKED reason — inline, else CONCERNS, else first line', () => {
+  assert.equal(parseStatusFooter('STATUS: BLOCKED — no token').reason, 'no token');
+  assert.equal(parseStatusFooter('STATUS: BLOCKED\nCONCERNS: repo is archived').reason, 'repo is archived');
+  assert.equal(parseStatusFooter('Upload failed: 401\nSTATUS: BLOCKED').reason, 'Upload failed: 401');
+});
+
+test('parseStatusFooter: the LAST status line wins; an echoed template line is ignored', () => {
+  assert.equal(parseStatusFooter('STATUS: BLOCKED — early\n…retried…\nSTATUS: DONE').status, 'DONE');
+  assert.equal(parseStatusFooter('Rules say: STATUS: DONE | DONE_WITH_CONCERNS | BLOCKED').status, undefined);
+  assert.equal(parseStatusFooter('STATUS: DONE | DONE_WITH_CONCERNS | BLOCKED\nSTATUS: DONE').status, 'DONE');
+});
+
+test('parseStatusFooter: no footer → no status, hasEvidence false; empty EVIDENCE is not evidence', () => {
+  const f = parseStatusFooter('Just a plain report.');
+  assert.equal(f.status, undefined);
+  assert.equal(f.hasEvidence, false);
+  assert.equal(parseStatusFooter('STATUS: DONE\nEVIDENCE:\n').hasEvidence, false);
+});
+
+test('parseStatusFooter: collects RULING lines (bulleted / bold), deduped', () => {
+  const f = parseStatusFooter([
+    'RULING: chose A — cheaper — redo in B',
+    '- **RULING:** skip the backfill — no readers — one rerun',
+    'RULING: chose A — cheaper — redo in B',
+  ].join('\n'));
+  assert.deepEqual(f.rulings, ['chose A — cheaper — redo in B', 'skip the backfill — no readers — one rerun']);
 });

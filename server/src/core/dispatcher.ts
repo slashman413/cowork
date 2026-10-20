@@ -6,7 +6,7 @@ import type { EventBus } from './events.js';
 import type { Store, CompletionDecision } from './store.js';
 import type { Workflows } from './workflows.js';
 import type { Goals } from './goals.js';
-import { verifyOutput, buildVerifierPrompt, parseLlmVerdict, detectInputRequest, detectBackgroundWait, isRateLimitFailure, type VerifyVerdict, type InputOptions, type InputRequest, type BackgroundOptions, type BackgroundWait } from './result-verifier.js';
+import { verifyOutput, buildVerifierPrompt, parseLlmVerdict, detectInputRequest, detectBackgroundWait, isRateLimitFailure, parseStatusFooter, type StatusFooter, type VerifyVerdict, type InputOptions, type InputRequest, type BackgroundOptions, type BackgroundWait } from './result-verifier.js';
 import { buildLesson, appendLesson } from './lessons.js';
 import { canonicalBrainId } from '../config.js';
 import { STREAMING_EXECS, streamArgs, createStreamRenderer } from './progress-stream.js';
@@ -1635,6 +1635,25 @@ export class Dispatcher {
     return { action: 'defer-background', note: bg.note, pollMs: this.backgroundPollMs() };
   }
 
+  /** P0-2/P0-4: context patch from a result's STATUS/EVIDENCE footer and RULING
+   *  lines. Absent fields are written as undefined so a re-run clears a stale flag. */
+  private footerContext(f: StatusFooter): Record<string, unknown> {
+    return {
+      hasEvidence: f.hasEvidence,
+      resultStatus: f.status,
+      qualityFlag: f.status === 'DONE_WITH_CONCERNS' ? 'concerns' : undefined,
+      concerns: f.status === 'DONE_WITH_CONCERNS' ? f.concerns : undefined,
+      blockedReason: f.status === 'BLOCKED' ? f.reason : undefined,
+      rulings: f.rulings.length ? f.rulings : undefined
+    };
+  }
+
+  /** A STATUS: BLOCKED result finalises as FAILED (isFailedTask keys on the
+   *  prefix) WITHOUT a handover — the blocker is not a brain problem. */
+  private blockedResult(f: StatusFooter, text: string): string {
+    return `FAILED (blocked): ${f.reason}\n\n${text.length > 2000 ? text.slice(0, 2000) + '\n…' : text}`;
+  }
+
   /** Append a failed-brain record to the task's inbox entry so the fallback trail
    *  is visible on the dashboard: which brains failed, in order, and why. */
   private recordFailedBrain(taskId: string, entry: { brain: string; agent: string; attempt: number; reason: string }): void {
@@ -1654,7 +1673,7 @@ export class Dispatcher {
    * is guarded and errors are swallowed after logging. Deterministic — no LLM.
    */
   private recordLesson(taskId: string, input: {
-    kind: 'verify-fail' | 'wait-input';
+    kind: 'verify-fail' | 'wait-input' | 'blocked';
     brain: string;
     agent: string;
     attempt: number;
@@ -1717,7 +1736,15 @@ export class Dispatcher {
       }
       const bg = this.backgroundDecision(task, text);
       if (bg) return bg;
-      return { action: 'complete' };
+      const footer = parseStatusFooter(text);
+      if (footer.status === 'BLOCKED') {
+        this.recordLesson(task.id, {
+          kind: 'blocked', brain: brainId || '', agent: this.resolveAgent(task) || brainId || '',
+          attempt: (Number(task.context?.attempts) || 0) + 1, reason: footer.reason, resultText: text
+        });
+        return { action: 'complete', result: this.blockedResult(footer, text), context: this.footerContext(footer) };
+      }
+      return { action: 'complete', context: this.footerContext(footer) };
     }
 
     // Strict gate precedence:
@@ -1747,8 +1774,20 @@ export class Dispatcher {
         console.log(`Dispatcher: reported result for task ${task.id} on ${brainId} is still WAITING on background work → defer (${bg.note || 'phrase'})`);
         return bg;
       }
+      // (2.75) STATUS footer — BLOCKED fails the task without a handover (not a
+      //        brain problem) and skips the LLM gate; other values are recorded.
+      const footer = parseStatusFooter(text);
+      if (footer.status === 'BLOCKED') {
+        this.recordLesson(task.id, {
+          kind: 'blocked', brain: brainId,
+          agent: this.resolveAgent(task) || (typeof task.context?.agentName === 'string' ? task.context.agentName : '') || brainId,
+          attempt: (Number(task.context?.attempts) || 0) + 1, reason: footer.reason, resultText: text
+        });
+        console.log(`Dispatcher: reported result for task ${task.id} on ${brainId} is STATUS: BLOCKED → failed, no handover (${(footer.reason || '').slice(0, 80)})`);
+        return { action: 'complete', result: this.blockedResult(footer, text), context: this.footerContext(footer) };
+      }
       verdict = await this.llmVerdict(task, text);
-      if (verdict.ok) return { action: 'complete' };
+      if (verdict.ok) return { action: 'complete', context: this.footerContext(footer) };
     }
 
     const failReason = verdict.reason || (result || '').slice(0, 300);
@@ -1949,10 +1988,13 @@ export class Dispatcher {
     // Only defer while under the safety cap; past it, treat the result as final so a
     // never-finishing background job can't loop the task forever.
     const bgDefer = bgWait.waiting && this.backgroundDeferralCount(task) < this.maxBackgroundDeferrals();
+    //   (2.75) STATUS footer (P0-2) — BLOCKED is final: no LLM gate, no handover.
+    const footer: StatusFooter | null = detVerdict.ok && !inputReq.needsInput && !bgDefer ? parseStatusFooter(output.text) : null;
+    const blocked = footer?.status === 'BLOCKED';
     const verdict: VerifyVerdict = !detVerdict.ok
       ? detVerdict
-      : inputReq.needsInput || bgDefer
-        ? { ok: true }                                 // question / bg-wait → skip the LLM gate, park below
+      : inputReq.needsInput || bgDefer || blocked
+        ? { ok: true }                                 // question / bg-wait / blocked → skip the LLM gate
         : await this.llmVerdict(task, output.text);
     if (output.ok && !verdict.ok) {
       console.log(`Dispatcher: verifier REJECTED task ${task.id} result on ${plan.brainId} — ${verdict.reason}`);
@@ -2048,19 +2090,25 @@ export class Dispatcher {
       ? this.store.getTask(task.id)!.context!.failedBrains as Array<{ brain: string; reason: string }>
       : [];
     const failedList = failedBrains.map(f => `${f.brain} (${f.reason})`).join('; ');
-    const result = verdict.ok
+    if (blocked) {
+      this.recordLesson(task.id, { kind: 'blocked', brain: plan.brainId, agent: plan.agent, attempt: plan.attempt + 1, reason: footer!.reason, resultText: output.text });
+      console.log(`Dispatcher: task ${task.id} STATUS: BLOCKED on ${plan.brainId} → failed, no handover (${(footer!.reason || '').slice(0, 80)})`);
+    }
+    const result = blocked
+      ? this.blockedResult(footer!, output.text)
+      : verdict.ok
       ? output.text.length > 2000 ? output.text.slice(0, 2000) + `\n…(full output in artifacts/${task.id}/result.md)` : output.text
       : `FAILED after ${bound} attempt(s) (chain exhausted). Brains that failed: ${failedList || plan.brainId}. Last output: ${output.text.slice(0, 800)}`;
 
     // Record which agent/brain ran it on the task itself (item 5) + artifacts.
     const done = this.store.getTask(task.id);
     if (done) {
-      done.context = { ...(done.context || {}), ranAgent: plan.agent, ranDivision: plan.division, ranBrain: plan.brainId, isRoster: plan.isRoster };
+      done.context = { ...(done.context || {}), ...(verdict.ok && footer ? this.footerContext(footer) : {}), ranAgent: plan.agent, ranDivision: plan.division, ranBrain: plan.brainId, isRoster: plan.isRoster };
       if (artifacts.length) (done as any).artifacts = artifacts;
       this.store.saveTask(done);
     }
     // internal: the dispatcher already verified this run — skip the completion guard.
     await this.store.completeTask({ taskId: task.id, result, internal: true });
-    console.log(`Dispatcher: task ${task.id} ${verdict.ok ? 'completed' : 'FAILED (chain exhausted)'} (${output.text.length} chars${artifacts.length ? ', ' + artifacts.length + ' artifact(s)' : ''})`);
+    console.log(`Dispatcher: task ${task.id} ${blocked ? 'FAILED (blocked)' : verdict.ok ? 'completed' : 'FAILED (chain exhausted)'} (${output.text.length} chars${artifacts.length ? ', ' + artifacts.length + ' artifact(s)' : ''})`);
   }
 }

@@ -2640,6 +2640,7 @@ class App {
           ${failed ? badge('failed', '#EF4444')
             : closedNoRun ? `<span class="badge" title="Done, but closed administratively without ever running a brain — so it has no artifacts and no result.md. The full explanation is in this task's result field below." style="background:#94A3B818; color:#94A3B8; border:1px solid #94A3B840">done · closed (never ran)</span>`
             : badge(t.status, STATUS_COLORS[t.status] || '#94A3B8')}
+          ${!failed && c.qualityFlag === 'concerns' ? `<span class="badge" title="${esc('Done with concerns: ' + (c.concerns || '(no CONCERNS text)'))}" style="background:#F59E0B18; color:#F59E0B; border:1px solid #F59E0B40">⚠ concerns</span>` : ''}
           ${t.status === 'scheduled' && t.scheduledAt ? badge(`⏰ ${new Date(t.scheduledAt).toLocaleString()}`, '#6366F1') : ''}
           ${t.recurrence ? badge(`🔁 ${describeRecurrence(t.recurrence)}`, '#3B82F6')
             : t.loopIntervalHours ? badge(`🔁 every ${t.loopIntervalHours}h`, '#3B82F6') : ''}

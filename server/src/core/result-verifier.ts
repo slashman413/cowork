@@ -528,3 +528,88 @@ function capQuestions(questions: string[]): string[] {
   }
   return out.length ? out : [GENERIC_QUESTION];
 }
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * STATUS / EVIDENCE footer (P0-2) + RULING lines (P0-4). CONVENTIONS §4 asks every
+ * result to end with `STATUS: DONE | DONE_WITH_CONCERNS | BLOCKED`, an EVIDENCE
+ * list and (for DONE_WITH_CONCERNS) a CONCERNS line, and to record each judgment
+ * call as `RULING: <decision> — <why> — <cost if wrong>`. The dispatcher reads it
+ * AFTER the failure / NEEDS_INPUT / WAITING_ON_BACKGROUND gates (those win):
+ *   DONE                → done
+ *   DONE_WITH_CONCERNS  → done, flagged (context.qualityFlag = "concerns")
+ *   BLOCKED             → failed with the reason, NOT handed to the next brain
+ *   no footer           → unchanged behaviour, context.hasEvidence = false
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+export type ResultStatus = 'DONE' | 'DONE_WITH_CONCERNS' | 'BLOCKED';
+
+export interface StatusFooter {
+  /** The value of the LAST `STATUS:` line; undefined when there is no footer. */
+  status?: ResultStatus;
+  /** BLOCKED: why (inline text after BLOCKED, else CONCERNS, else first line). */
+  reason?: string;
+  /** DONE_WITH_CONCERNS / BLOCKED: the CONCERNS text. */
+  concerns?: string;
+  /** An `EVIDENCE:` heading followed by at least one non-empty item. */
+  hasEvidence: boolean;
+  /** Every `RULING:` line's text, deduped, capped at 20 × 500 chars. */
+  rulings: string[];
+}
+
+const FOOTER_KEY = /^\s*(?:[-*+]\s+)?(?:#{1,6}\s*)?\**\s*(STATUS|EVIDENCE|CONCERNS|RULING)\s*\**\s*:\s*\**\s*(.*)$/i;
+const STATUS_VALUE = /^(DONE_WITH_CONCERNS|DONE|BLOCKED)\b\**\s*(?:[—–:-]+\s*)?(.*)$/i;
+
+export function parseStatusFooter(text: string): StatusFooter {
+  const lines = (text || '').split('\n');
+  const out: StatusFooter = { hasEvidence: false, rulings: [] };
+  let statusIdx = -1;
+  const seen = new Set<string>();
+
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(FOOTER_KEY);
+    if (!m) continue;
+    const key = m[1].toUpperCase();
+    const rest = m[2].trim();
+    if (key === 'RULING') {
+      const r = rest.replace(/\*+$/, '').trim().slice(0, 500);
+      if (r && !seen.has(r.toLowerCase()) && out.rulings.length < 20) { seen.add(r.toLowerCase()); out.rulings.push(r); }
+    } else if (key === 'STATUS') {
+      const v = rest.match(STATUS_VALUE);
+      // Skip an echoed template line ("DONE | DONE_WITH_CONCERNS | BLOCKED").
+      if (v && !/\|\s*(DONE|BLOCKED)/i.test(rest)) {
+        statusIdx = i;
+        out.status = v[1].toUpperCase() as ResultStatus;
+        out.reason = v[2].trim() || undefined;
+      }
+    }
+  }
+  if (statusIdx === -1) return { hasEvidence: hasEvidenceBlock(lines, 0), rulings: out.rulings };
+
+  out.hasEvidence = hasEvidenceBlock(lines, statusIdx);
+  const concerns = blockAfter(lines, statusIdx, 'CONCERNS');
+  if (concerns && out.status !== 'DONE') out.concerns = concerns;
+  if (out.status === 'BLOCKED') {
+    out.reason = (out.reason || concerns || firstLine(lines.slice(0, statusIdx).join('\n')) || 'agent reported BLOCKED').slice(0, 500);
+  } else {
+    delete out.reason;
+  }
+  return out;
+}
+
+/** Does an `EVIDENCE:` key at/after `from` carry content (inline or ≥1 item line)? */
+function hasEvidenceBlock(lines: string[], from: number): boolean {
+  return !!blockAfter(lines, from, 'EVIDENCE');
+}
+
+/** Text of the first `<key>:` block at/after `from`: its inline remainder plus the
+ *  following lines up to the next footer key. Empty when absent. */
+function blockAfter(lines: string[], from: number, key: string): string {
+  for (let i = from; i < lines.length; i++) {
+    const m = lines[i].match(FOOTER_KEY);
+    if (!m || m[1].toUpperCase() !== key) continue;
+    const parts = [m[2].trim()];
+    for (let j = i + 1; j < lines.length && !FOOTER_KEY.test(lines[j]); j++) parts.push(lines[j].trim());
+    return parts.map(p => p.replace(/^(?:[-*+]|\d+[.)])\s*/, '').trim()).filter(Boolean).join('\n').slice(0, 2000);
+  }
+  return '';
+}
