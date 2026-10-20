@@ -59,7 +59,8 @@
       "description": "Take the reviewed final article and prepare it for publishing: write an SEO title, meta description, 5 tags, and a 2-sentence social blurb. Output everything as markdown.",
       "acceptance": [
         "publish.md is saved in the artifacts dir with: SEO title (<= 60 chars), meta description (<= 160 chars), exactly 5 tags, a 2-sentence social blurb",
-        "The SEO title and meta description contain the topic keyword"
+        "The SEO title and meta description contain the topic keyword",
+        "Passes the unslop rules listed in `methods/content.md`"
       ],
       "verify": [
         "test -s publish.md",
