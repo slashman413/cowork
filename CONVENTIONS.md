@@ -83,6 +83,7 @@ Files a person attached to your task are listed in your prompt and live in
   | uploaded / published | the platform's id or URL |
   | agent / subtask completed | its diff or artifact — never its self-report |
   | tests pass | the runner's summary line |
+  | measured X% / Nx | the command that measured it + the sample count |
   | file created | path + size |
 
 **Rulings, not stalls.** Ask the user (`NEEDS_INPUT:`) only when the next step is:

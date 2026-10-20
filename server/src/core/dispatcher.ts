@@ -4,9 +4,10 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, statSy
 import type { Config, RoleConfig, Task, AchieverDecision } from '../types.js';
 import type { EventBus } from './events.js';
 import type { Store, CompletionDecision } from './store.js';
+import { isFailedTask } from './store.js';
 import type { Workflows } from './workflows.js';
 import type { Goals } from './goals.js';
-import { verifyOutput, buildVerifierPrompt, parseLlmVerdict, parseSpecVerdict, selectSpecJudges, DEFAULT_SPEC_JUDGES, extractEvidenceBlock, detectInputRequest, detectBackgroundWait, isRateLimitFailure, parseStatusFooter, type StatusFooter, type VerifyVerdict, type VerifierArtifact, type SpecVerdictRecord, type InputOptions, type InputRequest, type BackgroundOptions, type BackgroundWait } from './result-verifier.js';
+import { verifyOutput, buildVerifierPrompt, parseLlmVerdict, parseSpecVerdict, selectSpecJudges, DEFAULT_SPEC_JUDGES, extractEvidenceBlock, detectInputRequest, detectBackgroundWait, unaccountedFailedDeps, isRateLimitFailure, parseStatusFooter, type StatusFooter, type VerifyVerdict, type VerifierArtifact, type SpecVerdictRecord, type InputOptions, type InputRequest, type BackgroundOptions, type BackgroundWait } from './result-verifier.js';
 import { buildLesson, appendLesson } from './lessons.js';
 import { describeAutoAnswer, logAutoAnswer } from './rulings.js';
 import { BRIEF_KEYS, parseBrief, renderBriefSections } from './brief.js';
@@ -1543,6 +1544,7 @@ export class Dispatcher {
         `Every subtask POST must carry the brief: the goal (in the description) plus context.acceptance (2-5 concrete, checkable criteria) and context.verify (the commands/URLs/checks that prove them). Optional: context.timeboxMin (minutes) and context.scope {"write":[...],"forbid":[...]}. A subtask you cannot write acceptance for is not scoped yet — scope it further before dispatching it.`,
         `Tag every subtask with context.tier so it runs on the right class of brain: "mechanical" (formatting, file moves, scripted renders, data copying — cheap local brains), "standard" (most building and writing), "judgment" (design decisions, ambiguous briefs, final whole-run review — opus-class), or "review" (judging another subtask's output; add context.reviewOf = the brain id that produced it, and a brain of a different model family is picked). Default to the lowest tier that can do the job.`,
         `To make a subtask wait for others (e.g. a final synthesis step), add their task ids to its context: {"dependsOn":["<id1>","<id2>"]} — the API response to each POST gives the created task's id; dependencies' results are shown to the dependent agent.`,
+        `Rollup rule: before the final summary, dispatch a synthesis subtask whose context.dependsOn lists EVERY child you dispatched. Its result must account for every child by id as done, failed, or absorbed (its work folded into another named task), and report PASS / ISSUES / BLOCKED per slice. A gap is not a pass. Silently redoing a missing child's work hides the coverage gap. A synthesis that reports STATUS: DONE without naming a failed child's id is downgraded to DONE_WITH_CONCERNS by the server.`,
         `After dispatching, output a summary of the plan. Check existing tasks first: curl ${curlFlags} ${selfBase}/api/inbox?limit=20`,
         ``
       );
@@ -1985,15 +1987,38 @@ export class Dispatcher {
 
   /** P0-2/P0-4: context patch from a result's STATUS/EVIDENCE footer and RULING
    *  lines. Absent fields are written as undefined so a re-run clears a stale flag. */
-  private footerContext(f: StatusFooter): Record<string, unknown> {
+  private footerContext(f: StatusFooter, task?: Task, text = ''): Record<string, unknown> {
+    // PS-5 rollup rule: a STATUS: DONE whose dependsOn includes a FAILED task
+    // (failed tasks finish as status 'done' with a FAILED result, so
+    // depsSatisfied lets their dependents run) is forced to DONE_WITH_CONCERNS
+    // unless the result names that task id (8-char prefix is enough).
+    let status = f.status;
+    let concerns = f.concerns;
+    let unaccounted: string[] = [];
+    if (status === 'DONE' && task) unaccounted = this.unaccountedFailedDeps(task, text);
+    if (unaccounted.length) {
+      status = 'DONE_WITH_CONCERNS';
+      concerns = `Rollup gap: depends on failed task(s) ${unaccounted.map(id => id.slice(0, 8)).join(', ')} that the result does not account for (a gap is not a pass).${f.concerns ? ' ' + f.concerns : ''}`;
+    }
     return {
       hasEvidence: f.hasEvidence,
-      resultStatus: f.status,
-      qualityFlag: f.status === 'DONE_WITH_CONCERNS' ? 'concerns' : undefined,
-      concerns: f.status === 'DONE_WITH_CONCERNS' ? f.concerns : undefined,
+      resultStatus: status,
+      qualityFlag: status === 'DONE_WITH_CONCERNS' ? 'concerns' : undefined,
+      concerns: status === 'DONE_WITH_CONCERNS' ? concerns : undefined,
+      unaccountedFailedDeps: unaccounted.length ? unaccounted : undefined,
       blockedReason: f.status === 'BLOCKED' ? f.reason : undefined,
       rulings: f.rulings.length ? f.rulings : undefined
     };
+  }
+
+  /** PS-5: failed `context.dependsOn` tasks the result text does not name. */
+  private unaccountedFailedDeps(task: Task, text: string): string[] {
+    const deps = task.context?.dependsOn;
+    if (!Array.isArray(deps) || deps.length === 0) return [];
+    return unaccountedFailedDeps(deps.map((id: string) => {
+      const dep = this.store.getTask(id);
+      return { id, failed: !!dep && isFailedTask(dep) };
+    }), text);
   }
 
   /** A STATUS: BLOCKED result finalises as FAILED (isFailedTask keys on the
@@ -2093,7 +2118,7 @@ export class Dispatcher {
         });
         return { action: 'complete', result: this.blockedResult(footer, text), context: this.footerContext(footer) };
       }
-      return { action: 'complete', context: this.footerContext(footer) };
+      return { action: 'complete', context: this.footerContext(footer, task, text) };
     }
 
     // Strict gate precedence:
@@ -2140,7 +2165,7 @@ export class Dispatcher {
         return {
           action: 'complete',
           context: {
-            ...this.footerContext(footer),
+            ...this.footerContext(footer, task, text),
             ...(task.context?.specVerdict ? { specVerdict: task.context.specVerdict } : {})
           }
         };
@@ -2483,7 +2508,7 @@ export class Dispatcher {
     // Record which agent/brain ran it on the task itself (item 5) + artifacts.
     const done = this.store.getTask(task.id);
     if (done) {
-      done.context = { ...(done.context || {}), ...(verdict.ok && footer ? this.footerContext(footer) : {}), ranAgent: plan.agent, ranDivision: plan.division, ranBrain: plan.brainId, isRoster: plan.isRoster };
+      done.context = { ...(done.context || {}), ...(verdict.ok && footer ? this.footerContext(footer, task, output.text) : {}), ranAgent: plan.agent, ranDivision: plan.division, ranBrain: plan.brainId, isRoster: plan.isRoster };
       if (artifacts.length) (done as any).artifacts = artifacts;
       this.store.saveTask(done);
     }

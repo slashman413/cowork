@@ -70,6 +70,9 @@ export interface VerifierPromptOptions {
   artifacts?: Array<string | VerifierArtifact>;
   evidence?: string;
   maxResultChars?: number;
+  /** PS-6: add the numeric-claim criterion when the result reports a measured
+   *  number. Default true; pass false to omit it. */
+  numericClaimRule?: boolean;
 }
 
 export interface VerifyOptions {
@@ -289,6 +292,23 @@ export function extractEvidenceBlock(text: string): string {
   return blockAfter(lines, statusIdx >= 0 ? statusIdx : 0, 'EVIDENCE');
 }
 
+/** PS-6: the numeric-claim criterion added to the verifier rubric when a result
+ *  contains a measured number. */
+export const NUMERIC_CLAIM_CRITERION =
+  'Numeric claims: each measured number in the result (%, ×, latency, revenue, counts) names its source command or file and what limits it (sample count, window, environment); otherwise mark it UNVERIFIABLE.';
+
+/** PS-6: does the text report a measured number — a percentage, a multiplier
+ *  (3x / 3×), a latency/duration, a money amount, or a count of things? Bare
+ *  numbers (dates, versions, ids, list indices) do not count. */
+export function hasMeasuredNumber(text: string): boolean {
+  const t = text || '';
+  return /\d(?:[\d,.]*\d)?\s?%/.test(t)                                                  // 42% / 4.5 %
+    || /\b\d+(?:\.\d+)?\s?[x×]\b|\d\s?×/i.test(t)                                         // 3x / 2.5×
+    || /\b\d+(?:\.\d+)?\s?(?:ms|µs|us|ns|sec|secs|seconds|s)\b(?!\w)/i.test(t)            // 120ms / 3.2 s
+    || /(?:[$€£¥]\s?\d|\b\d[\d,.]*\s?(?:USD|EUR|GBP|CNY|RMB)\b)/i.test(t)                   // $1,200 / 300 USD
+    || /\b\d[\d,]*\s+(?:tasks?|runs?|requests?|users?|visits?|views?|clicks?|sales?|orders?|downloads?|signups?|subscribers?|followers?|items?|rows?|records?|errors?|failures?|samples?|tests?)\b/i.test(t);
+}
+
 /**
  * Build the prompt for the spec-compliance verifier (P1-1).
  *
@@ -317,6 +337,10 @@ export function buildVerifierPrompt(
     : ['- (none)'];
   const evidence = (opts.evidence !== undefined ? opts.evidence : (task.evidence !== undefined ? task.evidence : extractEvidenceBlock(result))).trim();
   const maxChars = opts.maxResultChars ?? 6000;
+  const criteria = acceptance.length ? [...acceptance] : [`Deliverable genuinely and completely addresses the task`];
+  // PS-6 (pstack principle-explain-the-number / benchmark-checklist): one extra
+  // criterion, only when the result reports a measured number.
+  if (opts.numericClaimRule !== false && hasMeasuredNumber(result || '')) criteria.push(NUMERIC_CLAIM_CRITERION);
 
   return [
     `You are a strict SPEC-COMPLIANCE VERIFIER in a multi-agent company. Judge whether the RESULT, EVIDENCE, and ARTIFACTS below satisfy EVERY acceptance criterion of the TASK.`,
@@ -326,7 +350,7 @@ export function buildVerifierPrompt(
     (task.description || '').slice(0, 2000),
     ``,
     `ACCEPTANCE CRITERIA:`,
-    ...(acceptance.length ? acceptance.map((c, i) => `${i + 1}. ${c}`) : [`1. Deliverable genuinely and completely addresses the task`]),
+    ...criteria.map((c, i) => `${i + 1}. ${c}`),
     ``,
     `ARTIFACTS PRODUCED (with sizes):`,
     ...artifactLines,
@@ -964,4 +988,22 @@ function blockAfter(lines: string[], from: number, key: string): string {
     return parts.map(p => p.replace(/^(?:[-*+]|\d+[.)])\s*/, '').trim()).filter(Boolean).join('\n').slice(0, 2000);
   }
   return '';
+}
+
+/**
+ * PS-5 (pstack swarm/orchestrate rollup rule): the FAILED dependencies a result
+ * does not account for. A dependent task (typically an orchestrator's synthesis
+ * step) whose `context.dependsOn` includes a failed task must name that task in
+ * its result — the full id or its 8-char prefix — or the gap is hidden. "A gap
+ * is not a pass." Returns the unaccounted failed ids (empty → nothing to flag).
+ */
+export function unaccountedFailedDeps(
+  deps: Array<{ id: string; failed: boolean }>,
+  result: string
+): string[] {
+  const text = (result || '').toLowerCase();
+  return deps
+    .filter(d => d.failed && d.id)
+    .filter(d => !text.includes(d.id.toLowerCase().slice(0, 8)))
+    .map(d => d.id);
 }

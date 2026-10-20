@@ -490,3 +490,42 @@ test('selectSpecJudge: cross-family judge selection matrix + cooldown/disabled s
   );
 });
 
+
+/* ── PS-6 numeric-claim criterion / PS-5 rollup helper ─────────────────────── */
+
+test('PS-6: buildVerifierPrompt adds the numeric-claim criterion when the result has a measured number', async () => {
+  const { NUMERIC_CLAIM_CRITERION } = await import('./result-verifier.js');
+  const p = buildVerifierPrompt({ title: 'Analyse funnel', acceptance: ['report.md exists'] }, 'Conversion rose 12% (3x baseline), p95 latency 180ms.');
+  assert.ok(p.includes(NUMERIC_CLAIM_CRITERION));
+  assert.match(p, /2\. Numeric claims: each measured number .* names its source command or file and what limits it.*otherwise mark it UNVERIFIABLE/);
+  assert.match(p, /1\. report\.md exists/);
+});
+
+test('PS-6: no numeric-claim criterion without a measured number, or when disabled', () => {
+  const plain = buildVerifierPrompt({ title: 'Write X', acceptance: ['a'] }, 'Wrote the doc in v1.2 on 2026-10-20, see section 3.');
+  assert.doesNotMatch(plain, /Numeric claims:/);
+  const off = buildVerifierPrompt({ title: 'Write X', acceptance: ['a'] }, 'up 40%', { numericClaimRule: false });
+  assert.doesNotMatch(off, /Numeric claims:/);
+});
+
+test('PS-6: hasMeasuredNumber detects %, ×, latency, revenue, counts', async () => {
+  const { hasMeasuredNumber } = await import('./result-verifier.js');
+  for (const s of ['42%', '4.5 %', '3x faster', '2.5×', '120ms', '3.2 s', '$1,200', '300 USD', '57 tasks', '1,024 rows']) {
+    assert.equal(hasMeasuredNumber(s), true, s);
+  }
+  for (const s of ['v1.2.3', '2026-10-20', 'step 3', 'commit e142f42', 'PS-6']) {
+    assert.equal(hasMeasuredNumber(s), false, s);
+  }
+});
+
+test('PS-5: unaccountedFailedDeps returns failed deps the result does not name (8-char prefix ok)', async () => {
+  const { unaccountedFailedDeps } = await import('./result-verifier.js');
+  const deps = [
+    { id: 'aaaaaaaa-1111-2222-3333-444444444444', failed: false },
+    { id: 'bbbbbbbb-1111-2222-3333-444444444444', failed: true },
+    { id: 'cccccccc-1111-2222-3333-444444444444', failed: true },
+  ];
+  assert.deepEqual(unaccountedFailedDeps(deps, 'child BBBBBBBB failed — absorbed into aaaaaaaa'), ['cccccccc-1111-2222-3333-444444444444']);
+  assert.deepEqual(unaccountedFailedDeps(deps, 'bbbbbbbb-1111-2222-3333-444444444444 and cccccccc ISSUES'), []);
+  assert.deepEqual(unaccountedFailedDeps([], 'x'), []);
+});
