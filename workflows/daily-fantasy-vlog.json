@@ -8,7 +8,7 @@
     {
       "key": "generate-vlog",
       "title": "Generate Daily Vlog",
-      "description": "Generate today's 10-minute fantasy vlog using the established ComfyUI + LoRA pipeline. Ensure visuals, pacing, and audio match the reference aesthetic.",
+      "description": "Generate today's 10-minute fantasy vlog using the established ComfyUI + LoRA pipeline. Ensure visuals, pacing, and audio match the reference aesthetic. Launch long renders (ComfyUI, LoRA, audio synthesis, ffmpeg assembly) in the background, record each completed step in progress.md (`- [x] step — evidence`), and emit a line starting with `WAITING_ON_BACKGROUND:` while a render is still running — never block synchronously until the 50-minute timeout.",
       "acceptance": [
         "One rendered video file (.mp4) is saved in the artifacts dir; name it in the result",
         "Duration is 9:30-10:30 (570-630 s)",

@@ -76,8 +76,8 @@ export function normalizeContextBrief(ctx: Record<string, any> | undefined): Rec
   return { ...out, ...brief };
 }
 
-/** The brief prompt sections, in a fixed order. [] when the task carries none. */
-export function renderBriefSections(ctx: Record<string, any> | undefined): string[] {
+/** The brief prompt sections, in a fixed order. [] when the task carries none and no defaultTimeboxMin is supplied. */
+export function renderBriefSections(ctx: Record<string, any> | undefined, defaultTimeboxMin?: number): string[] {
   const { brief } = parseBrief(ctx);
   const lines: string[] = [];
   if (brief.acceptance) {
@@ -90,9 +90,10 @@ export function renderBriefSections(ctx: Record<string, any> | undefined): strin
       `Run these checks and paste what you observed into your EVIDENCE lines.`,
       ...brief.verify.map(v => `- ${v}`), ``);
   }
-  if (brief.timeboxMin) {
+  const timeboxMin = brief.timeboxMin ?? defaultTimeboxMin;
+  if (timeboxMin && timeboxMin > 0) {
     lines.push(`# Timebox`,
-      `Spend at most ${brief.timeboxMin} min on this task. At T-5 min, write \`progress.md\` in your artifacts dir and return what you have: emit "WAITING_ON_BACKGROUND:" if work is still running, or "STATUS: BLOCKED" with the reason. A partial result clearly marked as partial is better than none.`, ``);
+      `Spend at most ${timeboxMin} min on this task. At T-5 min: write \`progress.md\` and return partial results with WAITING_ON_BACKGROUND or STATUS: BLOCKED. A partial result clearly marked as partial is better than none.`, ``);
   }
   if (brief.scope) {
     lines.push(`# Scope`);

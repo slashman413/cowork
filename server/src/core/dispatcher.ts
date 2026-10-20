@@ -89,6 +89,8 @@ export class Dispatcher {
   static readonly MAX_AUTO_ANSWERS = 3;
   /** Default brain cooldown when a rate-limit notice carries no reset time. */
   static readonly DEFAULT_BRAIN_COOLDOWN_MS = 1_800_000;
+  /** Maximum size in bytes of `artifacts/<id>/progress.md` injected into a resumed prompt (P1-3). */
+  static readonly PROGRESS_LEDGER_MAX_BYTES = 4096;
   /** Per-brain rate-limit cooldowns (circuit breaker), persisted under .status. */
   private cooldowns: BrainCooldowns;
 
@@ -380,6 +382,37 @@ export class Dispatcher {
   /** Persistent per-task artifacts dir (survives reboot — under the repo, gitignored). */
   private artifactsDir(taskId: string): string {
     return join(this.config.paths.artifacts, taskId);
+  }
+
+  /**
+   * Read `artifacts/<taskId>/progress.md` if present and non-empty, capped to the
+   * last {@link Dispatcher.PROGRESS_LEDGER_MAX_BYTES} bytes (4 KB) so a long
+   * ledger does not blow up the prompt while keeping the latest completed steps.
+   */
+  private readProgressLedger(taskId: string): string | null {
+    if (!this.config.paths?.artifacts || !taskId) return null;
+    const file = join(this.artifactsDir(taskId), 'progress.md');
+    try {
+      if (!existsSync(file)) return null;
+      const raw = readFileSync(file, 'utf-8').trim();
+      if (!raw) return null;
+      const cap = Dispatcher.PROGRESS_LEDGER_MAX_BYTES;
+      const buf = Buffer.from(raw, 'utf-8');
+      if (buf.byteLength <= cap) return raw;
+      return buf.subarray(buf.byteLength - cap).toString('utf-8').replace(/^\uFFFD+/, '');
+    } catch {
+      return null;
+    }
+  }
+
+  /** Compact summary of `artifacts/<taskId>/progress.md` for timeout lessons/handovers, or null if absent. */
+  private summarizeProgressLedger(taskId: string): string | null {
+    const ledger = this.readProgressLedger(taskId);
+    if (!ledger) return null;
+    const lines = ledger.split('\n').map(l => l.trim()).filter(Boolean);
+    const done = lines.filter(l => /^-\s*\[[xX]\]/.test(l));
+    const last = (done[done.length - 1] || lines[lines.length - 1] || '').slice(0, 120);
+    return `progress.md (${Buffer.byteLength(ledger, 'utf-8')}B, ${done.length} step(s) done${last ? `: ${last}` : ''})`;
   }
 
   /** True while a task still has an unanswered human-in-the-loop interaction
@@ -1398,8 +1431,11 @@ export class Dispatcher {
     // as their own sections — drop them from the raw context dump so they aren't
     // duplicated or lost as noise in the JSON blob.
     for (const k of ['persona', 'brainAuto', 'remoteWaitSince', 'dispatched', 'attempts', 'agentName', 'ranAgent', 'ranDivision', 'ranBrain', 'isRoster', 'inputFiles', 'humanInput', 'awaitingInput', 'inputQuestions', 'backgroundWait', 'specVerdict', 'specFindings', ...BRIEF_KEYS]) delete shownCtx[k];
-    // The brief contract (P0-3) gets its own sections right under the task text.
-    lines.push(...renderBriefSections(task.context));
+    // The brief contract (P0-3 / P1-3) gets its own sections right under the task text.
+    // Default timeboxMin = taskTimeoutMs / 60000 - 5 (e.g. 50 min cap → 45 min timebox).
+    const timeoutMs = Number(this.config.orchestration?.taskTimeoutMs) || 3_000_000;
+    const defaultTimeboxMin = Math.max(1, Math.round(timeoutMs / 60_000) - 5);
+    lines.push(...renderBriefSections(task.context, defaultTimeboxMin));
     if (Object.keys(shownCtx).length > 0) {
       lines.push(`# Context`, '```json', JSON.stringify(shownCtx, null, 2), '```', '');
     }
@@ -1428,6 +1464,18 @@ export class Dispatcher {
         `A previous run of THIS task deferred because long-running background work you launched had not finished (deferral #${bgWait.count}). This is that check-back.`,
         ...(bgWait.note ? [`What it was waiting on: ${bgWait.note}`] : []),
         `First determine whether that background work has now COMPLETED (check its output/logs/status). If it has, use its results and finish the task, producing your final deliverable. If it is STILL running, do NOT invent or guess a result — emit a line beginning "WAITING_ON_BACKGROUND:" describing what you are still waiting on, and the task will be checked again shortly.`,
+        ``
+      );
+    }
+    // Prior progress ledger (P1-3): on re-run, handover, or timeout re-dispatch
+    // of the same task, if `artifacts/<id>/progress.md` exists, include it (last
+    // 4 KB) so the agent resumes from completed steps instead of starting over.
+    const priorProgress = this.readProgressLedger(task.id);
+    if (priorProgress) {
+      lines.push(
+        `# Prior progress — resume, do not redo`,
+        `A previous run of this task recorded progress in \`progress.md\`. Verify existing artifacts on disk, trust completed steps (\`- [x]\`), and continue from the next unfinished step instead of redoing finished work:`,
+        priorProgress,
         ``
       );
     }
@@ -2065,14 +2113,19 @@ export class Dispatcher {
       }
     }
 
-    const failReason = verdict.reason || (result || '').slice(0, 300);
+    let failReason = verdict.reason || (result || '').slice(0, 300);
+    if (/^\s*TIMEOUT\b/i.test(failReason) || /^\s*TIMEOUT\b/i.test(text)) {
+      const progSummary = this.summarizeProgressLedger(task.id);
+      if (progSummary) failReason = `${failReason} — captured ${progSummary}`;
+    }
+    const progText = (/^\s*TIMEOUT\b/i.test(failReason) || /^\s*TIMEOUT\b/i.test(text)) ? this.readProgressLedger(task.id) : null;
     this.noteRateLimit(brainId, failReason, text, detFailed);
     const attempt = Number(task.context?.attempts) || 0;
     const agent = this.resolveAgent(task)
       || (typeof task.context?.agentName === 'string' ? task.context.agentName : '') || brainId;
     const division = typeof task.context?.division === 'string' ? task.context.division : undefined;
     this.recordFailedBrain(task.id, { brain: brainId, agent, attempt: attempt + 1, reason: failReason });
-    this.recordLesson(task.id, { kind: 'verify-fail', brain: brainId, agent, attempt: attempt + 1, reason: failReason, resultText: text });
+    this.recordLesson(task.id, { kind: 'verify-fail', brain: brainId, agent, attempt: attempt + 1, reason: failReason, resultText: progText ? `${text}\n${progText}` : text });
     console.log(`Dispatcher: verifier REJECTED reported result for task ${task.id} on ${brainId} — ${failReason.slice(0, 80)}`);
 
     // A user-pinned brain (context.brain WITHOUT brainAuto) retries itself up to
@@ -2293,11 +2346,29 @@ export class Dispatcher {
           console.warn(`Dispatcher: ${plan.brainId} — ${diag}`);
         }
       }
+      const isTimeout = /^\s*TIMEOUT\b/i.test(failReason) || /^\s*TIMEOUT\b/i.test(output.text);
+      const progSummary = isTimeout ? this.summarizeProgressLedger(task.id) : null;
+      const progText = isTimeout ? this.readProgressLedger(task.id) : null;
+      if (progSummary) {
+        failReason = `${failReason} — captured ${progSummary}`;
+      }
       this.noteRateLimit(plan.brainId, failReason, output.text, !detVerdict.ok);
       this.recordFailedBrain(task.id, { brain: plan.brainId, agent: plan.agent, attempt: plan.attempt + 1, reason: failReason });
-      this.recordLesson(task.id, { kind: 'verify-fail', brain: plan.brainId, agent: plan.agent, attempt: plan.attempt + 1, reason: failReason, resultText: output.text });
+      this.recordLesson(task.id, {
+        kind: 'verify-fail',
+        brain: plan.brainId,
+        agent: plan.agent,
+        attempt: plan.attempt + 1,
+        reason: failReason,
+        resultText: progText ? `${output.text}\n${progText}` : output.text
+      });
+      let partialArtifacts: string[] = [];
+      try {
+        partialArtifacts = readdirSync(artDir).filter(f => { try { return statSync(join(artDir, f)).isFile(); } catch { return false; } });
+      } catch { /* ignore */ }
       const fresh = this.store.getTask(task.id);
       if (fresh) {
+        if (partialArtifacts.length) (fresh as any).artifacts = partialArtifacts;
         const nextAttempt = plan.attempt + 1;
         if (nextAttempt < bound) {
           const nextBrain = plan.pinned ? plan.brainId : (this.chainFor(plan.agent, plan.division, fresh.context)[nextAttempt] || '?');

@@ -235,6 +235,9 @@ export function verifyOutput(text: string, spawnOk: boolean, opts: VerifyOptions
   if (clean.length < minLength) {
     return { ok: false, reason: `empty result (${clean.length} < ${minLength} chars)` };
   }
+  if (/^TIMEOUT after \d+/i.test(clean)) {
+    return { ok: false, reason: firstLine(clean) };
+  }
 
   if (clean.length > (opts.maxPatternScanLength ?? DEFAULT_MAX_PATTERN_SCAN_LENGTH)) return { ok: true };
 

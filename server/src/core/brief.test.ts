@@ -84,12 +84,99 @@ test('buildPrompt renders acceptance / verify / timebox / scope as their own sec
   assert.ok(!ctxJson.includes('"acceptance"') && !ctxJson.includes('"timeboxMin"'));
 });
 
-test('a task without a brief gets no brief sections', () => {
+test('a task without a brief gets no acceptance/verify/scope sections, but buildPrompt renders the default timebox (taskTimeoutMs/60000 - 5)', () => {
   const { store, dispatcher } = harness();
   const t = store.createTask({ title: 'x', description: 'y', from: { platform: 'p', agent: 'a' }, to: {}, priority: 'normal' });
   const prompt: string = (dispatcher as any).buildPrompt(t, { agent: 'engineer', isRoster: false });
-  assert.ok(!prompt.includes('# Acceptance criteria') && !prompt.includes('# How to verify'));
+  assert.ok(!prompt.includes('# Acceptance criteria') && !prompt.includes('# How to verify') && !prompt.includes('# Scope'));
+  assert.ok(prompt.includes('# Timebox'));
+  assert.ok(prompt.includes('Spend at most 45 min on this task.'));
+  assert.ok(prompt.includes('At T-5 min: write `progress.md` and return partial results with WAITING_ON_BACKGROUND or STATUS: BLOCKED'));
   assert.deepEqual(renderBriefSections(undefined), []);
+});
+
+test('P1-3 progress.md: absent on first run, injected on re-run/handover under "# Prior progress — resume, do not redo", capped to last 4 KB', () => {
+  const { store, dispatcher, paths } = harness();
+  const t = store.createTask({ title: 'render video', description: 'render 10 songs', from: { platform: 'p', agent: 'a' }, to: {}, priority: 'normal' });
+
+  // 1) First run — no progress.md on disk → section absent.
+  const firstPrompt: string = (dispatcher as any).buildPrompt(t, { agent: 'engineer', isRoster: false });
+  assert.ok(!firstPrompt.includes('# Prior progress — resume, do not redo'));
+
+  // 2) Brain writes artifacts/<id>/progress.md, then task is re-run / handed over.
+  const artDir = path.join(paths.artifacts, t.id);
+  fs.mkdirSync(artDir, { recursive: true });
+  fs.writeFileSync(path.join(artDir, 'progress.md'), [
+    '- [x] step 1: generated 5 songs — songs/01..05.wav (42 MB)',
+    '- [x] step 2: generated covers — covers/01..05.png',
+    '- [ ] step 3: ffmpeg assembly'
+  ].join('\n'));
+
+  const rerunPrompt: string = (dispatcher as any).buildPrompt(t, { agent: 'engineer', isRoster: false });
+  assert.ok(rerunPrompt.includes('# Prior progress — resume, do not redo'));
+  assert.ok(rerunPrompt.includes('- [x] step 1: generated 5 songs — songs/01..05.wav (42 MB)'));
+  assert.ok(rerunPrompt.includes('- [ ] step 3: ffmpeg assembly'));
+
+  // 3) Size cap — a 10 KB progress.md is truncated to the last 4 KB (4096 bytes), keeping recent steps.
+  const earlyMarker = '- [x] step 0: very old step that should be dropped\n';
+  const filler = Array.from({ length: 120 }, (_, i) => `- [x] filler step ${i} — artifact_${i}.bin (1024B)`).join('\n');
+  const recentMarker = '\n- [x] step 99: final completed checkpoint — output_99.mp4 (88MB)';
+  const bigProgress = earlyMarker + filler + recentMarker;
+  assert.ok(Buffer.byteLength(bigProgress, 'utf-8') > 6000);
+  fs.writeFileSync(path.join(artDir, 'progress.md'), bigProgress);
+
+  const cappedLedger: string = (dispatcher as any).readProgressLedger(t.id);
+  assert.ok(Buffer.byteLength(cappedLedger, 'utf-8') <= Dispatcher.PROGRESS_LEDGER_MAX_BYTES);
+  assert.ok(!cappedLedger.includes('step 0: very old step'));
+  assert.ok(cappedLedger.includes('step 99: final completed checkpoint — output_99.mp4 (88MB)'));
+
+  const cappedPrompt: string = (dispatcher as any).buildPrompt(t, { agent: 'engineer', isRoster: false });
+  assert.ok(cappedPrompt.includes('# Prior progress — resume, do not redo'));
+  assert.ok(!cappedPrompt.includes('step 0: very old step'));
+  assert.ok(cappedPrompt.includes('step 99: final completed checkpoint — output_99.mp4 (88MB)'));
+});
+
+test('P1-3 timeout captures progress.md and mentions it in the lessons.jsonl event', async () => {
+  const { store, paths } = harness();
+  const config: Config = {
+    ...(store as any).config,
+    orchestration: {
+      enabled: true,
+      maxConcurrent: 1,
+      pollIntervalMs: 1000,
+      taskTimeoutMs: 3000000,
+      defaultRole: 'generalist',
+      verifier: { enabled: true },
+      agents: { engineer: { description: '', brains: ['b1', 'b2'] } },
+      brains: {
+        b1: { description: '', location: 'remote' },
+        b2: { description: '', location: 'remote' }
+      }
+    }
+  };
+  const dispatcher = new Dispatcher(config, store, new EventBus());
+  const t = store.createTask({
+    title: 'Daily NLM Gumroad Products Promotion Videos',
+    description: 'render promos',
+    from: { platform: 'p', agent: 'a' },
+    to: {},
+    priority: 'normal',
+    context: { agent: 'engineer', brain: 'b1', brainAuto: true, attempts: 0 }
+  });
+  const artDir = path.join(paths.artifacts, t.id);
+  fs.mkdirSync(artDir, { recursive: true });
+  fs.writeFileSync(path.join(artDir, 'progress.md'), '- [x] rendered video 1 — promo1.mp4 (22MB)\n- [x] rendered video 2 — promo2.mp4 (31MB)\n');
+
+  const decision = await (dispatcher as any).verifyReportedCompletion(t, 'TIMEOUT after 3000000ms\npartial stdout');
+  assert.equal(decision.action, 'handover');
+
+  const ledger = path.join(paths.decisions, 'lessons.jsonl');
+  const lessons = fs.readFileSync(ledger, 'utf-8').trim().split('\n').map(l => JSON.parse(l));
+  const timeoutLesson = lessons.find(l => l.task === t.id && l.kind === 'verify-fail');
+  assert.ok(timeoutLesson, 'expected verify-fail lesson on timeout');
+  assert.match(timeoutLesson.reason, /TIMEOUT after 3000000ms/);
+  assert.match(timeoutLesson.reason, /progress\.md/);
+  assert.match(timeoutLesson.reason, /2 step\(s\) done/);
 });
 
 test('orchestrator prompt demands acceptance + verify on every subtask POST', () => {

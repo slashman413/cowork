@@ -92,6 +92,12 @@ guess. Otherwise decide, keep going, and record each call in the result as
 `RULING: <decision> — <why> — <cost if wrong>`. §5's GitHub archive/visibility/workflow
 rule stays a hard stop.
 
+**Progress ledger (`progress.md`).** Long or multi-step tasks keep
+`artifacts/<task-id>/progress.md` updated after each step as `- [x] <step> — <evidence>`
+lines. At T-5 min of your timebox, write `progress.md` and return partial results with
+`WAITING_ON_BACKGROUND:` or `STATUS: BLOCKED`. On a re-run or handover, resume from
+`# Prior progress — resume, do not redo` without redoing completed steps.
+
 ## 5. Stay inside your task
 
 - One task, one deliverable. Do not spawn side quests, refactors, or "while I'm here"
