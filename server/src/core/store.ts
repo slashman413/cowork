@@ -9,6 +9,8 @@ import { Roster } from './roster.js';
 import { normalizeRecurrence, recurrenceFromLegacyHours, nextRunAt, type TaskRecurrence } from './recurrence.js';
 import { isRateLimitFailure } from './result-verifier.js';
 import { canonicalBrainId } from '../config.js';
+import { normalizeContextBrief } from './brief.js';
+import { buildLesson, appendLesson } from './lessons.js';
 
 /**
  * A veto the Dispatcher registers on the store so EXTERNAL task completions
@@ -568,6 +570,22 @@ export class Store {
       status: 'pending',
       createdAt: new Date().toISOString()
     };
+    // Brief contract (P0-3): validate + normalize context.acceptance/verify/
+    // timeboxMin/scope (throws → 400 on the API / isError on MCP).
+    task.context = normalizeContextBrief(task.context);
+    if (task.context === undefined) delete task.context;
+    // An orchestrator subtask must say how it will be judged. Not rejected yet —
+    // warn and count it in the lesson ledger so the miss rate is measurable.
+    if (task.from?.agent === 'orchestrator' && !(Array.isArray(task.context?.acceptance) && task.context!.acceptance.length)) {
+      console.warn(`Store: orchestrator-created task ${id} ("${task.title}") has no acceptance criteria`);
+      if (this.config.paths?.decisions) {
+        appendLesson(this.config.paths.decisions, buildLesson({
+          kind: 'brief-missing-acceptance', task: id, title: task.title || '',
+          agent: 'orchestrator', brain: String(task.context?.brain || ''), attempt: 0,
+          reason: 'orchestrator-created subtask has no context.acceptance'
+        }));
+      }
+    }
     // A pin to a retired brain id (BRAIN_ID_ALIASES) is stored as the canonical id.
     if (typeof task.context?.brain === 'string') {
       const canon = canonicalBrainId(this.config, task.context.brain);

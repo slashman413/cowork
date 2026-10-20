@@ -2,8 +2,9 @@ import fs from 'fs';
 import path from 'path';
 import { globSync } from 'glob';
 import { v4 as uuidv4 } from 'uuid';
-import type { Config, WorkflowDef, WorkflowStep, WorkflowRun, WorkflowRunRecord, WorkflowDecision, Task } from '../types.js';
+import type { Config, WorkflowDef, WorkflowStep, WorkflowRun, WorkflowRunRecord, WorkflowDecision, Task, TaskBrief } from '../types.js';
 import type { Store } from './store.js';
+import { parseBrief } from './brief.js';
 
 /** Fill {{param}} placeholders from the run params (missing → left as-is). */
 function interpolate(tpl: string, params: Record<string, string>): string {
@@ -131,6 +132,7 @@ export class Workflows {
       if (!s.key || typeof s.key !== 'string') { errors.push('every step needs a string key'); continue; }
       if (keys.has(s.key)) errors.push(`duplicate step key "${s.key}"`);
       keys.add(s.key);
+      errors.push(...parseBrief(s as Record<string, any>, `step "${s.key}" `).errors);
     }
     for (const s of def.steps) {
       for (const d of s.dependsOn || []) {
@@ -182,7 +184,9 @@ export class Workflows {
       title, description,
       agent: s.agent, division: s.division, brain: s.brain,
       priority: s.priority || 'normal',
-      dependsOnKeys: s.dependsOn || []
+      dependsOnKeys: s.dependsOn || [],
+      // Brief contract (P0-3), {{param}}-filled like the title/description.
+      brief: interpolateBrief(parseBrief(s as Record<string, any>).brief, params)
     };
   }
 
@@ -209,7 +213,7 @@ export class Workflows {
     if (opts.dryRun) {
       const steps = order.map(s => {
         const c = this.compileStep(def, s, params);
-        return { key: s.key, title: c.title, description: c.description, agent: c.agent, division: c.division, brain: c.brain, dependsOn: c.dependsOnKeys };
+        return { key: s.key, title: c.title, description: c.description, agent: c.agent, division: c.division, brain: c.brain, dependsOn: c.dependsOnKeys, ...c.brief };
       });
       return { runId, workflowId: def.id, mode: 'dag', dryRun: true, steps };
     }
@@ -219,7 +223,7 @@ export class Workflows {
     const tasks: Task[] = [];
     for (const s of order) {
       const c = this.compileStep(def, s, params);
-      const context: Record<string, any> = { workflowId: def.id, workflowRunId: runId, stepKey: s.key };
+      const context: Record<string, any> = { workflowId: def.id, workflowRunId: runId, stepKey: s.key, ...c.brief };
       if (c.agent) context.agent = c.agent;
       if (c.division) context.division = c.division;
       if (c.brain) context.brain = c.brain;
@@ -349,7 +353,7 @@ export class Workflows {
     if (!step) { console.warn(`Workflows: run ${runId} decision names unknown step "${choice.stepKey}"`); return null; }
 
     const c = this.compileStep(def, step, record.params);
-    const context: Record<string, any> = { workflowId: def.id, workflowRunId: runId, stepKey: step.key, orchestrated: true };
+    const context: Record<string, any> = { workflowId: def.id, workflowRunId: runId, stepKey: step.key, orchestrated: true, ...c.brief };
     if (c.agent) context.agent = c.agent;
     if (c.division) context.division = c.division;
     if (c.brain) context.brain = c.brain;
@@ -456,6 +460,17 @@ export class Workflows {
       history: rec.history
     };
   }
+}
+
+/** Fill {{param}} placeholders inside every string of a brief. */
+function interpolateBrief(brief: TaskBrief, params: Record<string, string>): TaskBrief {
+  const list = (xs?: string[]) => xs?.map(x => interpolate(x, params));
+  const out: TaskBrief = {};
+  if (brief.acceptance) out.acceptance = list(brief.acceptance);
+  if (brief.verify) out.verify = list(brief.verify);
+  if (brief.timeboxMin) out.timeboxMin = brief.timeboxMin;
+  if (brief.scope) out.scope = { ...(brief.scope.write ? { write: list(brief.scope.write) } : {}), ...(brief.scope.forbid ? { forbid: list(brief.scope.forbid) } : {}) };
+  return out;
 }
 
 /** Short, url-safe run id. Kept here so workflows.ts owns its own id scheme. */

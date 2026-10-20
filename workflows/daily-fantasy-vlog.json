@@ -9,6 +9,16 @@
       "key": "generate-vlog",
       "title": "Generate Daily Vlog",
       "description": "Generate today's 10-minute fantasy vlog using the established ComfyUI + LoRA pipeline. Ensure visuals, pacing, and audio match the reference aesthetic.",
+      "acceptance": [
+        "One rendered video file (.mp4) is saved in the artifacts dir; name it in the result",
+        "Duration is 9:30-10:30 (570-630 s)",
+        "The file has both a video and an audio stream",
+        "A thumbnail image and title/description text for the upload are saved next to it"
+      ],
+      "verify": [
+        "ffprobe -v error -show_entries format=duration -of csv=p=0 <video>.mp4  # 570-630",
+        "ffprobe -v error -show_entries stream=codec_type -of csv=p=0 <video>.mp4  # lists video and audio"
+      ],
       "division": "specialized",
       "context": { "brain": "local-ha-deepseek-v4-pro" }
     },
@@ -16,6 +26,15 @@
       "key": "upload-vlog",
       "title": "Upload Vlog to YouTube (Public)",
       "description": "Upload the generated vlog to the Gentle Soul YouTube channel as a PUBLIC video. Use ~/.priv/gentle_soul_youtube_token.json.",
+      "acceptance": [
+        "The video from the generate-vlog step is uploaded to the Gentle Soul channel with privacyStatus public",
+        "The result contains the YouTube video id and URL https://www.youtube.com/watch?v=<id>",
+        "If the OAuth token is expired or upload fails, the result ends with STATUS: BLOCKED and the error, not a claimed upload"
+      ],
+      "verify": [
+        "YouTube Data API videos.list?part=status,snippet&id=<id> with the Gentle Soul token → status.privacyStatus == public",
+        "curl -sI https://www.youtube.com/watch?v=<id> returns 200"
+      ],
       "division": "marketing",
       "context": { "brain": "local-ha-deepseek-v4-pro" },
       "dependsOn": ["generate-vlog"]

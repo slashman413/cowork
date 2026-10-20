@@ -96,6 +96,8 @@ export function createApiRouter(store: Store, eventBus: EventBus): Router {
         to: { platform: body.to?.platform, agent: body.to?.agent },
         priority: ['low', 'normal', 'high', 'urgent'].includes(body.priority) ? body.priority : 'normal',
         skill: body.skill,
+        // Brief contract (P0-3) rides inside context: context.acceptance /
+        // verify / timeboxMin / scope. Validated in the store (bad shape → 400).
         context: body.context,
         tags: Array.isArray(body.tags) ? body.tags : undefined,
         interaction: body.interaction && Array.isArray(body.interaction.fields) ? body.interaction : undefined,

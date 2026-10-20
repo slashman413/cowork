@@ -498,6 +498,24 @@ export interface TaskInteraction {
   submittedBy?: string;
 }
 
+/**
+ * Brief contract (P0-3). Every field is optional. On a TASK these live on
+ * `task.context` (context.acceptance / .verify / .timeboxMin / .scope) — set
+ * them there on POST /api/inbox and MCP create_task. On a WORKFLOW STEP they
+ * are step-level fields that expansion copies into the task's context. The
+ * dispatcher renders them as dedicated prompt sections. See core/brief.ts.
+ */
+export interface TaskBrief {
+  /** Checkable "done means" criteria (artifact names, commands, URLs). */
+  acceptance?: string[];
+  /** Commands / checks that prove the acceptance criteria. */
+  verify?: string[];
+  /** Minutes to spend before returning partial results. */
+  timeboxMin?: number;
+  /** Paths/systems the worker may write to, and ones it must not touch. */
+  scope?: { write?: string[]; forbid?: string[] };
+}
+
 export interface Task {
   id: string;
   title: string;
@@ -520,6 +538,7 @@ export interface Task {
    *  or dispatched); the dispatcher releases it to `pending` when its time comes. */
   status: 'wait-input' | 'scheduled' | 'pending' | 'claimed' | 'in-progress' | 'done' | 'rejected';
   skill?: string;
+  /** Free-form; carries the brief contract (acceptance/verify/timeboxMin/scope — {@link TaskBrief}). */
   context?: Record<string, any>;
   tags?: string[];
   /** Human-in-the-loop questions/checklist a person answers from the Inbox card
@@ -609,6 +628,11 @@ export interface WorkflowStep {
   priority?: 'low' | 'normal' | 'high' | 'urgent';
   /** Step keys (NOT task ids) this step waits for — the DAG edges. */
   dependsOn?: string[];
+  /** Brief contract (P0-3) — copied into the expanded task's context. */
+  acceptance?: TaskBrief['acceptance'];
+  verify?: TaskBrief['verify'];
+  timeboxMin?: TaskBrief['timeboxMin'];
+  scope?: TaskBrief['scope'];
 }
 
 /**

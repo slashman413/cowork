@@ -8,12 +8,27 @@
       "key": "research",
       "title": "Research: {{topic}}",
       "description": "Research the topic \"{{topic}}\". Produce 5-8 key findings with sources, the current state of the art, and 3 angles worth writing about. Output as markdown.",
+      "acceptance": [
+        "research.md is saved in the artifacts dir with 5-8 numbered findings",
+        "Every finding has a source URL",
+        "Exactly 3 writing angles are proposed, each one sentence"
+      ],
+      "verify": [
+        "test -s research.md && grep -cE 'https?://' research.md  # >= 5",
+        "spot-check 2 source URLs: curl -sI <url> returns 2xx/3xx"
+      ],
       "division": "marketing"
     },
     {
       "key": "draft",
       "title": "Draft an article on {{topic}}",
       "description": "Using the research provided, write a 600-900 word article on \"{{topic}}\". Clear structure, engaging intro, concrete takeaways. Output the full article as markdown.",
+      "acceptance": [
+        "article.md is saved in the artifacts dir with 600-900 words",
+        "It has a title, an intro, at least 3 section headings and a takeaways section",
+        "Claims trace to findings in the research result (no new uncited statistics)"
+      ],
+      "verify": ["wc -w article.md  # 600-900", "grep -c '^## ' article.md  # >= 3"],
       "division": "marketing",
       "dependsOn": ["research"]
     },
@@ -21,6 +36,15 @@
       "key": "review",
       "title": "Review the {{topic}} draft",
       "description": "Review the drafted article for accuracy, clarity, and tone. List concrete edits, then output the corrected final article.",
+      "acceptance": [
+        "The result lists the concrete edits made (at least 3, or states why fewer were needed)",
+        "final-article.md is saved in the artifacts dir and stays within 600-900 words",
+        "Every factual claim in final-article.md is consistent with the research findings"
+      ],
+      "verify": [
+        "test -s final-article.md && wc -w final-article.md",
+        "diff article.md final-article.md from the two tasks' artifact dirs shows the listed edits"
+      ],
       "agent": "code-reviewer",
       "dependsOn": ["draft"]
     },
@@ -28,6 +52,14 @@
       "key": "publish",
       "title": "Prepare {{topic}} for publishing",
       "description": "Take the reviewed final article and prepare it for publishing: write an SEO title, meta description, 5 tags, and a 2-sentence social blurb. Output everything as markdown.",
+      "acceptance": [
+        "publish.md is saved in the artifacts dir with: SEO title (<= 60 chars), meta description (<= 160 chars), exactly 5 tags, a 2-sentence social blurb",
+        "The SEO title and meta description contain the topic keyword"
+      ],
+      "verify": [
+        "test -s publish.md",
+        "check title length <= 60 and meta description length <= 160 characters"
+      ],
       "division": "marketing",
       "dependsOn": ["review"]
     }

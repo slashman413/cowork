@@ -8,6 +8,7 @@ import type { Workflows } from './workflows.js';
 import type { Goals } from './goals.js';
 import { verifyOutput, buildVerifierPrompt, parseLlmVerdict, detectInputRequest, detectBackgroundWait, isRateLimitFailure, parseStatusFooter, type StatusFooter, type VerifyVerdict, type InputOptions, type InputRequest, type BackgroundOptions, type BackgroundWait } from './result-verifier.js';
 import { buildLesson, appendLesson } from './lessons.js';
+import { BRIEF_KEYS, renderBriefSections } from './brief.js';
 import { canonicalBrainId } from '../config.js';
 import { STREAMING_EXECS, streamArgs, createStreamRenderer } from './progress-stream.js';
 import { isAgyModelRejection, diagnoseAgyModelFailure, listAgyModels } from './agy-models.js';
@@ -1378,9 +1379,12 @@ export class Dispatcher {
     lines.push(`# Task: ${task.title}`, ``, task.description, ``);
     const shownCtx = { ...(task.context || {}) } as Record<string, unknown>;
     // inputFiles is rendered as its own section with readable paths (below), and
-    // humanInput as a dedicated "answers" section (below) — drop both from the raw
-    // context dump so they aren't duplicated or lost as noise in the JSON blob.
-    for (const k of ['persona', 'brainAuto', 'remoteWaitSince', 'dispatched', 'attempts', 'agentName', 'ranAgent', 'ranDivision', 'ranBrain', 'isRoster', 'inputFiles', 'humanInput', 'awaitingInput', 'inputQuestions', 'backgroundWait']) delete shownCtx[k];
+    // humanInput as a dedicated "answers" section (below), and the brief fields
+    // as their own sections — drop them from the raw context dump so they aren't
+    // duplicated or lost as noise in the JSON blob.
+    for (const k of ['persona', 'brainAuto', 'remoteWaitSince', 'dispatched', 'attempts', 'agentName', 'ranAgent', 'ranDivision', 'ranBrain', 'isRoster', 'inputFiles', 'humanInput', 'awaitingInput', 'inputQuestions', 'backgroundWait', ...BRIEF_KEYS]) delete shownCtx[k];
+    // The brief contract (P0-3) gets its own sections right under the task text.
+    lines.push(...renderBriefSections(task.context));
     if (Object.keys(shownCtx).length > 0) {
       lines.push(`# Context`, '```json', JSON.stringify(shownCtx, null, 2), '```', '');
     }
@@ -1436,9 +1440,10 @@ export class Dispatcher {
         `# Orchestrator instructions`,
         `Decompose this request into concrete subtasks and dispatch them to the company via the Cowork REST API — one POST per subtask. Leave the agent UNASSIGNED and the company's router will pick the best specialist from its 250-agent Agencies automatically (or set context.division/context.agent yourself if you know exactly who should do it):`,
         '```bash',
-        `curl ${curlFlags} -X POST ${selfBase}/api/inbox -H 'Content-Type: application/json' -d '{"title":"...","description":"...(full standalone instructions)...","from":{"platform":"claude","agent":"orchestrator"},"to":{},"priority":"normal"}'`,
+        `curl ${curlFlags} -X POST ${selfBase}/api/inbox -H 'Content-Type: application/json' -d '{"title":"...","description":"...(goal + full standalone instructions)...","from":{"platform":"claude","agent":"orchestrator"},"to":{},"priority":"normal","context":{"acceptance":["<checkable criterion: artifact name, command, URL>"],"verify":["<command or check that proves it>"]}}'`,
         '```',
         `Each subtask description must be fully standalone — the executing specialist sees ONLY that description.`,
+        `Every subtask POST must carry the brief: the goal (in the description) plus context.acceptance (2-5 concrete, checkable criteria) and context.verify (the commands/URLs/checks that prove them). Optional: context.timeboxMin (minutes) and context.scope {"write":[...],"forbid":[...]}. A subtask you cannot write acceptance for is not scoped yet — scope it further before dispatching it.`,
         `To make a subtask wait for others (e.g. a final synthesis step), add their task ids to its context: {"dependsOn":["<id1>","<id2>"]} — the API response to each POST gives the created task's id; dependencies' results are shown to the dependent agent.`,
         `After dispatching, output a summary of the plan. Check existing tasks first: curl ${curlFlags} ${selfBase}/api/inbox?limit=20`,
         ``

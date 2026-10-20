@@ -24,7 +24,7 @@ import { join } from 'node:path';
  *  on the single-process server. */
 export interface Lesson {
   at: string;                       // ISO-8601
-  kind: 'verify-fail' | 'wait-input' | 'blocked';  // blocked = agent's STATUS: BLOCKED (P0-2)
+  kind: 'verify-fail' | 'wait-input' | 'blocked' | 'brief-missing-acceptance';  // blocked = agent's STATUS: BLOCKED (P0-2); brief-missing-acceptance = orchestrator subtask without acceptance (P0-3)
   task: string;                     // task id
   titleSlug: string;                // kebab of the title, first 6 words
   agent: string;                    // roster slug (best-effort)
