@@ -566,7 +566,18 @@ async function main() {
   });
 
   // ── Brain registry (model × platform × location) ───────────────────────────
-  app.get('/api/brains', (_req, res) => res.json(config.orchestration.brains || {}));
+  // Read-only cooldownUntil/cooldownReason are overlaid on brains cooling after a
+  // rate limit (circuit breaker, see Dispatcher.noteRateLimit); never persisted.
+  app.get('/api/brains', (_req, res) => {
+    const brains = config.orchestration.brains || {};
+    const cooling = dispatcher.getBrainCooldowns();
+    const out: Record<string, unknown> = {};
+    for (const [id, b] of Object.entries(brains)) {
+      const cd = cooling[id];
+      out[id] = cd ? { ...b, cooldownUntil: cd.until, cooldownReason: cd.reason } : b;
+    }
+    res.json(out);
+  });
 
   app.put('/api/brains/:id', (req, res) => {
     try {

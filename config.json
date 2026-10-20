@@ -144,6 +144,10 @@
         "model": "claude-sonnet-5-5",
         "host": "your-remote-host"
       }
+    },
+    "brainCooldown": {
+      "enabled": true,
+      "defaultMs": 1800000
     }
   }
 }

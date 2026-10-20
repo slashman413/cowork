@@ -3782,6 +3782,7 @@ class App {
           ${badge(b.location, b.location === 'remote' ? '#EAB308' : '#22C55E')}
           ${b.dynamic ? badge('auto', '#0EA5E9') : ''}
           ${b.disabled ? badge('disabled', '#EF4444') : ''}
+          ${b.cooldownUntil ? `<span title="${esc(b.cooldownReason || 'rate limited')}">${badge('cooling until ' + new Date(b.cooldownUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), '#F97316')}</span>` : ''}
           <button class="btn" data-act="toggle-brain" data-id="${esc(id)}" data-disabled="${b.disabled ? '1' : ''}" style="font-size:0.75rem;margin-left:auto;${b.disabled ? 'color:#22C55E;border-color:#22C55E66' : 'color:#EAB308;border-color:#EAB30866'}">${b.disabled ? 'Enable' : 'Disable'}</button>
           <button class="btn" data-act="del-brain" data-id="${esc(id)}" style="font-size:0.75rem">Deregister</button>
         </div>

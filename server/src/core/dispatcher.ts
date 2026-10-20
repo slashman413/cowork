@@ -6,11 +6,12 @@ import type { EventBus } from './events.js';
 import type { Store, CompletionDecision } from './store.js';
 import type { Workflows } from './workflows.js';
 import type { Goals } from './goals.js';
-import { verifyOutput, buildVerifierPrompt, parseLlmVerdict, detectInputRequest, detectBackgroundWait, type VerifyVerdict, type InputOptions, type InputRequest, type BackgroundOptions, type BackgroundWait } from './result-verifier.js';
+import { verifyOutput, buildVerifierPrompt, parseLlmVerdict, detectInputRequest, detectBackgroundWait, isRateLimitFailure, type VerifyVerdict, type InputOptions, type InputRequest, type BackgroundOptions, type BackgroundWait } from './result-verifier.js';
 import { buildLesson, appendLesson } from './lessons.js';
 import { canonicalBrainId } from '../config.js';
 import { STREAMING_EXECS, streamArgs, createStreamRenderer } from './progress-stream.js';
 import { isAgyModelRejection, diagnoseAgyModelFailure, listAgyModels } from './agy-models.js';
+import { BrainCooldowns, parseRateLimitReset, type BrainCooldown } from './brain-cooldown.js';
 
 /** Remove ANSI CSI/OSC escape sequences and lone carriage returns. */
 // eslint-disable-next-line no-control-regex
@@ -84,6 +85,10 @@ export class Dispatcher {
    *  task before it is left for a real human (overridable via
    *  orchestration.autoAnswer.maxAttempts). */
   static readonly MAX_AUTO_ANSWERS = 3;
+  /** Default brain cooldown when a rate-limit notice carries no reset time. */
+  static readonly DEFAULT_BRAIN_COOLDOWN_MS = 1_800_000;
+  /** Per-brain rate-limit cooldowns (circuit breaker), persisted under .status. */
+  private cooldowns: BrainCooldowns;
 
   constructor(config: Config, store: Store, eventBus: EventBus, workflows?: Workflows, goals?: Goals) {
     this.config = config;
@@ -91,6 +96,42 @@ export class Dispatcher {
     this.eventBus = eventBus;
     this.workflows = workflows;
     this.goals = goals;
+    const statusDir = config.paths?.status;
+    this.cooldowns = new BrainCooldowns(statusDir ? join(statusDir, 'brain-cooldowns.json') : undefined);
+  }
+
+  private cooldownEnabled(): boolean {
+    return this.config.orchestration.brainCooldown?.enabled !== false;
+  }
+
+  /** Epoch ms `brainId` cools until after a rate limit, or undefined when dispatchable. */
+  private cooldownUntil(brainId: string): number | undefined {
+    return this.cooldownEnabled() ? this.cooldowns.until(brainId) : undefined;
+  }
+
+  /** Active cooldowns (for GET /api/brains). Empty when the breaker is disabled. */
+  public getBrainCooldowns(): Record<string, BrainCooldown> {
+    return this.cooldownEnabled() ? this.cooldowns.snapshot() : {};
+  }
+
+  /**
+   * Trip the breaker for `brainId` if this failed attempt was a rate / session
+   * limit. `reason` is the verifier's reason; `text` is the brain's raw output,
+   * only consulted when the deterministic gate rejected it (`detFailed`) — a long
+   * deliverable that merely DISCUSSES rate limits and failed the LLM gate must
+   * not cool its brain. Cools until the reset parsed from the notice, else
+   * now + orchestration.brainCooldown.defaultMs.
+   */
+  private noteRateLimit(brainId: string, reason: string, text: string, detFailed: boolean): void {
+    if (!this.cooldownEnabled() || !brainId) return;
+    const notice = detFailed ? `${reason}\n${(text || '').slice(0, 4000)}` : reason;
+    if (!isRateLimitFailure(notice)) return;
+    const now = Date.now();
+    const parsed = parseRateLimitReset(notice, now);
+    const until = parsed ?? now + (this.config.orchestration.brainCooldown?.defaultMs ?? Dispatcher.DEFAULT_BRAIN_COOLDOWN_MS);
+    const firstLine = (text || '').split('\n').map(l => l.trim()).find(l => isRateLimitFailure(l)) || reason;
+    const cd = this.cooldowns.set(brainId, until, detFailed ? firstLine : reason, now);
+    console.log(`Dispatcher: brain ${brainId} rate-limited — cooling until ${cd.until}${parsed ? '' : ' (default)'}`);
   }
 
   public start(): void {
@@ -313,7 +354,7 @@ export class Dispatcher {
     let bestIdx = -1, bestSlack = 0;
     for (let i = attempt; i < chain.length; i++) {
       const b = brains[chain[i]];
-      if (!b || b.location !== 'local' || !b.exec) continue;
+      if (!b || b.location !== 'local' || !b.exec || this.cooldownUntil(chain[i])) continue;
       const slack = this.brainCap(chain[i]) - this.brainLoad(chain[i]);
       if (slack > bestSlack) { bestSlack = slack; bestIdx = i; }
     }
@@ -427,6 +468,9 @@ export class Dispatcher {
               ? 'Held — tagged `manual`, so it never auto-runs. Use “Run now”, or drop the manual tag, to dispatch it.'
               : 'No eligible brain to run this — its agent’s brain chain is empty, exhausted, or every rung is disabled. Edit its agent/brain targeting.');
             continue;
+          case 'cooling':
+            this.markPending(task, `Waiting — ${plan.brains.length > 1 ? `every remaining brain in its chain (${plan.brains.map(b => `\`${b}\``).join(', ')}) is` : `brain \`${plan.brains[0]}\` is`} cooling down after a rate limit. Resumes ${new Date(plan.until).toISOString()}.`);
+            continue;
           case 'remote':
             this.handleRemoteRung(task, plan.exec);
             this.markPending(task, plan.exec?.brainId
@@ -478,7 +522,9 @@ export class Dispatcher {
     if (!since || ctx.brain !== plan.brainId) {
       const t = this.store.getTask(task.id);
       if (t) {
-        t.context = { ...(t.context || {}), brain: plan.brainId, brainAuto: true, remoteWaitSince: now };
+        // attempts = the rung actually offered (cooling rungs may have been skipped),
+        // so a later handover advances from THIS rung.
+        t.context = { ...(t.context || {}), brain: plan.brainId, brainAuto: true, remoteWaitSince: now, attempts: plan.attempt };
         this.store.saveTask(t);
       }
       return;
@@ -487,7 +533,7 @@ export class Dispatcher {
     if (grace > 0 && now - since > grace) {
       const t = this.store.getTask(task.id);
       if (t) {
-        const attempts = (Number(t.context?.attempts) || 0) + 1;
+        const attempts = plan.attempt + 1;
         t.context = { ...(t.context || {}), attempts, remoteWaitSince: undefined, brain: undefined, brainAuto: undefined };
         this.store.saveTask(t);
         console.log(`Dispatcher: remote rung ${plan.brainId} unclaimed ${grace}ms — advancing task ${task.id} to next brain`);
@@ -521,7 +567,7 @@ export class Dispatcher {
    *      remote (leave in inbox for that client).
    *   4. nothing -> classify (LLM assigns an agent)
    */
-  private planFor(task: Task): { action: 'skip' } | { action: 'remote'; exec?: ExecPlan } | { action: 'route' } | { action: 'execute'; exec: ExecPlan } {
+  private planFor(task: Task): { action: 'skip' } | { action: 'cooling'; until: number; brains: string[] } | { action: 'remote'; exec?: ExecPlan } | { action: 'route' } | { action: 'execute'; exec: ExecPlan } {
     if (task.tags?.includes('manual')) return { action: 'skip' };
     const brains = this.config.orchestration.brains || {};
     const agentName = this.resolveAgent(task) || '';
@@ -537,6 +583,9 @@ export class Dispatcher {
     // Canonicalised so a task pinned to a retired brain id before a rename still runs on it.
     const ctxBrain = typeof task.context?.brain === 'string' ? canonicalBrainId(this.config, task.context.brain) : undefined;
     if (ctxBrain && brains[ctxBrain] && !brains[ctxBrain].disabled && !task.context?.brainAuto) {
+      // A pinned brain that is cooling after a rate limit waits (no retry burned).
+      const cool = this.cooldownUntil(ctxBrain);
+      if (cool) return { action: 'cooling', until: cool, brains: [ctxBrain] };
       return this.brainPlan(agentName, division, ctxBrain, brains[ctxBrain], { pinned: true, attempt, chainLen: 0 });
     }
 
@@ -547,7 +596,16 @@ export class Dispatcher {
     if (agentName) {
       const chain = this.chainFor(agentName, division);
       if (!chain.length || attempt >= chain.length) return { action: 'skip' };  // exhausted / misconfigured
-      const { brainId, index } = this.selectRung(chain, attempt, brains);
+      // Skip rungs whose brain is cooling after a rate limit, like disabled rungs —
+      // without consuming an attempt. If EVERY remaining rung is cooling, wait for
+      // the earliest cooldown to end instead of burning attempts on capped brains.
+      let start = attempt;
+      while (start < chain.length && this.cooldownUntil(chain[start])) start++;
+      if (start >= chain.length) {
+        const rest = chain.slice(attempt);
+        return { action: 'cooling', until: Math.min(...rest.map(id => this.cooldownUntil(id) ?? Infinity)), brains: rest };
+      }
+      const { brainId, index } = this.selectRung(chain, start, brains);
       const b = brains[brainId];
       if (!b) return { action: 'skip' };
       return this.brainPlan(agentName, division, brainId, b, { pinned: false, attempt: index, chainLen: chain.length });
@@ -1672,6 +1730,7 @@ export class Dispatcher {
     //       handover and strand it.
     //   (3) LLM quality gate — only a genuine deliverable is judged for completion.
     let verdict = this.deterministicVerdict({ ok: true, text });
+    const detFailed = !verdict.ok;
     if (verdict.ok) {
       const req = detectInputRequest(text, this.inputOpts());
       if (req.needsInput) {
@@ -1693,6 +1752,7 @@ export class Dispatcher {
     }
 
     const failReason = verdict.reason || (result || '').slice(0, 300);
+    this.noteRateLimit(brainId, failReason, text, detFailed);
     const attempt = Number(task.context?.attempts) || 0;
     const agent = this.resolveAgent(task)
       || (typeof task.context?.agentName === 'string' ? task.context.agentName : '') || brainId;
@@ -1916,6 +1976,7 @@ export class Dispatcher {
           console.warn(`Dispatcher: ${plan.brainId} — ${diag}`);
         }
       }
+      this.noteRateLimit(plan.brainId, failReason, output.text, !detVerdict.ok);
       this.recordFailedBrain(task.id, { brain: plan.brainId, agent: plan.agent, attempt: plan.attempt + 1, reason: failReason });
       this.recordLesson(task.id, { kind: 'verify-fail', brain: plan.brainId, agent: plan.agent, attempt: plan.attempt + 1, reason: failReason, resultText: output.text });
       const fresh = this.store.getTask(task.id);

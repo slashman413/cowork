@@ -327,6 +327,18 @@ export interface OrchestrationConfig {
    *  re-queued at the reset without anyone ticking the card's toggle (which now
    *  only opts a task OUT). Set `enabled: false` to restore the old opt-in. */
   autoRerunRateLimited?: AutoRerunRateLimitedConfig;
+  /** Brain-level rate-limit circuit breaker: a brain that answers with a
+   *  rate/session-limit notice is skipped by the chain planner until its window
+   *  resets (parsed from the notice) or `defaultMs` passes. Default ON. */
+  brainCooldown?: BrainCooldownConfig;
+}
+
+/** Config for {@link OrchestrationConfig.brainCooldown}. */
+export interface BrainCooldownConfig {
+  /** Default true. false = never record or honour cooldowns. */
+  enabled?: boolean;
+  /** Cooldown when the notice carries no reset time. Default 1_800_000 (30 min). */
+  defaultMs?: number;
 }
 
 /** Config for {@link OrchestrationConfig.autoRerunRateLimited}. */
