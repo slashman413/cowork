@@ -24,7 +24,7 @@ import { join } from 'node:path';
  *  on the single-process server. */
 export interface Lesson {
   at: string;                       // ISO-8601
-  kind: 'verify-fail' | 'wait-input' | 'blocked' | 'brief-missing-acceptance' | 'quality-shadow' | 'sharpen-failed';  // blocked = agent's STATUS: BLOCKED (P0-2); brief-missing-acceptance = orchestrator subtask without acceptance (P0-3); quality-shadow = P1-1 shadow spec verdict; sharpen-failed = PS-1 sharpener failure
+  kind: 'verify-fail' | 'wait-input' | 'blocked' | 'brief-missing-acceptance' | 'quality-shadow' | 'sharpen-failed' | 'gate-panel';  // blocked = agent's STATUS: BLOCKED (P0-2); brief-missing-acceptance = orchestrator subtask without acceptance (P0-3); quality-shadow = P1-1 shadow spec verdict; sharpen-failed = PS-1 sharpener failure; gate-panel = PS-2 panel round
   task: string;                     // task id
   titleSlug: string;                // kebab of the title, first 6 words
   agent: string;                    // roster slug (best-effort)
@@ -34,6 +34,17 @@ export interface Lesson {
   reason: string;                   // truncated to 500 chars
   requiresGuess: string[];          // deterministic extract, ≤10 entries
   questions?: string[];             // for kind:"wait-input"
+  panel?: LessonPanel;              // for kind:"gate-panel"
+}
+
+/** PS-2: one panel review round (gate or judgment-tier spec verifier). */
+export interface LessonPanel {
+  gate: string;                     // gated step task id (or verified task id)
+  round: number;
+  families: string[];
+  buckets: { actOn: number; consider: number; noted: number; dismissed: number };
+  verdict: string;
+  leadParsed: boolean;
 }
 
 const REASON_CAP = 500;
@@ -127,6 +138,7 @@ export function buildLesson(input: {
   reason?: string;
   resultText?: string;
   questions?: string[];
+  panel?: LessonPanel;
 }): Lesson {
   const reason = (input.reason || '').slice(0, REASON_CAP);
   const requiresGuess = extractRequires(`${input.resultText || ''}\n${input.reason || ''}`);
@@ -141,7 +153,8 @@ export function buildLesson(input: {
     attempt: input.attempt,
     reason,
     requiresGuess,
-    ...(input.questions && input.questions.length ? { questions: input.questions.slice(0, 8) } : {})
+    ...(input.questions && input.questions.length ? { questions: input.questions.slice(0, 8) } : {}),
+    ...(input.panel ? { panel: input.panel } : {})
   };
 }
 

@@ -40,7 +40,8 @@
       "gate": {
         "reviewer": "engineering-code-reviewer",
         "maxRounds": 3,
-        "escalateBrainAt": 2
+        "escalateBrainAt": 2,
+        "panel": 2
       }
     },
     {
@@ -116,7 +117,13 @@
       ],
       "agent": "engineering-code-reviewer",
       "tier": "judgment",
-      "dependsOn": ["push-verify"]
+      "dependsOn": ["push-verify"],
+      "gate": {
+        "reviewer": "engineering-code-reviewer",
+        "maxRounds": 2,
+        "escalateBrainAt": 2,
+        "panel": 2
+      }
     }
   ]
 }

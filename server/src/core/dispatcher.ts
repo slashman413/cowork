@@ -8,11 +8,12 @@ import { isFailedTask } from './store.js';
 import type { Workflows } from './workflows.js';
 import type { Goals } from './goals.js';
 import { verifyOutput, buildVerifierPrompt, parseLlmVerdict, parseSpecVerdict, selectSpecJudges, DEFAULT_SPEC_JUDGES, extractEvidenceBlock, detectInputRequest, detectBackgroundWait, unaccountedFailedDeps, isRateLimitFailure, parseStatusFooter, type StatusFooter, type VerifyVerdict, type VerifierArtifact, type SpecVerdictRecord, type InputOptions, type InputRequest, type BackgroundOptions, type BackgroundWait } from './result-verifier.js';
-import { buildLesson, appendLesson } from './lessons.js';
+import { buildLesson, appendLesson, type LessonPanel } from './lessons.js';
+import { buildPanelReviewerPrompt, buildLeadJudgmentPrompt, parseLeadJudgment } from './review-panel.js';
 import { describeAutoAnswer, logAutoAnswer } from './rulings.js';
 import { BRIEF_KEYS, parseBrief, renderBriefSections } from './brief.js';
 import { shouldSharpenTask, sharpenTask } from './sharpener.js';
-import { taskTier, mergeTierChain, reviewChain, type TierName } from './tiers.js';
+import { taskTier, mergeTierChain, reviewChain, brainFamily, type TierName } from './tiers.js';
 import { canonicalBrainId } from '../config.js';
 import { STREAMING_EXECS, streamArgs, createStreamRenderer } from './progress-stream.js';
 import { isAgyModelRejection, diagnoseAgyModelFailure, listAgyModels } from './agy-models.js';
@@ -1843,7 +1844,24 @@ export class Dispatcher {
     let usedJudgeId: string | null = null;
     let parsed: ReturnType<typeof parseSpecVerdict> | null = null;
 
-    for (const judgeId of candidates) {
+    // PS-2: judgment-tier tasks get a multi-family panel + lead when the flag is on.
+    const panelCfg = this.config.orchestration.verifier?.panel;
+    if (panelCfg?.enabled !== false && panelCfg?.judgmentTier && taskTier(task.context) === 'judgment') {
+      const tiers = this.config.orchestration.tiers || {};
+      const panelJudges = selectSpecJudges(executorBrainId, {
+        brains: this.config.orchestration.brains,
+        judges: specCfg.judges,
+        isCooling: id => !!this.cooldownUntil(id),
+        panel: panelCfg.size ?? 2,
+        panelPool: [...(tiers.judgment || []), ...(tiers.standard || []), ...(tiers.mechanical || [])],
+      });
+      if (panelJudges.length >= 2) {
+        const out = await this.panelSpecVerdict(task, prompt, panelJudges, acceptance, timeoutMs, executorBrainId, agent, attemptNumber);
+        if (out) { usedJudgeId = out.judgeId; parsed = out.parsed; }
+      }
+    }
+
+    for (const judgeId of (parsed ? [] : candidates)) {
       let judgeOut: { ok: boolean; text: string };
       try {
         judgeOut = await this.runSpecJudge(judgeId, prompt, timeoutMs);
@@ -1915,6 +1933,79 @@ export class Dispatcher {
       };
     }
     return { ok: true };
+  }
+
+  /**
+   * PS-2 panel for the spec verifier: run every panel judge in parallel; when
+   * any requests changes, a judgment-tier lead buckets the findings and only
+   * Act on findings keep CHANGES_REQUESTED. Returns null when no panel judge
+   * produced a usable reply (the caller falls back to the single-judge chain).
+   */
+  private async panelSpecVerdict(
+    task: Task, prompt: string, judges: string[], acceptance: string[], timeoutMs: number,
+    executorBrainId: string, agent: string, attemptNumber: number
+  ): Promise<{ judgeId: string; parsed: ReturnType<typeof parseSpecVerdict> } | null> {
+    const brains = this.config.orchestration.brains || {};
+    const replies = await Promise.all(judges.map(async id => {
+      try { return { id, ...(await this.runSpecJudge(id, buildPanelReviewerPrompt(prompt), timeoutMs)) }; }
+      catch (e: any) { return { id, ok: false, text: `JUDGE ERROR: ${e?.message || e}` }; }
+    }));
+    const reviews = replies.map(r => {
+      const soft = verifyOutput(r.text, r.ok);
+      if ((!r.ok || !soft.ok) && isRateLimitFailure(r.text)) this.noteRateLimit(r.id, soft.reason || 'panel judge rate-limited', r.text, true);
+      const p = r.ok && soft.ok ? parseSpecVerdict(r.text, acceptance, false) : null;
+      return { id: r.id, family: brainFamily(brains[r.id], r.id), text: r.text, parsed: p && !p.crashed ? p : null };
+    });
+    const usable = reviews.filter(r => r.parsed);
+    if (!usable.length) return null;
+    const changes = usable.filter(r => r.parsed!.verdict === 'CHANGES_REQUESTED');
+    const lesson = (verdict: string, buckets = { actOn: 0, consider: 0, noted: 0, dismissed: 0 }, leadParsed = true) =>
+      this.recordLesson(task.id, {
+        kind: 'gate-panel', brain: executorBrainId, agent, attempt: attemptNumber,
+        reason: `${verdict} spec panel [${usable.map(r => r.family).join('+')}]: act_on=${buckets.actOn} consider=${buckets.consider} noted=${buckets.noted} dismissed=${buckets.dismissed}${leadParsed ? '' : ' (lead unavailable)'}`,
+        panel: { gate: task.id, round: attemptNumber, families: usable.map(r => r.family), buckets, verdict, leadParsed },
+      });
+    if (!changes.length) {
+      lesson(usable[0].parsed!.verdict);
+      return { judgeId: usable.map(r => r.id).join('+'), parsed: usable[0].parsed! };
+    }
+
+    const tiers = this.config.orchestration.tiers || {};
+    const leadBrain = (tiers.judgment || []).find(id => brains[id] && !brains[id].disabled && brains[id].location !== 'remote' && !this.cooldownUntil(id));
+    let lj: ReturnType<typeof parseLeadJudgment> | null = null;
+    if (leadBrain) {
+      try {
+        const out = await this.runSpecJudge(leadBrain, buildLeadJudgmentPrompt({
+          title: task.title, description: task.description, acceptance,
+          reviews: usable.map(r => ({ family: r.family, brain: r.id, text: r.text })),
+        }), timeoutMs);
+        if (out.ok) lj = parseLeadJudgment(out.text);
+      } catch (e: any) {
+        console.error(`Dispatcher: panel lead ${leadBrain} threw (strict fallback):`, e);
+      }
+    }
+    if (!lj || !lj.parsed) {
+      // Lead unavailable: strict — the first reviewer that requested changes stands.
+      lesson('CHANGES_REQUESTED', undefined, false);
+      return { judgeId: changes[0].id, parsed: changes[0].parsed! };
+    }
+    lesson(lj.verdict, lj.counts);
+    const judgeId = `${usable.map(r => r.id).join('+')}>${leadBrain}`;
+    if (lj.verdict === 'APPROVED') {
+      return { judgeId, parsed: {
+        ok: true, verdict: 'APPROVED',
+        criteria: acceptance.map(c => ({ criterion: c, status: 'PASS', reason: 'panel lead: no Act-on findings' })),
+        failedCriteria: [],
+        summary: `APPROVED by lead — act on 0, consider ${lj.counts.consider}, noted ${lj.counts.noted}, dismissed ${lj.counts.dismissed}`,
+      } };
+    }
+    return { judgeId, parsed: {
+      ok: false, verdict: 'CHANGES_REQUESTED',
+      criteria: lj.actOn.map(f => ({ criterion: 'Act on', status: 'FAIL', reason: f })),
+      failedCriteria: lj.actOn,
+      summary: `CHANGES_REQUESTED by lead — ${lj.actOn.join('; ').slice(0, 400)}`,
+      reason: `spec panel: CHANGES_REQUESTED — ${lj.actOn.join('; ').slice(0, 300)}`,
+    } };
   }
 
   /** Gate 2 (legacy, config-gated) — an LLM verifier agent judges whether the
@@ -2052,7 +2143,7 @@ export class Dispatcher {
    * is guarded and errors are swallowed after logging. Deterministic — no LLM.
    */
   private recordLesson(taskId: string, input: {
-    kind: 'verify-fail' | 'wait-input' | 'blocked' | 'quality-shadow';
+    kind: 'verify-fail' | 'wait-input' | 'blocked' | 'quality-shadow' | 'gate-panel';
     brain: string;
     agent: string;
     attempt: number;
@@ -2060,6 +2151,7 @@ export class Dispatcher {
     reason?: string;
     resultText?: string;
     questions?: string[];
+    panel?: LessonPanel;
   }): void {
     try {
       if (!this.config.paths?.decisions) return;
@@ -2073,7 +2165,8 @@ export class Dispatcher {
         attempt: input.attempt,
         reason: input.reason,
         resultText: input.resultText,
-        questions: input.questions
+        questions: input.questions,
+        panel: input.panel
       });
       const ok = appendLesson(this.config.paths.decisions, lesson);
       if (ok) {

@@ -235,6 +235,8 @@ export interface VerifierConfig {
   };
   /** Spec-compliance verifier (P1-1): cross-family judge for tasks with acceptance criteria. */
   spec?: SpecVerifierConfig;
+  /** PS-2 multi-family review panel. */
+  panel?: ReviewPanelConfig;
 }
 
 export interface SpecVerifierJudgesConfig {
@@ -243,6 +245,16 @@ export interface SpecVerifierJudgesConfig {
   qwen?: readonly string[] | string[];
   default?: readonly string[] | string[];
   [family: string]: readonly string[] | string[] | undefined;
+}
+
+/** PS-2 review panel switch (`orchestration.verifier.panel`). */
+export interface ReviewPanelConfig {
+  /** Master switch; false forces every gate back to a single reviewer. Default true. */
+  enabled?: boolean;
+  /** Panel size used where the panel applies without an explicit size (judgment-tier spec verifier). Default 2. */
+  size?: number;
+  /** Also run the panel in the dispatcher's spec verifier for `tier: judgment` tasks. Default false. */
+  judgmentTier?: boolean;
 }
 
 export interface SpecVerifierConfig {
@@ -714,6 +726,11 @@ export interface WorkflowStepGate {
   maxRounds?: number;
   /** 1-based round number from which the gated step escalates to the judgment tier (default 2). */
   escalateBrainAt?: number;
+  /** PS-2: reviewers per round, one per distinct model family (never the
+   *  executor's). ≥2 adds a judgment-tier lead pass that buckets findings into
+   *  Act on / Consider / Noted / Dismissed. Default 1 = single reviewer.
+   *  Honoured only while `orchestration.verifier.panel.enabled` is not false. */
+  panel?: number;
 }
 
 export interface WorkflowGateRoundRecord {
@@ -732,6 +749,14 @@ export interface WorkflowGateRoundRecord {
   summary: string;
   escalated?: boolean;
   action: 'approved' | 'requeue' | 'rulings' | 'wait-input';
+  /** PS-2 panel round: reviewers (brain/family) and the lead's bucket counts. */
+  panel?: {
+    reviewers: Array<{ taskId: string; brain: string; family: string; verdict?: string }>;
+    leadTaskId?: string;
+    leadParsed?: boolean;
+    buckets?: { actOn: number; consider: number; noted: number; dismissed: number };
+    findings?: Array<{ bucket: string; finding: string; families: string[]; rationale?: string; blocker?: boolean }>;
+  };
   rulings?: string[];
   blockerFindings?: string[];
   at: string;

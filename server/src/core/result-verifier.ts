@@ -560,6 +560,13 @@ export interface SelectSpecJudgeOptions {
   smallTask?: boolean;
   result?: string;
   acceptance?: string[];
+  /** PS-2: with `panel ≥ 2`, return at most one judge per DISTINCT model family
+   *  (never the executor's family), up to `panel` judges. Default 1 = today's
+   *  ordered fallback chain. */
+  panel?: number;
+  /** PS-2: extra candidate brains (e.g. the tier lists) tried after the
+   *  configured judge chain when filling a panel with more families. */
+  panelPool?: string[];
 }
 
 /**
@@ -596,7 +603,36 @@ export function selectSpecJudges(executorBrainId: string, opts: SelectSpecJudgeO
     if (opts.isCooling && opts.isCooling(id)) continue;
     out.push(id);
   }
-  return out;
+  const panel = opts.panel ?? 1;
+  if (panel < 2) return out;
+
+  // PS-2 panel: one judge per distinct family, executor's family excluded.
+  // The configured chain keeps priority (CEO judge-family ruling); the pool
+  // (tier lists + every family's judge chain) only adds further families.
+  const execFamily = family;
+  const famOf = (id: string) => brainFamily(opts.brains?.[id], id);
+  const pool = [
+    ...out,
+    ...(opts.panelPool || []),
+    ...Object.values(cfg || {}).flatMap(v => (Array.isArray(v) ? v : [])),
+    ...Object.values(DEFAULT_SPEC_JUDGES).flat(),
+  ];
+  const panelOut: string[] = [];
+  const families = new Set<string>();
+  for (const id of pool) {
+    if (panelOut.length >= panel) break;
+    if (!id || id === executorBrainId || panelOut.includes(id)) continue;
+    if (opts.brains) {
+      const b = opts.brains[id];
+      if (!b || b.disabled || b.location === 'remote') continue;
+    }
+    if (opts.isCooling && opts.isCooling(id)) continue;
+    const f = famOf(id);
+    if (f === execFamily || families.has(f)) continue;
+    families.add(f);
+    panelOut.push(id);
+  }
+  return panelOut;
 }
 
 /** Pick the primary available judge brain for `executorBrainId`, or null when none is available. */

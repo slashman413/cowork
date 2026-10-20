@@ -105,6 +105,15 @@ export interface QualityMetrics {
   acceptance: { tasks: number; withAcceptance: number; pct: number | null; bySource: AcceptanceBySource };
   specVerdicts: SpecVerdictMetrics;
   timeouts: { count: number; perWeek: number | null };
+  /** PS-2 review panel: rounds per gate and the lead's bucket mix (dismissedShare is a percent; > 50 = reviewer prompt too loose). */
+  panel: {
+    rounds: number;
+    gates: number;
+    avgRoundsPerGate: number | null;
+    buckets: { actOn: number; consider: number; noted: number; dismissed: number };
+    dismissedShare: number | null;
+    leadUnavailable: number;
+  };
   tiers: { tagged: number; byTier: Record<string, number>; mechanicalAttempts: number; mechanicalOpusAttempts: number; mechanicalOpusShare: number | null };
   sources: { lessons: number; lessonsSkipped: number; tasks: number };
 }
@@ -133,6 +142,9 @@ export function computeQualityMetrics(
     }
   }
   let hits = 0, repeats = 0, rejections = 0, blocked = 0;
+  let panelRounds = 0, panelLeadUnavailable = 0;
+  const panelGates = new Set<string>();
+  const panelBuckets = { actOn: 0, consider: 0, noted: 0, dismissed: 0 };
   const wait = { total: 0, permissionChoice: 0, humanOnly: 0, other: 0 };
   for (const l of inRange) {
     if (l.kind === 'verify-fail') {
@@ -149,7 +161,14 @@ export function computeQualityMetrics(
       wait.total++;
       wait[classifyWaitInput(l.questions, l.reason)]++;
     } else if (l.kind === 'blocked') blocked++;
+    else if (l.kind === 'gate-panel' && l.panel) {
+      panelRounds++;
+      panelGates.add(l.panel.gate);
+      for (const k of ['actOn', 'consider', 'noted', 'dismissed'] as const) panelBuckets[k] += Number(l.panel.buckets?.[k]) || 0;
+      if (l.panel.leadParsed === false) panelLeadUnavailable++;
+    }
   }
+  const panelTotal = panelBuckets.actOn + panelBuckets.consider + panelBuckets.noted + panelBuckets.dismissed;
   const byClassPct = Object.fromEntries(Object.entries(byClass).map(([k, v]) => [k, pct(v, rejections)])) as Record<RejectionClass, number | null>;
 
   let doneCount = 0, withEvidence = 0, concerns = 0;
@@ -231,6 +250,14 @@ export function computeQualityMetrics(
       }
     },
     specVerdicts,
+    panel: {
+      rounds: panelRounds,
+      gates: panelGates.size,
+      avgRoundsPerGate: panelGates.size ? Math.round((panelRounds / panelGates.size) * 100) / 100 : null,
+      buckets: panelBuckets,
+      dismissedShare: pct(panelBuckets.dismissed, panelTotal),
+      leadUnavailable: panelLeadUnavailable
+    },
     timeouts: { count: byClass.timeout, perWeek: weeks > 0 ? Math.round((byClass.timeout / weeks) * 10) / 10 : null },
     tiers: { tagged, byTier, mechanicalAttempts: mechAttempts, mechanicalOpusAttempts: mechOpus, mechanicalOpusShare: pct(mechOpus, mechAttempts) },
     sources: { lessons: inRange.length, lessonsSkipped: opts.lessonsSkipped ?? 0, tasks: tasks.length }

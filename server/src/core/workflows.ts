@@ -19,6 +19,8 @@ import { isFailedTask, type Store } from './store.js';
 import type { EventBus } from './events.js';
 import { parseBrief } from './brief.js';
 import { assertTier, brainFamily, reviewChain } from './tiers.js';
+import { buildPanelReviewerPrompt, buildLeadJudgmentPrompt, parseLeadJudgment, effectivePanelSize, type PanelReview, type LeadJudgment } from './review-panel.js';
+import { buildLesson, appendLesson, type LessonPanel } from './lessons.js';
 import {
   buildVerifierPrompt,
   parseSpecVerdict,
@@ -182,6 +184,9 @@ export class Workflows {
           if (s.gate.escalateBrainAt !== undefined && (!Number.isInteger(s.gate.escalateBrainAt) || s.gate.escalateBrainAt < 1)) {
             errors.push(`step "${s.key}" gate.escalateBrainAt must be a positive integer`);
           }
+          if (s.gate.panel !== undefined && (!Number.isInteger(s.gate.panel) || s.gate.panel < 1)) {
+            errors.push(`step "${s.key}" gate.panel must be a positive integer`);
+          }
         }
       }
     }
@@ -235,7 +240,8 @@ export class Workflows {
       ? {
           reviewer: s.gate.reviewer.trim(),
           maxRounds: s.gate.maxRounds ?? 3,
-          escalateBrainAt: s.gate.escalateBrainAt ?? 2
+          escalateBrainAt: s.gate.escalateBrainAt ?? 2,
+          panel: s.gate.panel ?? 1
         }
       : undefined;
     return {
@@ -304,6 +310,7 @@ export class Workflows {
           reviewer: c.gate.reviewer,
           maxRounds: c.gate.maxRounds,
           escalateBrainAt: c.gate.escalateBrainAt,
+          ...(c.gate.panel > 1 ? { panel: c.gate.panel } : {}),
           round: 1,
           status: 'pending',
           originalDescription: c.description,
@@ -352,7 +359,7 @@ export class Workflows {
       });
     }
     console.log(`Workflows: expanded "${def.id}" → run ${runId} (${tasks.length} tasks)`);
-    return { runId, workflowId: def.id, mode: 'dag', dryRun: false, steps: order.map(s => ({ key: s.key, ...(s.gate ? { gate: { reviewer: s.gate.reviewer, maxRounds: s.gate.maxRounds ?? 3, escalateBrainAt: s.gate.escalateBrainAt ?? 2 } } : {}) })), tasks };
+    return { runId, workflowId: def.id, mode: 'dag', dryRun: false, steps: order.map(s => ({ key: s.key, ...(s.gate ? { gate: { reviewer: s.gate.reviewer, maxRounds: s.gate.maxRounds ?? 3, escalateBrainAt: s.gate.escalateBrainAt ?? 2, ...(s.gate.panel && s.gate.panel > 1 ? { panel: s.gate.panel } : {}) } } : {}) })), tasks };
   }
 
   // ── Orchestrated (adaptive) runs ──────────────────────────────────────────
@@ -478,6 +485,7 @@ export class Workflows {
         reviewer: c.gate.reviewer,
         maxRounds: c.gate.maxRounds,
         escalateBrainAt: c.gate.escalateBrainAt,
+        ...(c.gate.panel > 1 ? { panel: c.gate.panel } : {}),
         round: 1,
         status: 'pending',
         originalDescription: c.description,
@@ -739,7 +747,8 @@ export class Workflows {
     round: number,
     maxRounds: number,
     priorFindings: string[],
-    artifacts: VerifierArtifact[]
+    artifacts: VerifierArtifact[],
+    panel = false
   ): string {
     const acceptance = Array.isArray(stepTask.context?.acceptance)
       ? (stepTask.context!.acceptance as string[]).map(s => String(s || '').trim()).filter(Boolean)
@@ -778,7 +787,7 @@ export class Workflows {
       `## Severity Tagging for Findings`,
       `If you return \`"verdict": "CHANGES_REQUESTED"\`, prefix any critical, ship-stopping criterion reason with \`BLOCKER:\` (for example: \`"reason": "BLOCKER: missing migration breaks startup"\`). Non-blocker findings should state the concrete fix without the \`BLOCKER:\` prefix.`,
       ``,
-      basePrompt
+      panel ? buildPanelReviewerPrompt(basePrompt) : basePrompt
     );
     return lines.join('\n');
   }
@@ -802,6 +811,16 @@ export class Workflows {
     const round = Number(gateCtx.round) || 1;
     const priorFindings = Array.isArray(fresh.context?.gateFindings) ? (fresh.context!.gateFindings as string[]) : [];
     const executorBrainId = String(fresh.context?.ranBrain || fresh.context?.brain || '');
+    // PS-2: multi-family panel when the step asks for one and the flag allows it.
+    const panelSize = effectivePanelSize(gateCtx.panel, this.config.orchestration?.verifier?.panel);
+    if (panelSize >= 2) {
+      const judges = this.selectPanelJudges(executorBrainId, panelSize);
+      if (judges.length >= 2) {
+        this.spawnPanelReviews(fresh, gateCtx, judges, { stepKey, runId, workflowId, reviewer, maxRounds, escalateBrainAt, round, priorFindings, executorBrainId });
+        return;
+      }
+      console.log(`Workflows: gate panel for step "${stepKey}" found ${judges.length} family(ies) — falling back to a single reviewer`);
+    }
     const { judgeFamily, judgeBrain } = this.selectGateJudge(executorBrainId);
     const artifacts = this.collectStepArtifacts(fresh);
     const reviewDescription = this.buildGateReviewBrief(fresh, round, maxRounds, priorFindings, artifacts);
@@ -865,6 +884,247 @@ export class Workflows {
     rec.gates![stepKey] = gateRec;
     this.saveRecord(rec);
     console.log(`Workflows: gate review spawned for step "${stepKey}" round ${round}/${maxRounds} → task ${reviewTask.id} (reviewer=${reviewer}, judgeFamily=${judgeFamily})`);
+  }
+
+  // ── Multi-family review panel (PS-2) ──────────────────────────────────────
+
+  /** One judge per distinct family (none from the executor's), configured judge chains first, then the tiers. */
+  private selectPanelJudges(executorBrainId: string, size: number): string[] {
+    const orch = this.config.orchestration || ({} as Config['orchestration']);
+    const judges = orch.verifier?.spec?.judges
+      ? { ...DEFAULT_SPEC_JUDGES, ...orch.verifier.spec.judges }
+      : DEFAULT_SPEC_JUDGES;
+    const pool = [...(orch.tiers?.judgment || []), ...(orch.tiers?.standard || []), ...(orch.tiers?.mechanical || [])];
+    return selectSpecJudges(executorBrainId, { judges, brains: orch.brains || {}, panel: size, panelPool: pool });
+  }
+
+  /** Spawn one pinned review task per panel judge for this round. */
+  private spawnPanelReviews(
+    fresh: Task,
+    gateCtx: Record<string, any>,
+    judges: string[],
+    m: { stepKey: string; runId: string; workflowId: string; reviewer: string; maxRounds: number; escalateBrainAt: number; round: number; priorFindings: string[]; executorBrainId: string }
+  ): void {
+    const brains = this.config.orchestration?.brains || {};
+    const artifacts = this.collectStepArtifacts(fresh);
+    const description = this.buildGateReviewBrief(fresh, m.round, m.maxRounds, m.priorFindings, artifacts, true);
+    const members: Array<{ taskId: string; brain: string; family: string }> = [];
+    for (const brain of judges) {
+      const family = brainFamily(brains[brain], brain);
+      const t = this.store.createTask({
+        title: `Review (${m.round}/${m.maxRounds}) [panel: ${family}]: ${fresh.title}`,
+        description,
+        from: { platform: 'cowork', agent: 'workflow-gate' },
+        to: {},
+        priority: fresh.priority || 'normal',
+        context: {
+          workflowId: m.workflowId,
+          workflowRunId: m.runId,
+          stepKey: `${m.stepKey}:review:${m.round}:${family}`,
+          gateReviewFor: fresh.id,
+          gateStepKey: m.stepKey,
+          gateRound: m.round,
+          gateMaxRounds: m.maxRounds,
+          gatePanelRole: 'reviewer',
+          agent: m.reviewer,
+          tier: 'review',
+          ...(m.executorBrainId ? { reviewOf: m.executorBrainId } : {}),
+          judgeFamily: family,
+          judgeBrain: brain,
+          brain,
+          dependsOn: [fresh.id]
+        },
+        tags: ['workflow', m.workflowId, 'gate-review', 'gate-panel']
+      });
+      members.push({ taskId: t.id, brain, family });
+    }
+    const judgeFamily = members.map(x => x.family).join('+');
+    const nextGate: Record<string, any> = {
+      ...gateCtx,
+      reviewer: m.reviewer,
+      maxRounds: m.maxRounds,
+      escalateBrainAt: m.escalateBrainAt,
+      round: m.round,
+      status: 'reviewing',
+      panelPhase: 'reviewers',
+      panelMembers: members,
+      panelReviews: {},
+      judgeFamily
+    };
+    delete nextGate.activeReviewTaskId;
+    fresh.context = { ...(fresh.context || {}), gate: nextGate };
+    this.store.saveTask(fresh);
+
+    const rec = this.ensureRunRecord(fresh);
+    const gateRec: WorkflowGateRecord = rec.gates![m.stepKey] || {
+      stepKey: m.stepKey, taskId: fresh.id, reviewer: m.reviewer, maxRounds: m.maxRounds,
+      escalateBrainAt: m.escalateBrainAt, currentRound: m.round, status: 'reviewing', rounds: []
+    };
+    gateRec.taskId = fresh.id;
+    gateRec.currentRound = m.round;
+    gateRec.status = 'reviewing';
+    rec.gates![m.stepKey] = gateRec;
+    this.saveRecord(rec);
+    console.log(`Workflows: gate panel spawned for step "${m.stepKey}" round ${m.round}/${m.maxRounds} → ${members.map(x => `${x.family}:${x.taskId.slice(0, 8)}`).join(', ')}`);
+  }
+
+  private stepAcceptance(stepTask: Task): string[] {
+    return Array.isArray(stepTask.context?.acceptance)
+      ? (stepTask.context!.acceptance as string[]).map(s => String(s || '').trim()).filter(Boolean)
+      : [];
+  }
+
+  /** Collect one panel reviewer's reply; once all are in, approve directly or spawn the lead. */
+  private handlePanelReviewerCompleted(review: Task, stepTask: Task, gateCtx: Record<string, any>): void {
+    const members: Array<{ taskId: string; brain: string; family: string }> = Array.isArray(gateCtx.panelMembers) ? gateCtx.panelMembers : [];
+    if (gateCtx.panelPhase !== 'reviewers' || !members.some(x => x.taskId === review.id)) return;
+    const reviews: Record<string, { failed: boolean; verdict: string; text: string }> = { ...(gateCtx.panelReviews || {}) };
+    if (reviews[review.id]) return;
+
+    const acceptance = this.stepAcceptance(stepTask);
+    const failed = isFailedTask(review);
+    const parsed = failed ? null : parseSpecVerdict(review.result || '', acceptance);
+    reviews[review.id] = {
+      failed: failed || !!parsed?.crashed,
+      verdict: !parsed || parsed.crashed ? 'UNVERIFIABLE' : parsed.verdict,
+      text: (review.result || '').slice(0, 8000)
+    };
+    let ctx: Record<string, any> = { ...gateCtx, panelReviews: reviews };
+    stepTask.context = { ...(stepTask.context || {}), gate: ctx };
+    this.store.saveTask(stepTask);
+    if (members.some(x => !reviews[x.taskId])) return; // wait for the rest of the panel
+
+    const round = Number(gateCtx.round) || 1;
+    const maxRounds = Number(gateCtx.maxRounds) || 3;
+    const stepKey = String(stepTask.context?.stepKey || stepTask.title || stepTask.id);
+    const reviewers = members.map(x => ({ ...x, verdict: reviews[x.taskId].verdict }));
+    const usable = members.filter(x => !reviews[x.taskId].failed);
+    const changes = usable.filter(x => reviews[x.taskId].verdict === 'CHANGES_REQUESTED');
+
+    if (changes.length === 0) {
+      // Nothing to judge: every working reviewer approved (fail-open when all crashed).
+      const allCrashed = usable.length === 0;
+      const record = { reviewers, leadParsed: true, buckets: { actOn: 0, consider: 0, noted: 0, dismissed: 0 }, findings: [] };
+      const parsedOk: ParsedSpecVerdict = {
+        ok: true,
+        verdict: allCrashed ? 'UNVERIFIABLE' : 'APPROVED',
+        criteria: acceptance.map(c => ({ criterion: c, status: allCrashed ? 'UNVERIFIABLE' : 'PASS', reason: allCrashed ? 'every panel reviewer failed (fail-open)' : 'no panel reviewer requested changes' })),
+        failedCriteria: [],
+        summary: allCrashed ? 'UNVERIFIABLE — every panel reviewer failed (fail-open)' : `APPROVED by panel (${usable.map(x => x.family).join(', ')})`,
+        ...(allCrashed ? { crashed: true } : {})
+      };
+      this.recordPanelLesson(stepTask, gateCtx, round, record, parsedOk.verdict);
+      this.decideGate(stepTask, review, ctx, parsedOk, '', { findings: [], blockers: [], record });
+      return;
+    }
+
+    const lead = this.store.createTask({
+      title: `Lead judgment (${round}/${maxRounds}): ${stepTask.title}`,
+      description: buildLeadJudgmentPrompt({
+        title: stepTask.title,
+        description: String(gateCtx.originalDescription || stepTask.description || ''),
+        acceptance,
+        reviews: members.map(x => ({ family: x.family, brain: x.brain, text: reviews[x.taskId].text, failed: reviews[x.taskId].failed })),
+        priorFindings: Array.isArray(stepTask.context?.gateFindings) ? stepTask.context!.gateFindings as string[] : []
+      }),
+      from: { platform: 'cowork', agent: 'workflow-gate' },
+      to: {},
+      priority: stepTask.priority || 'normal',
+      context: {
+        workflowId: String(stepTask.context?.workflowId || 'custom'),
+        workflowRunId: String(stepTask.context?.workflowRunId || `run-${stepTask.id.slice(0, 8)}`),
+        stepKey: `${stepKey}:lead:${round}`,
+        gateReviewFor: stepTask.id,
+        gateStepKey: stepKey,
+        gateRound: round,
+        gateMaxRounds: maxRounds,
+        gatePanelRole: 'lead',
+        agent: String(gateCtx.reviewer || 'engineering-code-reviewer'),
+        tier: 'judgment',
+        dependsOn: [stepTask.id]
+      },
+      tags: ['workflow', String(stepTask.context?.workflowId || 'custom'), 'gate-review', 'gate-panel']
+    });
+    ctx = { ...ctx, panelPhase: 'lead', activeReviewTaskId: lead.id };
+    stepTask.context = { ...(stepTask.context || {}), gate: ctx };
+    this.store.saveTask(stepTask);
+    console.log(`Workflows: gate panel for step "${stepKey}" round ${round}: ${changes.length}/${members.length} reviewer(s) requested changes → lead judgment ${lead.id}`);
+  }
+
+  /** Turn the lead's buckets into the gate decision (only Act on requests changes). */
+  private handlePanelLeadCompleted(lead: Task, stepTask: Task, gateCtx: Record<string, any>): void {
+    const members: Array<{ taskId: string; brain: string; family: string }> = Array.isArray(gateCtx.panelMembers) ? gateCtx.panelMembers : [];
+    const reviews: Record<string, { failed: boolean; verdict: string; text: string }> = gateCtx.panelReviews || {};
+    const acceptance = this.stepAcceptance(stepTask);
+    const round = Number(lead.context?.gateRound || gateCtx.round) || 1;
+    const lj: LeadJudgment | null = isFailedTask(lead) ? null : parseLeadJudgment(lead.result || '');
+    const record: NonNullable<WorkflowGateRoundRecord['panel']> = {
+      reviewers: members.map(x => ({ ...x, verdict: reviews[x.taskId]?.verdict })),
+      leadTaskId: lead.id,
+      leadParsed: !!lj?.parsed,
+      ...(lj?.parsed ? { buckets: lj.counts, findings: lj.findings.slice(0, 40) } : {})
+    };
+
+    let parsed: ParsedSpecVerdict;
+    let findings: string[] = [];
+    let blockers: string[] = [];
+    if (!lj || !lj.parsed) {
+      // Lead unavailable: keep today's single-judge strictness (union of reviewer findings).
+      for (const x of members) {
+        const r = reviews[x.taskId];
+        if (!r || r.failed || r.verdict !== 'CHANGES_REQUESTED') continue;
+        const fb = this.extractGateFindings(parseSpecVerdict(r.text, acceptance), r.text);
+        findings.push(...fb.findings.map(f => `[${x.family}] ${f}`));
+        blockers.push(...fb.blockers.map(f => `[${x.family}] ${f}`));
+      }
+      parsed = {
+        ok: false, verdict: 'CHANGES_REQUESTED', criteria: [], failedCriteria: findings,
+        summary: `lead judgment unavailable — strict union of panel findings: ${findings.join('; ').slice(0, 400)}`
+      };
+    } else if (lj.verdict === 'APPROVED') {
+      parsed = {
+        ok: true, verdict: 'APPROVED',
+        criteria: acceptance.map(c => ({ criterion: c, status: 'PASS', reason: 'panel lead: no Act-on findings' })),
+        failedCriteria: [],
+        summary: `APPROVED by lead — act on 0, consider ${lj.counts.consider}, noted ${lj.counts.noted}, dismissed ${lj.counts.dismissed}`
+      };
+    } else {
+      findings = lj.actOn;
+      blockers = lj.blockers;
+      parsed = {
+        ok: false, verdict: 'CHANGES_REQUESTED',
+        criteria: lj.actOn.map(f => ({ criterion: 'Act on', status: 'FAIL', reason: f })),
+        failedCriteria: lj.actOn,
+        summary: `CHANGES_REQUESTED by lead — act on ${lj.counts.actOn} (${lj.blockers.length} blocker), consider ${lj.counts.consider}, noted ${lj.counts.noted}, dismissed ${lj.counts.dismissed}`
+      };
+    }
+    this.recordPanelLesson(stepTask, gateCtx, round, record, parsed.verdict);
+    this.decideGate(stepTask, lead, gateCtx, parsed, lead.result || '', { findings, blockers, record });
+  }
+
+  /** PS-2 metric: one `gate-panel` lesson per panel round (rounds/gate, bucket counts). */
+  private recordPanelLesson(stepTask: Task, gateCtx: Record<string, any>, round: number, record: NonNullable<WorkflowGateRoundRecord['panel']>, verdict: string): void {
+    const decisions = this.config.paths?.decisions;
+    if (!decisions) return;
+    const buckets = record.buckets || { actOn: 0, consider: 0, noted: 0, dismissed: 0 };
+    const panel: LessonPanel = {
+      gate: stepTask.id,
+      round,
+      families: record.reviewers.map(r => r.family),
+      buckets,
+      verdict,
+      leadParsed: record.leadParsed !== false
+    };
+    appendLesson(decisions, buildLesson({
+      kind: 'gate-panel',
+      task: stepTask.id,
+      title: stepTask.title,
+      agent: String(gateCtx.reviewer || ''),
+      brain: String(stepTask.context?.ranBrain || stepTask.context?.brain || ''),
+      attempt: round,
+      reason: `${verdict} round ${round} [${panel.families.join('+')}]: act_on=${buckets.actOn} consider=${buckets.consider} noted=${buckets.noted} dismissed=${buckets.dismissed}${panel.leadParsed ? '' : ' (lead unavailable)'}`,
+      panel
+    }));
   }
 
   /** Inspect a `CHANGES_REQUESTED` verdict and raw reviewer text for any `BLOCKER` finding. */
@@ -932,18 +1192,18 @@ export class Workflows {
     if (!stepTask) return;
 
     const gateCtx = (stepTask.context?.gate || {}) as Record<string, any>;
+    // PS-2: a panel reviewer only reports into the panel; the lead decides.
+    if (freshReview.context?.gatePanelRole === 'reviewer') {
+      this.handlePanelReviewerCompleted(freshReview, stepTask, gateCtx);
+      return;
+    }
     // Idempotency: ignore if this review task was already processed.
     if (gateCtx.lastProcessedReviewTaskId === freshReview.id) return;
     if (gateCtx.activeReviewTaskId && gateCtx.activeReviewTaskId !== freshReview.id) return;
-
-    const stepKey = String(stepTask.context?.stepKey || freshReview.context?.gateStepKey || stepTask.title || stepTask.id);
-    const round = Number(freshReview.context?.gateRound || gateCtx.round) || 1;
-    const maxRounds = Number(gateCtx.maxRounds || freshReview.context?.gateMaxRounds) || 3;
-    const escalateBrainAt = Number(gateCtx.escalateBrainAt) || 2;
-    const reviewer = String(gateCtx.reviewer || freshReview.context?.agent || 'code-reviewer');
-    const executorBrain = String(stepTask.context?.ranBrain || stepTask.context?.brain || '');
-    const reviewerBrain = String(freshReview.context?.ranBrain || freshReview.context?.brain || freshReview.context?.judgeBrain || '');
-    const judgeFamily = String(freshReview.context?.judgeFamily || gateCtx.judgeFamily || '');
+    if (freshReview.context?.gatePanelRole === 'lead') {
+      this.handlePanelLeadCompleted(freshReview, stepTask, gateCtx);
+      return;
+    }
 
     const rawText = freshReview.result || '';
     const reviewerFailed = isFailedTask(freshReview);
@@ -960,6 +1220,36 @@ export class Workflows {
           crashed: true,
         }
       : parseSpecVerdict(rawText, acceptance);
+    this.decideGate(stepTask, freshReview, gateCtx, parsed, rawText);
+  }
+
+  /**
+   * Apply a review verdict to the gated step: approve, re-queue a fix round,
+   * park on a BLOCKER at the cap, or record residual RULINGs. `panelOutcome`
+   * (PS-2) supplies the lead's Act-on findings/blockers instead of
+   * re-deriving them from the reviewer text.
+   */
+  private decideGate(
+    stepTask: Task,
+    freshReview: Task,
+    gateCtx: Record<string, any>,
+    parsed: ParsedSpecVerdict,
+    rawText: string,
+    panelOutcome?: { findings: string[]; blockers: string[]; record: NonNullable<WorkflowGateRoundRecord['panel']> }
+  ): void {
+    const stepKey = String(stepTask.context?.stepKey || freshReview.context?.gateStepKey || stepTask.title || stepTask.id);
+    const round = Number(freshReview.context?.gateRound || gateCtx.round) || 1;
+    const maxRounds = Number(gateCtx.maxRounds || freshReview.context?.gateMaxRounds) || 3;
+    const escalateBrainAt = Number(gateCtx.escalateBrainAt) || 2;
+    const reviewer = String(gateCtx.reviewer || freshReview.context?.agent || 'code-reviewer');
+    const executorBrain = String(stepTask.context?.ranBrain || stepTask.context?.brain || '');
+    const reviewerBrain = panelOutcome
+      ? panelOutcome.record.reviewers.map(r => r.brain).join('+')
+      : String(freshReview.context?.ranBrain || freshReview.context?.brain || freshReview.context?.judgeBrain || '');
+    const judgeFamily = panelOutcome
+      ? panelOutcome.record.reviewers.map(r => r.family).join('+')
+      : String(freshReview.context?.judgeFamily || gateCtx.judgeFamily || '');
+    const panelField = panelOutcome ? { panel: panelOutcome.record } : {};
 
     const rec = this.ensureRunRecord(stepTask);
     const gateRec: WorkflowGateRecord = rec.gates![stepKey] || {
@@ -995,6 +1285,7 @@ export class Workflows {
         summary: parsed.summary,
         escalated: !!stepTask.context?.escalated,
         action: 'approved',
+        ...panelField,
         at: now
       };
       gateRec.rounds.push(roundRec);
@@ -1029,7 +1320,9 @@ export class Workflows {
     }
 
     // CHANGES_REQUESTED
-    const { findings, blockers } = this.extractGateFindings(parsed, rawText);
+    const { findings, blockers } = panelOutcome
+      ? { findings: panelOutcome.findings, blockers: panelOutcome.blockers }
+      : this.extractGateFindings(parsed, rawText);
 
     // Case 2: Under the round cap (`round < maxRounds`) → re-queue gated step for a fix round.
     if (round < maxRounds) {
@@ -1054,6 +1347,7 @@ export class Workflows {
         ...(blockers.length ? { blockerFindings: blockers } : {}),
         escalated: shouldEscalate,
         action: 'requeue',
+        ...panelField,
         at: now
       };
       gateRec.rounds.push(roundRec);
@@ -1145,6 +1439,7 @@ export class Workflows {
         blockerFindings: blockers,
         escalated: !!stepTask.context?.escalated,
         action: 'wait-input',
+        ...panelField,
         at: now
       };
       gateRec.rounds.push(roundRec);
@@ -1210,6 +1505,7 @@ export class Workflows {
       rulings,
       escalated: !!stepTask.context?.escalated,
       action: 'rulings',
+      ...panelField,
       at: now
     };
     gateRec.rounds.push(roundRec);

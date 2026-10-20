@@ -95,6 +95,12 @@
             "local-cc-opus-5-5"
           ]
         }
+      },
+      "panel": {
+        "_comment": "PS-2 multi-family review panel. enabled=false forces every gate back to one reviewer. Gates opt in with gate.panel (build-and-ship build + final-review use 2). judgmentTier=true also runs the panel+lead in the spec verifier for tier:judgment tasks (off until the eval gate passes).",
+        "enabled": true,
+        "size": 2,
+        "judgmentTier": false
       }
     },
     "sharpener": {
