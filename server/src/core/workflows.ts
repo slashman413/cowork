@@ -250,6 +250,7 @@ export class Workflows {
       priority: s.priority || 'normal',
       dependsOnKeys: s.dependsOn || [],
       gate,
+      playbook: s.playbook,
       // Brief contract (P0-3), {{param}}-filled like the title/description.
       brief: interpolateBrief(parseBrief(s as Record<string, any>).brief, params)
     };
@@ -305,6 +306,7 @@ export class Workflows {
       if (c.division) context.division = c.division;
       if (c.brain) context.brain = c.brain;
       if (c.tier) context.tier = c.tier;
+      if (c.playbook) context.playbook = c.playbook;
       if (c.gate) {
         context.gate = {
           reviewer: c.gate.reviewer,
@@ -480,6 +482,7 @@ export class Workflows {
     if (c.division) context.division = c.division;
     if (c.brain) context.brain = c.brain;
     if (c.tier) context.tier = c.tier;
+    if (c.playbook) context.playbook = c.playbook;
     if (c.gate) {
       context.gate = {
         reviewer: c.gate.reviewer,

@@ -108,6 +108,17 @@
       "mode": "shadow",
       "brain": "local-agy-gemini-3.8-flash-high"
     },
+    "methods": {
+      "enabled": true,
+      "cards": {
+        "investigation": "shadow",
+        "bug-fix": "shadow",
+        "feature": "shadow",
+        "research-report": "shadow",
+        "content": "shadow",
+        "ops-change": "shadow"
+      }
+    },
     "staleClaimMs": 600000,
     "hardClaimMs": 5400000,
     "maxWorkflowSteps": 12,

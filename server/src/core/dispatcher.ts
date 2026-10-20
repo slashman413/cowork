@@ -1,5 +1,5 @@
 import { spawn } from 'child_process';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, statSync, createWriteStream, type WriteStream } from 'node:fs';
 import type { Config, RoleConfig, Task, AchieverDecision } from '../types.js';
 import type { EventBus } from './events.js';
@@ -13,6 +13,7 @@ import { buildLesson, appendLesson, type LessonPanel } from './lessons.js';
 import { buildPanelReviewerPrompt, buildLeadJudgmentPrompt, parseLeadJudgment } from './review-panel.js';
 import { describeAutoAnswer, logAutoAnswer } from './rulings.js';
 import { BRIEF_KEYS, parseBrief, renderBriefSections } from './brief.js';
+import { renderMethodPrompt } from './methods.js';
 import { shouldSharpenTask, sharpenTask } from './sharpener.js';
 import { taskTier, mergeTierChain, reviewChain, brainFamily, type TierName } from './tiers.js';
 import { canonicalBrainId } from '../config.js';
@@ -1440,7 +1441,7 @@ export class Dispatcher {
     return this.conventionsCache;
   }
 
-  private buildPrompt(task: Task, plan: { agent: string; division?: string; isRoster: boolean }): string {
+  private buildPrompt(task: Task, plan: { agent: string; division?: string; isRoster: boolean; brainId?: string }): string {
     const port = this.config.server.port;
     // Self-referential API base for orchestrator subtask dispatch. Follows the
     // server's own scheme: when server.tls is set the server binds https://, so
@@ -1476,6 +1477,20 @@ export class Dispatcher {
     const timeoutMs = Number(this.config.orchestration?.taskTimeoutMs) || 3_000_000;
     const defaultTimeboxMin = Math.max(1, Math.round(timeoutMs / 60_000) - 5);
     lines.push(...renderBriefSections(task.context, defaultTimeboxMin));
+
+    // PS-4: Method injection from context.playbook behind orchestration.methods
+    const repoRoot = resolve(this.config.paths?.artifacts || 'artifacts', '..');
+    const methodsDir = join(repoRoot, 'methods');
+    const isLocal = !plan.brainId || (this.config.orchestration?.brains?.[plan.brainId]?.location !== 'remote' && !plan.brainId.startsWith('remote-'));
+    const methodLines = renderMethodPrompt({
+      repoRoot,
+      methodsDir,
+      playbook: typeof task.context?.playbook === 'string' ? task.context.playbook : '',
+      isLocal,
+      methodsCfg: this.config.orchestration?.methods,
+    });
+    if (methodLines.length) lines.push(...methodLines);
+
     if (Object.keys(shownCtx).length > 0) {
       lines.push(`# Context`, '```json', JSON.stringify(shownCtx, null, 2), '```', '');
     }

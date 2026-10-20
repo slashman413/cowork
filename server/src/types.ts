@@ -381,6 +381,16 @@ export interface OrchestrationConfig {
    *  decisions.tsv and writes an Attention section into the phase report.
    *  Default ON; `false` turns the review task off (the trail is always kept). */
   goalAttention?: boolean;
+  /** Per-task method cards from pinned pstack playbooks (PS-4). */
+  methods?: MethodsConfig;
+}
+
+/** Config for {@link OrchestrationConfig.methods} (PS-4). */
+export interface MethodsConfig {
+  /** Master switch for method card injection. Default false. */
+  enabled?: boolean;
+  /** Per-card injection state: "shadow" (not injected) | "on" (injected into prompt). Default "shadow". */
+  cards?: Record<string, 'shadow' | 'on'>;
 }
 
 /** Config for {@link OrchestrationConfig.sharpener} (PS-1). */
@@ -711,6 +721,8 @@ export interface WorkflowStep {
   verify?: TaskBrief['verify'];
   timeboxMin?: TaskBrief['timeboxMin'];
   scope?: TaskBrief['scope'];
+  /** Method / playbook key (PS-4: bug-fix, feature, investigation, content, ops-change, research-report). */
+  playbook?: string;
 }
 
 /**
