@@ -8,6 +8,8 @@ import { EventBus } from './core/events.js';
 import { Store } from './core/store.js';
 import { Dispatcher } from './core/dispatcher.js';
 import { computeQualityMetrics, metricsWindow, readLessons } from './core/quality-metrics.js';
+import { correctLoop } from './core/correct-loop.js';
+import { readRulings } from './core/rulings.js';
 import { createMcpServer } from './mcp/server.js';
 import { createApiRouter } from './api/router.js';
 import { createWorkflowRouter } from './api/workflows.js';
@@ -284,6 +286,22 @@ async function main() {
     const { from, to } = metricsWindow(req.query as Record<string, unknown>);
     const { lessons, skipped } = readLessons(config.paths.decisions);
     res.json(computeQualityMetrics(lessons, store.listTasks(), from, to, { lessonsSkipped: skipped }));
+  });
+
+  // ── P2-2 correct loop: lessons grouped into classes (≥2) with a structure-first
+  //    remedy menu, each option citing the past events its check would catch. ──
+  app.get('/api/lessons/classes', (req, res) => {
+    const q = req.query as Record<string, unknown>;
+    const { from, to } = metricsWindow({ days: q.days ?? 30, from: q.from, to: q.to });
+    res.json(correctLoop(readLessons(config.paths.decisions).lessons, from, to));
+  });
+
+  // ── P2-3 decision trail: RULING lines + orchestrator auto-answers (rulings.tsv). ─
+  app.get('/api/rulings', (req, res) => {
+    const q = req.query as Record<string, unknown>;
+    const { from, to } = metricsWindow({ days: q.days ?? 7, from: q.from, to: q.to });
+    const rows = readRulings(config.paths.decisions, from, to);
+    res.json({ from: new Date(from).toISOString(), to: new Date(to).toISOString(), count: rows.length, rulings: rows });
   });
 
   const validChain = (brains: any): string[] => {

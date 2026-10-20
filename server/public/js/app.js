@@ -731,7 +731,7 @@ class App {
         workers: ['Workers', 'plug'], config: ['Configuration', 'settings'] };
       const pages = {
         overview: { id: 'overview', type: 'dashboard', label: 'Overview', icon: 'layout-dashboard',
-          rows: [{ widgets: [{ type: 'sysbar' }] }, { widgets: [{ type: 'stats' }] }, { widgets: [{ type: 'quality', days: 7 }] },
+          rows: [{ widgets: [{ type: 'sysbar' }] }, { widgets: [{ type: 'stats' }] }, { widgets: [{ type: 'quality', days: 7 }] }, { widgets: [{ type: 'rulings', days: 7, limit: 15 }] },
                  { minWidth: 380, widgets: [{ type: 'dispatcher' }, { type: 'activity' }] }, { widgets: [{ type: 'platforms' }] }] },
         portal: { id: 'portal', type: 'portal', label: 'Portal', icon: 'layout-grid' },
       };
@@ -1514,14 +1514,16 @@ class App {
     const widgets = (page.rows || []).flatMap(r => r.widgets);
     const has = (t) => widgets.some(w => w.type === t);
     const qw = widgets.find(w => w.type === 'quality');
-    const [status, dispatcher, portal, quality] = await Promise.all([
+    const rw = widgets.find(w => w.type === 'rulings');
+    const [status, dispatcher, portal, quality, rulings] = await Promise.all([
       (has('stats') || has('platforms')) ? this.api.get('/status') : null,
       has('dispatcher') ? this.api.get('/dispatcher').catch(() => null) : null,
       has('services') ? this.api.get('/portal').catch(() => null) : null,
       has('activity') ? this.refreshAgents() : null,
       qw ? this.api.get(`/metrics/quality?days=${qw.days || 7}`).catch(() => null) : null,
+      rw ? this.api.get(`/rulings?days=${rw.days || 7}`).catch(() => null) : null,
     ]);
-    const ctx = { status, dispatcher, portal, quality };
+    const ctx = { status, dispatcher, portal, quality, rulings };
 
     const rows = (page.rows || []).map((row) => {
       const cells = row.widgets.map((w) => {
@@ -1553,7 +1555,7 @@ class App {
 
   // One widget's HTML. Options were validated server-side (layout-config.ts);
   // every string that reaches the DOM still goes through esc()/md().
-  renderWidget(w, { status, dispatcher, portal, quality }) {
+  renderWidget(w, { status, dispatcher, portal, quality, rulings }) {
     const head = (icon, title, extra = '') => `
       <div style="display:flex; align-items:center; gap:8px; margin-bottom:var(--space-md)">
         <i data-lucide="${icon}" style="width:18px;height:18px;color:var(--text-muted)"></i>
@@ -1607,6 +1609,16 @@ class App {
             <div class="stat-icon"><i data-lucide="${icon}"></i></div>
             <div><div class="stat-value">${esc(value ?? '—')}</div><div class="stat-label">${esc(label)}</div></div>
           </div>`).join('')}</div>` : '<p style="color:var(--text-muted); font-size:0.85rem">Quality metrics unavailable</p>'}`;
+      }
+
+      // P2-3 decision trail (GET /api/rulings): RULING lines + auto-answers.
+      case 'rulings': {
+        const list = rulings?.rulings || [];
+        const rows = list.slice(0, w.limit || 15).map(r => `<p style="margin:6px 0; font-size:0.85rem">
+            ${badge(r.ruling.startsWith('AUTO-ANSWER: ') ? 'auto-answer' : 'ruling', r.ruling.startsWith('AUTO-ANSWER: ') ? '#F59E0B' : '#7C3AED')}
+            ${esc(r.ruling.replace(/^AUTO-ANSWER: /, ''))}
+            <span style="color:var(--text-muted)">${esc(r.task.slice(0, 8))} · ${esc(r.agent || '—')} · ${esc(r.brain || '—')} · ${timeAgo(r.date)}</span></p>`).join('');
+        return `<div class="card">${head('gavel', w.title || `Rulings · last ${w.days || 7} days (${list.length})`)}<div style="max-height:340px; overflow-y:auto">${rows || '<p style="color:var(--text-muted); font-size:0.85rem">No rulings in this window</p>'}</div></div>`;
       }
 
       case 'dispatcher': {

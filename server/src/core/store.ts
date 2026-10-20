@@ -12,6 +12,7 @@ import { canonicalBrainId } from '../config.js';
 import { normalizeContextBrief } from './brief.js';
 import { assertTier } from './tiers.js';
 import { buildLesson, appendLesson } from './lessons.js';
+import { appendRulings } from './rulings.js';
 
 /**
  * A veto the Dispatcher registers on the store so EXTERNAL task completions
@@ -832,6 +833,12 @@ export class Store {
     // reset time, so the dashboard can offer an auto-re-run-on-reset toggle and the
     // dispatcher can honour it (see classifyRateLimit / Dispatcher.autoRerunRateLimited).
     if (task.failed) this.classifyRateLimit(task);
+
+    // P2-3 decision trail: RULING lines + orchestrator auto-answers → rulings.tsv.
+    // The watermark keeps a re-run from re-logging auto-answers already written.
+    if (appendRulings(this.config.paths.decisions, task) > 0) {
+      task.context = { ...(task.context || {}), rulingsLoggedAt: task.completedAt };
+    }
 
     const taskFile = this.resolveTaskFile(task.id) || `${task.id}.json`;
     this.writeTaskFile(taskFile, task);

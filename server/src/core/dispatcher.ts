@@ -8,6 +8,7 @@ import type { Workflows } from './workflows.js';
 import type { Goals } from './goals.js';
 import { verifyOutput, buildVerifierPrompt, parseLlmVerdict, parseSpecVerdict, selectSpecJudges, DEFAULT_SPEC_JUDGES, extractEvidenceBlock, detectInputRequest, detectBackgroundWait, isRateLimitFailure, parseStatusFooter, type StatusFooter, type VerifyVerdict, type VerifierArtifact, type SpecVerdictRecord, type InputOptions, type InputRequest, type BackgroundOptions, type BackgroundWait } from './result-verifier.js';
 import { buildLesson, appendLesson } from './lessons.js';
+import { describeAutoAnswer, logAutoAnswer } from './rulings.js';
 import { BRIEF_KEYS, parseBrief, renderBriefSections } from './brief.js';
 import { taskTier, mergeTierChain, reviewChain, type TierName } from './tiers.js';
 import { canonicalBrainId } from '../config.js';
@@ -1267,7 +1268,11 @@ export class Dispatcher {
           // carries the bumped count if it parks again this same tick.
           fresh.context = {
             ...(fresh.context || {}),
-            autoAnswer: { ...meta, count: count + 1 }
+            autoAnswer: {
+              ...meta, count: count + 1,
+              // P2-3: kept for the decision trail (rulings.tsv) on completion.
+              decisions: logAutoAnswer((meta as any).decisions, { at: new Date().toISOString(), answer: describeAutoAnswer(ix.fields, decision.answers) })
+            }
           };
           this.store.saveTask(fresh);
           const updated = this.store.submitInteraction({

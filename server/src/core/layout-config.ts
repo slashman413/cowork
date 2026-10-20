@@ -76,6 +76,7 @@ const WIDGETS: Record<string, readonly string[]> = {
   services: ['keys', 'categories', 'compact'],
   note: ['text'],
   quality: ['days'],
+  rulings: ['days', 'limit'],
 };
 
 export interface LayoutWidget {
@@ -158,6 +159,14 @@ function normalizeWidget(raw: any, where: string, errors: string[]): LayoutWidge
   if (w.type === 'quality' && w.days !== undefined) {
     if (!(Number.isInteger(w.days) && (w.days as number) >= 1 && (w.days as number) <= 365)) {
       errors.push(`${where}: quality.days must be 1–365`); delete w.days;
+    }
+  }
+  if (w.type === 'rulings') {
+    if (w.days !== undefined && !(Number.isInteger(w.days) && (w.days as number) >= 1 && (w.days as number) <= 365)) {
+      errors.push(`${where}: rulings.days must be 1–365`); delete w.days;
+    }
+    if (w.limit !== undefined && !(Number.isInteger(w.limit) && (w.limit as number) >= 1 && (w.limit as number) <= 100)) {
+      errors.push(`${where}: rulings.limit must be 1–100`); delete w.limit;
     }
   }
   if (w.type === 'services') {

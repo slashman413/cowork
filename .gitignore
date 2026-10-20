@@ -45,3 +45,4 @@ server/*.py
 .env
 .env.*
 !.env.example
+decisions/rulings.tsv
