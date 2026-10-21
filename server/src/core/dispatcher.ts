@@ -427,12 +427,16 @@ export class Dispatcher {
               ? 'Held — tagged `manual`, so it never auto-runs. Use “Run now”, or drop the manual tag, to dispatch it.'
               : 'No eligible brain to run this — its agent’s brain chain is empty, exhausted, or every rung is disabled. Edit its agent/brain targeting.');
             continue;
-          case 'remote':
+          case 'remote': {
             this.handleRemoteRung(task, plan.exec);
-            this.markPending(task, plan.exec?.brainId
+            const cooling = plan.exec?.brainId ? this.store.brainCooldownUntil(plan.exec.brainId) : undefined;
+            this.markPending(task, cooling
+              ? this.coolingReason(plan.exec!.brainId, cooling)
+              : plan.exec?.brainId
               ? `Offered to remote brain \`${plan.exec.brainId}\` — waiting for that machine’s client to connect and claim it.`
               : 'Waiting for a remote brain’s client to connect and claim it.');
             continue;
+          }
           case 'route':
             this.route(task);
             this.markPending(task, 'Routing — an agent/division is being auto-assigned; it dispatches on the next tick.');
@@ -448,6 +452,13 @@ export class Dispatcher {
             // concurrently on the same instance. selectRung already steered fresh
             // dispatches toward free rungs; this backstops a pinned task or a fully
             // saturated chain.
+            // A task PINNED to a brain that is cooling down on a rate limit is held
+            // (running it now would only fail) until the window resets — or until
+            // someone reassigns it to another brain from the dashboard.
+            if (plan.exec.pinned) {
+              const cooling = this.store.brainCooldownUntil(plan.exec.brainId);
+              if (cooling) { this.markPending(task, this.coolingReason(plan.exec.brainId, cooling)); continue; }
+            }
             if (this.brainLoad(plan.exec.brainId) >= this.brainCap(plan.exec.brainId)) {
               this.markPending(task, `Queued — brain \`${plan.exec.brainId}\` is at capacity (${this.brainLoad(plan.exec.brainId)}/${this.brainCap(plan.exec.brainId)} slots). Runs as soon as a slot frees.`);
               continue;
@@ -457,6 +468,12 @@ export class Dispatcher {
         }
       } catch (e) { console.error(`Dispatcher: planning task ${task.id} failed:`, e); }
     }
+  }
+
+  /** Pending-card note for a task held on a rate-limited brain. The dashboard keys
+   *  its "Reassign" call-to-action off `context.pendingReason`, so keep the prefix. */
+  private coolingReason(brainId: string, until: string): string {
+    return `Rate-limited — brain \`${brainId}\` is cooling down until ${until}. It runs then, or use ⇄ Reassign to move it to another brain now.`;
   }
 
   /** A remote brain in a chain is left pending for that machine's client to

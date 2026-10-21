@@ -863,6 +863,52 @@ export class Store {
   }
 
   /**
+   * When a brain is COOLING DOWN on a rate limit — its usage meter reports a window
+   * that is fully used (≥ 100%, or 0% remaining) and resets in the future — return
+   * that reset time (the latest such window, since the brain is unusable until all
+   * exhausted windows reset). Undefined when the brain has room or isn't metered.
+   */
+  public brainCooldownUntil(brainId: string): string | undefined {
+    const u = this.brainUsage.get(brainId);
+    if (!u || !Array.isArray(u.windows)) return undefined;
+    const now = Date.now();
+    let until = 0;
+    for (const w of u.windows) {
+      const used = typeof w.usedPct === 'number' ? w.usedPct
+        : (typeof w.remainingPct === 'number' ? 100 - w.remainingPct : 0);
+      const at = w.resetsAt ? Date.parse(w.resetsAt) : NaN;
+      if (used >= 100 && Number.isFinite(at) && at > now) until = Math.max(until, at);
+    }
+    return until ? new Date(until).toISOString() : undefined;
+  }
+
+  /**
+   * MANUALLY move a task that has not started yet (`pending` or `scheduled`) onto
+   * another brain — e.g. one held because its brain is cooling down on a rate
+   * limit. '' clears the pin so the agent's chain routes it from the top; '<id>'
+   * pins that known brain. Resets the chain bookkeeping (attempts, the
+   * dispatcher-published remote pin + its grace clock, the stale pending reason)
+   * so the next tick plans it afresh. Returns null when the task is gone or has
+   * already been claimed / finished (use rerunTask for a failed task).
+   */
+  public reassignTask(taskId: string, brain: string): Task | null {
+    const task = this.getTask(taskId);
+    if (!task || (task.status !== 'pending' && task.status !== 'scheduled')) return null;
+    const targetBrain = this.resolveBrainOverride(brain, undefined);
+    const ctx: Record<string, any> = { ...(task.context || {}) };
+    delete ctx.brainAuto;
+    if (targetBrain) ctx.brain = targetBrain; else delete ctx.brain;
+    ctx.attempts = 0;
+    delete ctx.remoteWaitSince;
+    delete ctx.pendingReason;
+    delete ctx.pendingReasonAt;
+    task.context = ctx;
+    this.saveTask(task);
+    this.eventBus.emitTaskCreated(task);   // nudge live dashboards to refresh
+    return task;
+  }
+
+  /**
    * Re-queue a FAILED (chain-exhausted) or rejected task for another run. Resets
    * it to `pending` from the TOP of its chain: clears the failed flag, the prior
    * result/claim/completion, and the scheduling bookkeeping (attempts / dispatched /

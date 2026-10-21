@@ -537,6 +537,18 @@ const BRAIN_BAD_COLOR = '#EF4444';    // unknown / deregistered brain
  * management page still lists disabled brains (with the Enable toggle); it uses
  * the raw /api/brains map directly, not this helper.
  */
+/** Reset time (Date) of a brain cooling down on a rate limit — a usage window at
+ *  ≥100% that resets in the future (mirror of Store.brainCooldownUntil) — or null. */
+function brainCooldownUntil(u) {
+  let until = 0;
+  for (const w of (u && Array.isArray(u.windows)) ? u.windows : []) {
+    const used = typeof w.usedPct === 'number' ? w.usedPct : (typeof w.remainingPct === 'number' ? 100 - w.remainingPct : 0);
+    const at = w.resetsAt ? Date.parse(w.resetsAt) : NaN;
+    if (used >= 100 && Number.isFinite(at) && at > Date.now()) until = Math.max(until, at);
+  }
+  return until ? new Date(until) : null;
+}
+
 function selectableBrainIds(brains) {
   return Object.keys(brains || {}).filter(id => !brains[id]?.disabled).sort();
 }
@@ -1052,11 +1064,18 @@ class App {
     if (!container || !content) {   // no modal markup → degrade to a plain confirm
       return window.confirm(`${title}\n\n${body.replace(/<[^>]+>/g, '')}`) ? { brain: defaultBrain, prompt: '', files: [], scheduledAt: '' } : null;
     }
-    let brains = {};
-    try { brains = await this.api.get('/brains'); } catch { /* registry unreachable → Auto only */ }
+    let brains = {}, usage = {};
+    await Promise.all([
+      this.api.get('/brains').then(r => { brains = r || {}; }).catch(() => { /* registry unreachable → Auto only */ }),
+      this.api.get('/connections').then(r => { usage = r?.usage || {}; }).catch(() => { /* meters unavailable → no cooldown labels */ })
+    ]);
     const ids = selectableBrainIds(brains);
     const opts = [`<option value="">🧠 Auto — route via the agent's brain chain</option>`]
-      .concat(ids.map(b => `<option value="${esc(b)}"${b === defaultBrain ? ' selected' : ''}>${esc(b)}</option>`)).join('');
+      .concat(ids.map(b => {
+        const until = brainCooldownUntil(usage[b]);
+        const note = until ? ` — ⏳ rate-limited until ${until.toLocaleString()}` : '';
+        return `<option value="${esc(b)}"${b === defaultBrain ? ' selected' : ''}>${esc(b + note)}</option>`;
+      })).join('');
     const fieldStyle = 'width:100%; padding:9px 10px; background:var(--bg-tertiary); border:1px solid var(--border-color); border-radius:8px; color:inherit; font:inherit; font-size:0.9rem';
     const labelStyle = 'display:block; font-size:0.72rem; text-transform:uppercase; letter-spacing:.04em; color:var(--text-muted); margin-bottom:6px';
     // Optional extra-steer block — appended to the follow-up's brief and inputs.
@@ -2631,6 +2650,8 @@ class App {
           <input type="checkbox" data-autorerun="${esc(t.id)}" ${c.autoRerunOnReset !== false ? 'checked' : ''} style="width:15px;height:15px;cursor:pointer;accent-color:#F97316">
           <span><i data-lucide="refresh-cw" style="width:12px;height:12px;vertical-align:-1px;margin-right:3px"></i>Auto re-run when the rate limit resets${rlResetOk ? ` <span style="color:var(--text-muted)">(≈ ${esc(rlReset.toLocaleString())})</span>` : ''}</span>
         </label>
+        <button class="btn" data-rerun-task="${esc(t.id)}" data-brain="" title="Don't wait for the cooldown — re-run now on another brain"
+          style="font-size:0.72rem;margin:6px 0 0 23px;padding:2px 7px;color:#F97316;border-color:#F9731666">⇄ Assign to another brain now</button>
         <div style="font-size:0.72rem; color:var(--text-muted); margin-top:3px; padding-left:23px">Failed on a rate limit. On by default — Cowork re-queues this task automatically once the usage window resets${rlResetOk ? '' : ' (re-checked hourly until a reset time is known)'}. Untick to leave it failed.${c.autoRerunCount ? ` Auto re-runs so far: ${esc(String(c.autoRerunCount))}.` : ''}</div>
       </div>` : '';
 
@@ -2660,6 +2681,12 @@ class App {
         <div class="task-meta" style="display:block; margin:2px 0 4px">${esc(t.from?.platform || '?')}/${esc(t.from?.agent || '?')} · <span title="${esc(t.createdAt || '')}">${timeAgo(t.createdAt)}</span>
           ${failed ? `<button class="btn" data-rerun-task="${esc(t.id)}" data-brain="${esc(c.brainAuto ? '' : (c.brain || ''))}" title="Re-run this task — pick which brain claims it"
             style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#EF4444;border-color:#EF444466">↻ Re-run</button>` : ''}
+          ${t.status === 'pending' || t.status === 'scheduled' ? (() => {
+            const cooling = /^Rate-limited\b/.test(pendingReason);
+            const col = cooling ? '#F97316' : '#64748B';
+            return `<button class="btn" data-reassign-task="${esc(t.id)}" data-brain="${esc(c.brainAuto ? '' : (c.brain || ''))}" title="Reassign — move this not-yet-started task to another brain"
+            style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:${col};border-color:${col}66">⇄ Reassign${cooling ? ' brain' : ''}</button>`;
+          })() : ''}
           ${t.status === 'scheduled' ? `<button class="btn" data-run-now-task="${esc(t.id)}" title="Run now — release this scheduled task immediately instead of waiting for its run time"
             style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#6366F1;border-color:#6366F166">▶ Run now</button>` : ''}
           ${t.status === 'done' && !failed ? (t.context?.continuedInto
@@ -2790,6 +2817,29 @@ class App {
           await this.api.post(`/inbox/${encodeURIComponent(id)}/rerun`, body);
           const routeNote = choice.brain ? `pinned to ${choice.brain}` : 'auto-routed via the brain chain';
           this.toast('re-running', choice.scheduledAt ? `Scheduled for ${new Date(choice.scheduledAt).toLocaleString()} — ${routeNote}.` : `Reset to pending — ${routeNote}.`);
+          this.renderInbox();
+        } catch (err) { this.toast('error', err.message); b.disabled = false; }
+      }));
+
+    // Reassign a pending/scheduled task (e.g. held on a rate-limited brain) to another brain.
+    this.contentEl.querySelectorAll('[data-reassign-task]').forEach(b =>
+      b.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const id = b.dataset.reassignTask;
+        const title = b.closest('[data-task]')?.dataset.title || id.slice(0, 8);
+        const choice = await this.pickBrain({
+          title: 'Reassign to another brain',
+          body: `<strong>${esc(title)}</strong> hasn't started yet. Choose which brain should claim it instead — pick <em>Auto</em> to route from the top of the agent's brain chain. Brains cooling down on a rate limit are marked ⏳.`,
+          defaultBrain: '',
+          confirmLabel: '⇄ Reassign',
+          confirmColor: '#F97316',
+          withSchedule: false
+        });
+        if (!choice) return;
+        b.disabled = true;
+        try {
+          await this.api.post(`/inbox/${encodeURIComponent(id)}/reassign`, { brain: choice.brain });
+          this.toast('reassigned', choice.brain ? `Pinned to ${choice.brain} — dispatched by the next tick.` : 'Auto-routed via the brain chain — dispatched by the next tick.');
           this.renderInbox();
         } catch (err) { this.toast('error', err.message); b.disabled = false; }
       }));

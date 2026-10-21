@@ -175,6 +175,20 @@ export function createApiRouter(store: Store, eventBus: EventBus): Router {
     }
   });
 
+  // Reassign a task that hasn't started (pending / scheduled) to another brain —
+  // e.g. one held while its brain cools down on a rate limit. Body { brain }:
+  // '' → route via the agent's chain, '<id>' → pin that brain.
+  router.post('/inbox/:id/reassign', (req, res) => {
+    try {
+      const brain = typeof req.body?.brain === 'string' ? req.body.brain : '';
+      const task = store.reassignTask(req.params.id, brain);
+      if (!task) return res.status(409).json({ error: 'Task not found or already started — only pending/scheduled tasks can be reassigned (re-run a failed one instead)' });
+      res.json(task);
+    } catch (e: any) {
+      res.status(400).json({ error: e.message });
+    }
+  });
+
   // Run a SCHEDULED task NOW — release it immediately instead of at its
   // scheduledAt time. The dashboard shows this as a "Run now" button on
   // scheduled cards. Returns the released task (now pending, or wait-input if it
