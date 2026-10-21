@@ -7,8 +7,10 @@ import type {
   WorkflowDef,
   WorkflowStep,
   WorkflowStepGate,
+  WorkflowStepArena,
   WorkflowGateRecord,
   WorkflowGateRoundRecord,
+  WorkflowArenaRecord,
   WorkflowRun,
   WorkflowRunRecord,
   WorkflowDecision,
@@ -18,7 +20,7 @@ import type {
 import { isFailedTask, type Store } from './store.js';
 import type { EventBus } from './events.js';
 import { parseBrief } from './brief.js';
-import { assertTier, brainFamily, reviewChain } from './tiers.js';
+import { assertTier, brainFamily, reviewChain, mergeTierChain } from './tiers.js';
 import { buildPanelReviewerPrompt, buildLeadJudgmentPrompt, parseLeadJudgment, effectivePanelSize, type PanelReview, type LeadJudgment } from './review-panel.js';
 import { buildLesson, appendLesson, type LessonPanel } from './lessons.js';
 import {
@@ -189,6 +191,44 @@ export class Workflows {
           }
         }
       }
+      if (s.arena !== undefined) {
+        if (!s.arena || typeof s.arena !== 'object') {
+          errors.push(`step "${s.key}" arena must be an object`);
+        } else {
+          const isOpsOrMedia = s.division === 'operations' || s.division === 'ops' || s.division === 'media' ||
+            s.key.includes('render') || (s.title && /render/i.test(s.title)) || (s.agent && /render/i.test(s.agent));
+          if (isOpsOrMedia) {
+            errors.push(`step "${s.key}" arena is forbidden on media renders or operations steps`);
+          }
+          if (!Array.isArray(s.arena.runners) || s.arena.runners.length < 2) {
+            errors.push(`step "${s.key}" arena.runners must be an array of at least 2 brains`);
+          } else {
+            for (const r of s.arena.runners) {
+              if (typeof r !== 'string' || !r.trim()) {
+                errors.push(`step "${s.key}" arena.runners must contain non-empty brain strings`);
+              }
+            }
+            const brains = this.config.orchestration?.brains || {};
+            const families = new Set(
+              s.arena.runners
+                .filter(r => typeof r === 'string' && r.trim())
+                .map(r => brainFamily(brains[r], r))
+            );
+            if (families.size < 2) {
+              errors.push(`step "${s.key}" arena.runners must span at least 2 distinct model families (found ${Array.from(families).join(', ')})`);
+            }
+          }
+          if (!Array.isArray(s.arena.rubric) || s.arena.rubric.length < 3 || s.arena.rubric.length > 6) {
+            errors.push(`step "${s.key}" arena.rubric must contain 3-6 gradeable criteria`);
+          } else {
+            for (const r of s.arena.rubric) {
+              if (typeof r !== 'string' || !r.trim()) {
+                errors.push(`step "${s.key}" arena.rubric criteria must be non-empty strings`);
+              }
+            }
+          }
+        }
+      }
     }
     for (const s of def.steps) {
       for (const d of s.dependsOn || []) {
@@ -244,16 +284,169 @@ export class Workflows {
           panel: s.gate.panel ?? 1
         }
       : undefined;
+    const arena: WorkflowStepArena | undefined = s.arena
+      ? {
+          runners: [...s.arena.runners],
+          rubric: s.arena.rubric.map(r => interpolate(r, params))
+        }
+      : undefined;
     return {
       title, description,
       agent: s.agent, division: s.division, brain: s.brain, tier: s.tier,
       priority: s.priority || 'normal',
       dependsOnKeys: s.dependsOn || [],
       gate,
+      arena,
       playbook: s.playbook,
       // Brief contract (P0-3), {{param}}-filled like the title/description.
       brief: interpolateBrief(parseBrief(s as Record<string, any>).brief, params)
     };
+  }
+
+  /**
+   * PS-3 arena mode is enabled when:
+   * 1. orchestration.arena.enabled is true (default false).
+   * 2. The step has arena configuration.
+   * 3. It is never allowed on operations or media renders.
+   */
+  isArenaEnabled(def: WorkflowDef, s: WorkflowStep): boolean {
+    if (!s.arena) return false;
+    if (!this.config.orchestration?.arena?.enabled) return false;
+    if (s.division === 'operations' || s.division === 'ops' || s.division === 'media') return false;
+    if (s.key.includes('render') || (s.title && /render/i.test(s.title)) || (s.agent && /render/i.test(s.agent))) return false;
+    return true;
+  }
+
+  /**
+   * Select a cross-judge brain from a different model family than the runners (PS-3).
+   * Per standing CEO decisions: Gemini judges Claude, opus-class Claude judges Gemini/qwen.
+   */
+  selectArenaJudge(runners: string[]): string | undefined {
+    const orch = this.config.orchestration || ({} as Config['orchestration']);
+    const brains = orch.brains || {};
+    const runnerFamilies = new Set(runners.map(r => brainFamily(brains[r], r)));
+
+    // Usable brains from judgment tier, then standard, then mechanical
+    const pool = mergeTierChain(
+      [...(orch.tiers?.judgment || []), ...(orch.tiers?.standard || [])],
+      orch.tiers?.mechanical || []
+    );
+    const usable = pool.filter(id => brains[id] && !brains[id].disabled && !runners.includes(id));
+
+    // 1. Prefer a brain from a family completely distinct from all runners
+    const differentFamily = usable.filter(id => !runnerFamilies.has(brainFamily(brains[id], id)));
+    if (differentFamily.length > 0) return differentFamily[0];
+
+    // 2. Otherwise per standing CEO ruling: if runners include claude, prefer gemini; else prefer claude (opus)
+    const wantFamily = runnerFamilies.has('claude') ? 'gemini' : 'claude';
+    const preferred = usable.filter(id => brainFamily(brains[id], id) === wantFamily);
+    if (preferred.length > 0) return preferred[0];
+
+    // 3. Fallback to any usable judge from the pool or reviewChain
+    if (usable.length > 0) return usable[0];
+    const rev = reviewChain(runners[0], orch.tiers, brains);
+    return rev[0];
+  }
+
+  buildArenaJudgePrompt(
+    stepKey: string,
+    title: string,
+    rubric: string[],
+    candidateTasks: Task[]
+  ): string {
+    const lines: string[] = [
+      `# Arena Cross-Judge — Blind Evaluation & Rubric Scoring`,
+      ``,
+      `You are the readonly cross-judge for step "${stepKey}": "${title}".`,
+      `Parallel candidate agents have independently executed the brief in their own isolated artifact directories.`,
+      `Your job is to objectively score every candidate against the fixed rubric, evaluate their relative strengths, identify any divergence, and recommend a base candidate for synthesis.`,
+      ``,
+      `## Rubric Criteria (3-6 Gradeable Criteria)`,
+      ...rubric.map((c, i) => `${i + 1}. **${c}**`),
+      ``,
+      `## Candidates to Evaluate`,
+      ...candidateTasks.map((t, i) => [
+        `### Candidate ${i + 1} (${t.context?.brain || 'runner'})`,
+        `- Task ID: \`${t.id}\``,
+        `- Artifacts Directory: \`artifacts/${t.id}/\``,
+        `- Task Title: ${t.title}`
+      ].join('\n')),
+      ``,
+      `## Instructions`,
+      `1. Read the reported results and all generated files in each candidate's artifacts directory (\`artifacts/<id>/\`).`,
+      `2. Score each candidate against each criterion with concrete evidence from their outputs.`,
+      `3. Note any convergence (candidates agree on core shape) or wild divergence (candidates chose irreconcilable directions or conflicting architectures).`,
+      `4. Recommend a single BASE candidate to build upon, with clear rationale why it provides the cleanest foundation.`,
+      `5. Save your evaluation in your artifacts directory as \`arena-verdict.md\`.`
+    ];
+    return lines.join('\n');
+  }
+
+  buildArenaSynthesisPrompt(
+    stepKey: string,
+    title: string,
+    description: string,
+    rubric: string[],
+    candidateTasks: Task[],
+    judgeTask: Task
+  ): string {
+    const lines: string[] = [
+      `# Arena Synthesis — Pick Base & Graft for step "${stepKey}"`,
+      ``,
+      `You are the Arena Lead on the \`judgment\` tier (Phase D & E of Arena).`,
+      `Parallel candidate agents have produced candidate artifacts, and a cross-judge evaluated them.`,
+      `You are responsible for picking the best base, grafting 1-2 elements from each losing candidate, and producing the final unified deliverable plus \`synthesis.md\`.`,
+      ``,
+      `## Original Brief: ${title}`,
+      description,
+      ``,
+      `## Candidates & Judge Outputs`,
+      ...candidateTasks.map((t, i) => [
+        `### Candidate ${i + 1} (${t.context?.brain || 'runner'})`,
+        `- Task ID: \`${t.id}\``,
+        `- Artifacts: \`artifacts/${t.id}/\``
+      ].join('\n')),
+      `### Cross-Judge Verdict`,
+      `- Task ID: \`${judgeTask.id}\``,
+      `- Verdict: \`artifacts/${judgeTask.id}/arena-verdict.md\``,
+      ``,
+      `## Rubric`,
+      ...rubric.map((c, i) => `${i + 1}. ${c}`),
+      ``,
+      `## Instructions (Arena Phases D & E)`,
+      `1. **Phase D (Pick Base):** Read all candidate artifacts and the cross-judge verdict. Pick the base candidate that provides the strongest, most coherent foundation.`,
+      `2. **Phase E (Graft):** Review each losing candidate for 1-2 valuable elements worth porting into the base deliverable. Fold each graft into the deliverable by hand so the result stays coherent under one unified mental model.`,
+      `3. **Phase E Rule (Divergence):** If the candidates wildly diverge in structure, scope, assumptions, or direction (indicating the brief was under-specified), DO NOT average them. Instead, park the step for human input:`,
+      `   End your result with:`,
+      `   STATUS: BLOCKED`,
+      `   DIVERGENCE: <summary of the divergence and irreconcilable differences>`,
+      `   NEEDS_INPUT: Candidates wildly diverged: <summary>. How should we proceed?`,
+      `   Do not emit an averaged deliverable when candidates wildly diverge.`,
+      `4. **Deliverables:**`,
+      `   - Write the complete synthesized deliverable (e.g. prd.md) to your artifacts directory.`,
+      `   - Save \`synthesis.md\` in your artifacts directory with the following required sections:`,
+      `     ## Base`,
+      `     Which candidate was chosen as the base and why.`,
+      `     ## Verdict`,
+      `     Summary of the cross-judge verdict and your assessment.`,
+      `     ## Grafts`,
+      `     The 1-2 elements ported from each loser, citing the source candidate.`,
+      `     ## Rejections`,
+      `     What was rejected from the losers and why.`,
+      `     ## Divergence Notes`,
+      `     Notes on consensus or divergence observed among candidates.`
+    ];
+    return lines.join('\n');
+  }
+
+  extractArenaDivergence(text: string): string {
+    const divMatch = text.match(/DIVERGENCE:\s*([^\n]+(?:\n(?!\n|STATUS:|EVIDENCE:|NEEDS_INPUT:)[^\n]+)*)/i);
+    if (divMatch) return divMatch[1].trim();
+    const needsMatch = text.match(/NEEDS_INPUT:\s*([^\n]+)/i);
+    if (needsMatch) return needsMatch[1].trim();
+    const wildMatch = text.match(/wildly diverge[^\n.]*\.?/i);
+    if (wildMatch) return wildMatch[0].trim();
+    return 'Candidates diverged significantly on architecture, scope, or key assumptions.';
   }
 
   /**
@@ -289,6 +482,7 @@ export class Workflows {
           tier: c.tier,
           dependsOn: c.dependsOnKeys,
           ...(c.gate ? { gate: c.gate } : {}),
+          ...(c.arena ? { arena: c.arena } : {}),
           ...c.brief
         };
       });
@@ -299,53 +493,166 @@ export class Workflows {
     const keyToTaskId = new Map<string, string>();
     const tasks: Task[] = [];
     const gates: Record<string, WorkflowGateRecord> = {};
+    const arenas: Record<string, WorkflowArenaRecord> = {};
     for (const s of order) {
       const c = this.compileStep(def, s, params);
-      const context: Record<string, any> = { workflowId: def.id, workflowRunId: runId, stepKey: s.key, ...c.brief };
-      if (c.agent) context.agent = c.agent;
-      if (c.division) context.division = c.division;
-      if (c.brain) context.brain = c.brain;
-      if (c.tier) context.tier = c.tier;
-      if (c.playbook) context.playbook = c.playbook;
-      if (c.gate) {
-        context.gate = {
-          reviewer: c.gate.reviewer,
-          maxRounds: c.gate.maxRounds,
-          escalateBrainAt: c.gate.escalateBrainAt,
-          ...(c.gate.panel > 1 ? { panel: c.gate.panel } : {}),
-          round: 1,
-          status: 'pending',
-          originalDescription: c.description,
-          originalTier: c.tier
-        };
-      }
       const deps = c.dependsOnKeys.map(k => keyToTaskId.get(k)).filter(Boolean) as string[];
-      if (deps.length) context.dependsOn = deps;
-      const task = this.store.createTask({
-        title: c.title,
-        description: c.description,
-        from: { platform: 'cowork', agent: 'workflow' },
-        to: {},
-        priority: c.priority as Task['priority'],
-        context,
-        tags: ['workflow', def.id]
-      });
-      keyToTaskId.set(s.key, task.id);
-      tasks.push(task);
-      if (c.gate) {
-        gates[s.key] = {
-          stepKey: s.key,
-          taskId: task.id,
-          reviewer: c.gate.reviewer,
-          maxRounds: c.gate.maxRounds,
-          escalateBrainAt: c.gate.escalateBrainAt,
-          currentRound: 1,
-          status: 'pending',
-          rounds: []
+      const isArena = c.arena && this.isArenaEnabled(def, s);
+
+      if (isArena && c.arena) {
+        const candidateTasks: Task[] = [];
+        for (let i = 0; i < c.arena.runners.length; i++) {
+          const runner = c.arena.runners[i];
+          const candCtx: Record<string, any> = {
+            workflowId: def.id,
+            workflowRunId: runId,
+            stepKey: `${s.key}:candidate:${i + 1}`,
+            arenaStepKey: s.key,
+            arenaRole: 'candidate',
+            arenaCandidateIndex: i,
+            arenaRunners: c.arena.runners,
+            arenaRubric: c.arena.rubric,
+            brain: runner,
+            ...c.brief
+          };
+          if (c.agent) candCtx.agent = c.agent;
+          if (c.division) candCtx.division = c.division;
+          if (c.tier) candCtx.tier = c.tier;
+          if (c.playbook) candCtx.playbook = c.playbook;
+          if (deps.length) candCtx.dependsOn = deps;
+
+          const candTask = this.store.createTask({
+            title: `${c.title} [Arena Candidate ${i + 1}/${c.arena.runners.length}: ${runner}]`,
+            description: c.description,
+            from: { platform: 'cowork', agent: 'workflow-arena' },
+            to: {},
+            priority: c.priority as Task['priority'],
+            context: candCtx,
+            tags: ['workflow', def.id, 'arena-candidate']
+          });
+          candidateTasks.push(candTask);
+          tasks.push(candTask);
+        }
+
+        const judgeBrain = this.selectArenaJudge(c.arena.runners);
+        const judgePrompt = this.buildArenaJudgePrompt(s.key, c.title, c.arena.rubric, candidateTasks);
+        const judgeCtx: Record<string, any> = {
+          workflowId: def.id,
+          workflowRunId: runId,
+          stepKey: `${s.key}:judge`,
+          arenaStepKey: s.key,
+          arenaRole: 'judge',
+          arenaCandidateIds: candidateTasks.map(t => t.id),
+          arenaRubric: c.arena.rubric,
+          tier: 'review',
+          ...(judgeBrain ? { brain: judgeBrain } : {}),
+          dependsOn: candidateTasks.map(t => t.id),
+          acceptance: ['arena-verdict.md is saved with scores per candidate and a recommended base'],
+          verify: ['test -s arena-verdict.md']
         };
+        const judgeTask = this.store.createTask({
+          title: `Arena Cross-Judge: ${c.title}`,
+          description: judgePrompt,
+          from: { platform: 'cowork', agent: 'workflow-arena' },
+          to: {},
+          priority: c.priority as Task['priority'],
+          context: judgeCtx,
+          tags: ['workflow', def.id, 'arena-judge']
+        });
+        tasks.push(judgeTask);
+
+        const synthPrompt = this.buildArenaSynthesisPrompt(s.key, c.title, c.description, c.arena.rubric, candidateTasks, judgeTask);
+        const origAcceptance = Array.isArray(c.brief.acceptance) ? c.brief.acceptance : [];
+        const synthAcceptance = [
+          ...origAcceptance,
+          'synthesis.md is saved in the artifacts dir naming the base, judge verdict, grafts, and rejections'
+        ];
+        const synthCtx: Record<string, any> = {
+          ...c.brief,
+          workflowId: def.id,
+          workflowRunId: runId,
+          stepKey: s.key,
+          arenaStepKey: s.key,
+          arenaRole: 'synthesis',
+          arenaCandidateIds: candidateTasks.map(t => t.id),
+          arenaJudgeTaskId: judgeTask.id,
+          arenaRubric: c.arena.rubric,
+          tier: 'judgment',
+          dependsOn: [...candidateTasks.map(t => t.id), judgeTask.id],
+          acceptance: synthAcceptance
+        };
+        if (c.agent) synthCtx.agent = c.agent;
+        if (c.division) synthCtx.division = c.division;
+        if (c.playbook) synthCtx.playbook = c.playbook;
+
+        const synthTask = this.store.createTask({
+          title: `${c.title} (Arena Synthesis)`,
+          description: synthPrompt,
+          from: { platform: 'cowork', agent: 'workflow-arena' },
+          to: {},
+          priority: c.priority as Task['priority'],
+          context: synthCtx,
+          tags: ['workflow', def.id, 'arena-synthesis']
+        });
+        tasks.push(synthTask);
+        keyToTaskId.set(s.key, synthTask.id);
+
+        arenas[s.key] = {
+          stepKey: s.key,
+          status: 'pending',
+          runners: c.arena.runners,
+          candidateTaskIds: candidateTasks.map(t => t.id),
+          judgeTaskId: judgeTask.id,
+          synthesisTaskId: synthTask.id,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        };
+      } else {
+        const context: Record<string, any> = { workflowId: def.id, workflowRunId: runId, stepKey: s.key, ...c.brief };
+        if (c.agent) context.agent = c.agent;
+        if (c.division) context.division = c.division;
+        if (c.brain) context.brain = c.brain;
+        if (c.tier) context.tier = c.tier;
+        if (c.playbook) context.playbook = c.playbook;
+        if (c.gate) {
+          context.gate = {
+            reviewer: c.gate.reviewer,
+            maxRounds: c.gate.maxRounds,
+            escalateBrainAt: c.gate.escalateBrainAt,
+            ...(c.gate.panel > 1 ? { panel: c.gate.panel } : {}),
+            round: 1,
+            status: 'pending',
+            originalDescription: c.description,
+            originalTier: c.tier
+          };
+        }
+        if (deps.length) context.dependsOn = deps;
+        const task = this.store.createTask({
+          title: c.title,
+          description: c.description,
+          from: { platform: 'cowork', agent: 'workflow' },
+          to: {},
+          priority: c.priority as Task['priority'],
+          context,
+          tags: ['workflow', def.id]
+        });
+        keyToTaskId.set(s.key, task.id);
+        tasks.push(task);
+        if (c.gate) {
+          gates[s.key] = {
+            stepKey: s.key,
+            taskId: task.id,
+            reviewer: c.gate.reviewer,
+            maxRounds: c.gate.maxRounds,
+            escalateBrainAt: c.gate.escalateBrainAt,
+            currentRound: 1,
+            status: 'pending',
+            rounds: []
+          };
+        }
       }
     }
-    if (Object.keys(gates).length > 0) {
+    if (Object.keys(gates).length > 0 || Object.keys(arenas).length > 0) {
       const now = new Date().toISOString();
       this.saveRecord({
         runId,
@@ -354,14 +661,26 @@ export class Workflows {
         params,
         status: 'running',
         history: [],
-        gates,
+        ...(Object.keys(gates).length > 0 ? { gates } : {}),
+        ...(Object.keys(arenas).length > 0 ? { arenas } : {}),
         rulings: [],
         createdAt: now,
         updatedAt: now
       });
     }
     console.log(`Workflows: expanded "${def.id}" → run ${runId} (${tasks.length} tasks)`);
-    return { runId, workflowId: def.id, mode: 'dag', dryRun: false, steps: order.map(s => ({ key: s.key, ...(s.gate ? { gate: { reviewer: s.gate.reviewer, maxRounds: s.gate.maxRounds ?? 3, escalateBrainAt: s.gate.escalateBrainAt ?? 2, ...(s.gate.panel && s.gate.panel > 1 ? { panel: s.gate.panel } : {}) } } : {}) })), tasks };
+    return {
+      runId,
+      workflowId: def.id,
+      mode: 'dag',
+      dryRun: false,
+      steps: order.map(s => ({
+        key: s.key,
+        ...(s.gate ? { gate: { reviewer: s.gate.reviewer, maxRounds: s.gate.maxRounds ?? 3, escalateBrainAt: s.gate.escalateBrainAt ?? 2, ...(s.gate.panel && s.gate.panel > 1 ? { panel: s.gate.panel } : {}) } } : {}),
+        ...(s.arena ? { arena: { runners: s.arena.runners, rubric: s.arena.rubric } } : {})
+      })),
+      tasks
+    };
   }
 
   // ── Orchestrated (adaptive) runs ──────────────────────────────────────────
@@ -662,12 +981,57 @@ export class Workflows {
    */
   onTaskCompleted(task: Task): void {
     if (!task || !task.context) return;
+    if (task.context.arenaRole === 'synthesis') {
+      this.handleArenaSynthesisCompleted(task);
+      return;
+    }
     if (typeof task.context.gateReviewFor === 'string') {
       this.handleGateReviewCompleted(task);
       return;
     }
     if (task.context.gate && typeof task.context.gate === 'object') {
       this.handleGatedStepCompleted(task);
+    }
+  }
+
+  private handleArenaSynthesisCompleted(task: Task): void {
+    const fresh = this.store.getTask(task.id) || task;
+    const stepKey = String(fresh.context?.arenaStepKey || fresh.context?.stepKey || fresh.id);
+    const runId = String(fresh.context?.workflowRunId || '');
+    const rec = runId ? this.ensureRunRecord(fresh) : null;
+    const arenaRec = rec?.arenas?.[stepKey];
+
+    const resultText = fresh.result || '';
+    const isDiverged = fresh.status === 'wait-input' ||
+      /wildly diverge|divergence detected|STATUS:\s*DIVERGED|DIVERGENCE:/i.test(resultText);
+
+    if (isDiverged) {
+      const divergenceSummary = this.extractArenaDivergence(resultText);
+      const questions = [
+        `Arena candidates wildly diverged for step "${stepKey}". Summary: ${divergenceSummary}. How should we proceed?`
+      ];
+      this.store.parkForInput({ taskId: fresh.id, questions, result: resultText });
+
+      if (rec) {
+        rec.status = 'wait-input';
+        if (arenaRec) {
+          arenaRec.status = 'diverged';
+          arenaRec.divergenceSummary = divergenceSummary;
+          arenaRec.updatedAt = new Date().toISOString();
+        }
+        this.saveRecord(rec);
+      }
+      console.log(`Workflows: arena candidates wildly diverged on step "${stepKey}" → parked on wait-input`);
+      return;
+    }
+
+    if (fresh.status === 'done' && !isFailedTask(fresh)) {
+      if (rec && arenaRec) {
+        arenaRec.status = 'completed';
+        arenaRec.updatedAt = new Date().toISOString();
+        this.saveRecord(rec);
+      }
+      console.log(`Workflows: arena completed for step "${stepKey}"`);
     }
   }
 
@@ -702,6 +1066,7 @@ export class Workflows {
     const existing = this.loadRecord(runId);
     if (existing) {
       existing.gates = existing.gates || {};
+      existing.arenas = existing.arenas || {};
       existing.rulings = existing.rulings || [];
       return existing;
     }
@@ -714,6 +1079,7 @@ export class Workflows {
       status: 'running',
       history: [],
       gates: {},
+      arenas: {},
       rulings: [],
       createdAt: stepTask.createdAt || now,
       updatedAt: now

@@ -114,10 +114,14 @@
         "investigation": "shadow",
         "bug-fix": "shadow",
         "feature": "shadow",
-        "research-report": "shadow",
+        "research-report": "on",
         "content": "shadow",
         "ops-change": "shadow"
       }
+    },
+    "arena": {
+      "_comment": "PS-3 arena workflow primitive for one-way-door deliverables. Spawns N parallel candidates across distinct model families, cross-judged and synthesized. Default false until blind A/B eval passes.",
+      "enabled": false
     },
     "staleClaimMs": 600000,
     "hardClaimMs": 5400000,

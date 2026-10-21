@@ -1,7 +1,7 @@
 {
   "id": "gtm-campaign",
   "name": "GTM Campaign (promos + email auto-replies)",
-  "description": "Marketing and sales wire a launch: growth designs the offer and promotional angles, the email strategist builds the sequence AND the inbound auto-reply rules, content drafts the assets, sales builds the enablement layer, and analytics defines how success is measured. This is the 'marketing/sales wire product promotions and manage emails with auto-replies' pipeline. Roles pinned to marketing/sales agents; brain fallback chains editable from the dashboard.",
+  "description": "Marketing and sales wire a launch: growth designs the offer and promotional angles, the email strategist builds the sequence AND the inbound auto-reply rules, content drafts the assets, sales builds the enablement layer, and analytics defines how success is measured. This is the 'marketing/sales wire product promotions and manage emails with auto-replies' pipeline. Roles pinned to marketing/sales agents; brain fallback chains editable from the dashboard. (Candidate for PS-3 arena mode on the 'offer' / core message step once promoted.)",
   "params": ["product"],
   "steps": [
     {

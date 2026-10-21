@@ -383,6 +383,14 @@ export interface OrchestrationConfig {
   goalAttention?: boolean;
   /** Per-task method cards from pinned pstack playbooks (PS-4). */
   methods?: MethodsConfig;
+  /** Arena primitive for one-way-door deliverables (PS-3). */
+  arena?: ArenaConfig;
+}
+
+/** Config for {@link OrchestrationConfig.arena} (PS-3). */
+export interface ArenaConfig {
+  /** Master switch for arena workflow step primitive. Default false. */
+  enabled?: boolean;
 }
 
 /** Config for {@link OrchestrationConfig.methods} (PS-4). */
@@ -723,6 +731,22 @@ export interface WorkflowStep {
   scope?: TaskBrief['scope'];
   /** Method / playbook key (PS-4: bug-fix, feature, investigation, content, ops-change, research-report). */
   playbook?: string;
+  /** Arena primitive for one-way-door deliverables (PS-3). */
+  arena?: WorkflowStepArena;
+}
+
+/**
+ * Arena step option (PS-3, port of pstack arena phases A-F).
+ * Spawns N parallel sibling candidates across >=2 model families with identical brief,
+ * followed by a cross-judge scoring each candidate, followed by a judgment-tier synthesis
+ * that picks a base, grafts 1-2 elements from losers, and writes synthesis.md.
+ * If candidates wildly diverge, parks the step on wait-input.
+ */
+export interface WorkflowStepArena {
+  /** Runner brains (must span >= 2 distinct model families). */
+  runners: string[];
+  /** 3-6 gradeable criteria for scoring candidates. */
+  rubric: string[];
 }
 
 /**
@@ -796,6 +820,20 @@ export interface WorkflowGateRecord {
   blockerFindings?: string[];
 }
 
+/** Record of an arena execution on a workflow step (PS-3). */
+export interface WorkflowArenaRecord {
+  stepKey: string;
+  status: 'pending' | 'running' | 'judging' | 'synthesizing' | 'completed' | 'diverged' | 'wait-input';
+  runners: string[];
+  candidateTaskIds: string[];
+  judgeTaskId: string;
+  synthesisTaskId: string;
+  baseCandidate?: string;
+  divergenceSummary?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 /**
  * A reusable, version-controlled pipeline. Loaded from workflows/<id>.json.
  *
@@ -851,6 +889,8 @@ export interface WorkflowRunRecord {
   history: WorkflowDecision[];
   /** Per-step review→fix gate state and round/verdict history (P1-2). */
   gates?: Record<string, WorkflowGateRecord>;
+  /** Per-step arena state and tasks (PS-3). */
+  arenas?: Record<string, WorkflowArenaRecord>;
   /** Residual non-blocker findings recorded as RULING lines when a gate hits maxRounds (P1-2). */
   rulings?: string[];
   createdAt: string;
@@ -869,6 +909,7 @@ export interface WorkflowRun {
   goal?: string;
   history?: WorkflowDecision[];
   gates?: Record<string, WorkflowGateRecord>;
+  arenas?: Record<string, WorkflowArenaRecord>;
   rulings?: string[];
 }
 
