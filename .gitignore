@@ -14,6 +14,7 @@ decisions/*.md
 # human-approved routing rules / per-agent playbooks (WF-2). These are per-server
 # state, not source — never commit them.
 decisions/*.jsonl
+decisions/*.tsv
 decisions/routing-rules.json
 decisions/playbooks/
 server/hermes-*.md

@@ -149,3 +149,55 @@ test('dispatcher: a rate-limit failure marks the brain cooling; chain routing sk
   (d as any).tick();
   assert.deepEqual(ran, [`${t.id}@local-qwen`], 'routed past the cooling head rung');
 });
+
+test('brainCooldownUntil & classifyRateLimit: Antigravity quota groups only affect their matching brains', async () => {
+  const { store, config } = makeStore();
+  (config.orchestration.brains as any)['local-agy-gemini-3.8-flash-high'] = { location: 'local', exec: 'agy', model: 'gemini-3.8-flash-high' };
+  (config.orchestration.brains as any)['local-agy-claude-opus-5-5-high'] = { location: 'local', exec: 'agy', model: 'claude-opus-5-5-high' };
+  (config.orchestration.brains as any)['local-agy-gemini-4-argon-high'] = { location: 'local', exec: 'agy', model: 'gemini-4-argon-high' };
+
+  const geminiReset = new Date(Date.now() + 1800e3).toISOString();
+  const claudeReset = new Date(Date.now() + 86400e3).toISOString();
+  const argonReset = new Date(Date.now() + 43200e3).toISOString();
+
+  // Snapshot has Gemini at 10% used, but Claude and Argon exhausted (100%)
+  const multiGroupUsage: BrainUsage = {
+    exec: 'agy',
+    at: new Date().toISOString(),
+    windows: [
+      { label: '5h', usedPct: 10, resetsAt: geminiReset, group: 'Gemini Models', groupModels: ['Gemini Flash', 'Gemini Pro'], title: 'Five Hour Limit Remaining' },
+      { label: '7d', usedPct: 100, resetsAt: claudeReset, group: 'Claude and GPT models', groupModels: ['Claude Opus', 'Claude Sonnet', 'GPT-OSS'], title: 'Weekly Limit Remaining' },
+      { label: '7d', usedPct: 100, resetsAt: argonReset, group: 'Gemini 4 Argon', title: 'Gemini 4 Argon Weekly Limit', groupNote: 'Argon quota is separate' }
+    ]
+  };
+
+  store.setBrainUsage('local-agy-gemini-3.8-flash-high', multiGroupUsage);
+  store.setBrainUsage('local-agy-claude-opus-5-5-high', multiGroupUsage);
+  store.setBrainUsage('local-agy-gemini-4-argon-high', multiGroupUsage);
+
+  // Gemini 3.8 Flash MUST NOT be considered cooling down just because Claude or Argon is exhausted
+  assert.equal(store.brainCooldownUntil('local-agy-gemini-3.8-flash-high'), undefined, 'gemini 3.8 is not cooling down');
+  // Claude must cool down until claudeReset
+  assert.equal(store.brainCooldownUntil('local-agy-claude-opus-5-5-high'), claudeReset, 'claude cools down until claudeReset');
+  // Argon must cool down until argonReset
+  assert.equal(store.brainCooldownUntil('local-agy-gemini-4-argon-high'), argonReset, 'argon cools down until argonReset');
+
+  // If Gemini itself fails on a rate limit when its 5h window is 90% full, classifyRateLimit uses geminiReset, not claudeReset
+  const geminiNearExhausted: BrainUsage = {
+    exec: 'agy',
+    at: new Date().toISOString(),
+    windows: [
+      { label: '5h', usedPct: 90, resetsAt: geminiReset, group: 'Gemini Models', groupModels: ['Gemini Flash', 'Gemini Pro'], title: 'Five Hour Limit Remaining' },
+      { label: '7d', usedPct: 100, resetsAt: claudeReset, group: 'Claude and GPT models', groupModels: ['Claude Opus', 'Claude Sonnet', 'GPT-OSS'], title: 'Weekly Limit Remaining' }
+    ]
+  };
+  store.setBrainUsage('local-agy-gemini-3.8-flash-high', geminiNearExhausted);
+  const failedTask = mkTask(store, {
+    brain: 'local-agy-gemini-3.8-flash-high',
+    failedBrains: [{ brain: 'local-agy-gemini-3.8-flash-high', reason: 'You have exhausted your rate limit for this model' }]
+  });
+  await store.completeTask({ taskId: failedTask.id, result: 'FAILED after 1 attempt(s) (chain exhausted). rate limit exceeded', internal: true });
+  const completed = store.getTask(failedTask.id)!;
+  assert.equal(completed.context?.rateLimited, true);
+  assert.equal(completed.context?.rateLimitResetsAt, geminiReset, 'rateLimitResetsAt matches Gemini window, NOT Claude');
+});

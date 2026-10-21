@@ -107,8 +107,17 @@ function usageMeters(brainIds, usage) {
     const u = usage?.[id];
     if (!u?.windows?.length) continue;
     const existing = byExec.get(u.exec);
-    if (!existing || (u.at && (!existing.u.at || new Date(u.at).getTime() > new Date(existing.u.at).getTime()))) {
-      byExec.set(u.exec, { u });
+    if (!existing) {
+      byExec.set(u.exec, { u: { ...u, windows: [...(u.windows || [])] } });
+    } else {
+      for (const w of u.windows || []) {
+        if (!existing.u.windows.some(ew => ew.label === w.label && ew.group === w.group && ew.title === w.title)) {
+          existing.u.windows.push(w);
+        }
+      }
+      if (u.at && (!existing.u.at || new Date(u.at).getTime() > new Date(existing.u.at).getTime())) {
+        existing.u.at = u.at;
+      }
     }
   }
   if (!byExec.size) return '';
@@ -139,11 +148,16 @@ function localBrainCards(localBrains, usage) {
     if (!u?.windows?.length) continue;
     const existing = byExec.get(u.exec);
     if (!existing) {
-      byExec.set(u.exec, { u, names: [shortBrain(id)] });
+      byExec.set(u.exec, { u: { ...u, windows: [...(u.windows || [])] }, names: [shortBrain(id)] });
     } else {
       existing.names.push(shortBrain(id));
+      for (const w of u.windows || []) {
+        if (!existing.u.windows.some(ew => ew.label === w.label && ew.group === w.group && ew.title === w.title)) {
+          existing.u.windows.push(w);
+        }
+      }
       if (u.at && (!existing.u.at || new Date(u.at).getTime() > new Date(existing.u.at).getTime())) {
-        existing.u = u;
+        existing.u.at = u.at;
       }
     }
   }
@@ -537,11 +551,38 @@ const BRAIN_BAD_COLOR = '#EF4444';    // unknown / deregistered brain
  * management page still lists disabled brains (with the Enable toggle); it uses
  * the raw /api/brains map directly, not this helper.
  */
+function agyWindowMatchesModel(modelOrBrainId, w) {
+  if (!w?.group) return true;
+  const target = (modelOrBrainId || '').toLowerCase();
+  const group = (w.group || '').toLowerCase();
+  const title = (w.title || '').toLowerCase();
+  const note = (w.groupNote || '').toLowerCase();
+
+  const isArgonModel = target.includes('argon');
+  const isArgonWindow = group.includes('argon') || title.includes('argon') || note.includes('argon');
+  if (isArgonModel) return isArgonWindow;
+  if (isArgonWindow) return false;
+
+  if (target.includes('gemini')) return group.includes('gemini');
+  if (target.includes('claude')) return group.includes('claude');
+  if (target.includes('gpt')) return group.includes('gpt');
+
+  if (w.groupModels && w.groupModels.length > 0) {
+    for (const gm of w.groupModels) {
+      const words = gm.toLowerCase().split(/\s+/).filter(Boolean);
+      if (words.length > 0 && words.every(word => target.includes(word))) return true;
+    }
+  }
+
+  return group.includes(target) || target.includes(group);
+}
+
 /** Reset time (Date) of a brain cooling down on a rate limit — a usage window at
  *  ≥100% that resets in the future (mirror of Store.brainCooldownUntil) — or null. */
-function brainCooldownUntil(u) {
+function brainCooldownUntil(u, brainId) {
   let until = 0;
   for (const w of (u && Array.isArray(u.windows)) ? u.windows : []) {
+    if (brainId && u?.exec === 'agy' && !agyWindowMatchesModel(brainId, w)) continue;
     const used = typeof w.usedPct === 'number' ? w.usedPct : (typeof w.remainingPct === 'number' ? 100 - w.remainingPct : 0);
     const at = w.resetsAt ? Date.parse(w.resetsAt) : NaN;
     if (used >= 100 && Number.isFinite(at) && at > Date.now()) until = Math.max(until, at);
@@ -1072,7 +1113,7 @@ class App {
     const ids = selectableBrainIds(brains);
     const opts = [`<option value="">🧠 Auto — route via the agent's brain chain</option>`]
       .concat(ids.map(b => {
-        const until = brainCooldownUntil(usage[b]);
+        const until = brainCooldownUntil(usage[b], b);
         const note = until ? ` — ⏳ rate-limited until ${until.toLocaleString()}` : '';
         return `<option value="${esc(b)}"${b === defaultBrain ? ' selected' : ''}>${esc(b + note)}</option>`;
       })).join('');

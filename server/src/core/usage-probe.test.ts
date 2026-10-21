@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { normalizeClaudeUsage, normalizeCodexRateLimits, normalizeAgyQuota, mergeAgyWindows, agyUserAgent, installedAgyUserAgent, _resetAgyUserAgent, isMeteredExec, findRateLimitsSnapshot, discoverAgyRefreshToken, readCachedAgyToken, agyOAuthClients, UsagePoller } from './usage-probe.js';
+import { normalizeClaudeUsage, normalizeCodexRateLimits, normalizeAgyQuota, mergeAgyWindows, agyUserAgent, installedAgyUserAgent, _resetAgyUserAgent, isMeteredExec, findRateLimitsSnapshot, discoverAgyRefreshToken, readCachedAgyToken, agyOAuthClients, UsagePoller, agyWindowMatchesModel } from './usage-probe.js';
 
 // Shape captured from a live GET /api/oauth/usage response (values trimmed).
 const CLAUDE_LIVE_SHAPE = {
@@ -471,4 +471,34 @@ test('installedAgyUserAgent: a failed version lookup is retried, a successful on
     if (saved === undefined) delete process.env.AGY_USER_AGENT; else process.env.AGY_USER_AGENT = saved;
     _resetAgyUserAgent();
   }
+});
+
+test('agyWindowMatchesModel: partitions Antigravity quota groups by model family', () => {
+  const geminiWin = { label: '5h', usedPct: 10, group: 'Gemini Models', groupModels: ['Gemini Flash', 'Gemini Pro'], title: 'Five Hour Limit Remaining' };
+  const claudeWin = { label: '7d', usedPct: 100, group: 'Claude and GPT models', groupModels: ['Claude Opus', 'Claude Sonnet', 'GPT-OSS'], title: 'Weekly Limit Remaining' };
+  const argonWin = { label: '7d', usedPct: 100, group: 'Gemini 4 Argon', title: 'Gemini 4 Argon Weekly Limit', groupNote: 'Argon quota is separate' };
+  const ungroupedWin = { label: '5h', usedPct: 20 };
+
+  // Standard Gemini models (gemini-3.8-flash, etc.)
+  assert.equal(agyWindowMatchesModel('local-agy-gemini-3.8-flash-high', geminiWin), true);
+  assert.equal(agyWindowMatchesModel('gemini-3.8-flash-high', geminiWin), true);
+  assert.equal(agyWindowMatchesModel('local-agy-gemini-3.8-flash-high', claudeWin), false, 'gemini must not match claude/gpt group');
+  assert.equal(agyWindowMatchesModel('local-agy-gemini-3.8-flash-high', argonWin), false, 'gemini must not match argon group');
+  assert.equal(agyWindowMatchesModel('local-agy-gemini-3.8-flash-high', ungroupedWin), true, 'ungrouped matches all');
+
+  // Argon models
+  assert.equal(agyWindowMatchesModel('local-agy-gemini-4-argon-high', argonWin), true);
+  assert.equal(agyWindowMatchesModel('gemini-4-argon-high', argonWin), true);
+  assert.equal(agyWindowMatchesModel('local-agy-gemini-4-argon-high', geminiWin), false, 'argon must not match standard gemini group');
+  assert.equal(agyWindowMatchesModel('local-agy-gemini-4-argon-high', claudeWin), false, 'argon must not match claude/gpt group');
+
+  // Claude models
+  assert.equal(agyWindowMatchesModel('local-agy-claude-opus-5-5-high', claudeWin), true);
+  assert.equal(agyWindowMatchesModel('local-agy-claude-opus-5-5-high', geminiWin), false);
+  assert.equal(agyWindowMatchesModel('local-agy-claude-opus-5-5-high', argonWin), false);
+
+  // GPT models
+  assert.equal(agyWindowMatchesModel('local-agy-gpt-oss-120b-medium', claudeWin), true);
+  assert.equal(agyWindowMatchesModel('local-agy-gpt-oss-120b-medium', geminiWin), false);
+  assert.equal(agyWindowMatchesModel('local-agy-gpt-oss-120b-medium', argonWin), false);
 });

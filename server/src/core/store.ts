@@ -9,6 +9,7 @@ import { Roster } from './roster.js';
 import { normalizeRecurrence, recurrenceFromLegacyHours, nextRunAt, type TaskRecurrence } from './recurrence.js';
 import { isRateLimitFailure } from './result-verifier.js';
 import { canonicalBrainId } from '../config.js';
+import { agyWindowMatchesModel } from './usage-probe.js';
 
 /**
  * A veto the Dispatcher registers on the store so EXTERNAL task completions
@@ -330,8 +331,10 @@ export class Store {
     // brain when no brain ids were recorded) for the soonest future reset.
     const usageAll = this.getBrainUsage();
     const ids = failedBrains.map(f => f.brain).filter((b): b is string => !!b);
-    const pool: BrainUsage[] = (ids.length ? ids.map(id => usageAll[id]) : Object.values(usageAll))
-      .filter((u): u is BrainUsage => !!u && Array.isArray(u.windows));
+    const pool: Array<{ brainId?: string; u: BrainUsage }> = (ids.length
+      ? ids.map(id => ({ brainId: id, u: usageAll[id] }))
+      : Object.entries(usageAll).map(([brainId, u]) => ({ brainId, u })))
+      .filter((item): item is { brainId: string; u: BrainUsage } => !!item.u && Array.isArray(item.u.windows));
     const reset = this.earliestFutureReset(pool);
     if (reset) ctx.rateLimitResetsAt = reset; else delete ctx.rateLimitResetsAt;
     // Auto re-run is DEFAULT-ON (orchestration.autoRerunRateLimited.enabled): the
@@ -348,12 +351,14 @@ export class Store {
   /** Soonest future `resetsAt` across a set of usage snapshots. Prefers windows
    *  that are actually exhausted (used ≥ 80%) — the one that caused the failure —
    *  and only falls back to the soonest of any future window when none look maxed. */
-  private earliestFutureReset(pool: BrainUsage[]): string | undefined {
+  private earliestFutureReset(pool: Array<{ brainId?: string; u: BrainUsage }>): string | undefined {
     const now = Date.now();
     const futures: number[] = [];
     const exhausted: number[] = [];
-    for (const u of pool) {
+    for (const { brainId, u } of pool) {
+      const model = brainId ? (this.config.orchestration?.brains?.[brainId]?.model || brainId) : undefined;
       for (const w of u.windows) {
+        if (model && u.exec === 'agy' && !agyWindowMatchesModel(model, w)) continue;
         if (!w.resetsAt) continue;
         const t = Date.parse(w.resetsAt);
         if (!Number.isFinite(t) || t <= now) continue;
@@ -878,7 +883,9 @@ export class Store {
       if (seen > now) until = seen; else this.brainRateLimitedUntil.delete(brainId);
     }
     const u = this.brainUsage.get(brainId);
+    const model = this.config.orchestration?.brains?.[brainId]?.model || brainId;
     for (const w of (u && Array.isArray(u.windows)) ? u.windows : []) {
+      if (u?.exec === 'agy' && !agyWindowMatchesModel(model, w)) continue;
       const used = typeof w.usedPct === 'number' ? w.usedPct
         : (typeof w.remainingPct === 'number' ? 100 - w.remainingPct : 0);
       const at = w.resetsAt ? Date.parse(w.resetsAt) : NaN;
@@ -899,9 +906,11 @@ export class Store {
    */
   public noteBrainRateLimited(brainId: string, fallbackMs = 15 * 60_000): string {
     const u = this.brainUsage.get(brainId);
+    const model = this.config.orchestration?.brains?.[brainId]?.model || brainId;
     const now = Date.now();
     let reset = 0;
     for (const w of (u && Array.isArray(u.windows)) ? u.windows : []) {
+      if (u?.exec === 'agy' && !agyWindowMatchesModel(model, w)) continue;
       const used = typeof w.usedPct === 'number' ? w.usedPct
         : (typeof w.remainingPct === 'number' ? 100 - w.remainingPct : 0);
       const at = w.resetsAt ? Date.parse(w.resetsAt) : NaN;
@@ -934,9 +943,12 @@ export class Store {
     delete ctx.brainAuto;
     if (targetBrain) ctx.brain = targetBrain; else delete ctx.brain;
     ctx.attempts = 0;
+    ctx.dispatched = false;
     delete ctx.remoteWaitSince;
     delete ctx.pendingReason;
     delete ctx.pendingReasonAt;
+    delete task.claimedBy;
+    delete task.claimedAt;
     task.context = ctx;
     this.saveTask(task);
     this.eventBus.emitTaskCreated(task);   // nudge live dashboards to refresh

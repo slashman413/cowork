@@ -475,6 +475,32 @@ async function probeAgyUsage() {
   return windows.length ? windows : null;
 }
 
+function agyWindowMatchesModel(modelOrBrainId, w) {
+  if (!w?.group) return true;
+  const target = (modelOrBrainId || '').toLowerCase();
+  const group = (w.group || '').toLowerCase();
+  const title = (w.title || '').toLowerCase();
+  const note = (w.groupNote || '').toLowerCase();
+
+  const isArgonModel = target.includes('argon');
+  const isArgonWindow = group.includes('argon') || title.includes('argon') || note.includes('argon');
+  if (isArgonModel) return isArgonWindow;
+  if (isArgonWindow) return false;
+
+  if (target.includes('gemini')) return group.includes('gemini');
+  if (target.includes('claude')) return group.includes('claude');
+  if (target.includes('gpt')) return group.includes('gpt');
+
+  if (w.groupModels && w.groupModels.length > 0) {
+    for (const gm of w.groupModels) {
+      const words = gm.toLowerCase().split(/\s+/).filter(Boolean);
+      if (words.length > 0 && words.every(word => target.includes(word))) return true;
+    }
+  }
+
+  return group.includes(target) || target.includes(group);
+}
+
 async function refreshUsage() {
   const byExec = {};
   for (const b of Object.values(BRAIN)) (byExec[b.exec] ||= []).push(b.id);
@@ -484,8 +510,19 @@ async function refreshUsage() {
     try { windows = exec === 'claude' ? await probeClaudeUsage() : exec === 'codex' ? probeCodexUsage() : exec === 'agy' ? await probeAgyUsage() : null; }
     catch { /* fail-soft */ }
     if (!windows) continue;
-    const snap = { exec, windows, at: new Date().toISOString() };
-    for (const id of ids) next[id] = snap;
+    const now = new Date().toISOString();
+    for (const id of ids) {
+      const b = BRAIN[id];
+      const model = b?.model || id;
+      const brainWindows = exec === 'agy'
+        ? windows.filter(w => agyWindowMatchesModel(model, w))
+        : windows;
+      next[id] = {
+        exec,
+        windows: brainWindows.length ? brainWindows : windows,
+        at: now
+      };
+    }
   }
   // Keep the last good snapshot if this round failed entirely (transient net).
   if (Object.keys(next).length || !Object.keys(USAGE).length) USAGE = next;

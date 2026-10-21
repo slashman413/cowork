@@ -427,6 +427,51 @@ export function normalizeAgyQuota(raw: any): BrainUsageWindow[] {
   return windows;
 }
 
+/**
+ * Check whether an Antigravity quota window belongs to a given model slug or brain ID.
+ * Antigravity partitions quota by model family (Gemini Models, Claude and GPT models,
+ * Gemini 4 Argon); a brain must only track the windows for its own model group so an
+ * exhausted Claude/Argon limit does not falsely cool down or mis-state resets for Gemini.
+ */
+export function agyWindowMatchesModel(modelOrBrainId: string, w: BrainUsageWindow): boolean {
+  if (!w?.group) return true;
+  const target = (modelOrBrainId || '').toLowerCase();
+  const group = (w.group || '').toLowerCase();
+  const title = (w.title || '').toLowerCase();
+  const note = (w.groupNote || '').toLowerCase();
+
+  // 1. Argon models and windows: "Gemini 4 Argon" is separate from standard Gemini
+  const isArgonModel = target.includes('argon');
+  const isArgonWindow = group.includes('argon') || title.includes('argon') || note.includes('argon');
+  if (isArgonModel) return isArgonWindow;
+  if (isArgonWindow) return false;
+
+  // 2. Standard Gemini models (Flash, Pro, 3.8, etc.)
+  if (target.includes('gemini')) {
+    return group.includes('gemini');
+  }
+
+  // 3. Claude models
+  if (target.includes('claude')) {
+    return group.includes('claude');
+  }
+
+  // 4. GPT models
+  if (target.includes('gpt')) {
+    return group.includes('gpt');
+  }
+
+  // 5. Check if any model in w.groupModels matches target words
+  if (w.groupModels && w.groupModels.length > 0) {
+    for (const gm of w.groupModels) {
+      const words = gm.toLowerCase().split(/\s+/).filter(Boolean);
+      if (words.length > 0 && words.every(word => target.includes(word))) return true;
+    }
+  }
+
+  return group.includes(target) || target.includes(group);
+}
+
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 
 export interface OAuthClientCreds {
@@ -655,8 +700,19 @@ export class UsagePoller {
       let windows: BrainUsageWindow[] | null = null;
       try { windows = await PROBES[targetExec](); } catch { /* fail-soft: keep last snapshot */ }
       if (!windows) return;
-      const usage: BrainUsage = { exec: targetExec, windows, at: new Date().toISOString() };
-      for (const id of ids) this.store.setBrainUsage(id, usage);
+      const at = new Date().toISOString();
+      for (const id of ids) {
+        const brain = this.brains()[id];
+        const model = brain?.model || id;
+        const brainWindows = targetExec === 'agy'
+          ? windows.filter(w => agyWindowMatchesModel(model, w))
+          : windows;
+        this.store.setBrainUsage(id, {
+          exec: targetExec,
+          windows: brainWindows.length ? brainWindows : windows,
+          at
+        });
+      }
     })().finally(() => {
       this.inFlight.delete(targetExec);
     });

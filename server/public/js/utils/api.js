@@ -23,7 +23,17 @@ class APIClient {
           const body = await response.clone().json();
           detail = body?.error || body?.message || '';
         } catch {
-          try { detail = (await response.clone().text()).trim(); } catch { /* ignore */ }
+          try {
+            const text = (await response.clone().text()).trim();
+            const preMatch = text.match(/<pre>(.*?)<\/pre>/is);
+            if (preMatch) {
+              detail = preMatch[1].trim();
+            } else if (text.startsWith('<')) {
+              detail = text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+            } else {
+              detail = text;
+            }
+          } catch { /* ignore */ }
         }
         throw new Error(detail || `API Error: ${response.status} ${response.statusText}`);
       }
