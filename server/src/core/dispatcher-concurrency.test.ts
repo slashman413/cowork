@@ -19,7 +19,10 @@ function harness() {
   const store = {
     getTask: () => null,
     saveTask: () => {},
-    getAgentPersona: () => null
+    getAgentPersona: () => null,
+    brainCooldownUntil: () => undefined,
+    noteBrainRateLimited: () => '',
+    clearBrainRateLimited: () => {}
   };
   const config = {
     inbox: { maxRetries: 3 },

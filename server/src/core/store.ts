@@ -869,17 +869,52 @@ export class Store {
    * exhausted windows reset). Undefined when the brain has room or isn't metered.
    */
   public brainCooldownUntil(brainId: string): string | undefined {
-    const u = this.brainUsage.get(brainId);
-    if (!u || !Array.isArray(u.windows)) return undefined;
     const now = Date.now();
     let until = 0;
-    for (const w of u.windows) {
+    // An OBSERVED rate-limit failure counts too: meters poll on an interval and
+    // often still read < 100% when the brain is already refusing work.
+    const seen = this.brainRateLimitedUntil.get(brainId);
+    if (seen !== undefined) {
+      if (seen > now) until = seen; else this.brainRateLimitedUntil.delete(brainId);
+    }
+    const u = this.brainUsage.get(brainId);
+    for (const w of (u && Array.isArray(u.windows)) ? u.windows : []) {
       const used = typeof w.usedPct === 'number' ? w.usedPct
         : (typeof w.remainingPct === 'number' ? 100 - w.remainingPct : 0);
       const at = w.resetsAt ? Date.parse(w.resetsAt) : NaN;
       if (used >= 100 && Number.isFinite(at) && at > now) until = Math.max(until, at);
     }
     return until ? new Date(until).toISOString() : undefined;
+  }
+
+  /** Brains seen failing on a rate limit → epoch ms the cooldown ends (in-memory). */
+  private brainRateLimitedUntil = new Map<string, number>();
+
+  /**
+   * Record that `brainId` just failed a run on a rate limit / quota / overload, so
+   * brainCooldownUntil reports it cooling even before its meter catches up. The
+   * cooldown lasts until that brain's nearly-exhausted (≥ 80%) usage window resets;
+   * with no such window (unmetered brain, or a transient overload) it is a short
+   * fixed hold. Cleared early by clearBrainRateLimited when the brain next succeeds.
+   */
+  public noteBrainRateLimited(brainId: string, fallbackMs = 15 * 60_000): string {
+    const u = this.brainUsage.get(brainId);
+    const now = Date.now();
+    let reset = 0;
+    for (const w of (u && Array.isArray(u.windows)) ? u.windows : []) {
+      const used = typeof w.usedPct === 'number' ? w.usedPct
+        : (typeof w.remainingPct === 'number' ? 100 - w.remainingPct : 0);
+      const at = w.resetsAt ? Date.parse(w.resetsAt) : NaN;
+      if (used >= 80 && Number.isFinite(at) && at > now) reset = reset ? Math.min(reset, at) : at;
+    }
+    const until = reset || now + fallbackMs;
+    this.brainRateLimitedUntil.set(brainId, until);
+    return new Date(until).toISOString();
+  }
+
+  /** Forget an observed rate-limit cooldown (the brain just completed a run fine). */
+  public clearBrainRateLimited(brainId: string): void {
+    this.brainRateLimitedUntil.delete(brainId);
   }
 
   /**

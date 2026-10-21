@@ -6,7 +6,7 @@ import type { EventBus } from './events.js';
 import type { Store, CompletionDecision } from './store.js';
 import type { Workflows } from './workflows.js';
 import type { Goals } from './goals.js';
-import { verifyOutput, buildVerifierPrompt, parseLlmVerdict, detectInputRequest, detectBackgroundWait, type VerifyVerdict, type InputOptions, type InputRequest, type BackgroundOptions, type BackgroundWait } from './result-verifier.js';
+import { verifyOutput, isRateLimitFailure, buildVerifierPrompt, parseLlmVerdict, detectInputRequest, detectBackgroundWait, type VerifyVerdict, type InputOptions, type InputRequest, type BackgroundOptions, type BackgroundWait } from './result-verifier.js';
 import { buildLesson, appendLesson } from './lessons.js';
 import { canonicalBrainId } from '../config.js';
 import { STREAMING_EXECS, streamArgs, createStreamRenderer } from './progress-stream.js';
@@ -308,12 +308,14 @@ export class Dispatcher {
     // Only load-balance a local, runnable preferred rung; anything else keeps the
     // index so remote/skip handling upstream is untouched.
     if (!hb || hb.location !== 'local' || !hb.exec) return { brainId: head, index: attempt };
-    if (this.brainLoad(head) < this.brainCap(head)) return { brainId: head, index: attempt };
-    // Preferred rung saturated → least-loaded local rung with room (ties: earliest).
+    const cooling = (id: string) => !!this.store.brainCooldownUntil(id);
+    if (this.brainLoad(head) < this.brainCap(head) && !cooling(head)) return { brainId: head, index: attempt };
+    // Preferred rung saturated or cooling down on a rate limit → least-loaded local
+    // rung with room that isn't cooling (ties: earliest).
     let bestIdx = -1, bestSlack = 0;
     for (let i = attempt; i < chain.length; i++) {
       const b = brains[chain[i]];
-      if (!b || b.location !== 'local' || !b.exec) continue;
+      if (!b || b.location !== 'local' || !b.exec || cooling(chain[i])) continue;
       const slack = this.brainCap(chain[i]) - this.brainLoad(chain[i]);
       if (slack > bestSlack) { bestSlack = slack; bestIdx = i; }
     }
@@ -1603,6 +1605,12 @@ export class Dispatcher {
     failedBrains.push({ ...entry, at: new Date().toISOString() });
     t.context = { ...(t.context || {}), failedBrains };
     this.store.saveTask(t);
+    // A rate-limit refusal means that brain is cooling down: hold tasks pinned to it
+    // and steer chain routing past it until it resets (Store.brainCooldownUntil).
+    if (entry.brain && isRateLimitFailure(entry.reason)) {
+      const until = this.store.noteBrainRateLimited(entry.brain);
+      console.log(`Dispatcher: brain ${entry.brain} hit a rate limit — treated as cooling down until ${until}`);
+    }
   }
 
   /**
@@ -2012,6 +2020,7 @@ export class Dispatcher {
     const done = this.store.getTask(task.id);
     if (done) {
       done.context = { ...(done.context || {}), ranAgent: plan.agent, ranDivision: plan.division, ranBrain: plan.brainId, isRoster: plan.isRoster };
+      if (verdict.ok) this.store.clearBrainRateLimited(plan.brainId);   // it works again
       if (artifacts.length) (done as any).artifacts = artifacts;
       this.store.saveTask(done);
     }

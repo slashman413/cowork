@@ -112,3 +112,40 @@ test('dispatcher holds a task pinned to a cooling brain, runs it once reassigned
   (d as any).tick();
   assert.deepEqual(ran, [`${t.id}@local-qwen`], 'dispatched on the reassigned brain');
 });
+
+test('an observed rate-limit failure cools a brain even while its meter lags', () => {
+  const { store } = makeStore();
+  const resetsAt = new Date(Date.now() + 3600e3).toISOString();
+  // Meter still reads 92% — below the ≥100% exhausted threshold.
+  store.setBrainUsage('local-opus', { exec: 'claude', at: '', windows: [{ label: '5h', usedPct: 92, resetsAt }] });
+  assert.equal(store.brainCooldownUntil('local-opus'), undefined);
+  assert.equal(store.noteBrainRateLimited('local-opus'), resetsAt, 'cools until the near-exhausted window resets');
+  assert.equal(store.brainCooldownUntil('local-opus'), resetsAt);
+  store.clearBrainRateLimited('local-opus');
+  assert.equal(store.brainCooldownUntil('local-opus'), undefined, 'cleared once it succeeds again');
+
+  // Unmetered brain → short fixed hold that expires on its own.
+  const until = Date.parse(store.noteBrainRateLimited('local-qwen', 60_000));
+  assert.ok(until > Date.now() && until <= Date.now() + 60_000);
+  store.noteBrainRateLimited('local-qwen', -1);
+  assert.equal(store.brainCooldownUntil('local-qwen'), undefined, 'expired hold is dropped');
+});
+
+test('dispatcher: a rate-limit failure marks the brain cooling; chain routing skips it', () => {
+  const { store, config } = makeStore();
+  const d = new Dispatcher(config, store, new EventBus());
+  const ran: string[] = [];
+  (d as any).agentId = 'dispatcher';
+  (d as any).execute = async (task: any, plan: any) => { ran.push(`${task.id}@${plan.brainId}`); };
+
+  const failed = mkTask(store, { agent: 'generalist' });
+  (d as any).recordFailedBrain(failed.id, { brain: 'local-opus', agent: 'generalist', attempt: 1, reason: "You've hit your usage limit · resets 5pm" });
+  assert.ok(store.brainCooldownUntil('local-opus'), 'local-opus cooling after the refusal');
+  (d as any).recordFailedBrain(failed.id, { brain: 'local-qwen', agent: 'generalist', attempt: 2, reason: 'empty result' });
+  assert.equal(store.brainCooldownUntil('local-qwen'), undefined, 'non-rate-limit failures do not cool a brain');
+  const s = store.getTask(failed.id)!; s.status = 'done'; store.saveTask(s);
+
+  const t = mkTask(store, { agent: 'generalist' });   // unpinned: chain local-opus → local-qwen
+  (d as any).tick();
+  assert.deepEqual(ran, [`${t.id}@local-qwen`], 'routed past the cooling head rung');
+});
