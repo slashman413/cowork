@@ -68,13 +68,19 @@ test('brainCooldownUntil: exhausted future window → its reset; otherwise undef
 
 test('reassignTask re-pins a pending task and resets chain bookkeeping', () => {
   const { store } = makeStore();
-  const t = mkTask(store, { agent: 'generalist', brain: 'local-opus', attempts: 1, remoteWaitSince: 1, pendingReason: 'x' });
+  const t = mkTask(store, {
+    agent: 'generalist', brain: 'local-opus', attempts: 1, remoteWaitSince: 1,
+    pendingReason: 'x', rateLimited: true, rateLimitResetsAt: '2026-10-25T00:00:00Z', autoRerunOnReset: true
+  });
   const re = store.reassignTask(t.id, 'local-qwen')!;
   assert.equal(re.status, 'pending');
   assert.equal(re.context!.brain, 'local-qwen');
   assert.equal(re.context!.attempts, 0);
   assert.equal(re.context!.remoteWaitSince, undefined);
   assert.equal(re.context!.pendingReason, undefined);
+  assert.equal(re.context!.rateLimited, undefined, 'rateLimited cleared');
+  assert.equal(re.context!.rateLimitResetsAt, undefined, 'rateLimitResetsAt cleared');
+  assert.equal(re.context!.autoRerunOnReset, undefined, 'autoRerunOnReset cleared');
   assert.equal(re.context!.agent, 'generalist', 'agent kept');
 
   const auto = store.reassignTask(t.id, '')!;
@@ -174,6 +180,10 @@ test('brainCooldownUntil & classifyRateLimit: Antigravity quota groups only affe
   store.setBrainUsage('local-agy-gemini-3.8-flash-high', multiGroupUsage);
   store.setBrainUsage('local-agy-claude-opus-5-5-high', multiGroupUsage);
   store.setBrainUsage('local-agy-gemini-4-argon-high', multiGroupUsage);
+
+  // Store.setBrainUsage partitions windows so gemini only receives Gemini windows
+  assert.equal(store.getBrainUsage()['local-agy-gemini-3.8-flash-high'].windows.length, 1);
+  assert.equal(store.getBrainUsage()['local-agy-gemini-3.8-flash-high'].windows[0].group, 'Gemini Models');
 
   // Gemini 3.8 Flash MUST NOT be considered cooling down just because Claude or Argon is exhausted
   assert.equal(store.brainCooldownUntil('local-agy-gemini-3.8-flash-high'), undefined, 'gemini 3.8 is not cooling down');

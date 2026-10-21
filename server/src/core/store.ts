@@ -288,7 +288,13 @@ export class Store {
     if (existing?.at && usage.at && new Date(usage.at).getTime() < new Date(existing.at).getTime()) {
       return; // Do not overwrite with an older snapshot
     }
-    this.brainUsage.set(brainId, usage);
+    let windows = usage.windows;
+    if (usage.exec === 'agy' && Array.isArray(windows)) {
+      const model = this.config.orchestration?.brains?.[brainId]?.model || brainId;
+      const matched = windows.filter(w => agyWindowMatchesModel(model, w));
+      if (matched.length) windows = matched;
+    }
+    this.brainUsage.set(brainId, { ...usage, windows });
     this.scheduleBrainUsageSave();
   }
   public removeBrainUsage(brainId: string): void {
@@ -947,6 +953,9 @@ export class Store {
     delete ctx.remoteWaitSince;
     delete ctx.pendingReason;
     delete ctx.pendingReasonAt;
+    delete ctx.rateLimited;
+    delete ctx.rateLimitResetsAt;
+    delete ctx.autoRerunOnReset;
     delete task.claimedBy;
     delete task.claimedAt;
     task.context = ctx;

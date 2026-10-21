@@ -1113,7 +1113,7 @@ class App {
     const ids = selectableBrainIds(brains);
     const opts = [`<option value="">🧠 Auto — route via the agent's brain chain</option>`]
       .concat(ids.map(b => {
-        const until = brainCooldownUntil(usage[b], b);
+        const until = brainCooldownUntil(usage[b], brains[b]?.model || b);
         const note = until ? ` — ⏳ rate-limited until ${until.toLocaleString()}` : '';
         return `<option value="${esc(b)}"${b === defaultBrain ? ' selected' : ''}>${esc(b + note)}</option>`;
       })).join('');
