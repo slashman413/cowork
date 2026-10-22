@@ -3,6 +3,15 @@
   "accent": "#2563EB",
   "categories": ["Knowledge", "Marketing", "Files", "Dev", "Automation", "Ops", "APIs & MCP", "Explore", "Other"],
   "services": {
+    "videostudio": {
+      "url": "/video-studio.html",
+      "label": "Video Studio 影片工作室",
+      "description": "Code-rendered films: pick one of 59 lemo-opuscar styles, write a brief, a Claude brain directs and renders the MP4.",
+      "icon": "clapperboard",
+      "category": "Marketing",
+      "enabled": true,
+      "probe": false
+    },
     "obsidian": {
       "url": "/obsidian.html",
       "label": "Obsidian Vault",

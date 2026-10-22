@@ -29,6 +29,7 @@ export function createApiRouter(store: Store, eventBus: EventBus): Router {
       status: req.query.status as string,
       platform: req.query.platform as string,
       agent: req.query.agent as string,
+      tag: req.query.tag as string,
       limit: req.query.limit ? parseInt(req.query.limit as string, 10) : undefined
     }));
   });

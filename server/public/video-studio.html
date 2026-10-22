@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<!--
+  Video Studio — code-rendered films from the lemo-opuscar style library.
+
+  Served by the cowork server itself (like obsidian.html) and launched from the
+  Portal card. A thin client over:
+    GET  /api/video-studio            library status + allowed brains
+    GET  /api/video-studio/styles     the 59 library styles + the user's own
+    GET  /api/video-studio/frames/:s  poster frame per style
+    POST /api/video-studio/films      brief → one ordinary cowork task (tag video-studio)
+    GET  /api/inbox?tag=video-studio  "My films", refreshed from SSE /api/events
+    GET  /api/artifacts/:id/film.mp4?inline=1   the player
+  The film itself is directed + rendered by a Claude brain; see
+  server/src/core/video-studio.ts for the fixed brief it receives.
+-->
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Video Studio · Cowork</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root[data-theme="dark"] {
+      --bg: #0b0f17; --panel: #121826; --panel-2: #0e1320; --border: #232c3d;
+      --text: #e6edf7; --muted: #8b98ad; --accent: #7c5cff; --accent-soft: #7c5cff22;
+      --ok: #22c55e; --warn: #eab308; --bad: #ef4444; --run: #0ea5e9; --wait: #a855f7;
+      --shadow: 0 8px 30px rgba(0,0,0,.35);
+    }
+    :root[data-theme="light"] {
+      --bg: #f6f8fc; --panel: #ffffff; --panel-2: #eef2f8; --border: #dbe2ee;
+      --text: #1a2130; --muted: #5b6779; --accent: #6b46e5; --accent-soft: #6b46e514;
+      --ok: #16a34a; --warn: #b8860b; --bad: #dc2626; --run: #0284c7; --wait: #9333ea;
+      --shadow: 0 8px 30px rgba(20,30,60,.12);
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      font-family: 'Inter', system-ui, sans-serif; background: var(--bg); color: var(--text);
+      display: grid; grid-template-rows: auto 1fr; height: 100vh; overflow: hidden;
+      transition: background .2s, color .2s;
+    }
+    header {
+      display: flex; align-items: center; gap: 12px; padding: 12px 18px;
+      border-bottom: 1px solid var(--border); background: var(--panel); z-index: 5;
+    }
+    header .brand { display: flex; align-items: center; gap: 9px; font-weight: 650; }
+    header .brand .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 12px var(--accent); }
+    header .count { color: var(--muted); font-size: .82rem; }
+    header .spacer { flex: 1; }
+    header a.link, header button, .btn {
+      color: var(--muted); text-decoration: none; font-size: .85rem; background: none;
+      border: 1px solid var(--border); border-radius: 8px; padding: 6px 11px; cursor: pointer;
+      font-family: inherit; transition: color .15s, border-color .15s, background .15s, transform .15s;
+    }
+    header a.link:hover, header button:hover, .btn:hover { color: var(--text); border-color: var(--accent); }
+    .btn:disabled { opacity: .5; cursor: not-allowed; }
+    .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+    .btn.primary:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 6px 18px var(--accent-soft); }
+
+    main { display: flex; min-height: 0; }
+
+    /* ── Left: style gallery ───────────────────────────────────────── */
+    #gallery-wrap { flex: 1 1 auto; min-width: 0; overflow-y: auto; padding: 16px 18px 40px; }
+    .toolbar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; position: sticky; top: -16px; padding: 12px 0 10px; background: var(--bg); z-index: 2; }
+    #search {
+      flex: 0 1 300px; padding: 8px 12px 8px 32px; border-radius: 9px; border: 1px solid var(--border);
+      background: var(--panel-2) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='15' height='15' viewBox='0 0 24 24' fill='none' stroke='%238b98ad' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cline x1='21' y1='21' x2='16.5' y2='16.5'/%3E%3C/svg%3E") no-repeat 10px center;
+      color: var(--text); font-family: inherit; font-size: .9rem;
+    }
+    #search:focus { outline: none; border-color: var(--accent); }
+    .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+    .chip {
+      font-size: .76rem; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border);
+      color: var(--muted); cursor: pointer; background: var(--panel-2); user-select: none; transition: all .15s;
+    }
+    .chip:hover { color: var(--text); }
+    .chip.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+    .cat-h { font-size: .72rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin: 18px 2px 8px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 12px; }
+    .card {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 12px; overflow: hidden;
+      cursor: pointer; transition: transform .25s cubic-bezier(.16,1,.3,1), border-color .15s, box-shadow .25s;
+      display: flex; flex-direction: column;
+    }
+    .card:hover { transform: translateY(-3px); border-color: var(--accent); box-shadow: var(--shadow); }
+    .card.sel { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+    .card .img { aspect-ratio: 16/9; background: var(--panel-2) center/cover no-repeat; position: relative; }
+    .card .img .dur { position: absolute; right: 6px; bottom: 6px; font-size: .68rem; background: #000a; color: #fff; padding: 1px 6px; border-radius: 6px; }
+    .card .img .mine { position: absolute; left: 6px; top: 6px; font-size: .68rem; background: var(--accent); color: #fff; padding: 1px 7px; border-radius: 6px; }
+    .card .body { padding: 9px 11px 11px; }
+    .card .name { font-weight: 600; font-size: .9rem; }
+    .card .cn { color: var(--muted); font-size: .8rem; margin-left: 4px; font-weight: 450; }
+    .card .line { color: var(--muted); font-size: .76rem; margin-top: 4px; line-height: 1.4;
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .credit { color: var(--muted); font-size: .74rem; margin-top: 24px; }
+    .credit a { color: var(--accent); }
+
+    /* ── Right: brief + films ─────────────────────────────────────── */
+    #side { flex: 0 0 440px; width: 440px; min-width: 0; border-left: 1px solid var(--border); background: var(--panel-2); display: flex; flex-direction: column; min-height: 0; }
+    .tabs { display: flex; border-bottom: 1px solid var(--border); background: var(--panel); }
+    .tab { flex: 1; text-align: center; padding: 11px 0; cursor: pointer; color: var(--muted); font-size: .88rem; border-bottom: 2px solid transparent; transition: all .15s; }
+    .tab.on { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+    .pane { flex: 1 1 auto; overflow-y: auto; padding: 16px 18px 40px; display: none; }
+    .pane.on { display: block; }
+    .picked { display: flex; gap: 11px; align-items: center; padding: 10px; border-radius: 11px; background: var(--panel); border: 1px solid var(--border); margin-bottom: 14px; }
+    .picked .thumb { width: 96px; aspect-ratio: 16/9; border-radius: 7px; background: var(--bg) center/cover; flex: 0 0 auto; }
+    .picked .t { font-weight: 600; } .picked .s { color: var(--muted); font-size: .78rem; margin-top: 2px; }
+    label.f { display: block; font-size: .76rem; color: var(--muted); margin: 12px 0 5px; letter-spacing: .02em; }
+    textarea, select, input[type=text] {
+      width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border);
+      background: var(--panel); color: var(--text); font-family: inherit; font-size: .88rem;
+    }
+    textarea { min-height: 110px; resize: vertical; line-height: 1.5; }
+    textarea:focus, select:focus, input:focus { outline: none; border-color: var(--accent); }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .seg { display: flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+    .seg button { flex: 1; background: var(--panel); border: 0; border-right: 1px solid var(--border); color: var(--muted); padding: 7px 0; cursor: pointer; font-family: inherit; font-size: .8rem; transition: all .12s; }
+    .seg button:last-child { border-right: 0; }
+    .seg button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+    .checks { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 12px; font-size: .85rem; }
+    .checks label { display: flex; gap: 6px; align-items: center; cursor: pointer; }
+    .hint { color: var(--muted); font-size: .74rem; margin-top: 6px; line-height: 1.45; }
+    .files { font-size: .78rem; color: var(--muted); margin-top: 6px; }
+    .submit { margin-top: 18px; display: flex; gap: 10px; align-items: center; }
+    .msg { font-size: .8rem; }
+    .msg.err { color: var(--bad); } .msg.ok { color: var(--ok); }
+
+    .film { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 12px; margin-bottom: 12px; }
+    .film .top { display: flex; gap: 8px; align-items: center; }
+    .film .ttl { flex: 1; min-width: 0; font-weight: 600; font-size: .88rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .st { font-size: .7rem; padding: 2px 8px; border-radius: 999px; border: 1px solid currentColor; white-space: nowrap; }
+    .st.done { color: var(--ok); } .st.failed { color: var(--bad); } .st.run { color: var(--run); }
+    .st.pending { color: var(--warn); } .st.wait { color: var(--wait); }
+    .film .meta { color: var(--muted); font-size: .74rem; margin-top: 4px; }
+    .film video, .film img.sb { width: 100%; border-radius: 8px; margin-top: 9px; background: #000; display: block; max-height: 420px; }
+    .film pre { font-size: .7rem; color: var(--muted); background: var(--panel-2); padding: 8px; border-radius: 8px; max-height: 120px; overflow: auto; white-space: pre-wrap; margin: 9px 0 0; }
+    .film .acts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 9px; }
+    .film .acts .btn { font-size: .76rem; padding: 4px 9px; }
+    .empty { color: var(--muted); font-size: .85rem; text-align: center; padding: 40px 10px; }
+    .banner { background: var(--panel); border: 1px solid var(--bad); color: var(--text); border-radius: 10px; padding: 14px; margin: 10px 0; font-size: .86rem; }
+
+    @media (max-width: 900px) {
+      body { overflow: auto; height: auto; display: block; }
+      main { flex-direction: column; }
+      #side { flex: none; border-left: 0; border-top: 1px solid var(--border); }
+      #side { width: auto; }
+      .pane { overflow: visible; }
+      header .count { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <span class="brand"><span class="dot"></span> Video Studio <span class="count">影片工作室</span></span>
+    <span class="count" id="count"></span>
+    <span class="spacer"></span>
+    <button id="theme" title="Toggle theme">🌗</button>
+    <a class="link" href="/#portal">← Cowork</a>
+  </header>
+  <main>
+    <section id="gallery-wrap">
+      <div class="toolbar">
+        <input id="search" type="search" placeholder="Search styles…  ( / )" autocomplete="off">
+        <div class="chips" id="cats"></div>
+      </div>
+      <div id="gallery"><div class="empty">Loading styles…</div></div>
+      <div class="credit">Styles &amp; demo films © LemoLab / Lemomo, <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a> ·
+        engine <a href="https://github.com/lemomo-ai/lemo-opuscar" target="_blank" rel="noopener">lemo-opuscar</a> (MIT) ·
+        watch every demo in the <a href="https://lemomo-ai.github.io/lemo-opuscar/" target="_blank" rel="noopener">gallery</a>.
+        <span id="libver"></span></div>
+    </section>
+    <aside id="side">
+      <div class="tabs">
+        <div class="tab on" data-pane="brief">New film</div>
+        <div class="tab" data-pane="films">My films <span id="nfilms"></span></div>
+      </div>
+      <div class="pane on" id="pane-brief">
+        <div class="picked" id="picked"><div class="thumb"></div><div><div class="t">Pick a style</div><div class="s">Click any card on the left.</div></div></div>
+        <label class="f" for="topic">Topic / story · 主題</label>
+        <textarea id="topic" placeholder="What is the film about? Facts, names or products that must appear, the angle you want…"></textarea>
+        <div class="row">
+          <div><label class="f">Length</label>
+            <div class="seg" id="seconds"><button data-v="15">15s</button><button data-v="30">30s</button><button data-v="45" class="on">45s</button><button data-v="60">60s</button><button data-v="90">90s</button></div></div>
+          <div><label class="f">Aspect</label>
+            <div class="seg" id="aspect"><button data-v="16:9" class="on">16:9</button><button data-v="9:16">9:16</button><button data-v="3:4">3:4</button></div></div>
+        </div>
+        <div class="row">
+          <div><label class="f" for="voice">Narration</label>
+            <select id="voice"><option value="none">None (text on screen)</option><option value="en">English (Kokoro)</option><option value="zh">中文 (edge-tts, zh-TW)</option></select></div>
+          <div><label class="f" for="brain">Brain</label><select id="brain"></select></div>
+        </div>
+        <label class="f" for="voiceHint">Voice hint (optional)</label>
+        <input type="text" id="voiceHint" placeholder="e.g. warm female, calm pace">
+        <label class="f" for="notes">Extra notes (optional)</label>
+        <input type="text" id="notes" placeholder="Colours, references, end card text…">
+        <div class="checks">
+          <label><input type="checkbox" id="music" checked> Music</label>
+          <label><input type="checkbox" id="storyboard"> Storyboard first</label>
+        </div>
+        <label class="f">Attachments (logo, photos, data CSV…)</label>
+        <input type="file" id="files" multiple>
+        <div class="files" id="filelist"></div>
+        <div class="hint">One film ≈ 30–60 min of agent time. Sonnet is the cost default; pick Opus for harder styles.
+          “Storyboard first” renders <code>storyboard.jpg</code> and pauses — the orchestrator's auto-answer approves it as your delegate, so you can still glance at it on the card.</div>
+        <div class="submit"><button class="btn primary" id="go" disabled>🎬 Make film</button><span class="msg" id="msg"></span></div>
+      </div>
+      <div class="pane" id="pane-films"><div id="films"><div class="empty">Loading…</div></div></div>
+    </aside>
+  </main>
+
+  <script>
+    const $ = (s, r = document) => r.querySelector(s);
+    const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const LS = { theme: 'cowork-theme', last: 'vstudio-last' };
+    let info = null, styles = [], cat = 'All', selected = null, films = [];
+    const artifactCache = new Map();   // taskId -> file list (refetched while not done)
+
+    // Theme mirrors the dashboard's persisted choice.
+    const applyTheme = (t) => document.documentElement.setAttribute('data-theme', t);
+    applyTheme(localStorage.getItem(LS.theme) || 'dark');
+    $('#theme').onclick = () => {
+      const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+      applyTheme(next); localStorage.setItem(LS.theme, next);
+    };
+
+    async function api(path, opts) {
+      const r = await fetch(`/api${path}`, opts);
+      if (!r.ok) { let m = `HTTP ${r.status}`; try { m = (await r.json()).error || m; } catch {} throw new Error(m); }
+      return r.json();
+    }
+
+    // ── Gallery ───────────────────────────────────────────────────────
+    function renderCats() {
+      const cats = ['All', ...new Set(styles.map(s => s.cat_en))];
+      $('#cats').innerHTML = cats.map(c => `<span class="chip ${c === cat ? 'on' : ''}" data-cat="${esc(c)}">${esc(c)}</span>`).join('');
+      $$('.chip', $('#cats')).forEach(el => el.onclick = () => { cat = el.dataset.cat; renderCats(); renderGallery(); });
+    }
+    function renderGallery() {
+      const q = $('#search').value.trim().toLowerCase();
+      const hit = styles.filter(s => (cat === 'All' || s.cat_en === cat) &&
+        (!q || [s.slug, s.en, s.cn, s.film, s.line, s.line_cn, ...(s.uses || [])].join(' ').toLowerCase().includes(q)));
+      $('#count').textContent = `${hit.length} / ${styles.length} styles`;
+      if (!hit.length) { $('#gallery').innerHTML = '<div class="empty">No style matches.</div>'; return; }
+      const groups = new Map();
+      for (const s of hit) { if (!groups.has(s.cat_en)) groups.set(s.cat_en, []); groups.get(s.cat_en).push(s); }
+      $('#gallery').innerHTML = [...groups].map(([g, list]) => `
+        <div class="cat-h">${esc(g)} · ${esc(list[0].cat_cn || '')}</div>
+        <div class="grid">${list.map(s => `
+          <div class="card ${selected?.slug === s.slug ? 'sel' : ''}" data-slug="${esc(s.slug)}" title="${esc(s.line || '')}">
+            <div class="img" style="${s.poster ? `background-image:url('/api/video-studio/frames/${encodeURIComponent(s.slug)}')` : ''}">
+              ${s.my ? '<span class="mine">My style</span>' : ''}${s.dur ? `<span class="dur">demo ${Math.round(s.dur)}s</span>` : ''}</div>
+            <div class="body"><div class="name">${esc(s.en)}<span class="cn">${esc(s.cn)}</span></div>
+              <div class="line">${esc(s.line || (s.uses || []).join(' · '))}</div></div>
+          </div>`).join('')}</div>`).join('');
+      $$('.card').forEach(el => el.onclick = () => pick(el.dataset.slug));
+    }
+    function pick(slug, { scroll = false } = {}) {
+      selected = styles.find(s => s.slug === slug) || null;
+      $$('.card').forEach(el => el.classList.toggle('sel', el.dataset.slug === slug));
+      if (!selected) return;
+      $('#picked').innerHTML = `<div class="thumb" style="${selected.poster ? `background-image:url('/api/video-studio/frames/${encodeURIComponent(selected.slug)}')` : ''}"></div>
+        <div><div class="t">${esc(selected.en)} <span class="cn" style="color:var(--muted);font-weight:450">${esc(selected.cn)}</span></div>
+        <div class="s">${esc(selected.line_cn || selected.line || '')}</div>
+        <div class="s">${(selected.uses || []).map(esc).join(' · ')}</div></div>`;
+      if (selected.size === '1080x1440') setSeg('aspect', '3:4');
+      showTab('brief');
+      if (scroll) $(`.card[data-slug="${CSS.escape(slug)}"]`)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      validate();
+    }
+
+    // ── Brief form ────────────────────────────────────────────────────
+    const segVal = (id) => $(`#${id} button.on`)?.dataset.v;
+    function setSeg(id, v) { $$(`#${id} button`).forEach(b => b.classList.toggle('on', b.dataset.v === String(v))); }
+    ['seconds', 'aspect'].forEach(id => $$(`#${id} button`).forEach(b => b.onclick = () => setSeg(id, b.dataset.v)));
+    function validate() { $('#go').disabled = !(info?.available && selected && $('#topic').value.trim().length >= 3); }
+    $('#topic').addEventListener('input', validate);
+    $('#files').onchange = () => {
+      const f = [...$('#files').files];
+      $('#filelist').textContent = f.length ? f.map(x => `${x.name} (${Math.ceil(x.size / 1024)} KB)`).join(', ') : '';
+    };
+    async function uploadAll(files) {
+      const out = [];
+      for (const f of files) {
+        const r = await fetch(`/api/uploads?name=${encodeURIComponent(f.name)}`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: f });
+        if (!r.ok) throw new Error(`${f.name}: upload failed (${r.status})`);
+        const j = await r.json(); out.push({ token: j.token, name: j.name });
+      }
+      return out;
+    }
+    $('#go').onclick = async () => {
+      const msg = $('#msg'); msg.className = 'msg'; msg.textContent = 'Submitting…'; $('#go').disabled = true;
+      try {
+        const inputs = await uploadAll([...$('#files').files]);
+        const brief = {
+          slug: selected.slug, topic: $('#topic').value.trim(), seconds: +segVal('seconds'), aspect: segVal('aspect'),
+          voice: $('#voice').value, voiceHint: $('#voiceHint').value, notes: $('#notes').value,
+          music: $('#music').checked, storyboard: $('#storyboard').checked, brain: $('#brain').value,
+          ...(inputs.length ? { inputs } : {}),
+        };
+        const task = await api('/video-studio/films', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(brief) });
+        localStorage.setItem(LS.last, JSON.stringify({ brain: brief.brain, voice: brief.voice, aspect: brief.aspect, seconds: brief.seconds }));
+        msg.className = 'msg ok'; msg.textContent = 'Queued ✓';
+        $('#files').value = ''; $('#filelist').textContent = '';
+        await loadFilms(); showTab('films');
+        document.getElementById(`film-${task.id}`)?.scrollIntoView({ block: 'start' });
+      } catch (e) { msg.className = 'msg err'; msg.textContent = e.message; }
+      finally { validate(); }
+    };
+    function prefill(vs) {
+      if (!vs) return;
+      pick(vs.slug, { scroll: true });
+      $('#topic').value = vs.topic || ''; setSeg('seconds', vs.seconds); setSeg('aspect', vs.aspect);
+      $('#voice').value = vs.voice || 'none'; $('#voiceHint').value = vs.voiceHint || ''; $('#notes').value = vs.notes || '';
+      $('#music').checked = vs.music !== false; $('#storyboard').checked = !!vs.storyboard;
+      if ([...$('#brain').options].some(o => o.value === vs.brain)) $('#brain').value = vs.brain;
+      $('#msg').textContent = 'Pre-filled from an earlier film — tweak and submit.'; $('#msg').className = 'msg';
+      validate(); $('#topic').focus();
+    }
+
+    // ── Tabs ──────────────────────────────────────────────────────────
+    function showTab(id) {
+      $$('.tab').forEach(t => t.classList.toggle('on', t.dataset.pane === id));
+      $$('.pane').forEach(p => p.classList.toggle('on', p.id === `pane-${id}`));
+    }
+    $$('.tab').forEach(t => t.onclick = () => showTab(t.dataset.pane));
+
+    // ── My films ──────────────────────────────────────────────────────
+    function statusOf(t) {
+      const failed = t.failed === true || t.status === 'rejected' || (t.status === 'done' && /^FAILED\b/i.test((t.result || '').trim()));
+      if (failed) return ['failed', 'failed'];
+      if (t.status === 'done') return ['done', 'done'];
+      if (t.status === 'wait-input') return ['wait', 'storyboard / input'];
+      if (t.status === 'in-progress' || t.status === 'claimed') return ['run', 'rendering'];
+      return ['pending', t.status];
+    }
+    async function artifactsOf(t) {
+      if (artifactCache.has(t.id) && t.status === 'done') return artifactCache.get(t.id);
+      try { const a = await api(`/artifacts/${encodeURIComponent(t.id)}`); artifactCache.set(t.id, a); return a; } catch { return []; }
+    }
+    const art = (id, f, inline = true) => `/api/artifacts/${encodeURIComponent(id)}/${encodeURIComponent(f)}${inline ? '?inline=1' : ''}`;
+    async function loadFilms() {
+      try { films = await api(`/inbox?tag=${encodeURIComponent(info?.tag || 'video-studio')}&limit=50`); }
+      catch (e) { $('#films').innerHTML = `<div class="banner">${esc(e.message)}</div>`; return; }
+      $('#nfilms').textContent = films.length ? `(${films.length})` : '';
+      if (!films.length) { $('#films').innerHTML = '<div class="empty">No films yet — pick a style and write a brief.</div>'; return; }
+      const playing = new Set($$('#films video').filter(v => !v.paused).map(v => v.dataset.task));
+      const cards = await Promise.all(films.map(async (t) => {
+        const [cls, label] = statusOf(t);
+        const vs = t.context?.videoStudio || {};
+        const files = await artifactsOf(t);
+        const has = (f) => files.includes(f);
+        let media = '';
+        if (has('film.mp4')) {
+          media = `<video controls preload="metadata" data-task="${esc(t.id)}" ${has('poster.jpg') ? `poster="${art(t.id, 'poster.jpg')}"` : ''} src="${art(t.id, 'film.mp4')}">
+            ${has('film.vtt') ? `<track kind="subtitles" src="${art(t.id, 'film.vtt')}" default>` : ''}</video>`;
+        } else if (has('storyboard.jpg')) {
+          media = `<img class="sb" src="${art(t.id, 'storyboard.jpg')}&v=${encodeURIComponent(t.updatedAt || '')}" alt="storyboard">`;
+        }
+        const running = cls === 'run';
+        return { id: t.id, playing: playing.has(t.id), running, html: `
+          <div class="film" id="film-${esc(t.id)}">
+            <div class="top"><span class="ttl" title="${esc(t.title)}">${esc(vs.styleName || '')} · ${esc((vs.topic || t.title).slice(0, 80))}</span><span class="st ${cls}">${esc(label)}</span></div>
+            <div class="meta">${esc(vs.seconds || '?')}s · ${esc(vs.aspect || '')} · ${esc(vs.voice === 'none' ? 'no voice' : vs.voice || '')} · ${esc((t.context?.brain || '').replace(/^local-cc-/, ''))} · ${new Date(t.createdAt).toLocaleString()}</div>
+            ${media}
+            ${running ? `<pre data-progress="${esc(t.id)}">…</pre>` : ''}
+            ${cls === 'failed' && t.result ? `<pre>${esc(t.result.slice(0, 600))}</pre>` : ''}
+            <div class="acts">
+              ${has('film.mp4') ? `<a class="btn" href="${art(t.id, 'film.mp4', false)}">⬇ film.mp4</a>` : ''}
+              ${has('contact.jpg') ? `<a class="btn" href="${art(t.id, 'contact.jpg')}" target="_blank">Contact sheet</a>` : ''}
+              ${has('TREATMENT.md') ? `<a class="btn" href="${art(t.id, 'TREATMENT.md')}" target="_blank">Treatment</a>` : ''}
+              <button class="btn" data-remake="${esc(t.id)}">↻ Remake with tweaks</button>
+              <a class="btn" href="/#tasks/${encodeURIComponent(t.id)}" target="_blank">Open task</a>
+            </div>
+          </div>` };
+      }));
+      // Keep a playing <video> untouched so a live refresh doesn't stop playback.
+      const wrap = $('#films');
+      const existing = new Map($$('.film', wrap).map(el => [el.id, el]));
+      wrap.innerHTML = '';
+      for (const c of cards) {
+        const old = existing.get(`film-${c.id}`);
+        if (c.playing && old) { wrap.appendChild(old); continue; }
+        const d = document.createElement('div'); d.innerHTML = c.html.trim(); wrap.appendChild(d.firstChild);
+      }
+      $$('[data-remake]', wrap).forEach(b => b.onclick = () => prefill(films.find(f => f.id === b.dataset.remake)?.context?.videoStudio));
+      pollProgress();
+    }
+    async function pollProgress() {
+      for (const pre of $$('pre[data-progress]')) {
+        try {
+          const p = await api(`/inbox/${encodeURIComponent(pre.dataset.progress)}/progress`);
+          const lines = (p.log || '').trim().split('\n').filter(Boolean);
+          pre.textContent = lines.slice(-6).join('\n') || 'Waiting for the brain to start…';
+          pre.scrollTop = pre.scrollHeight;
+        } catch {}
+      }
+    }
+    setInterval(() => { if (films.some(t => ['in-progress', 'claimed'].includes(t.status))) pollProgress(); }, 6000);
+
+    // Live refresh: any task event for one of ours (or a new one) reloads the list.
+    let refreshTimer = null;
+    function scheduleRefresh() { clearTimeout(refreshTimer); refreshTimer = setTimeout(loadFilms, 800); }
+    function connectEvents() {
+      const es = new EventSource('/api/events');
+      es.onmessage = (m) => {
+        let ev; try { ev = JSON.parse(m.data); } catch { return; }
+        if (!ev || ev.type === 'ping' || ev.type === 'connected') return;
+        // Envelope: {type, payload: {task, …}} (core/events.ts).
+        const task = ev.payload?.task;
+        const id = task?.id || ev.payload?.taskId;
+        if ((id && films.some(f => f.id === id)) || (Array.isArray(task?.tags) && task.tags.includes(info?.tag))) scheduleRefresh();
+      };
+    }
+
+    // ── Keyboard ──────────────────────────────────────────────────────
+    document.addEventListener('keydown', (e) => {
+      const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName || '');
+      if (e.key === '/' && !typing) { e.preventDefault(); $('#search').focus(); $('#search').select(); }
+      else if (e.key === 'Escape' && document.activeElement === $('#search')) { $('#search').value = ''; renderGallery(); $('#search').blur(); }
+    });
+    $('#search').addEventListener('input', renderGallery);
+
+    // ── Boot ──────────────────────────────────────────────────────────
+    (async () => {
+      try {
+        info = await api('/video-studio');
+        const last = JSON.parse(localStorage.getItem(LS.last) || '{}');
+        $('#brain').innerHTML = info.brains.map(b => `<option value="${esc(b)}">${esc(b.replace(/^local-cc-/, ''))}${b === info.defaultBrain ? ' (default)' : ''}</option>`).join('');
+        $('#brain').value = info.brains.includes(last.brain) ? last.brain : info.defaultBrain;
+        if (last.voice) $('#voice').value = last.voice;
+        if (last.aspect) setSeg('aspect', last.aspect);
+        if (last.seconds) setSeg('seconds', last.seconds);
+        $('#libver').textContent = info.libVersion ? `Library @ ${info.libVersion}.` : '';
+        if (!info.available) {
+          $('#gallery').innerHTML = `<div class="banner">Style library not found at <code>${esc(info.libDir)}</code>. Clone it: <code>git clone https://github.com/lemomo-ai/lemo-opuscar ${esc(info.libDir)}</code></div>`;
+        } else {
+          styles = await api('/video-studio/styles');
+          renderCats(); renderGallery();
+        }
+      } catch (e) { $('#gallery').innerHTML = `<div class="banner">${esc(e.message)}</div>`; }
+      validate();
+      await loadFilms();
+      connectEvents();
+    })();
+  </script>
+</body>
+</html>

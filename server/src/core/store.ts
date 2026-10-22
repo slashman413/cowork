@@ -1715,7 +1715,7 @@ export class Store {
     return shortIdMatches === 1 ? shortIdMatch : null;
   }
 
-  public listTasks(filters?: { status?: string; platform?: string; agent?: string; limit?: number }): Task[] {
+  public listTasks(filters?: { status?: string; platform?: string; agent?: string; tag?: string; limit?: number }): Task[] {
     // Flat directory of <id>.json files — a plain readdir is ~5x cheaper than a
     // glob here and yields the same set (dotfiles can't be task ids).
     let taskFiles: string[];
@@ -1764,6 +1764,7 @@ export class Store {
     // Guard t.to / t.from — task files are plain JSON on disk and may be malformed
     if (filters?.platform) tasks = tasks.filter(t => t.to?.platform === filters.platform || (!t.to?.platform && t.from?.platform === filters.platform));
     if (filters?.agent) tasks = tasks.filter(t => t.to?.agent === filters.agent || t.claimedBy === filters.agent);
+    if (filters?.tag) tasks = tasks.filter(t => Array.isArray(t.tags) && t.tags.includes(filters.tag!));
     
     if (filters?.limit && filters.limit > 0) {
       tasks = tasks.slice(0, filters.limit);

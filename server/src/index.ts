@@ -22,6 +22,7 @@ import { LayoutStore } from './core/layout-config.js';
 import { systemDetails, DETAIL_KINDS, type DetailKind } from './core/system-details.js';
 import { controlService } from './core/service-control.js';
 import { getObsidianVault } from './core/obsidian.js';
+import { VideoStudio, VIDEO_STUDIO_TAG, ASPECTS } from './core/video-studio.js';
 import { AUTH_COOKIE, KeylessLog, keyMatches, readCookie, resolveApiKey } from './core/auth.js';
 
 async function main() {
@@ -436,6 +437,42 @@ async function main() {
     res.json(note);
   });
 
+  // ── Video Studio: lemo-opuscar style catalog + film briefs ─────────────────
+  // The page (/video-studio.html) lists the styles, posts a brief, and watches
+  // tasks tagged "video-studio". A film is a normal task; see core/video-studio.ts.
+  const studio = new VideoStudio(config.videoStudio);
+  app.get('/api/video-studio', (_req, res) => {
+    res.json({
+      available: studio.available(), libDir: studio.cfg.libDir, libVersion: studio.libVersion(),
+      defaultBrain: studio.cfg.defaultBrain, brains: studio.cfg.brains, aspects: ASPECTS, tag: VIDEO_STUDIO_TAG,
+    });
+  });
+  app.get('/api/video-studio/styles', (_req, res) => {
+    if (!studio.available()) return res.status(404).json({ error: `style library not found at ${studio.cfg.libDir}` });
+    res.json(studio.styles());
+  });
+  app.get('/api/video-studio/frames/:slug', (req, res) => {
+    const file = studio.posterFile(path.basename(req.params.slug).replace(/\.jpg$/, ''));
+    if (!file) return res.status(404).json({ error: 'not found' });
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    res.sendFile(file);
+  });
+  app.post('/api/video-studio/films', (req, res) => {
+    try {
+      if (!studio.available()) throw new Error(`style library not found at ${studio.cfg.libDir}`);
+      const brief = studio.parseBrief(req.body);
+      const inputs = Array.isArray(req.body?.inputs) ? req.body.inputs : undefined;
+      const spec = studio.buildTask(brief, (inputs || []).map((i: any) => String(i?.name || '')).filter(Boolean));
+      const task = store.createTask({
+        ...spec,
+        from: { platform: 'dashboard', agent: 'video-studio' },
+        to: {},
+        priority: 'normal',
+      }, { inputs });
+      res.status(201).json(task);
+    } catch (e: any) { res.status(400).json({ error: e.message }); }
+  });
+
   // ── Connections: external MCP clients (heartbeat-live) + invocation counters ─
   app.get('/api/connections', async (req, res) => {
     if (req.query.refresh === '1' || req.query.refresh === 'true') {
@@ -482,6 +519,9 @@ async function main() {
       }
     }
     if (!file.startsWith(artifactsRoot) || !fs.existsSync(file)) return res.status(404).json({ error: 'not found' });
+    // ?inline=1 serves without Content-Disposition: attachment, so <video>/<img>
+    // on the Video Studio page play in place (send() handles Range for seeking).
+    if (req.query.inline === '1') return res.sendFile(file);
     res.download(file);
   });
   // Upload — a REMOTE brain client pushes each file it produced into the task's

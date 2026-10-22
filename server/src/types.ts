@@ -404,11 +404,27 @@ export interface Config {
    *  remote brains reach it through the /api/obsidian endpoints and the
    *  obsidian_* MCP tools, which the server serves from this same path. */
   obsidian?: ObsidianConfig;
+  /** Video Studio page (/video-studio.html) — films rendered by a Claude brain
+   *  with the lemo-opuscar library. All fields optional; see core/video-studio.ts. */
+  videoStudio?: VideoStudioConfig;
   inbox: {
     autoArchiveDays: number;
     maxRetries: number;
   };
   orchestration: OrchestrationConfig;
+}
+
+export interface VideoStudioConfig {
+  /** lemo-opuscar clone (default ~/lemo-opuscar). */
+  libDir?: string;
+  /** The user's own styles (default ~/lemo-my-styles). */
+  myStylesDir?: string;
+  /** Brain pre-selected on the brief form (default local-cc-sonnet-5-5). */
+  defaultBrain?: string;
+  /** Brains offered on the form; anything else posted falls back to defaultBrain. */
+  brains?: string[];
+  /** RENDER_SLOTS the brief tells the brain to export (machine-wide full renders). */
+  renderSlots?: number;
 }
 
 export interface ObsidianConfig {
