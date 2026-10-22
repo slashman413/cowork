@@ -67,6 +67,17 @@
       "category": "Explore",
       "enabled": true,
       "unit": "gods-eye-view.service"
+    },
+    "sunshine": {
+      "url": "https://localhost:47990",
+      "label": "Sunshine",
+      "description": "Self-hosted game stream and remote desktop host for Moonlight.",
+      "icon": "sun",
+      "category": "Ops",
+      "enabled": true,
+      "probe": "http://localhost:47989/serverinfo",
+      "unit": "sunshine.service",
+      "controllable": true
     }
   }
 }

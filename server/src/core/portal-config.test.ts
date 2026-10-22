@@ -17,11 +17,13 @@ const tmpFile = () => path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'portal-')
 test('repo default portal.json is valid and lists the DGX Spark services', () => {
   const view = normalizePortal(JSON.parse(fs.readFileSync(PORTAL_TEMPLATE, 'utf-8')), PORTAL_TEMPLATE);
   assert.deepEqual(view.errors, []);
-  for (const k of ['obsidian', 'mautic', 'filebrowser', 'forgejo', 'sglang38', 'comfyui', 'firecrawl', 'godseye']) {
+  for (const k of ['obsidian', 'mautic', 'filebrowser', 'forgejo', 'sglang38', 'comfyui', 'firecrawl', 'godseye', 'sunshine']) {
     assert.ok(view.services[k], `missing default service ${k}`);
   }
   assert.equal(view.services.firecrawl.enabled, false);
   assert.equal(view.services.godseye.unit, 'gods-eye-view.service');
+  assert.equal(view.services.sunshine.unit, 'sunshine.service');
+  assert.equal(view.services.sunshine.enabled, true);
 });
 
 test('bad entries are dropped or stripped with an error; good ones survive', () => {
