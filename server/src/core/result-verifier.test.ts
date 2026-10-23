@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { verifyOutput, parseLlmVerdict, buildVerifierPrompt, DEFAULT_FAIL_PATTERNS, detectInputRequest, DEFAULT_QUESTION_PATTERNS, detectBackgroundWait, DEFAULT_BACKGROUND_WAIT_PATTERNS } from './result-verifier.js';
+import { isCliRateLimitSignal, verifyOutput, parseLlmVerdict, buildVerifierPrompt, DEFAULT_FAIL_PATTERNS, detectInputRequest, DEFAULT_QUESTION_PATTERNS, detectBackgroundWait, DEFAULT_BACKGROUND_WAIT_PATTERNS } from './result-verifier.js';
 
 /**
  * The result verifier is the fix for "a rate-limit reply looked like a done
@@ -282,4 +282,12 @@ test('custom backgroundPatterns merge with the built-ins', () => {
 test('DEFAULT_BACKGROUND_WAIT_PATTERNS is non-empty and matched case-insensitively', () => {
   assert.ok(DEFAULT_BACKGROUND_WAIT_PATTERNS.length > 0);
   assert.equal(detectBackgroundWait('THE BACKGROUND TASK IS STILL RUNNING').waiting, true);
+});
+
+test('isCliRateLimitSignal: only the CLI exit/stderr signals count, not free text', () => {
+  assert.equal(isCliRateLimitSignal({ gateFailed: true, gateReason: 'matched failure pattern "rate limit reached"' }), true);
+  assert.equal(isCliRateLimitSignal({ gateFailed: true, gateReason: 'process exited non-zero', stderr: 'Error: 429 Too Many Requests' }), true);
+  assert.equal(isCliRateLimitSignal({ gateFailed: true, gateReason: 'empty result (0 < 1 chars)', stderr: '' }), false);
+  // The deterministic gate passed: the failure came from the LLM verifier, whatever its wording.
+  assert.equal(isCliRateLimitSignal({ gateFailed: false, gateReason: undefined, stderr: 'retrying after rate limit exceeded' }), false);
 });

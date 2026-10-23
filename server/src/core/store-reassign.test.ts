@@ -145,10 +145,12 @@ test('dispatcher: a rate-limit failure marks the brain cooling; chain routing sk
   (d as any).execute = async (task: any, plan: any) => { ran.push(`${task.id}@${plan.brainId}`); };
 
   const failed = mkTask(store, { agent: 'generalist' });
-  (d as any).recordFailedBrain(failed.id, { brain: 'local-opus', agent: 'generalist', attempt: 1, reason: "You've hit your usage limit · resets 5pm" });
+  (d as any).recordFailedBrain(failed.id, { brain: 'local-opus', agent: 'generalist', attempt: 1, reason: "You've hit your usage limit · resets 5pm" }, true);
   assert.ok(store.brainCooldownUntil('local-opus'), 'local-opus cooling after the refusal');
   (d as any).recordFailedBrain(failed.id, { brain: 'local-qwen', agent: 'generalist', attempt: 2, reason: 'empty result' });
   assert.equal(store.brainCooldownUntil('local-qwen'), undefined, 'non-rate-limit failures do not cool a brain');
+  (d as any).recordFailedBrain(failed.id, { brain: 'local-qwen', agent: 'generalist', attempt: 3, reason: 'verifier LLM: report only says the API returned too many requests' }, false);
+  assert.equal(store.brainCooldownUntil('local-qwen'), undefined, 'rate-limit words in the reason alone do not cool a brain');
   const s = store.getTask(failed.id)!; s.status = 'done'; store.saveTask(s);
 
   const t = mkTask(store, { agent: 'generalist' });   // unpinned: chain local-opus → local-qwen

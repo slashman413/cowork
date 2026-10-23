@@ -16,12 +16,13 @@ const CHAIN = ['remote-examplehost-cc-opus', 'remote-examplehost-cc-fable', 'loc
 
 function harness(verifierEnabled = true) {
   const tasks = new Map<string, Task>();
+  const cooled: string[] = [];
   const store = {
     getTask: (id: string) => tasks.get(id) || null,
     saveTask: (t: Task) => { tasks.set(t.id, t); },
     getAgentPersona: () => null,
     brainCooldownUntil: () => undefined,
-    noteBrainRateLimited: () => '',
+    noteBrainRateLimited: (b: string) => { cooled.push(b); return ''; },
     clearBrainRateLimited: () => {}
   };
   const config = {
@@ -39,7 +40,7 @@ function harness(verifierEnabled = true) {
   const dispatcher = new Dispatcher(config, store as any, {} as any);
   const guard = (t: Task, r?: string) => (dispatcher as any).verifyReportedCompletion(t, r);
   const put = (t: Partial<Task> & { id: string }) => { tasks.set(t.id, t as Task); return tasks.get(t.id)!; };
-  return { guard, put, tasks };
+  return { guard, put, tasks, dispatcher, cooled };
 }
 
 function chainRung(id: string, attempt = 0): Partial<Task> & { id: string } {
@@ -113,4 +114,17 @@ test('verifier disabled → reported soft failures pass through untouched', asyn
   const task = put(chainRung('t7'));
   const decision = await guard(task, "You've hit your session limit");
   assert.deepEqual(decision, { action: 'complete' }, 'with the verifier off, exit-0 results are trusted');
+});
+
+test('a reported rate-limit refusal cools the brain; an LLM rejection that mentions rate limits does not', async () => {
+  const { guard, put, dispatcher, cooled } = harness();
+  await guard(put(chainRung('rl1')), "You've hit your usage limit · resets 5pm");
+  assert.deepEqual(cooled, ['remote-examplehost-cc-opus'], 'CLI refusal → cooldown');
+
+  // A real (long) deliverable the LLM verifier rejects, with rate-limit words in its free-text reason.
+  (dispatcher as any).config.orchestration.verifier.llm = { enabled: true };
+  (dispatcher as any).llmVerdict = async () => ({ ok: false, reason: 'verifier LLM: it only explains why the API said "too many requests"' });
+  const decision = await guard(put(chainRung('rl2')), '# Postmortem\n\nThe upstream API was rate-limited (429 too many requests); here is the full fix and tests.' + '\n\nDetail. '.repeat(200));
+  assert.equal(decision.action, 'handover');
+  assert.deepEqual(cooled, ['remote-examplehost-cc-opus'], 'no second cooldown from free text');
 });

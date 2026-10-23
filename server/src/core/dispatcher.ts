@@ -6,7 +6,7 @@ import type { EventBus } from './events.js';
 import type { Store, CompletionDecision } from './store.js';
 import type { Workflows } from './workflows.js';
 import type { Goals } from './goals.js';
-import { verifyOutput, isRateLimitFailure, buildVerifierPrompt, parseLlmVerdict, detectInputRequest, detectBackgroundWait, type VerifyVerdict, type InputOptions, type InputRequest, type BackgroundOptions, type BackgroundWait } from './result-verifier.js';
+import { verifyOutput, isRateLimitFailure, isCliRateLimitSignal, buildVerifierPrompt, parseLlmVerdict, detectInputRequest, detectBackgroundWait, type VerifyVerdict, type InputOptions, type InputRequest, type BackgroundOptions, type BackgroundWait } from './result-verifier.js';
 import { buildLesson, appendLesson } from './lessons.js';
 import { canonicalBrainId } from '../config.js';
 import { STREAMING_EXECS, streamArgs, createStreamRenderer } from './progress-stream.js';
@@ -1598,7 +1598,7 @@ export class Dispatcher {
 
   /** Append a failed-brain record to the task's inbox entry so the fallback trail
    *  is visible on the dashboard: which brains failed, in order, and why. */
-  private recordFailedBrain(taskId: string, entry: { brain: string; agent: string; attempt: number; reason: string }): void {
+  private recordFailedBrain(taskId: string, entry: { brain: string; agent: string; attempt: number; reason: string }, rateLimited = false): void {
     const t = this.store.getTask(taskId);
     if (!t) return;
     const failedBrains = Array.isArray(t.context?.failedBrains) ? t.context!.failedBrains : [];
@@ -1607,7 +1607,9 @@ export class Dispatcher {
     this.store.saveTask(t);
     // A rate-limit refusal means that brain is cooling down: hold tasks pinned to it
     // and steer chain routing past it until it resets (Store.brainCooldownUntil).
-    if (entry.brain && isRateLimitFailure(entry.reason)) {
+    // `rateLimited` comes from the CLI's own signals (isCliRateLimitSignal), never
+    // from `entry.reason`, which may be the LLM verifier's free text.
+    if (entry.brain && rateLimited) {
       const until = this.store.noteBrainRateLimited(entry.brain);
       console.log(`Dispatcher: brain ${entry.brain} hit a rate limit — treated as cooling down until ${until}`);
     }
@@ -1696,7 +1698,8 @@ export class Dispatcher {
     //       genuine question does; running it first would turn the question into a
     //       handover and strand it.
     //   (3) LLM quality gate — only a genuine deliverable is judged for completion.
-    let verdict = this.deterministicVerdict({ ok: true, text });
+    const detVerdict = this.deterministicVerdict({ ok: true, text });
+    let verdict = detVerdict;
     if (verdict.ok) {
       const req = detectInputRequest(text, this.inputOpts());
       if (req.needsInput) {
@@ -1722,7 +1725,8 @@ export class Dispatcher {
     const agent = this.resolveAgent(task)
       || (typeof task.context?.agentName === 'string' ? task.context.agentName : '') || brainId;
     const division = typeof task.context?.division === 'string' ? task.context.division : undefined;
-    this.recordFailedBrain(task.id, { brain: brainId, agent, attempt: attempt + 1, reason: failReason });
+    const rateLimited = isCliRateLimitSignal({ gateFailed: !detVerdict.ok, gateReason: detVerdict.reason });
+    this.recordFailedBrain(task.id, { brain: brainId, agent, attempt: attempt + 1, reason: failReason }, rateLimited);
     this.recordLesson(task.id, { kind: 'verify-fail', brain: brainId, agent, attempt: attempt + 1, reason: failReason, resultText: text });
     console.log(`Dispatcher: verifier REJECTED reported result for task ${task.id} on ${brainId} — ${failReason.slice(0, 80)}`);
 
@@ -1815,7 +1819,7 @@ export class Dispatcher {
     const logProgress = (s: string) => { try { plog?.write(s); } catch { /* best-effort */ } };
     logProgress(`[${new Date().toISOString()}] ▶ ${plan.label} (${plan.exec}:${plan.model || 'default'}) started\n   task: ${task.title}\n\n`);
 
-    const output = await new Promise<{ ok: boolean; text: string }>((resolve) => {
+    const output = await new Promise<{ ok: boolean; text: string; stderr?: string }>((resolve) => {
       const child = spawn(argv[0], argv.slice(1), {
         // Run the agent INSIDE its artifacts dir. Without a cwd the child
         // inherits the server's — the repo itself — so anything an agent wrote
@@ -1852,7 +1856,7 @@ export class Dispatcher {
       const answer = () => (renderer ? renderer.finalText() : out);
       const timer = setTimeout(() => {
         child.kill('SIGTERM');
-        resolve({ ok: false, text: `TIMEOUT after ${orch.taskTimeoutMs}ms\n${answer()}\n${err}` });
+        resolve({ ok: false, text: `TIMEOUT after ${orch.taskTimeoutMs}ms\n${answer()}\n${err}`, stderr: err });
       }, orch.taskTimeoutMs);
       child.stdout.on('data', (d) => {
         const s = d.toString();
@@ -1870,8 +1874,8 @@ export class Dispatcher {
         // Strip ANSI/terminal control sequences some CLIs emit even to a pipe
         // (e.g. Ollama's streaming cursor redraws) so results are clean text.
         const clean = stripAnsi(out).trim();
-        if (code === 0 && clean) resolve({ ok: true, text: clean });
-        else resolve({ ok: code === 0, text: (clean || stripAnsi(err).trim() || `exit code ${code}`) });
+        if (code === 0 && clean) resolve({ ok: true, text: clean, stderr: err });
+        else resolve({ ok: code === 0, text: (clean || stripAnsi(err).trim() || `exit code ${code}`), stderr: err });
       });
     });
 
@@ -1928,6 +1932,7 @@ export class Dispatcher {
     const bound = plan.pinned ? this.config.inbox.maxRetries : plan.chainLen;
     if (!verdict.ok) {
       let failReason = verdict.reason || output.text.slice(0, 300);
+      let rateLimited = isCliRateLimitSignal({ gateFailed: !detVerdict.ok, gateReason: detVerdict.reason, stderr: output.stderr });
       // agy rejects valid models when its catalog fetch fails (503/429) — tell a
       // transient outage (rate-limit class → auto re-run on reset) from a retired model.
       // Only agy's own short error output qualifies, not a deliverable quoting it.
@@ -1938,10 +1943,11 @@ export class Dispatcher {
         const diag = diagnoseAgyModelFailure(plan.model || '', output.text, await listAgyModels());
         if (diag) {
           failReason = diag;
+          rateLimited = rateLimited || isRateLimitFailure(diag);
           console.warn(`Dispatcher: ${plan.brainId} — ${diag}`);
         }
       }
-      this.recordFailedBrain(task.id, { brain: plan.brainId, agent: plan.agent, attempt: plan.attempt + 1, reason: failReason });
+      this.recordFailedBrain(task.id, { brain: plan.brainId, agent: plan.agent, attempt: plan.attempt + 1, reason: failReason }, rateLimited);
       this.recordLesson(task.id, { kind: 'verify-fail', brain: plan.brainId, agent: plan.agent, attempt: plan.attempt + 1, reason: failReason, resultText: output.text });
       const fresh = this.store.getTask(task.id);
       if (fresh) {

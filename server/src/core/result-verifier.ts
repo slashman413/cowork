@@ -169,6 +169,19 @@ export function isRateLimitFailure(text: string): boolean {
 }
 
 /**
+ * Whether a failed attempt should put its brain on a rate-limit cooldown. Decided
+ * only from the CLI's own signals: its stderr, and the deterministic gate's verdict
+ * on its output (a non-zero exit, or a short exit-0 refusal). Free text such as the
+ * LLM verifier's reason, or a deliverable that merely mentions rate limits, never
+ * counts, so a real failure that talks about "too many requests" does not pause
+ * the brain.
+ */
+export function isCliRateLimitSignal(signal: { gateFailed: boolean; gateReason?: string; stderr?: string }): boolean {
+  if (!signal.gateFailed) return false;
+  return isRateLimitFailure(signal.stderr || '') || isRateLimitFailure(signal.gateReason || '');
+}
+
+/**
  * Deterministic verdict on one attempt's output. `spawnOk` is the raw exit-code
  * result (false = the process itself failed/timed out — already a failure).
  * Returns ok:false with a short reason when the output is empty or matches a
