@@ -178,7 +178,19 @@ export function isRateLimitFailure(text: string): boolean {
  */
 export function isCliRateLimitSignal(signal: { gateFailed: boolean; gateReason?: string; stderr?: string }): boolean {
   if (!signal.gateFailed) return false;
-  return isRateLimitFailure(signal.stderr || '') || isRateLimitFailure(signal.gateReason || '');
+  return isRateLimitFailure(stderrTail(signal.stderr || '')) || isRateLimitFailure(signal.gateReason || '');
+}
+
+/** Non-empty stderr lines scanned for a rate-limit signal (see stderrTail). */
+export const RATE_LIMIT_STDERR_TAIL_LINES = 5;
+
+/**
+ * The last few non-empty lines of a CLI's stderr (≤2000 chars). Only the tail
+ * explains why the run ended: a CLI that logged "retrying after 429", recovered,
+ * then timed out or returned nothing must not put its brain on a cooldown.
+ */
+export function stderrTail(stderr: string, lines = RATE_LIMIT_STDERR_TAIL_LINES): string {
+  return stderr.split(/\r?\n/).map(l => l.trim()).filter(Boolean).slice(-lines).join('\n').slice(-2000);
 }
 
 /**

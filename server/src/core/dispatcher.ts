@@ -1931,22 +1931,13 @@ export class Dispatcher {
     // (or, for a pinned brain, retry it up to inbox.maxRetries).
     const bound = plan.pinned ? this.config.inbox.maxRetries : plan.chainLen;
     if (!verdict.ok) {
-      let failReason = verdict.reason || output.text.slice(0, 300);
-      let rateLimited = isCliRateLimitSignal({ gateFailed: !detVerdict.ok, gateReason: detVerdict.reason, stderr: output.stderr });
-      // agy rejects valid models when its catalog fetch fails (503/429) — tell a
-      // transient outage (rate-limit class → auto re-run on reset) from a retired model.
-      // Only agy's own short error output qualifies, not a deliverable quoting it.
-      // The `agy models` probe (≤60 s) runs after this task's slot was released
+      // The `agy models` probe inside (≤60 s) runs after this task's slot was released
       // (running.delete above) and execute() is fire-and-forget, so it only delays
       // this task's own completion — never other tasks' dispatch or completion.
-      if (plan.exec === 'agy' && isAgyModelRejection(output.text)) {
-        const diag = diagnoseAgyModelFailure(plan.model || '', output.text, await listAgyModels());
-        if (diag) {
-          failReason = diag;
-          rateLimited = rateLimited || isRateLimitFailure(diag);
-          console.warn(`Dispatcher: ${plan.brainId} — ${diag}`);
-        }
-      }
+      const { failReason, rateLimited, agyDiag } = await classifyCliFailure(
+        { exec: plan.exec, model: plan.model, text: output.text, stderr: output.stderr },
+        detVerdict, verdict.reason || output.text.slice(0, 300));
+      if (agyDiag) console.warn(`Dispatcher: ${plan.brainId} — ${agyDiag}`);
       this.recordFailedBrain(task.id, { brain: plan.brainId, agent: plan.agent, attempt: plan.attempt + 1, reason: failReason }, rateLimited);
       this.recordLesson(task.id, { kind: 'verify-fail', brain: plan.brainId, agent: plan.agent, attempt: plan.attempt + 1, reason: failReason, resultText: output.text });
       const fresh = this.store.getTask(task.id);
@@ -2034,4 +2025,31 @@ export class Dispatcher {
     await this.store.completeTask({ taskId: task.id, result, internal: true });
     console.log(`Dispatcher: task ${task.id} ${verdict.ok ? 'completed' : 'FAILED (chain exhausted)'} (${output.text.length} chars${artifacts.length ? ', ' + artifacts.length + ' artifact(s)' : ''})`);
   }
+}
+
+/**
+ * Why a dispatched CLI run failed, and whether its brain should go on a
+ * rate-limit cooldown — decided from the CLI's own signals only (exit/gate
+ * verdict + stderr tail, see isCliRateLimitSignal), never the LLM verifier's text.
+ * agy rejects valid models when its catalog fetch fails (503/429): tell that
+ * transient outage (rate-limit class → auto re-run on reset) from a retired
+ * model. Only agy's own short error output qualifies, not a deliverable quoting it.
+ */
+export async function classifyCliFailure(
+  run: { exec?: string; model?: string; text: string; stderr?: string },
+  det: VerifyVerdict,
+  reason: string,
+  listModels: () => Promise<string[] | null> = listAgyModels,
+): Promise<{ failReason: string; rateLimited: boolean; agyDiag?: string }> {
+  let failReason = reason;
+  let rateLimited = isCliRateLimitSignal({ gateFailed: !det.ok, gateReason: det.reason, stderr: run.stderr });
+  let agyDiag: string | undefined;
+  if (run.exec === 'agy' && isAgyModelRejection(run.text)) {
+    const diag = diagnoseAgyModelFailure(run.model || '', run.text, await listModels());
+    if (diag) {
+      failReason = agyDiag = diag;
+      rateLimited = rateLimited || isRateLimitFailure(diag);
+    }
+  }
+  return { failReason, rateLimited, agyDiag };
 }

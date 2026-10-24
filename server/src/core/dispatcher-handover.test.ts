@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Dispatcher } from './dispatcher.js';
+import { Dispatcher, classifyCliFailure } from './dispatcher.js';
+import { verifyOutput } from './result-verifier.js';
 import type { Config, Task } from '../types.js';
 
 /**
@@ -127,4 +128,36 @@ test('a reported rate-limit refusal cools the brain; an LLM rejection that menti
   const decision = await guard(put(chainRung('rl2')), '# Postmortem\n\nThe upstream API was rate-limited (429 too many requests); here is the full fix and tests.' + '\n\nDetail. '.repeat(200));
   assert.equal(decision.action, 'handover');
   assert.deepEqual(cooled, ['remote-examplehost-cc-opus'], 'no second cooldown from free text');
+});
+
+test('classifyCliFailure: a timeout cools the brain only when the stderr tail is a rate limit', async () => {
+  const timedOut = (stderr: string) => ({ text: `TIMEOUT after 600000ms\n\n${stderr}`, stderr });
+  const early = ['retrying after 429 Too Many Requests', 'ok', 'tool call 1', 'tool call 2', 'tool call 3', 'tool call 4'].join('\n');
+  for (const [stderr, expected] of [[early, false], [early + '\nError: 429 Too Many Requests', true], ['', false]] as const) {
+    const run = { exec: 'claude', ...timedOut(stderr) };
+    const det = verifyOutput(run.text, false);
+    const r = await classifyCliFailure(run, det, det.reason!, async () => { throw new Error('agy probe must not run'); });
+    assert.equal(r.rateLimited, expected, `stderr tail ${JSON.stringify(stderr.split('\n').at(-1))}`);
+    assert.equal(r.failReason, 'TIMEOUT after 600000ms');
+  }
+});
+
+test('classifyCliFailure: agy model rejection → transient outage cools, retired model does not', async () => {
+  const text = 'Error: model "gemini-3-pro" is not recognized as a known model';
+  const det = verifyOutput(text, false);
+  const transient = await classifyCliFailure({ exec: 'agy', model: 'gemini-3-pro', text, stderr: '' }, det, det.reason!, async () => null);
+  assert.equal(transient.rateLimited, true, 'catalog unavailable (503/429) → rate-limit class');
+  assert.match(transient.failReason, /could not load its model catalog/);
+  assert.equal(transient.agyDiag, transient.failReason);
+
+  const retired = await classifyCliFailure({ exec: 'agy', model: 'gemini-3-pro', text, stderr: '' }, det, det.reason!, async () => ['gemini-3.5-pro']);
+  assert.equal(retired.rateLimited, false, 'a retired model is a real failure, not a cooldown');
+  assert.match(retired.failReason, /is retired/);
+
+  // The same text from a non-agy brain, or quoted in a long deliverable, is not diagnosed.
+  const other = await classifyCliFailure({ exec: 'claude', text, stderr: '' }, det, det.reason!, async () => null);
+  assert.equal(other.agyDiag, undefined);
+  const long = 'Report\n' + text + '\n' + 'detail\n'.repeat(20);
+  const quoted = await classifyCliFailure({ exec: 'agy', model: 'gemini-3-pro', text: long, stderr: '' }, { ok: false, reason: 'LLM said no' }, 'LLM said no', async () => null);
+  assert.deepEqual([quoted.agyDiag, quoted.rateLimited, quoted.failReason], [undefined, false, 'LLM said no']);
 });

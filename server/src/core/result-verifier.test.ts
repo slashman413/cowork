@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isCliRateLimitSignal, verifyOutput, parseLlmVerdict, buildVerifierPrompt, DEFAULT_FAIL_PATTERNS, detectInputRequest, DEFAULT_QUESTION_PATTERNS, detectBackgroundWait, DEFAULT_BACKGROUND_WAIT_PATTERNS } from './result-verifier.js';
+import { isCliRateLimitSignal, stderrTail, verifyOutput, parseLlmVerdict, buildVerifierPrompt, DEFAULT_FAIL_PATTERNS, detectInputRequest, DEFAULT_QUESTION_PATTERNS, detectBackgroundWait, DEFAULT_BACKGROUND_WAIT_PATTERNS } from './result-verifier.js';
 
 /**
  * The result verifier is the fix for "a rate-limit reply looked like a done
@@ -290,4 +290,12 @@ test('isCliRateLimitSignal: only the CLI exit/stderr signals count, not free tex
   assert.equal(isCliRateLimitSignal({ gateFailed: true, gateReason: 'empty result (0 < 1 chars)', stderr: '' }), false);
   // The deterministic gate passed: the failure came from the LLM verifier, whatever its wording.
   assert.equal(isCliRateLimitSignal({ gateFailed: false, gateReason: undefined, stderr: 'retrying after rate limit exceeded' }), false);
+});
+
+test('isCliRateLimitSignal: only the stderr tail counts, not a 429 the CLI recovered from', () => {
+  const recovered = ['retrying after 429 Too Many Requests', 'retry ok', 'step 1 done', 'step 2 done', 'step 3 done', 'step 4 done', 'writing result'].join('\n');
+  assert.equal(isCliRateLimitSignal({ gateFailed: true, gateReason: 'TIMEOUT after 600000ms', stderr: recovered }), false);
+  assert.equal(isCliRateLimitSignal({ gateFailed: true, gateReason: 'TIMEOUT after 600000ms', stderr: recovered + '\nError: 429 Too Many Requests\n\n' }), true);
+  assert.equal(stderrTail('a\n\nb\r\nc\n  \nd\ne\nf\n'), 'b\nc\nd\ne\nf');
+  assert.ok(stderrTail('x'.repeat(5000)).length <= 2000);
 });
