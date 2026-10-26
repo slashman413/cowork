@@ -48,6 +48,8 @@ export interface RoleConfig {
    *  OpenAI-compatible endpoint wired in $DSH_HOME/settings.yaml. */
   exec: 'claude' | 'hermes' | 'agy' | 'script' | 'codex' | 'ollama' | 'dsh';
   model: string;
+  /** claude only: thinking effort passed as `--effort` (low|medium|high|xhigh|max). */
+  effort?: string;
   /** argv for exec:script roles (the command + args to run). */
   command?: string[];
   /** Delegate execution to a named brain (see BrainConfig) instead of the
@@ -71,6 +73,8 @@ export interface BrainConfig {
   /** local brains: how to run them. */
   exec?: 'claude' | 'hermes' | 'agy' | 'script' | 'codex' | 'ollama' | 'dsh';
   model?: string;
+  /** claude only: thinking effort passed as `--effort` (low|medium|high|xhigh|max). */
+  effort?: string;
   command?: string[];
   /** remote brains: which machine/client (informational + claim-routing hint). */
   host?: string;

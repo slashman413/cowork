@@ -135,6 +135,8 @@ const BRAIN = Object.fromEntries(BRAINS.map(b => [b.id, {
   // Optional codex profile (~/.codex/config.toml) — pins model + custom model_provider
   // so a brain can target a local vLLM endpoint or a non-default cloud provider.
   profile: b.profile || '',
+  // Optional claude thinking effort (low|medium|high|xhigh|max) → `claude --effort`.
+  effort: b.effort || '',
   location: b.location || 'remote', host: b.host || HOST
 }]));
 const MY_IDS = new Set(Object.keys(BRAIN));
@@ -580,7 +582,7 @@ function buildPrompt(task, artDir, inputInfo) {
   return lines.join('\n');
 }
 function runModel(brain, prompt, artDir) {
-  const argv = brain.exec === 'claude' ? ['claude', '-p', prompt, ...(brain.model ? ['--model', brain.model] : []), '--dangerously-skip-permissions']
+  const argv = brain.exec === 'claude' ? ['claude', '-p', prompt, ...(brain.model ? ['--model', brain.model] : []), ...(brain.effort ? ['--effort', brain.effort] : []), '--dangerously-skip-permissions']
     : brain.exec === 'hermes' ? ['hermes', ...(brain.model ? ['-m', brain.model] : []), '-z', prompt]
     : brain.exec === 'agy' ? ['agy', '-p', prompt, ...(brain.model ? ['--model', brain.model] : []), '--dangerously-skip-permissions']
     : brain.exec === 'codex' ? ['codex', 'exec', '--skip-git-repo-check', '--dangerously-bypass-approvals-and-sandbox', ...(brain.profile ? ['--profile', brain.profile] : []), ...(brain.model ? ['-m', brain.model] : []), prompt]

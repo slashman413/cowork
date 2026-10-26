@@ -38,6 +38,7 @@ interface ExecPlan {
   platform: string;             // active-agent platform bucket
   exec: 'claude' | 'hermes' | 'agy' | 'script' | 'codex' | 'ollama' | 'dsh';
   model: string;
+  effort?: string;
   command?: string[];
 }
 
@@ -580,7 +581,7 @@ export class Dispatcher {
 
   private brainPlan(
     agent: string, division: string | undefined, brainId: string,
-    b: { location: string; exec?: string; model?: string; command?: string[] },
+    b: { location: string; exec?: string; model?: string; effort?: string; command?: string[] },
     meta: { pinned: boolean; attempt: number; chainLen: number }
   ): { action: 'remote'; exec?: ExecPlan } | { action: 'skip' } | { action: 'execute'; exec: ExecPlan } {
     const isRoster = !!agent && !this.isSpecial(agent);
@@ -588,7 +589,7 @@ export class Dispatcher {
     const exec: ExecPlan = {
       agent, division, isRoster, brainId, attempt: meta.attempt, chainLen: meta.chainLen, pinned: meta.pinned,
       label, platform: this.platformOf(b.exec || 'hermes'),
-      exec: (b.exec || 'hermes') as ExecPlan['exec'], model: b.model || '', command: b.command
+      exec: (b.exec || 'hermes') as ExecPlan['exec'], model: b.model || '', effort: b.effort, command: b.command
     };
     if (b.location === 'remote') return { action: 'remote', exec };   // that machine's client claims it
     if (!b.exec) return { action: 'skip' };
@@ -1432,7 +1433,8 @@ export class Dispatcher {
       case 'claude': {
         const lean = fullProfile || this.config.orchestration.claudeProfile === 'full' ? []
           : this.claudeProfile.args(taskText, this.config.orchestration.claudeMcp);
-        return ['claude', '-p', prompt, '--model', roleCfg.model, '--dangerously-skip-permissions', ...lean];
+        return ['claude', '-p', prompt, '--model', roleCfg.model,
+          ...(roleCfg.effort ? ['--effort', roleCfg.effort] : []), '--dangerously-skip-permissions', ...lean];
       }
       case 'hermes':
         return roleCfg.model
@@ -1810,7 +1812,7 @@ export class Dispatcher {
     this.store.updateHeartbeat({ agentId: worker.id, status: 'working', currentTask: task.title });
 
     this.running.set(task.id, { role: plan.label, startedAt: Date.now(), workerAgentId: worker.id, brainId: plan.brainId });
-    console.log(`Dispatcher: [${plan.label}/${plan.exec}:${plan.model || 'default'}] running task ${task.id} — ${task.title}`);
+    console.log(`Dispatcher: [${plan.label}/${plan.exec}:${plan.model || 'default'}${plan.effort ? '@' + plan.effort : ''}] running task ${task.id} — ${task.title}`);
 
     // Persistent per-task artifacts dir (agents save files here → downloadable).
     const artDir = this.artifactsDir(task.id);
@@ -1822,7 +1824,7 @@ export class Dispatcher {
     // as it happens instead of nothing until the final answer.
     const streaming = STREAMING_EXECS.has(plan.exec);
     // A task can opt out of the lean claude profile with context.claudeProfile='full'.
-    const argv = [...this.buildArgv({ exec: plan.exec, model: plan.model, command: plan.command }, prompt,
+    const argv = [...this.buildArgv({ exec: plan.exec, model: plan.model, effort: plan.effort, command: plan.command }, prompt,
       `${task.title}\n${task.description || ''}`, task.context?.claudeProfile === 'full'), ...streamArgs(plan.exec)];
     const renderer = streaming ? createStreamRenderer(plan.exec) : null;
 
