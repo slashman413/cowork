@@ -10,6 +10,7 @@ import { verifyOutput, isRateLimitFailure, isCliRateLimitSignal, buildVerifierPr
 import { buildLesson, appendLesson } from './lessons.js';
 import { canonicalBrainId } from '../config.js';
 import { STREAMING_EXECS, streamArgs, createStreamRenderer } from './progress-stream.js';
+import { briefPersona } from './persona-brief.js';
 import { isAgyModelRejection, diagnoseAgyModelFailure, listAgyModels } from './agy-models.js';
 
 /** Remove ANSI CSI/OSC escape sequences and lone carriage returns. */
@@ -1312,7 +1313,7 @@ export class Dispatcher {
     return this.conventionsCache;
   }
 
-  private buildPrompt(task: Task, plan: { agent: string; division?: string; isRoster: boolean }): string {
+  private buildPrompt(task: Task, plan: { agent: string; division?: string; isRoster: boolean; exec?: string }): string {
     const port = this.config.server.port;
     // Self-referential API base for orchestrator subtask dispatch. Follows the
     // server's own scheme: when server.tls is set the server binds https://, so
@@ -1331,7 +1332,12 @@ export class Dispatcher {
     if (plan.isRoster) {
       // Run the roster agent's full .md persona as the system prompt.
       const p = this.store.getAgentPersona(plan.agent);
-      lines.push(p?.persona || `You are the "${plan.agent}" specialist.`, ``, `---`, ``);
+      // ollama brains have no file tools, so they could not follow the brief's
+      // pointer to the rest of the persona: give them the full text.
+      const persona = p && this.config.orchestration.personaMode !== 'full' && plan.exec !== 'ollama'
+        ? briefPersona(p.persona, p.sourcePath).text
+        : p?.persona;
+      lines.push(persona || `You are the "${plan.agent}" specialist.`, ``, `---`, ``);
       lines.push(`You have been assigned the following task. Work autonomously and produce your final deliverable as plain text (markdown allowed).`, ``);
     } else {
       lines.push(`You are the "${role}" agent in a multi-agent company. Work autonomously and produce your final deliverable as plain text output.`, ``);

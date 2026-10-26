@@ -1794,7 +1794,7 @@ export class Store {
     return this.roster.divisionIds();
   }
 
-  public getAgentPersona(slug: string): { name: string; division: string; persona: string } | null {
+  public getAgentPersona(slug: string): { name: string; division: string; persona: string; sourcePath?: string } | null {
     return this.roster.getPersona(slug);
   }
 

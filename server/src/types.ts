@@ -286,6 +286,11 @@ export interface OrchestrationConfig {
   /** Special (non-roster) executor agents: orchestrator (router/decomposer),
    *  video (LTX pipeline), generalist (fallback). Each has its own brain chain. */
   agents: Record<string, AgentConfig>;
+  /** How a roster persona is injected into LOCAL runs. 'brief' (default) inlines
+   *  identity/mission/rules/style/metrics and points to the .md for the rest
+   *  (templates, code samples, workflow), saving ~3k tokens per run; 'full' inlines
+   *  the whole persona. Remote clients always get the full persona. */
+  personaMode?: 'brief' | 'full';
   /** Grace period before a task on a REMOTE brain in a chain auto-advances to
    *  the next brain if no client has claimed it (ms; 0 disables). */
   remoteGraceMs?: number;

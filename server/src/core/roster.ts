@@ -156,7 +156,7 @@ export class Roster {
 
   /** Full persona (frontmatter + body) of a roster agent by slug, plus its
    *  division — injected as the system prompt when that agent runs a task. */
-  public getPersona(slug: string): { name: string; division: string; persona: string } | null {
+  public getPersona(slug: string): { name: string; division: string; persona: string; sourcePath: string } | null {
     this.loadAll();
     const card = this.agents.find(a => a.slug === slug);
     if (!card) return null;
@@ -167,7 +167,7 @@ export class Roster {
       const raw = fs.readFileSync(card.sourcePath, 'utf-8');
       const body = parseAgentFile(raw).content.trim();
       const persona = body || `You are ${card.name}. ${card.description}`.trim();
-      return { name: card.name, division: card.division || 'unknown', persona };
+      return { name: card.name, division: card.division || 'unknown', persona, sourcePath: card.sourcePath };
     } catch {
       return null;
     }
