@@ -60,6 +60,23 @@ async function main() {
   const app = express();
   app.use(express.json());
 
+  // Host allowlist (anti DNS-rebinding): a page on any site can re-point its own
+  // hostname at 127.0.0.1 and then talk to us same-origin. Enforced when bound to
+  // loopback or when COWORK_ALLOWED_HOSTS (comma-separated hostnames) is set; a
+  // 0.0.0.0 deployment without the env var is left as before.
+  const loopbackBind = ['127.0.0.1', 'localhost', '::1'].includes(config.server.host);
+  const extraHosts = (process.env.COWORK_ALLOWED_HOSTS || '')
+    .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+  if (loopbackBind || extraHosts.length) {
+    const allowedHosts = new Set(['127.0.0.1', 'localhost', '[::1]', ...extraHosts]);
+    app.use((req, res, next) => {
+      const host = (req.headers.host || '').toLowerCase().replace(/:\d+$/, '');
+      if (allowedHosts.has(host)) return next();
+      res.status(421).json({ error: 'host not allowed' });
+    });
+    console.log(`Host allowlist: ${[...allowedHosts].join(', ')}`);
+  }
+
   // API-key auth on /api and /mcp. Required whenever the server listens on a
   // non-loopback address: with no server.apiKey a key is generated once and
   // saved beside the config (see core/auth.ts). Accepts "Authorization: Bearer
