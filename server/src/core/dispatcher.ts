@@ -11,6 +11,7 @@ import { buildLesson, appendLesson } from './lessons.js';
 import { canonicalBrainId } from '../config.js';
 import { STREAMING_EXECS, streamArgs, createStreamRenderer } from './progress-stream.js';
 import { briefPersona } from './persona-brief.js';
+import { ClaudeProfile } from './claude-profile.js';
 import { isAgyModelRejection, diagnoseAgyModelFailure, listAgyModels } from './agy-models.js';
 
 /** Remove ANSI CSI/OSC escape sequences and lone carriage returns. */
@@ -1305,6 +1306,7 @@ export class Dispatcher {
    *  repo root). Read once and cached — injected into every dispatched prompt so a
    *  brain cannot run without them. */
   private conventionsCache: string | null = null;
+  private claudeProfile = new ClaudeProfile();
   private conventions(): string {
     if (this.conventionsCache !== null) return this.conventionsCache;
     const file = join(this.config.paths.artifacts, '..', 'CONVENTIONS.md');
@@ -1421,10 +1423,17 @@ export class Dispatcher {
     return lines.join('\n');
   }
 
-  private buildArgv(roleCfg: RoleConfig, prompt: string): string[] {
+  /** `taskText` = the task's own title + description for a task run (picks its
+   *  MCP servers, or the full profile when it asks for skills/subagents); omit it
+   *  for internal reasoning calls (router, verifier, achiever), which run lean
+   *  with no MCP servers. */
+  private buildArgv(roleCfg: RoleConfig, prompt: string, taskText: string | null = null, fullProfile = false): string[] {
     switch (roleCfg.exec) {
-      case 'claude':
-        return ['claude', '-p', prompt, '--model', roleCfg.model, '--dangerously-skip-permissions'];
+      case 'claude': {
+        const lean = fullProfile || this.config.orchestration.claudeProfile === 'full' ? []
+          : this.claudeProfile.args(taskText, this.config.orchestration.claudeMcp);
+        return ['claude', '-p', prompt, '--model', roleCfg.model, '--dangerously-skip-permissions', ...lean];
+      }
       case 'hermes':
         return roleCfg.model
           ? ['hermes', '-m', roleCfg.model, '-z', prompt]
@@ -1812,7 +1821,9 @@ export class Dispatcher {
     // verifier keep plain text) so progress.log shows each tool call and message
     // as it happens instead of nothing until the final answer.
     const streaming = STREAMING_EXECS.has(plan.exec);
-    const argv = [...this.buildArgv({ exec: plan.exec, model: plan.model, command: plan.command }, prompt), ...streamArgs(plan.exec)];
+    // A task can opt out of the lean claude profile with context.claudeProfile='full'.
+    const argv = [...this.buildArgv({ exec: plan.exec, model: plan.model, command: plan.command }, prompt,
+      `${task.title}\n${task.description || ''}`, task.context?.claudeProfile === 'full'), ...streamArgs(plan.exec)];
     const renderer = streaming ? createStreamRenderer(plan.exec) : null;
 
     // Live PROGRESS LOG: stream the brain's stdout/stderr to artifacts/<id>/progress.log

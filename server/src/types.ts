@@ -291,6 +291,17 @@ export interface OrchestrationConfig {
    *  (templates, code samples, workflow), saving ~3k tokens per run; 'full' inlines
    *  the whole persona. Remote clients always get the full persona. */
   personaMode?: 'brief' | 'full';
+  /** Environment for LOCAL `claude -p` runs. 'lean' (default) skips the owner's
+   *  user-level subagents/skills/rules and loads only the MCP servers a task can
+   *  use (claudeMcp), saving ~12k prompt tokens per run; 'full' loads the whole
+   *  user profile. Tasks that mention skills/subagents, or set
+   *  context.claudeProfile='full', always get the full profile. */
+  claudeProfile?: 'lean' | 'full';
+  /** MCP servers (names from ~/.claude.json) for lean claude task runs:
+   *  `always` for every run, `onDemand` name → regex matched against the task's
+   *  title + description. Defaults: cowork + firecrawl always; twstock,
+   *  notebooklm-mcp, rea on demand. */
+  claudeMcp?: { always?: string[]; onDemand?: Record<string, string> };
   /** Grace period before a task on a REMOTE brain in a chain auto-advances to
    *  the next brain if no client has claimed it (ms; 0 disables). */
   remoteGraceMs?: number;
