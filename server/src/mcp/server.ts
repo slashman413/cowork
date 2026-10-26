@@ -166,7 +166,7 @@ function buildServer(config: Config, store: Store, eventBus: EventBus, goals?: G
       agent_id: z.string(),
       current_task: z.string().optional(),
       status: z.enum(['idle', 'working', 'blocked']).optional(),
-      usage: z.record(z.object({
+      usage: z.record(z.string(), z.object({
         exec: z.string(),
         at: z.string().optional(),
         windows: z.array(z.object({
@@ -259,7 +259,7 @@ function buildServer(config: Config, store: Store, eventBus: EventBus, goals?: G
       to_agent: z.string().optional(),
       priority: z.enum(['low', 'normal', 'high', 'urgent']).default('normal'),
       skill: z.string().optional(),
-      context: z.record(z.any()).optional(),
+      context: z.record(z.string(), z.any()).optional(),
       tags: z.array(z.string()).optional(),
       // Scheduled launch: ISO 8601 date-time. Default is "now" (omit = run
       // immediately). A future time parks the task on the `scheduled` status
