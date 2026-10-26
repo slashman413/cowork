@@ -355,21 +355,26 @@ export function createApiRouter(store: Store, eventBus: EventBus): Router {
 
       fs.writeFileSync(configPath, JSON.stringify(newConfig, null, 2));
 
-      // Also update the repo template if we are in the repo, commit, push, and restart
+      res.json({ ok: true });
+
+      // Mirroring the live config into the tracked template and pushing it leaks
+      // host-personal settings (and any apiKey) into git, so it is opt-in only
+      // (COWORK_CONFIG_GIT_PUSH=1), and the template copy never carries the key.
+      // Either way the process exits so systemd restarts it on the new config.
       const repoTemplate = path.resolve(__dirname, '../../config.json');
-      if (fs.existsSync(repoTemplate)) {
-        fs.writeFileSync(repoTemplate, JSON.stringify(newConfig, null, 2));
+      if (process.env.COWORK_CONFIG_GIT_PUSH === '1' && fs.existsSync(repoTemplate)) {
+        const templateCopy = { ...newConfig, server: { ...(newConfig.server || {}), apiKey: null } };
+        fs.writeFileSync(repoTemplate, JSON.stringify(templateCopy, null, 2));
         import('child_process').then(({ exec }) => {
           exec('git add config.json && git commit -m "chore: update config via web UI" && git push', { cwd: path.resolve(__dirname, '../../') }, (err) => {
             if (err) console.error('Failed to commit config changes:', err);
             else console.log('Config changes committed and pushed');
-            // Graceful restart (if managed by systemd/pm2, this will restart it)
             process.exit(0);
           });
         }).catch(err => console.error('Failed to load child_process:', err));
+      } else {
+        setTimeout(() => process.exit(0), 250);
       }
-
-      res.json({ ok: true });
     } catch (e: any) {
       res.status(400).json({ error: e.message });
     }
