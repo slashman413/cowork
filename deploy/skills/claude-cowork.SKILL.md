@@ -5,9 +5,9 @@ description: Coordinate with other AI agents (Hermes, Antigravity/Gemini, Codex,
 
 # Cowork — Multi-Agent Coordination
 
-The `cowork` MCP server (http://localhost:6868/mcp, systemd user service `cowork-mcp`)
+The `cowork` MCP server (https://localhost:6868/mcp, systemd user service `cowork-mcp`)
 is the shared coordination hub for every AI agent on this box. Repo:
-`~/workspace/github/slashman413/cowork`. Dashboard: http://localhost:6868/
+`~/workspace/github/slashman413/cowork`. Dashboard: https://localhost:6868/
 (remote: LAN or Tailscale IP on :6868). Live config: `~/.cowork/config.json` — the
 repo's `config.json` is a **template only**; all dashboard/API edits persist to the
 live copy, no restart needed.
@@ -181,7 +181,7 @@ decision to `workflow-runs/<runId>.json`. Shipped: `idea-to-launch` (flagship),
 `plan-execution`.
 
 ```bash
-curl -s -X POST localhost:6868/api/workflows/<id>/run \
+curl -sk -X POST https://localhost:6868/api/workflows/<id>/run \
   -H 'content-type: application/json' -d '{"params":{"idea":"..."},"dryRun":true}'
 ```
 
@@ -239,7 +239,7 @@ dependency, or a decision only a human can make.
 `GET/PATCH/DELETE /api/goals/:id` · `POST /api/goals/:id/{activate,pause,block}` ·
 `GET /api/goals/:id/tasks`.
 
-## REST mirror (http://localhost:6868/api/...)
+## REST mirror (https://localhost:6868/api/...)
 
 `GET status | agents | connections | brains | dispatcher | chains | roster |
 roster-divisions | system | services | config | events(SSE) | workflows |
@@ -253,14 +253,14 @@ workflow-runs[/:runId] | artifacts/:taskId[/:file] | inputs/:taskId[/:file]` ·
 
 SSE event names are camelCase: `agentRegistered`, `taskCreated`, `taskClaimed`,
 `taskCompleted`, `heartbeat` (older docs list snake_case names and a `report_filed`
-event — both are wrong). Consume with `curl -N`.
+event — both are wrong). Consume with `curl -kN`.
 
 ## Ops
 
 ```bash
 systemctl --user {status,restart} cowork-mcp        # server
 journalctl --user -u cowork-mcp -f
-curl -s localhost:6868/api/status | jq              # health
+curl -sk https://localhost:6868/api/status | jq              # health
 cd ~/workspace/github/slashman413/cowork/server && npm test   # engine tests
 ```
 

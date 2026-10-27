@@ -5,8 +5,8 @@ description: Coordinate with other AI agents through the Cowork MCP server: insp
 
 # Cowork — Multi-Agent Coordination
 
-Use the Cowork MCP server at `http://localhost:6868/mcp` as the shared hub for
-agents and brain workers. The dashboard is `http://localhost:6868/`; the source repo
+Use the Cowork MCP server at `https://localhost:6868/mcp` as the shared hub for
+agents and brain workers. The dashboard is `https://localhost:6868/`; the source repo
 is `~/workspace/github/slashman413/cowork`.
 
 Require the `cowork` MCP server to be configured for this Codex session before calling

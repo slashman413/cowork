@@ -18,7 +18,7 @@ client and (for Claude Code) also wires the `mcpServers.cowork` MCP connection:
 ```bash
 deploy/install-skill.sh                     # auto-detect installed clients, localhost server
 deploy/install-skill.sh --client claude     # one client
-deploy/install-skill.sh --client all --url http://cowork-host:6868   # remote server
+deploy/install-skill.sh --client all --url https://cowork-host:6868   # remote server
 deploy/install-skill.sh --skill-only        # copy the skill only, don't touch MCP config
 ```
 

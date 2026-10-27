@@ -1,11 +1,11 @@
 ---
 name: cowork
-description: Full-lifecycle Cowork multi-agent framework skill — register brains, dispatch and schedule tasks, collect artifacts, run workflows, and administer the local Cowork MCP server at http://localhost:6868.
+description: Full-lifecycle Cowork multi-agent framework skill — register brains, dispatch and schedule tasks, collect artifacts, run workflows, and administer the local Cowork MCP server at https://localhost:6868.
 ---
 
 # Cowork — Multi-Agent Coordination Skill
 
-You are connected to the **Cowork MCP server** at `http://localhost:6868/mcp` (configured
+You are connected to the **Cowork MCP server** at `https://localhost:6868/mcp` (configured
 in `~/.gemini/config/mcp.json`). Cowork is a filesystem-based MCP server + Web UI
 dashboard that enables multi-platform AI agents (Claude Code, Antigravity, Hermes, Gemini
 CLI, and others) to coordinate, dispatch tasks, and share results through a single pane of
@@ -35,7 +35,7 @@ glass.
   - Config: `~/.cowork/config.json`
   - Port: 6868. API key: send `Authorization: Bearer $COWORK_API_KEY` (dispatched tasks and brain clients have it in env; the hub on a non-loopback host requires it)
 - **Antigravity MCP endpoint**: `~/.gemini/config/mcp.json` →
-  `{ "mcpServers": { "cowork": { "url": "http://localhost:6868/mcp" } } }`
+  `{ "mcpServers": { "cowork": { "url": "https://localhost:6868/mcp" } } }`
 - **Brain client service**: `cowork-local-brain@agy.service` (systemd user unit)
   - Config: `~/.config/cowork-local-brain/agy.env`
   - Script: `~/workspace/github/slashman413/cowork/deploy/remote-brain-client.mjs`
@@ -427,7 +427,7 @@ orchestrator brain decides the next step or says `DONE`.
 ### Running a Workflow
 
 ```
-POST http://localhost:6868/api/workflows/<id>/run
+POST https://localhost:6868/api/workflows/<id>/run
 Body: { "params": { "topic": "value" }, "dryRun": false }
 ```
 
@@ -523,7 +523,7 @@ way; copy that shape rather than writing a bare metric.
 
 ### Web Dashboard
 
-- `http://localhost:6868/` — Web UI (dashboard, Connections, inbox, reports, Agents,
+- `https://localhost:6868/` — Web UI (dashboard, Connections, inbox, reports, Agents,
   Brains, Agencies) with raw/rendered markdown viewer and artifact downloads
 - **Inbox UX**: Real-time SSE updates preserve card expansion and scroll position; status pills display live counts; and a **+ New task** toolbar button lets you create and dispatch tasks with title, brief, priority, and target brain directly from the Inbox without routing through Chat.
 
@@ -556,19 +556,19 @@ Edit `~/.config/cowork-local-brain/agy.env`, then:
 
 ```bash
 # Test MCP endpoint with inspector
-npx @modelcontextprotocol/inspector http://localhost:6868/mcp
+npx @modelcontextprotocol/inspector https://localhost:6868/mcp
 
 # Quick health check
-curl -s http://localhost:6868/api/status | jq
+curl -sk https://localhost:6868/api/status | jq
 
 # Watch real-time SSE events
-curl -N http://localhost:6868/api/events
+curl -kN https://localhost:6868/api/events
 
 # Check active agents
-curl -s http://localhost:6868/api/agents | jq
+curl -sk https://localhost:6868/api/agents | jq
 
 # Check registered brains
-curl -s http://localhost:6868/api/brains | jq
+curl -sk https://localhost:6868/api/brains | jq
 ```
 
 ---
@@ -610,14 +610,14 @@ or `GET /api/artifacts/:taskId/:file`.
 
 ## Pitfalls
 
-- Server must be running — check with `curl -s http://localhost:6868/api/status`
+- Server must be running — check with `curl -sk https://localhost:6868/api/status`
 - MCP endpoint: `/mcp` (Streamable HTTP). REST API: `/api/...`. Do not mix.
 - API key: every /api and /mcp request needs `Authorization: Bearer $COWORK_API_KEY` (or `X-API-Key`). Dispatched tasks and brain clients get `COWORK_API_KEY` in env; never paste the key into task text or output.
 - Task lifecycle: `scheduled` / `wait-input` → `pending` → `claimed` → `in-progress` →
   `done` / `rejected`; a task whose whole chain was rejected finishes `failed: true`
   (re-queue with `POST /api/inbox/:id/rerun`). `scheduled` and `wait-input` are held OUT
   of the pending pool — never claimed or routed until released.
-- SSE at `/api/events` needs `curl -N` (no buffering).
+- SSE at `/api/events` needs `curl -kN` (no buffering).
 - Chain/brain edits via the dashboard or `/api/chains*`, `/api/agents-config`,
   `/api/brains` are applied live AND persisted to config.json (no restart). Only manual
   hand-edits of config.json require a restart.

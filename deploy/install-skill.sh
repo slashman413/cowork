@@ -32,7 +32,7 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SKILLS_DIR="$REPO/deploy/skills"
 
 CLIENT=""            # empty => auto-detect
-URL="http://localhost:6868"
+URL="https://localhost:6868"
 KEY="${COWORK_API_KEY:-}"
 DO_SKILL=1
 DO_MCP=1
@@ -137,4 +137,4 @@ done
 
 echo
 echo "Done. Restart the client if it was running so it picks up the skill + MCP server."
-echo "Verify:  curl -s ${KEY:+-H \"Authorization: Bearer \$COWORK_API_KEY\" }$URL/api/status   (server must be up — see deploy/install-server.sh)"
+echo "Verify:  curl -sk ${KEY:+-H \"Authorization: Bearer \$COWORK_API_KEY\" }$URL/api/status   (server must be up — see deploy/install-server.sh)"
