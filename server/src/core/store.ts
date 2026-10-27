@@ -1344,7 +1344,7 @@ export class Store {
 
   /**
    * Delete a task and everything filed under it: its inbox JSON, its artifacts
-   * dir, and its input files.
+   * dir, and its input files. Emits `taskDeleted` so a running brain is killed.
    */
   public deleteTask(id: string): { deleted: boolean; artifacts: boolean } {
     const task = this.getTask(id);
@@ -1368,6 +1368,9 @@ export class Store {
     const taskFile = this.resolveTaskFile(fullId) || `${fullId}.json`;
     fs.rmSync(path.join(this.config.paths.inbox, taskFile), { force: true });
     this.taskCache.delete(taskFile);
+    // Tell the dispatcher: if this task is mid-run, its brain process tree must be
+    // killed — deleting the files alone left e.g. a dsh brain hammering the GPU.
+    try { this.eventBus?.emitTaskDeleted?.(fullId, task.status); } catch { /* best-effort */ }
     return { deleted: true, artifacts };
   }
 

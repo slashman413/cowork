@@ -32,6 +32,11 @@ export class EventBus extends EventEmitter {
     this.emitEvent('heartbeat', { agentId, status, currentTask });
   }
 
+  /** A task was deleted — the dispatcher kills its running brain process tree. */
+  public emitTaskDeleted(taskId: string, status?: string): void {
+    this.emitEvent('taskDeleted', { taskId, status });
+  }
+
   public emitBrainExecuted(brainId: string, exec: string, taskId: string): void {
     this.emitEvent('brainExecuted', { brainId, exec, taskId });
   }

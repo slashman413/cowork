@@ -273,6 +273,9 @@ export interface OrchestrationConfig {
   defaultBrainConcurrency?: number;
   pollIntervalMs: number;
   taskTimeoutMs: number;
+  /** Grace between SIGTERM and SIGKILL when a brain's process tree is killed
+   *  (task deleted / timed out). Default 5000. */
+  killGraceMs?: number;
   defaultRole: string;
   /** The global default brain fallback chain (ordered brain ids). Used by any
    *  roster-agent task whose division has no override. Drag-sortable in the UI. */
@@ -610,6 +613,7 @@ export interface CoworkEventPayloads {
   taskCompleted: { task: Task };
   heartbeat: { agentId: string; status: string; currentTask?: string };
   brainExecuted: { brainId: string; exec: string; taskId: string };
+  taskDeleted: { taskId: string; status?: string };
 }
 
 /**

@@ -1,4 +1,4 @@
-import { spawn } from 'child_process';
+import { spawn, type ChildProcess } from 'child_process';
 import { join } from 'node:path';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, statSync, createWriteStream, type WriteStream } from 'node:fs';
 import type { Config, RoleConfig, Task, AchieverDecision } from '../types.js';
@@ -12,6 +12,7 @@ import { canonicalBrainId } from '../config.js';
 import { STREAMING_EXECS, streamArgs, createStreamRenderer } from './progress-stream.js';
 import { briefPersona } from './persona-brief.js';
 import { ClaudeProfile } from './claude-profile.js';
+import { killProcessTree } from './proc-tree.js';
 import { isAgyModelRejection, diagnoseAgyModelFailure, listAgyModels } from './agy-models.js';
 
 /** Remove ANSI CSI/OSC escape sequences and lone carriage returns. */
@@ -67,6 +68,10 @@ export class Dispatcher {
   private workflows?: Workflows;
   private goals?: Goals;
   private running = new Map<string, { role: string; startedAt: number; workerAgentId?: string; brainId?: string }>();
+  /** Live brain process per running task — killed (whole tree) when the task is deleted. */
+  private children = new Map<string, ChildProcess>();
+  /** Tasks deleted while their brain was running: their run is discarded, never verified/handed over. */
+  private cancelled = new Set<string>();
   private agentId: string | null = null;
   private timer: NodeJS.Timeout | null = null;
   private stopped = false;
@@ -94,6 +99,32 @@ export class Dispatcher {
     this.eventBus = eventBus;
     this.workflows = workflows;
     this.goals = goals;
+    // Deleting a task must stop its brain. Store.deleteTask only removes files;
+    // without this the brain (e.g. a dsh run on the local SGLang engine) kept
+    // running — and burning GPU — with nobody left to collect its result.
+    if (typeof eventBus?.on === 'function') {
+      eventBus.on('taskDeleted', (evt: any) => {
+        const taskId = evt?.payload?.taskId;
+        if (taskId) this.cancelTask(taskId, 'task deleted');
+      });
+    }
+  }
+
+  /**
+   * Stop a task's running brain: SIGTERM its whole process tree, SIGKILL after a
+   * grace period. The run is marked cancelled so execute() discards its output
+   * instead of verifying / handing it over (which could resurrect the task).
+   * Returns false when this dispatcher is not running the task.
+   */
+  public cancelTask(taskId: string, reason = 'cancelled'): boolean {
+    const child = this.children.get(taskId);
+    if (!this.running.has(taskId) && !child) return false;
+    this.cancelled.add(taskId);
+    if (child?.pid && child.exitCode === null && child.signalCode === null) {
+      console.log(`Dispatcher: ${reason} — killing brain process tree (pid ${child.pid}) of task ${taskId}`);
+      void killProcessTree(child.pid, { graceMs: this.config.orchestration?.killGraceMs ?? 5000 });
+    }
+    return true;
   }
 
   public start(): void {
@@ -1847,6 +1878,10 @@ export class Dispatcher {
         // the task's artifacts instead. exec:script keeps the server cwd because
         // its configured command is a repo-relative path (./deploy/…).
         ...(plan.exec === 'script' ? {} : { cwd: artDir }),
+        // Own process group (pgid = child pid) so cancel/timeout can kill the
+        // brain's whole tree (tool shells, scripts) — not just the top process.
+        // Not unref'd: the server still waits on it and reaps it.
+        detached: true,
         env: {
           ...process.env,
           // exec:script pipelines read the task from these instead of a prompt.
@@ -1873,8 +1908,11 @@ export class Dispatcher {
       // `result` event, else the assistant text so far) — the same text plain `-p`
       // would have printed — so verification below is unchanged.
       const answer = () => (renderer ? renderer.finalText() : out);
+      this.children.set(task.id, child);
+      // The task may have been deleted between claim and spawn.
+      if (this.cancelled.has(task.id)) void killProcessTree(child.pid, { graceMs: orch.killGraceMs ?? 5000 });
       const timer = setTimeout(() => {
-        child.kill('SIGTERM');
+        void killProcessTree(child.pid, { graceMs: orch.killGraceMs ?? 5000 });
         resolve({ ok: false, text: `TIMEOUT after ${orch.taskTimeoutMs}ms\n${answer()}\n${err}`, stderr: err });
       }, orch.taskTimeoutMs);
       child.stdout.on('data', (d) => {
@@ -1902,7 +1940,17 @@ export class Dispatcher {
     try { plog?.end(); } catch { /* best-effort */ }
 
     this.running.delete(task.id);
+    this.children.delete(task.id);
     this.store.removeAgent(worker.id);
+
+    // Deleted mid-run: the brain was killed and nobody is waiting for this result.
+    // Stop here — verifying / handing over would re-run a deleted task on the next
+    // brain (or re-save its file).
+    const wasCancelled = this.cancelled.delete(task.id);
+    if (wasCancelled || !this.store.getTask(task.id)) {
+      console.log(`Dispatcher: task ${task.id} was deleted while running on ${plan.brainId} — run discarded`);
+      return;
+    }
 
     // Count this run: the local dispatcher ran the brain; attribute submission
     // to whoever created the task.
