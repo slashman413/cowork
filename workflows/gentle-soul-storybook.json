@@ -1,0 +1,30 @@
+{
+  "id": "gentle-soul-storybook",
+  "name": "Gentle Soul Moving Storybook 3-Tier Content Flywheel (5-Language SEO + Symphonic LoRA + Zero-Warp H3)",
+  "description": "End-to-end 3-Act Moving Storybook (【動く旅の絵本 / 移動的奇幻繪本】) production workflow on DGX Spark: (1) Monumental 80-piece symphonic orchestral music via ACE-Step 1.5 + 2-LoRA Stack (acestep15_symphonic_orchestra_dora @0.5, acestep15_instrumental_richness_lora @0.45) + Regrind V10b VAE + Concert-Hall Mastering EQ (-14 LUFS, LRA 16, context-aware -36 LUFS low-pass rain Foley in rain scenes only, zero white noise) + bleak/melancholic ghibli-style gouache LoRA (ghibli_style.safetensors @ 0.85) + zero-warp phase-locked 10-second MiniMax H3 1024x576 (16:9) dynamic loops + 5-language SEO YouTube upload (zh-TW, zh-CN, en, es, ja, ko), followed by (2) daily Shorts extraction & Thompson-sampled A/B scheduling.",
+  "mode": "dag",
+  "params": [],
+  "steps": [
+    {
+      "key": "render-and-upload-storybook",
+      "title": "Render & Upload 3-Act Bleak Symphonic Moving Storybook Album (1080p30 + Zero-Warp H3 + 5-Lang SEO)",
+      "description": "Canonical recipe, traps and acceptance checks: /home/wayne/workspace/github/slashman413/ai-lofi-music-vid-yt/docs/STORYBOOK_RUNBOOK.md (read it first; it wins over this text).\n\nExecute the fixed Moving Storybook pipeline from your task's artifacts directory ($COWORK_ARTIFACTS_DIR):\n\npython3 /home/wayne/workspace/github/slashman413/ai-lofi-music-vid-yt/src/storybook_pipeline.py \\\n  --work-dir . \\\n  --past-used /home/wayne/workspace/github/slashman413/ai-lofi-music-vid-yt/config/past_used.json \\\n  --engine acestep15 \\\n  --acts 3 --tracks-per-act 3 --song-seconds 180 \\\n  --shots-per-track 2 --shot-loop-seconds 10.0 --i2v-mode h3 \\\n  --foley-lufs -36.0 --export-ep --upload\n\nVerify:\n1. 1920x1080 @ 30fps MP4 with zero horizontal warping/jitter in 10s MiniMax H3 loops (1024x576 exact 16:9 pre-resized keyframes + phase-correlation registration, forward-only loop).\n2. Bleak, desolate, melancholic ghibli-style gouache visual tone (ghibli_style.safetensors @ 0.85 + cold slate-indigo grading) in covers_contact.jpg.\n3. Monumental 80-piece symphonic audio via ACE-Step 1.5 2-LoRA stack + Regrind V10b VAE + Symphonic Fullness EQ (-14 LUFS, LRA 16), with zero white-noise hiss (pure silence Foley in non-rain acts, -36 LUFS <850Hz rain patter in rain acts).\n4. 5-language SEO metadata (zh-TW, zh-CN, en, es, ja, ko) in multilang_metadata.json, full_description.txt, and YouTube localizations.",
+      "division": "specialized",
+      "context": {
+        "brain": "local-hermes-qwen3.8-27b"
+      }
+    },
+    {
+      "key": "evolve-and-schedule-shorts",
+      "title": "Measure, Evolve & Schedule 3 Vertical Storybook Shorts",
+      "description": "Run the fixed Gentle Soul Shorts kit from your task's artifacts directory ($COWORK_ARTIFACTS_DIR):\n\nK=/home/wayne/workspace/github/slashman413/ai-lofi-music-vid-yt/kit\npython3 $K/metrics_snapshot.py\npython3 $K/evolve.py\npython3 $K/make_shorts.py --upload\ncp $K/state/scoreboard.json $K/state/release_queue.json $K/state/next_brief.json .",
+      "division": "marketing",
+      "context": {
+        "brain": "local-hermes-qwen3.8-27b"
+      },
+      "dependsOn": [
+        "render-and-upload-storybook"
+      ]
+    }
+  ]
+}

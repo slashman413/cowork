@@ -13,6 +13,7 @@ import { STREAMING_EXECS, streamArgs, createStreamRenderer } from './progress-st
 import { briefPersona } from './persona-brief.js';
 import { ClaudeProfile } from './claude-profile.js';
 import { killProcessTree } from './proc-tree.js';
+import { lintArtifacts, lintReason } from './artifact-lint.js';
 import { isAgyModelRejection, diagnoseAgyModelFailure, listAgyModels } from './agy-models.js';
 
 /** Remove ANSI CSI/OSC escape sequences and lone carriage returns. */
@@ -1522,6 +1523,7 @@ export class Dispatcher {
         // and the provider needs its apiKeyEnv present (SGLang ignores the value).
         // env(1) sets both regardless of spawn cwd so the brain is self-contained.
         return ['env', `DSH_HOME=${process.env.HOME}/.dsh`, 'SGLANG_API_KEY=dummy',
+          'DSH_PERMISSION_MODE=danger-full-access',
           'dsh', '--profile', 'headless', prompt];
       case 'script':
         // Task is passed via COWORK_TASK_* env vars (see execute); the command
@@ -1591,6 +1593,38 @@ export class Dispatcher {
     } catch (e) {
       console.error(`Dispatcher: LLM verifier errored (failing open):`, e);
       return { ok: true };   // never discard a real deliverable because the verifier crashed
+    }
+  }
+
+  /** Gate 2.7 — deterministic artifact lint (core/artifact-lint.ts, ADR-013) of the
+   *  files THIS attempt wrote to the task's artifacts dir. Findings are recorded on
+   *  task.context.artifactLint for the reviewer. Returns a rejecting verdict only in
+   *  'enforce' mode, with CRITICAL defects, and when this is not the last attempt
+   *  of the chain (the last attempt keeps its deliverable — fail open). Never
+   *  throws: a lint crash must not cost a real deliverable. */
+  private artifactVerdict(task: Task, artDir: string, sinceMs: number, lastAttempt: boolean): VerifyVerdict {
+    const mode = this.config.orchestration.verifier?.artifactLint ?? 'enforce';
+    if (mode === 'off' || this.config.orchestration.verifier?.enabled === false) return { ok: true };
+    try {
+      const report = lintArtifacts(artDir, { sinceMs, brief: `${task.title}\n${task.description || ''}` });
+      if (!report.files.length) return { ok: true };
+      const reject = mode === 'enforce' && report.critical.length > 0 && !lastAttempt;
+      const t = this.store.getTask(task.id);
+      if (t) {
+        t.context = {
+          ...(t.context || {}),
+          artifactLint: {
+            at: new Date().toISOString(), files: report.files.length,
+            critical: report.critical.slice(0, 10), warnings: report.warnings.slice(0, 20),
+            ...(report.critical.length && !reject ? { downgraded: true } : {}),
+          },
+        };
+        this.store.saveTask(t);
+      }
+      return reject ? { ok: false, reason: lintReason(report) } : { ok: true };
+    } catch (e) {
+      console.error(`Dispatcher: artifact lint errored for ${task.id} (failing open):`, e);
+      return { ok: true };
     }
   }
 
@@ -1848,6 +1882,9 @@ export class Dispatcher {
     // Persistent per-task artifacts dir (agents save files here → downloadable).
     const artDir = this.artifactsDir(task.id);
     try { mkdirSync(artDir, { recursive: true }); } catch { /* ignore */ }
+    // Attempt start (minus a little clock slack): the artifact gate only lints files
+    // written during THIS attempt, so an earlier brain's leftovers can't fail it.
+    const attemptStartedMs = Date.now() - 2000;
 
     const prompt = this.buildPrompt(task, plan);
     // claude/agy run in stream-json mode here (and only here — probes and the
@@ -1988,11 +2025,22 @@ export class Dispatcher {
     // Only defer while under the safety cap; past it, treat the result as final so a
     // never-finishing background job can't loop the task forever.
     const bgDefer = bgWait.waiting && this.backgroundDeferralCount(task) < this.maxBackgroundDeferrals();
+    // (2.7) ARTIFACT gate — deterministic lint of the files this attempt wrote
+    //       (core/artifact-lint.ts). Only for a would-be deliverable (not a
+    //       question / background wait). CRITICAL defects reject the attempt like
+    //       a soft failure — except on the LAST attempt of the chain, where they
+    //       are downgraded to warnings so a real deliverable is never discarded
+    //       outright (same fail-open stance as the LLM gate).
+    const lastAttempt = plan.attempt + 1 >= (plan.pinned ? this.config.inbox.maxRetries : plan.chainLen);
+    const lint = detVerdict.ok && !inputReq.needsInput && !bgDefer
+      ? this.artifactVerdict(task, artDir, attemptStartedMs, lastAttempt) : null;
     const verdict: VerifyVerdict = !detVerdict.ok
       ? detVerdict
       : inputReq.needsInput || bgDefer
         ? { ok: true }                                 // question / bg-wait → skip the LLM gate, park below
-        : await this.llmVerdict(task, output.text);
+        : lint && !lint.ok
+          ? lint
+          : await this.llmVerdict(task, output.text);
     if (output.ok && !verdict.ok) {
       console.log(`Dispatcher: verifier REJECTED task ${task.id} result on ${plan.brainId} — ${verdict.reason}`);
     }

@@ -229,6 +229,13 @@ export interface VerifierConfig {
    *  before it is completed with whatever it has (avoids an infinite loop when a
    *  background job never finishes). Default 30. */
   maxBackgroundDeferrals?: number;
+  /** Deterministic artifact quality gate (core/artifact-lint.ts, ADR-013) run on the
+   *  files a LOCAL brain wrote to its artifacts dir during the attempt.
+   *  'enforce' (default): CRITICAL defects (empty deliverable, invalid JSON, lorem
+   *  ipsum / unresolved {{template}} tags outside code) reject the attempt and hand
+   *  it to the next brain; warnings are recorded on the task. 'warn': record only.
+   *  'off': skip. */
+  artifactLint?: 'enforce' | 'warn' | 'off';
   /** Optional LLM verifier agent stacked on top of the deterministic check. */
   llm?: {
     enabled: boolean;
@@ -433,11 +440,36 @@ export interface Config {
   /** Shotcraft page (/shotcraft.html) — shortcut for the video-shotcraft agent
    *  skill. All fields optional; see core/shotcraft.ts. */
   shotcraft?: ShotcraftConfig;
+  /** GitHub / open-source repo integrations (/integrations.html, core/integrations.ts).
+   *  All fields optional. */
+  integrations?: IntegrationsConfig;
   inbox: {
     autoArchiveDays: number;
     maxRetries: number;
   };
   orchestration: OrchestrationConfig;
+}
+
+export interface IntegrationsConfig {
+  /** Master switch for the API/page/MCP tool. Default on. */
+  enabled?: boolean;
+  /** Where repos are cloned (default ~/.cowork/integrations). */
+  root?: string;
+  /** Registry file (default ~/.cowork/integrations.json). */
+  registry?: string;
+  /** Shared skills home that installed skills are copied into (default ~/.agents/skills). */
+  skillsHome?: string;
+  /** Client skill dirs to symlink installed skills into (only existing ones are used).
+   *  Default ~/.claude/skills, ~/.codex/skills, ~/.gemini/config/skills, ~/.hermes/skills. */
+  clientSkillDirs?: string[];
+  /** Git hosts a repo may be fetched from (default github.com, gitlab.com, codeberg.org, bitbucket.org). */
+  allowHosts?: string[];
+  /** Skill-audit allow list: "ruleId" or "ruleId@relative/path" (false-positive suppression). */
+  auditAllow?: string[];
+  /** Refuse clones bigger than this (default 300 MB). */
+  maxRepoMB?: number;
+  /** Brain pre-selected for "wrap with an agent" tasks (must be a LOCAL brain — Rule 6). */
+  wrapBrain?: string;
 }
 
 export interface ShotcraftConfig {

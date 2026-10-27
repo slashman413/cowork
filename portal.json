@@ -1,7 +1,17 @@
 {
   "$comment": "Portal launcher catalog — default services of the DGX Spark host. Live copy: ~/.cowork/portal.json (override with COWORK_PORTAL), seeded from this file on first run and hot-reloaded on save. Per service: url (required; http(s)://… or a /path on the dashboard), label, description, icon (lucide name), category, enabled, order, accent (#hex), probe (health-check URL, or false), unit + controllable (systemd --user lifecycle buttons; also needs serviceControl.enabled in config.json). localhost URLs are rewritten to the dashboard's host for remote viewers.",
   "accent": "#2563EB",
-  "categories": ["Knowledge", "Marketing", "Files", "Dev", "Automation", "Ops", "APIs & MCP", "Explore", "Other"],
+  "categories": [
+    "Knowledge",
+    "Marketing",
+    "Files",
+    "Dev",
+    "Automation",
+    "Ops",
+    "APIs & MCP",
+    "Explore",
+    "Other"
+  ],
   "services": {
     "videostudio": {
       "url": "/video-studio.html",
@@ -28,6 +38,15 @@
       "icon": "book-open",
       "category": "Knowledge",
       "enabled": true
+    },
+    "integrations": {
+      "url": "/integrations.html",
+      "label": "Integrations",
+      "description": "Turn a GitHub / open-source repo into a cowork capability: fetch, security-audit, then install as an agent skill or a sandboxed portal plugin (or have an agent wrap a CLI/MCP server as a skill).",
+      "icon": "puzzle",
+      "category": "APIs & MCP",
+      "enabled": true,
+      "probe": false
     },
     "mautic": {
       "url": "http://localhost:8081",

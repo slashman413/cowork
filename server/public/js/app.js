@@ -577,17 +577,23 @@ function agyWindowMatchesModel(modelOrBrainId, w) {
   return group.includes(target) || target.includes(group);
 }
 
-/** Reset time (Date) of a brain cooling down on a rate limit — a usage window at
- *  ≥100% that resets in the future (mirror of Store.brainCooldownUntil) — or null. */
+/** Reset time (Date) of a brain's rate limit window — prefers an exhausted (≥100%)
+ *  window that is actively cooling down, or falls back to the rate limit reset time
+ *  for metered brains so rate limits remain visible in pickers — or null. */
 function brainCooldownUntil(u, brainId) {
   let until = 0;
+  let futureReset = 0;
   for (const w of (u && Array.isArray(u.windows)) ? u.windows : []) {
     if (brainId && u?.exec === 'agy' && !agyWindowMatchesModel(brainId, w)) continue;
     const used = typeof w.usedPct === 'number' ? w.usedPct : (typeof w.remainingPct === 'number' ? 100 - w.remainingPct : 0);
     const at = w.resetsAt ? Date.parse(w.resetsAt) : NaN;
-    if (used >= 100 && Number.isFinite(at) && at > Date.now()) until = Math.max(until, at);
+    if (Number.isFinite(at) && at > Date.now()) {
+      futureReset = Math.max(futureReset, at);
+      if (used >= 100) until = Math.max(until, at);
+    }
   }
-  return until ? new Date(until) : null;
+  const chosen = until || futureReset;
+  return chosen ? new Date(chosen) : null;
 }
 
 function selectableBrainIds(brains) {
@@ -1261,11 +1267,19 @@ class App {
     if (!container || !content) return;
     let brains = {};
     let divisions = {};
-    // Both feeds are optional — a missing registry/roster degrades to Auto.
-    try { brains = await this.api.get('/brains'); } catch { /* registry unreachable → Auto only */ }
-    try { divisions = await this.api.get('/roster-divisions'); } catch { /* roster unreachable → no agent picker options */ }
+    let usage = {};
+    // Feeds are optional — missing registry/roster degrades to Auto.
+    await Promise.all([
+      this.api.get('/brains').then(r => { brains = r || {}; }).catch(() => {}),
+      this.api.get('/roster-divisions').then(r => { divisions = r || {}; }).catch(() => {}),
+      this.api.get('/connections').then(r => { usage = r?.usage || {}; }).catch(() => {})
+    ]);
     const opts = [`<option value="">🧠 Auto — route via the agent's brain chain</option>`]
-      .concat(selectableBrainIds(brains).map(b => `<option value="${esc(b)}">${esc(b)}</option>`)).join('');
+      .concat(selectableBrainIds(brains).map(b => {
+        const until = brainCooldownUntil(usage[b], brains[b]?.model || b);
+        const note = until ? ` — ⏳ rate-limited until ${until.toLocaleString()}` : '';
+        return `<option value="${esc(b)}">${esc(b + note)}</option>`;
+      })).join('');
     const divOpts = [`<option value="">🤖 Auto — let the router pick the agent</option>`]
       .concat(Object.entries(divisions).sort().map(([d, i]) => `<option value="${esc(d)}">${esc(i.label || d)} (${i.agents.length})</option>`)).join('');
     const fieldStyle = 'width:100%; padding:9px 10px; background:var(--bg-tertiary); border:1px solid var(--border-color); border-radius:8px; color:inherit; font:inherit; font-size:0.9rem';
@@ -1414,9 +1428,12 @@ class App {
     catch (err) { this.toast('error', err.message); return; }
     if (!task) { this.toast('error', 'Task not found'); return; }
     if (!isTaskEditable(task)) { this.toast('cannot edit', `Task is ${task.status} — only tasks that are not running or pending can be edited.`); return; }
-    let brains = {}, divisions = {};
-    try { brains = await this.api.get('/brains'); } catch { /* Auto only */ }
-    try { divisions = await this.api.get('/roster-divisions'); } catch { /* no agent picker */ }
+    let brains = {}, divisions = {}, usage = {};
+    await Promise.all([
+      this.api.get('/brains').then(r => { brains = r || {}; }).catch(() => {}),
+      this.api.get('/roster-divisions').then(r => { divisions = r || {}; }).catch(() => {}),
+      this.api.get('/connections').then(r => { usage = r?.usage || {}; }).catch(() => {})
+    ]);
     const ctx = task.context || {};
     const curBrain = ctx.brainAuto ? '' : (ctx.brain || '');
     const curDivision = ctx.division || '';
@@ -1425,7 +1442,11 @@ class App {
     // treats a disabled pin as absent), so it's not offered here either.
     const curBrainSelectable = curBrain && !brains[curBrain]?.disabled;
     const brainOpts = [`<option value=""${curBrainSelectable ? '' : ' selected'}>🧠 Auto — route via the agent's brain chain</option>`]
-      .concat(selectableBrainIds(brains).map(b => `<option value="${esc(b)}"${b === curBrain ? ' selected' : ''}>${esc(b)}</option>`)).join('');
+      .concat(selectableBrainIds(brains).map(b => {
+        const until = brainCooldownUntil(usage[b], brains[b]?.model || b);
+        const note = until ? ` — ⏳ rate-limited until ${until.toLocaleString()}` : '';
+        return `<option value="${esc(b)}"${b === curBrain ? ' selected' : ''}>${esc(b + note)}</option>`;
+      })).join('');
     const divOpts = [`<option value=""${curDivision ? '' : ' selected'}>🤖 Auto — let the router pick the agent</option>`]
       .concat(Object.entries(divisions).sort().map(([d, i]) => `<option value="${esc(d)}"${d === curDivision ? ' selected' : ''}>${esc(i.label || d)} (${i.agents.length})</option>`)).join('');
     const prioOpts = ['normal', 'low', 'high', 'urgent']
@@ -2146,11 +2167,20 @@ class App {
   // ── Chat (dispatch a task to a brain/agent and stream back its result) ─────
 
   async renderChat() {
-    const [brains, divisions] = await Promise.all([this.api.get('/brains'), this.api.get('/roster-divisions')]);
+    const [brains, divisions, conn] = await Promise.all([
+      this.api.get('/brains'),
+      this.api.get('/roster-divisions'),
+      this.api.get('/connections').catch(() => ({}))
+    ]);
+    const usage = conn?.usage || {};
     this._chatDivisions = divisions;
     const sel = 'padding:6px 10px;background:transparent;border:none;border-radius:12px;color:var(--text-secondary);font-size:0.8rem;cursor:pointer;outline:none;font-weight:500;transition:background 0.2s;';
     const brainOpts = ['<option value="">🧠 Auto (route via chain)</option>']
-      .concat(Object.keys(brains).sort().map(b => `<option value="${esc(b)}">${esc(b)}</option>`)).join('');
+      .concat(Object.keys(brains).sort().map(b => {
+        const until = brainCooldownUntil(usage[b], brains[b]?.model || b);
+        const note = until ? ` — ⏳ rate-limited until ${until.toLocaleString()}` : '';
+        return `<option value="${esc(b)}">${esc(b + note)}</option>`;
+      })).join('');
     const divOpts = ['<option value="">— any division —</option>']
       .concat(Object.entries(divisions).sort().map(([d, i]) => `<option value="${esc(d)}">${esc(i.label || d)} (${i.agents.length})</option>`)).join('');
 

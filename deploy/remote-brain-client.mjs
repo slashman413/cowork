@@ -591,7 +591,7 @@ function runModel(brain, prompt, artDir) {
     // Talks to a local OpenAI-compatible endpoint via the provider in
     // $DSH_HOME/settings.yaml; DSH_HOME + the provider apiKeyEnv are pinned so the
     // brain is self-contained regardless of spawn cwd (SGLang ignores the value).
-    : brain.exec === 'dsh' ? ['env', `DSH_HOME=${process.env.HOME}/.dsh`, 'SGLANG_API_KEY=dummy', 'dsh', '--profile', 'headless', prompt]
+    : brain.exec === 'dsh' ? ['env', `DSH_HOME=${process.env.HOME}/.dsh`, 'SGLANG_API_KEY=dummy', 'DSH_PERMISSION_MODE=danger-full-access', 'dsh', '--profile', 'headless', prompt]
     : null;
   if (!argv) return Promise.resolve({ ok: false, text: `unknown/misconfigured exec ${brain.exec}` });
   return new Promise((resolve) => {

@@ -25,6 +25,8 @@ import { getObsidianVault } from './core/obsidian.js';
 import { VideoStudio, VIDEO_STUDIO_TAG, ASPECTS } from './core/video-studio.js';
 import { normalizeRecurrence, nextRunAt } from './core/recurrence.js';
 import { Shotcraft, SHOTCRAFT_TAG, GALLERY_URL, ASPECTS as SHOTCRAFT_ASPECTS, LENGTHS as SHOTCRAFT_LENGTHS } from './core/shotcraft.js';
+import { sharedIntegrations, defaultAuditTargets, defaultWrapBrain } from './core/integrations.js';
+import { auditPath, mergeReports } from './core/skill-auditor.js';
 import { AUTH_COOKIE, KeylessLog, keyMatches, readCookie, resolveApiKey } from './core/auth.js';
 
 async function main() {
@@ -561,6 +563,80 @@ async function main() {
         : undefined;
       res.status(201).json({ kind, workflow: def, run });
     } catch (e: any) { res.status(400).json({ error: e.message }); }
+  });
+
+  // ── Integrations: GitHub / open-source repo → skill / portal web plugin ────
+  // (ADR-014, core/integrations.ts; page /integrations.html, MCP tool
+  // `integrations`). Fetch never runs repo code; every install is gated by the
+  // static skill audit (core/skill-auditor.ts).
+  const integrations = sharedIntegrations(config.integrations);
+  const intEnabled = () => config.integrations?.enabled !== false;
+  const localBrains = () => Object.entries(config.orchestration.brains || {})
+    .filter(([, b]) => b.location === 'local').map(([id]) => id);
+  const wrapBrainDefault = () => defaultWrapBrain(config.integrations?.wrapBrain, localBrains());
+  app.use('/api/integrations', (_req, res, next) => {
+    if (!intEnabled()) return res.status(404).json({ error: 'integrations are disabled (config integrations.enabled=false)' });
+    next();
+  });
+  app.get('/api/integrations', (_req, res) => {
+    res.json({
+      root: integrations.root, skillsHome: integrations.skillsHome,
+      clientSkillDirs: integrations.clientSkillDirs.filter(d => fs.existsSync(d)),
+      allowHosts: integrations.allowHosts, wrapBrain: wrapBrainDefault(), brains: localBrains(),
+      integrations: integrations.list(),
+    });
+  });
+  app.post('/api/integrations', async (req, res) => {
+    try {
+      const body = req.body || {};
+      res.status(201).json(await integrations.add(String(body.repo || ''), { install: body.install === true, force: body.force === true }));
+    } catch (e: any) { res.status(400).json({ error: e.message }); }
+  });
+  app.post('/api/integrations/audit', (req, res) => {
+    try {
+      const targets = defaultAuditTargets(config.integrations || {});
+      const report = mergeReports(targets.map(t => auditPath(t, { allow: config.integrations?.auditAllow })), 'default targets');
+      res.json({ targets, ...report, findings: report.findings.filter(f => req.body?.all === true || f.severity !== 'medium').slice(0, 500) });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+  app.post('/api/integrations/:id/:action', async (req, res) => {
+    const id = path.basename(req.params.id);
+    const body = req.body || {};
+    try {
+      switch (req.params.action) {
+        case 'install': return res.json(integrations.install(id, { force: body.force === true, kinds: Array.isArray(body.kinds) ? body.kinds : undefined }));
+        case 'uninstall': return res.json(integrations.uninstall(id, { purge: body.purge === true }) || { id, purged: true });
+        case 'update': return res.json(await integrations.update(id));
+        case 'rescan': return res.json(integrations.rescan(id));
+        case 'wrap': {
+          // Rule 6: the clone lives under the operator's home, so the wrap task is
+          // always pinned to a LOCAL brain.
+          const brain = localBrains().includes(String(body.brain)) ? String(body.brain) : wrapBrainDefault();
+          if (!brain) throw new Error('no local brain configured to run the wrap task');
+          const spec = integrations.buildWrapTask(id, { brain, notes: typeof body.notes === 'string' ? body.notes.slice(0, 4000) : undefined });
+          const task = store.createTask({
+            ...spec, context: { ...spec.context, agent: 'engineering-developer-tooling-engineer' },
+            from: { platform: 'dashboard', agent: 'integrations' }, to: {}, priority: 'normal',
+          });
+          return res.status(201).json({ task });
+        }
+        default: return res.status(404).json({ error: `unknown action ${req.params.action}` });
+      }
+    } catch (e: any) { res.status(400).json({ error: e.message }); }
+  });
+  // Installed web plugins, sandboxed: an opaque-origin CSP sandbox means plugin JS
+  // can't read the dashboard's cookie-authenticated /api or its storage.
+  app.use('/plugins/:id', (req, res, next) => {
+    if (!intEnabled()) return res.status(404).send('not found');
+    const root = integrations.webRoot(path.basename(req.params.id));
+    if (!root) return res.status(404).send('plugin not installed');
+    res.setHeader('Content-Security-Policy', 'sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    // Sandboxed docs have an opaque (null) origin, and <script type="module"> /
+    // fonts are fetched in CORS mode — allow them (static, credential-less files).
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    express.static(root, { dotfiles: 'deny', index: ['index.html'], fallthrough: false })(req, res, next);
   });
 
   // ── Connections: external MCP clients (heartbeat-live) + invocation counters ─

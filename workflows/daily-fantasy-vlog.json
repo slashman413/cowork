@@ -1,23 +1,23 @@
 {
   "id": "daily-fantasy-vlog",
-  "name": "Daily Fantasy Vlog Pipeline",
-  "description": "Generates a 10-minute vlog video using ComfyUI and Lora, and uploads it to YouTube publicly.",
+  "name": "Daily Fantasy Storybook Video Pipeline (Gentle Soul)",
+  "description": "Generates a 1080p 30fps Moving Storybook (【動く旅の絵本】) fantasy ambient music video using the fixed pipeline at /home/wayne/workspace/github/slashman413/ai-lofi-music-vid-yt/src/storybook_pipeline.py (Flux 1080p + watercolor.safetensors LoRA, multi-shot 2.5D motion + rain/starlight/embers/leaves + cold-press paper vignette, ACE-Step 1.5 / HeartMuLa 80% instrumental + 20% ethereal vocalise, -22 LUFS Foley ambience) and uploads it to the Gentle Soul YouTube channel.",
   "mode": "dag",
   "params": [],
   "steps": [
     {
       "key": "generate-vlog",
-      "title": "Generate Daily Vlog",
-      "description": "Generate today's 10-minute fantasy vlog using the established ComfyUI + LoRA pipeline. Ensure visuals, pacing, and audio match the reference aesthetic.",
+      "title": "Generate Daily Moving Storybook Video",
+      "description": "Run the fixed Gentle Soul Moving Storybook pipeline from your task's artifacts directory ($COWORK_ARTIFACTS_DIR):\n\npython3 /home/wayne/workspace/github/slashman413/ai-lofi-music-vid-yt/src/storybook_pipeline.py \\\n  --work-dir . \\\n  --past-used /home/wayne/workspace/github/slashman413/ai-lofi-music-vid-yt/config/past_used.json \\\n  --engine acestep15 \\\n  --acts 3 --tracks-per-act 3 --song-seconds 180 \\\n  --shots-per-track 3 --shot-loop-seconds 6.0 \\\n  --foley-lufs -22.0 --export-ep\n\nVerify that covers_contact.jpg, songs.json, full_description.txt, album_build/music/01..09.mp3, album_build/loops/01..09.mp4, and the final 1920x1080 @ 30fps MP4 exist and are valid.",
       "division": "specialized",
-      "context": { "brain": "local-ha-deepseek-v4-pro" }
+      "context": { "brain": "local-agy-gemini-3.8-flash-high" }
     },
     {
       "key": "upload-vlog",
-      "title": "Upload Vlog to YouTube (Public)",
-      "description": "Upload the generated vlog to the Gentle Soul YouTube channel as a PUBLIC video. Use ~/.priv/gentle_soul_youtube_token.json.",
+      "title": "Upload Moving Storybook Video to YouTube (Public)",
+      "description": "Upload the generated Moving Storybook MP4 to the Gentle Soul YouTube channel (UCvd4nL04uE7lFqkKtzsOwLg) as a PUBLIC video using ~/.priv/gentle_soul_youtube_token.json via:\n\npython3 /home/wayne/workspace/github/slashman413/ai-lofi-music-vid-yt/src/storybook_pipeline.py --work-dir . --upload\n\nEnsure bilingual JP/EN Storybook title, 0:00 emoji chapter timestamps, and containsSyntheticMedia=True are applied.",
       "division": "marketing",
-      "context": { "brain": "local-ha-deepseek-v4-pro" },
+      "context": { "brain": "local-hermes-qwen3.8-27b" },
       "dependsOn": ["generate-vlog"]
     }
   ]

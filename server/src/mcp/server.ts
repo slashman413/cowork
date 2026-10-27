@@ -7,6 +7,8 @@ import type { EventBus } from '../core/events.js';
 import type { Goals } from '../core/goals.js';
 import { registerBrain, removeBrainCascade, clientTaskView } from '../config.js';
 import { getObsidianVault } from '../core/obsidian.js';
+import { sharedIntegrations, defaultAuditTargets } from '../core/integrations.js';
+import { auditPath, mergeReports, formatSummary } from '../core/skill-auditor.js';
 
 // Stateless streamable-HTTP pattern: build a fresh McpServer + transport per
 // request. Sharing one McpServer across concurrent transports cross-wires
@@ -583,6 +585,52 @@ function buildServer(config: Config, store: Store, eventBus: EventBus, goals?: G
       };
     }
   );
+
+  // integrations — GitHub/open-source repo → cowork skill / portal web plugin
+  // (ADR-014). Agents can fetch, audit, rescan and install, but NEVER force-install
+  // a quarantined repo: overriding a CRITICAL audit finding is a human decision
+  // made on the dashboard (/integrations.html).
+  if (config.integrations?.enabled !== false) {
+    server.tool(
+      'integrations',
+      'Integrate a GitHub / open-source repository into cowork. Actions: ' +
+      '"list"; "add" (repo = owner/repo or URL, optional install) — shallow-clones without running code, ' +
+      'detects skill/web/mcp/cli/library, runs the static security audit; "install" (skills → shared ' +
+      'skills home + every client skills dir; static web apps → sandboxed portal plugin); "rescan" ' +
+      '(re-detect + re-audit, e.g. after writing a wrapper SKILL.md); "update" (pull + re-audit); ' +
+      '"uninstall"; "audit" (audit every installed skill dir). Quarantined repos cannot be installed here.',
+      {
+        action: z.enum(['list', 'add', 'install', 'rescan', 'update', 'uninstall', 'audit']),
+        repo: z.string().optional(),
+        id: z.string().optional(),
+        install: z.boolean().optional(),
+      },
+      async (args) => {
+        try {
+          const int = sharedIntegrations(config.integrations);
+          const need = () => { if (!args.id) throw new Error(`action "${args.action}" needs id`); return args.id; };
+          let out: unknown;
+          switch (args.action) {
+            case 'list': out = int.list().map(i => ({ id: i.id, source: i.source, status: i.status, kinds: i.detected.kinds, audit: i.audit.verdict, skills: i.installed.skills.map(s => s.name), web: i.installed.web?.url })); break;
+            case 'add': out = await int.add(args.repo || '', { install: args.install === true }); break;
+            case 'install': out = int.install(need()); break;
+            case 'rescan': out = int.rescan(need()); break;
+            case 'update': out = await int.update(need()); break;
+            case 'uninstall': out = int.uninstall(need()); break;
+            case 'audit': {
+              const targets = defaultAuditTargets(config.integrations || {});
+              const r = mergeReports(targets.map(t => auditPath(t, { allow: config.integrations?.auditAllow })), 'default targets');
+              out = { summary: formatSummary(r), targets, findings: r.findings.filter(f => f.severity !== 'medium').slice(0, 100) };
+              break;
+            }
+          }
+          return { content: [{ type: 'text', text: JSON.stringify(out) }] };
+        } catch (e: any) {
+          return { content: [{ type: 'text', text: e.message }], isError: true };
+        }
+      }
+    );
+  }
 
   server.resource(
     'roster',

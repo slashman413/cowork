@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<!--
+  Integrations — turn a GitHub / open-source repository into a cowork capability
+  (ADR-014). Served by the cowork server and launched from the Portal card.
+  A thin client over:
+    GET    /api/integrations                    registry + paths + local brains
+    POST   /api/integrations        {repo,install?,force?}   fetch → detect → audit (→ install)
+    POST   /api/integrations/:id/install   {force?}          skills → ~/.agents/skills + client dirs;
+                                                             static web app → /plugins/<id>/ portal card
+    POST   /api/integrations/:id/update|rescan|uninstall {purge?}
+    POST   /api/integrations/:id/wrap      {brain,notes}     create a task: an engineering agent wraps a
+                                                             CLI / MCP server / library as a SKILL.md
+    POST   /api/integrations/audit                           audit every installed skill dir
+  Pipeline + security model: server/src/core/integrations.ts, core/skill-auditor.ts.
+-->
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Integrations · Cowork</title>
+  <style>
+    :root[data-theme="dark"] {
+      --bg: #0b0f17; --panel: #121826; --panel-2: #0e1320; --border: #232c3d;
+      --text: #e6edf7; --muted: #8b98ad; --accent: #6366f1; --accent-soft: #6366f122;
+      --ok: #22c55e; --warn: #eab308; --bad: #ef4444; --run: #0ea5e9;
+    }
+    :root[data-theme="light"] {
+      --bg: #f6f8fc; --panel: #ffffff; --panel-2: #eef2f8; --border: #dbe2ee;
+      --text: #1a2130; --muted: #5b6779; --accent: #4f46e5; --accent-soft: #4f46e514;
+      --ok: #16a34a; --warn: #b8860b; --bad: #dc2626; --run: #0284c7;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: Inter, system-ui, sans-serif; background: var(--bg); color: var(--text); }
+    header { display: flex; align-items: center; gap: 12px; padding: 12px 18px; border-bottom: 1px solid var(--border); background: var(--panel); position: sticky; top: 0; z-index: 5; }
+    header .brand { font-weight: 650; display: flex; gap: 9px; align-items: center; }
+    header .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 12px var(--accent); }
+    header .spacer { flex: 1; }
+    a { color: var(--accent); }
+    .btn, header a.link, header button { color: var(--muted); text-decoration: none; font-size: .85rem; background: none; border: 1px solid var(--border); border-radius: 8px; padding: 6px 11px; cursor: pointer; font-family: inherit; }
+    .btn:hover, header a.link:hover, header button:hover { color: var(--text); border-color: var(--accent); }
+    .btn:disabled { opacity: .5; cursor: not-allowed; }
+    .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+    .btn.danger:hover { border-color: var(--bad); color: var(--bad); }
+    .btn.sm { font-size: .74rem; padding: 3px 8px; }
+    main { max-width: 1100px; margin: 0 auto; padding: 20px 18px 60px; display: grid; gap: 18px; }
+    .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+    .panel h2 { margin: 0 0 10px; font-size: 1rem; }
+    .muted { color: var(--muted); font-size: .84rem; }
+    .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    input[type=text], select, textarea { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-family: inherit; font-size: .9rem; }
+    input[type=text] { flex: 1; min-width: 260px; }
+    textarea { width: 100%; min-height: 60px; }
+    .card { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; background: var(--panel-2); display: grid; gap: 8px; }
+    .card .title { font-weight: 600; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .pill { font-size: .7rem; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
+    .pill.ok { color: var(--ok); border-color: var(--ok); } .pill.warn { color: var(--warn); border-color: var(--warn); }
+    .pill.bad { color: var(--bad); border-color: var(--bad); } .pill.run { color: var(--run); border-color: var(--run); }
+    details summary { cursor: pointer; color: var(--muted); font-size: .82rem; }
+    .finding { font-family: ui-monospace, monospace; font-size: .74rem; padding: 3px 0; border-bottom: 1px dashed var(--border); word-break: break-all; }
+    .finding b.critical { color: var(--bad); } .finding b.high { color: var(--warn); } .finding b.medium { color: var(--muted); }
+    #msg { min-height: 1.2em; font-size: .85rem; }
+    #msg.err { color: var(--bad); } #msg.ok { color: var(--ok); }
+    #list { display: grid; gap: 10px; }
+    code { font-size: .8rem; }
+  </style>
+</head>
+<body>
+<header>
+  <div class="brand"><span class="dot"></span>Integrations</div>
+  <span class="muted">GitHub &amp; open-source repos → skills · portal plugins</span>
+  <span class="spacer"></span>
+  <a class="link" href="/">← Dashboard</a>
+  <button id="theme" title="Toggle theme">🌗</button>
+</header>
+<main>
+  <section class="panel">
+    <h2>Add a repository</h2>
+    <div class="row">
+      <input id="repo" type="text" placeholder="owner/repo · https://github.com/owner/repo · …/tree/main/skills/foo" autocomplete="off">
+      <label class="muted"><input id="autoinstall" type="checkbox" checked> install if the audit passes</label>
+      <button id="add" class="btn primary">Fetch &amp; audit</button>
+    </div>
+    <p class="muted">Shallow clone, <b>no repo code is executed</b>. Cowork detects what the repo is —
+      agent skill(s) (<code>SKILL.md</code>), static web app (<code>index.html</code>), MCP server, CLI or library —
+      and runs the static security audit. Skills are installed to the shared skills home and linked into every
+      agent client; web apps become a sandboxed Portal card. CLIs / MCP servers / libraries can be wrapped as a
+      skill by an engineering agent. CRITICAL audit findings quarantine the repo.</p>
+    <div id="msg"></div>
+  </section>
+
+  <section class="panel">
+    <div class="row" style="justify-content:space-between">
+      <h2 style="margin:0">Integrated repositories</h2>
+      <div class="row">
+        <button id="auditAll" class="btn sm" title="Audit every installed skill dir and the bundled agency personas">🛡 Audit installed skills</button>
+        <button id="refresh" class="btn sm">↻ Refresh</button>
+      </div>
+    </div>
+    <p class="muted" id="paths"></p>
+    <div id="auditOut"></div>
+    <div id="list"><p class="muted">Loading…</p></div>
+  </section>
+</main>
+<script>
+  const $ = (s, r = document) => r.querySelector(s);
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const applyTheme = (t) => document.documentElement.setAttribute('data-theme', t);
+  applyTheme(localStorage.getItem('cowork-theme') || 'dark');
+  $('#theme').onclick = () => {
+    const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+    applyTheme(next); localStorage.setItem('cowork-theme', next);
+  };
+  let info = { integrations: [], brains: [] };
+  const busy = new Set();
+
+  async function api(path, body) {
+    const r = await fetch(`/api${path}`, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (!r.ok) { let m = `HTTP ${r.status}`; try { m = (await r.json()).error || m; } catch {} throw new Error(m); }
+    return r.json();
+  }
+  const say = (text, cls = '') => { const m = $('#msg'); m.textContent = text; m.className = cls; };
+
+  const verdictPill = (v) => `<span class="pill ${v === 'pass' ? 'ok' : v === 'warn' ? 'warn' : 'bad'}">audit: ${esc(v)}</span>`;
+  const statusPill = (s) => `<span class="pill ${s === 'installed' ? 'ok' : s === 'quarantined' || s === 'error' ? 'bad' : 'run'}">${esc(s)}</span>`;
+  const findingsHtml = (fs) => fs.map(f => `<div class="finding"><b class="${esc(f.severity)}">[${esc(f.severity)}]</b> ${esc(f.rule)} — ${esc(f.file)}:${f.line}<br>${esc(f.excerpt)}</div>`).join('');
+
+  function render() {
+    $('#paths').innerHTML = `Clones: <code>${esc(info.root)}</code> · skills home: <code>${esc(info.skillsHome)}</code> · linked into: ${(info.clientSkillDirs || []).map(d => `<code>${esc(d)}</code>`).join(', ') || 'none'} · hosts: ${esc((info.allowHosts || []).join(', '))}`;
+    const list = info.integrations || [];
+    if (!list.length) { $('#list').innerHTML = '<p class="muted">Nothing integrated yet — paste a repository above.</p>'; return; }
+    $('#list').innerHTML = list.map(e => {
+      const d = e.detected || {}, a = e.audit || { counts: {} };
+      const isBusy = busy.has(e.id);
+      const skills = (e.installed?.skills || []).map(s => `<code>${esc(s.name)}</code>`).join(', ');
+      const web = e.installed?.web ? `<a href="${esc(e.installed.web.url)}" target="_blank" rel="noopener">${esc(e.installed.web.url)}</a>` : '';
+      const canWrap = !(d.skills || []).length && (d.kinds || []).some(k => k !== 'web');
+      return `<div class="card" data-id="${esc(e.id)}">
+        <div class="title"><a href="${esc(e.url.replace(/\.git$/, ''))}" target="_blank" rel="noopener">${esc(e.source)}</a>${e.subpath ? `<span class="muted">/${esc(e.subpath)}</span>` : ''}
+          ${statusPill(e.status)} ${verdictPill(a.verdict)}${a.overridden ? '<span class="pill bad">override</span>' : ''}
+          ${(d.kinds || []).map(k => `<span class="pill">${esc(k)}</span>`).join('')}
+          <span class="muted">${esc(e.commit || '')}</span></div>
+        ${d.description ? `<div class="muted">${esc(d.description)}</div>` : ''}
+        <div class="muted">${d.language ? esc(d.language) + ' · ' : ''}${d.license ? 'license: ' + esc(d.license) + ' · ' : ''}${a.scannedFiles || 0} files audited: ${a.counts.critical || 0} critical / ${a.counts.high || 0} high / ${a.counts.medium || 0} medium${d.mcp ? ' · MCP: ' + esc(d.mcp) : ''}${d.cli ? ' · ' + esc(d.cli) : ''}</div>
+        ${skills || web ? `<div class="muted">Installed: ${skills ? 'skills ' + skills : ''} ${web ? ' · plugin ' + web : ''}</div>` : ''}
+        ${(d.skills || []).length && !skills ? `<div class="muted">Skills found: ${(d.skills).map(s => `<code>${esc(s.name)}</code>${s.wrapper ? ' (wrapper)' : ''}`).join(', ')}</div>` : ''}
+        ${(e.notes || []).map(n => `<div class="muted">ℹ ${esc(n)}</div>`).join('')}
+        ${(a.findings || []).length ? `<details><summary>Audit findings (${a.findings.length})</summary>${findingsHtml(a.findings)}</details>` : ''}
+        <div class="row">
+          ${e.status !== 'installed' ? `<button class="btn sm primary" data-act="install" ${isBusy ? 'disabled' : ''}>Install</button>` : ''}
+          <button class="btn sm" data-act="update" ${isBusy ? 'disabled' : ''}>Update</button>
+          <button class="btn sm" data-act="rescan" ${isBusy ? 'disabled' : ''}>Rescan</button>
+          ${canWrap ? `<button class="btn sm" data-act="wrap" ${isBusy ? 'disabled' : ''}>🧩 Wrap with an agent</button>` : ''}
+          ${e.status === 'installed' ? `<button class="btn sm danger" data-act="uninstall" ${isBusy ? 'disabled' : ''}>Uninstall</button>` : ''}
+          <button class="btn sm danger" data-act="purge" ${isBusy ? 'disabled' : ''}>Remove</button>
+        </div>
+      </div>`;
+    }).join('');
+  }
+
+  async function load() {
+    try { info = await api('/integrations'); render(); }
+    catch (e) { $('#list').innerHTML = `<p class="muted">${esc(e.message)}</p>`; }
+  }
+
+  async function act(id, action) {
+    const e = info.integrations.find(x => x.id === id);
+    let body = {};
+    if (action === 'install' && e?.audit?.verdict === 'quarantine') {
+      if (!confirm(`${e.source} is QUARANTINED (${e.audit.counts.critical} critical finding(s)).\n\nInstall anyway? Only do this after reading every finding.`)) return;
+      body.force = true;
+    }
+    if (action === 'purge') { if (!confirm(`Remove ${e?.source}: uninstall, delete the clone and its registry entry?`)) return; action = 'uninstall'; body.purge = true; }
+    if (action === 'uninstall' && !body.purge && !confirm(`Uninstall ${e?.source}? (links, copied skills and portal card are removed; the clone stays)`)) return;
+    if (action === 'wrap') {
+      const brain = prompt(`Local brain to run the wrap task (Rule 6 — must be local):\n${info.brains.join(', ')}`, info.wrapBrain || '');
+      if (brain === null) return;
+      const notes = prompt('Notes for the agent (optional):', '') || '';
+      body = { brain, notes };
+    }
+    busy.add(id); render(); say(`${action}: ${e?.source}…`);
+    try {
+      const r = await api(`/integrations/${encodeURIComponent(id)}/${action}`, body);
+      say(action === 'wrap' ? `Created task ${r.task?.id} — when it finishes, press Rescan then Install.` : `${action} ✓ ${e?.source}`, 'ok');
+    } catch (err) { say(err.message, 'err'); }
+    busy.delete(id); await load();
+  }
+
+  $('#list').addEventListener('click', (ev) => {
+    const b = ev.target.closest('button[data-act]'); if (!b) return;
+    act(b.closest('.card').dataset.id, b.dataset.act);
+  });
+  $('#add').onclick = async () => {
+    const repo = $('#repo').value.trim(); if (!repo) return;
+    $('#add').disabled = true; say(`Fetching ${repo}… (shallow clone + audit)`);
+    try {
+      const e = await api('/integrations', { repo, install: $('#autoinstall').checked });
+      say(`${e.source}: ${e.status} · audit ${e.audit.verdict} · ${e.detected.kinds.join(', ')}`, e.status === 'quarantined' ? 'err' : 'ok');
+      $('#repo').value = '';
+    } catch (err) { say(err.message, 'err'); }
+    $('#add').disabled = false; await load();
+  };
+  $('#repo').addEventListener('keydown', (ev) => { if (ev.key === 'Enter') $('#add').click(); });
+  $('#refresh').onclick = load;
+  $('#auditAll').onclick = async () => {
+    $('#auditAll').disabled = true; $('#auditOut').innerHTML = '<p class="muted">Auditing…</p>';
+    try {
+      const r = await api('/integrations/audit', {});
+      $('#auditOut').innerHTML = `<details open><summary>${verdictPill(r.verdict)} ${r.scannedFiles} files in ${r.targets.length} dirs — ${r.counts.critical} critical / ${r.counts.high} high / ${r.counts.medium} medium${r.allowed ? ` (${r.allowed} allow-listed)` : ''}</summary>${findingsHtml(r.findings)}</details>`;
+    } catch (err) { $('#auditOut').innerHTML = `<p class="muted">${esc(err.message)}</p>`; }
+    $('#auditAll').disabled = false;
+  };
+  const q = new URLSearchParams(location.search).get('repo');
+  if (q) $('#repo').value = q;
+  load();
+</script>
+</body>
+</html>

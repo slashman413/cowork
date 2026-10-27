@@ -24,6 +24,12 @@
 #   deploy/install-skill.sh --key <hub api key>     # send "Authorization: Bearer <key>" (default: $COWORK_API_KEY)
 #   deploy/install-skill.sh --skill-only            # copy skill, don't touch MCP config
 #   deploy/install-skill.sh --mcp-only              # wire MCP config, don't copy skill
+#   deploy/install-skill.sh --no-audit              # skip the static skill security audit
+#
+# Before copying, the canonical skills are statically audited (server/src/core/
+# skill-auditor.ts, ADR-011): a CRITICAL finding (credential exfiltration,
+# obfuscated exec, exfil endpoint, rm -rf /, invisible prompt-injection chars)
+# aborts the install. Third-party repos go through the Integrations page instead.
 #
 # Idempotent: re-running just refreshes the skill file and leaves other MCP servers alone.
 set -euo pipefail
@@ -36,6 +42,7 @@ URL="https://localhost:6868"
 KEY="${COWORK_API_KEY:-}"
 DO_SKILL=1
 DO_MCP=1
+DO_AUDIT=1
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -44,7 +51,8 @@ while [ $# -gt 0 ]; do
     --key)        KEY="${2:-}"; shift 2 ;;
     --skill-only) DO_MCP=0; shift ;;
     --mcp-only)   DO_SKILL=0; shift ;;
-    -h|--help)    sed -n '2,30p' "$0"; exit 0 ;;
+    --no-audit)   DO_AUDIT=0; shift ;;
+    -h|--help)    sed -n '2,36p' "$0"; exit 0 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
@@ -127,6 +135,23 @@ else
   fi
   echo "Detected clients: $TARGETS"
 fi
+
+# Static security audit of what we are about to install (fail-closed on CRITICAL).
+audit_skills() {
+  local srv="$REPO/server" rc=0
+  if [ -f "$srv/dist/cli/audit-skills.js" ]; then
+    node "$srv/dist/cli/audit-skills.js" "$SKILLS_DIR" || rc=$?
+  elif [ -x "$srv/node_modules/.bin/tsx" ]; then
+    "$srv/node_modules/.bin/tsx" "$srv/src/cli/audit-skills.ts" "$SKILLS_DIR" || rc=$?
+  else
+    echo "  ! skill auditor unavailable (build the server first) — continuing without audit"; return 0
+  fi
+  if [ "$rc" = 1 ]; then
+    echo "ABORT: CRITICAL audit finding in $SKILLS_DIR — review above (or re-run with --no-audit)." >&2
+    exit 1
+  fi
+}
+if [ "$DO_SKILL" = 1 ] && [ "$DO_AUDIT" = 1 ]; then audit_skills; fi
 
 echo "Cowork server URL: $URL"
 for c in $TARGETS; do

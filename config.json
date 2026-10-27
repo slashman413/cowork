@@ -70,7 +70,8 @@
         "exec": "hermes",
         "model": "qwen3.8-27b",
         "timeoutMs": 120000
-      }
+      },
+      "maxBackgroundDeferrals": 120
     },
     "staleClaimMs": 600000,
     "hardClaimMs": 5400000,
