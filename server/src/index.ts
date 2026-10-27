@@ -23,6 +23,8 @@ import { systemDetails, DETAIL_KINDS, type DetailKind } from './core/system-deta
 import { controlService } from './core/service-control.js';
 import { getObsidianVault } from './core/obsidian.js';
 import { VideoStudio, VIDEO_STUDIO_TAG, ASPECTS } from './core/video-studio.js';
+import { normalizeRecurrence, nextRunAt } from './core/recurrence.js';
+import { Shotcraft, SHOTCRAFT_TAG, GALLERY_URL, ASPECTS as SHOTCRAFT_ASPECTS, LENGTHS as SHOTCRAFT_LENGTHS } from './core/shotcraft.js';
 import { AUTH_COOKIE, KeylessLog, keyMatches, readCookie, resolveApiKey } from './core/auth.js';
 
 async function main() {
@@ -487,6 +489,77 @@ async function main() {
         priority: 'normal',
       }, { inputs });
       res.status(201).json(task);
+    } catch (e: any) { res.status(400).json({ error: e.message }); }
+  });
+
+  // ── Shotcraft: shortcut for the video-shotcraft agent skill ────────────────
+  // The page (/shotcraft.html) picks shot cards + settings and creates a task,
+  // recurring task, goal or workflow template from one brief; see core/shotcraft.ts.
+  const shotcraft = new Shotcraft(config.shotcraft);
+  app.get('/api/shotcraft', (_req, res) => {
+    res.json({
+      available: shotcraft.available(), skillDir: shotcraft.cfg.skillDir, version: shotcraft.version(),
+      defaultBrain: shotcraft.cfg.defaultBrain, brains: shotcraft.cfg.brains, aspects: SHOTCRAFT_ASPECTS,
+      lengths: SHOTCRAFT_LENGTHS, bgm: shotcraft.bgm(), tag: SHOTCRAFT_TAG, galleryUrl: GALLERY_URL,
+    });
+  });
+  app.get('/api/shotcraft/shots', (_req, res) => {
+    if (!shotcraft.available()) return res.status(404).json({ error: `video-shotcraft skill not found at ${shotcraft.cfg.skillDir}` });
+    res.json(shotcraft.catalog());
+  });
+  app.get('/api/shotcraft/bgm/:name', (req, res) => {
+    const file = shotcraft.bgmFile(req.params.name);
+    if (!file) return res.status(404).json({ error: 'not found' });
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    // The skill lives under ~/.agents — send refuses dot-dirs unless told otherwise.
+    res.sendFile(file, { dotfiles: 'allow' });
+  });
+  app.post('/api/shotcraft/create', (req, res) => {
+    try {
+      if (!shotcraft.available()) throw new Error(`video-shotcraft skill not found at ${shotcraft.cfg.skillDir}`);
+      const body = req.body || {};
+      const kind = ['task', 'recurring', 'goal', 'workflow'].includes(body.kind) ? body.kind : 'task';
+      const brief = shotcraft.parseBrief(body);
+      const inputs = Array.isArray(body.inputs) ? body.inputs : undefined;
+      const inputNames = (inputs || []).map((i: any) => String(i?.name || '')).filter(Boolean);
+      const from = { platform: 'dashboard', agent: 'shotcraft' };
+      // Preview: the exact brief the brain will get, nothing created.
+      if (body.dryRun === true) {
+        const preview = kind === 'goal' ? shotcraft.buildGoal(brief).description
+          : kind === 'workflow' ? shotcraft.buildWorkflow(brief, String(body.workflowId || 'shotcraft-preview').trim().toLowerCase(), config.paths.artifacts).steps[0].description
+          : shotcraft.buildTask(brief, inputNames).description;
+        return res.json({ kind, brief, preview });
+      }
+
+      if (kind === 'task' || kind === 'recurring') {
+        if (kind === 'recurring' && (brief.mode === 'guided' || brief.mode === 'ask')) {
+          throw new Error('recurring films run unattended — pick autonomous, template or single-shot mode');
+        }
+        const recurrence = kind === 'recurring' ? normalizeRecurrence(body.recurrence || { type: 'weekly' }) : undefined;
+        // A schedule's first film waits for its first slot unless asked to start now.
+        const scheduledAt = typeof body.scheduledAt === 'string' && body.scheduledAt ? body.scheduledAt
+          : recurrence && body.firstNow !== true ? nextRunAt(recurrence, new Date())?.toISOString() : undefined;
+        const task = store.createTask({
+          ...shotcraft.buildTask(brief, inputNames), from, to: {}, priority: 'normal',
+          ...(recurrence ? { recurrence } : {}), ...(scheduledAt ? { scheduledAt } : {}),
+        }, { inputs });
+        return res.status(201).json({ kind, task });
+      }
+      if (inputs?.length) throw new Error('attachments only work for a task — use a URL/path source for goals and workflows');
+      if (kind === 'goal') {
+        const goal = goals.create(shotcraft.buildGoal(brief));
+        const active = body.activate === false ? goal : goals.activate(goal.goalId);
+        return res.status(201).json({ kind, goal: active });
+      }
+      const id = String(body.workflowId || '').trim().toLowerCase();
+      const def = workflows.create(shotcraft.buildWorkflow(brief, id, config.paths.artifacts), { overwrite: body.overwrite === true });
+      const run = body.runNow === true
+        ? workflows.run(def.id, {
+            product: brief.product, message: brief.message,
+            source: brief.source || 'none', notes: brief.notes || 'none',
+          })
+        : undefined;
+      res.status(201).json({ kind, workflow: def, run });
     } catch (e: any) { res.status(400).json({ error: e.message }); }
   });
 

@@ -12,6 +12,15 @@
       "enabled": true,
       "probe": false
     },
+    "shotcraft": {
+      "url": "/shotcraft.html",
+      "label": "Shotcraft 鏡頭工坊",
+      "description": "Cinematic product videos with the video-shotcraft skill: pick shots from 124 recipe cards, then create a task, schedule, goal or workflow.",
+      "icon": "film",
+      "category": "Marketing",
+      "enabled": true,
+      "probe": false
+    },
     "obsidian": {
       "url": "/obsidian.html",
       "label": "Obsidian Vault",

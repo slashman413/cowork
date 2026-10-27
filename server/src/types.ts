@@ -430,11 +430,23 @@ export interface Config {
   /** Video Studio page (/video-studio.html) — films rendered by a Claude brain
    *  with the lemo-opuscar library. All fields optional; see core/video-studio.ts. */
   videoStudio?: VideoStudioConfig;
+  /** Shotcraft page (/shotcraft.html) — shortcut for the video-shotcraft agent
+   *  skill. All fields optional; see core/shotcraft.ts. */
+  shotcraft?: ShotcraftConfig;
   inbox: {
     autoArchiveDays: number;
     maxRetries: number;
   };
   orchestration: OrchestrationConfig;
+}
+
+export interface ShotcraftConfig {
+  /** video-shotcraft skill clone (default ~/.agents/skills/video-shotcraft). */
+  skillDir?: string;
+  /** Brain pre-selected on the form (default local-cc-opus-5-5). */
+  defaultBrain?: string;
+  /** Brains offered on the form; anything else posted falls back to defaultBrain. */
+  brains?: string[];
 }
 
 export interface VideoStudioConfig {

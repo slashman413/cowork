@@ -1,0 +1,710 @@
+<!DOCTYPE html>
+<!--
+  Shotcraft — one-click launcher for the video-shotcraft agent skill
+  (https://github.com/Vincentwei1021/video-shotcraft, cloned at
+  ~/.agents/skills/video-shotcraft).
+
+  Served by the cowork server itself (like video-studio.html) and launched from
+  the Portal card. A thin client over:
+    GET  /api/shotcraft              skill status, brains, aspects, lengths, BGM list
+    GET  /api/shotcraft/shots        the 124 shot cards (Gallery index) + categories
+    GET  /api/shotcraft/bgm/:name    bundled BGM preview
+    POST /api/shotcraft/create       brief → task | recurring task | goal | workflow
+                                     ({dryRun:true} returns the brief text only)
+    GET  /api/inbox?tag=video-shotcraft   "My films", refreshed from SSE /api/events
+  Shot previews stream from the public Gallery (the mp4s are not in git).
+  The brief itself is built in server/src/core/shotcraft.ts.
+-->
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Shotcraft · Cowork</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root[data-theme="dark"] {
+      --bg: #0b0f17; --panel: #121826; --panel-2: #0e1320; --border: #232c3d;
+      --text: #e6edf7; --muted: #8b98ad; --accent: #d3923c; --accent-soft: #d3923c22;
+      --ok: #22c55e; --warn: #eab308; --bad: #ef4444; --run: #0ea5e9; --wait: #a855f7;
+      --shadow: 0 8px 30px rgba(0,0,0,.35);
+    }
+    :root[data-theme="light"] {
+      --bg: #f6f8fc; --panel: #ffffff; --panel-2: #eef2f8; --border: #dbe2ee;
+      --text: #1a2130; --muted: #5b6779; --accent: #ae6700; --accent-soft: #ae670014;
+      --ok: #16a34a; --warn: #b8860b; --bad: #dc2626; --run: #0284c7; --wait: #9333ea;
+      --shadow: 0 8px 30px rgba(20,30,60,.12);
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      font-family: 'Inter', system-ui, sans-serif; background: var(--bg); color: var(--text);
+      display: grid; grid-template-rows: auto 1fr; height: 100vh; overflow: hidden;
+    }
+    header { display: flex; align-items: center; gap: 12px; padding: 12px 18px; border-bottom: 1px solid var(--border); background: var(--panel); z-index: 5; }
+    header .brand { display: flex; align-items: center; gap: 9px; font-weight: 650; }
+    header .brand .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 12px var(--accent); }
+    header .count { color: var(--muted); font-size: .82rem; }
+    header .spacer { flex: 1; }
+    header a.link, header button, .btn {
+      color: var(--muted); text-decoration: none; font-size: .85rem; background: none;
+      border: 1px solid var(--border); border-radius: 8px; padding: 6px 11px; cursor: pointer;
+      font-family: inherit; transition: color .15s, border-color .15s, background .15s, transform .15s;
+    }
+    header a.link:hover, header button:hover, .btn:hover { color: var(--text); border-color: var(--accent); }
+    .btn:disabled { opacity: .5; cursor: not-allowed; }
+    .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+    .btn.primary:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 6px 18px var(--accent-soft); }
+    .btn.sm { font-size: .74rem; padding: 3px 8px; }
+    main { display: flex; min-height: 0; }
+
+    /* ── Left: shot library ───────────────────────────────────────── */
+    #lib-wrap { flex: 1 1 auto; min-width: 0; overflow-y: auto; padding: 16px 18px 40px; }
+    .toolbar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; position: sticky; top: -16px; padding: 12px 0 10px; background: var(--bg); z-index: 2; }
+    #search {
+      flex: 0 1 280px; padding: 8px 12px 8px 32px; border-radius: 9px; border: 1px solid var(--border);
+      background: var(--panel-2) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='15' height='15' viewBox='0 0 24 24' fill='none' stroke='%238b98ad' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cline x1='21' y1='21' x2='16.5' y2='16.5'/%3E%3C/svg%3E") no-repeat 10px center;
+      color: var(--text); font-family: inherit; font-size: .9rem;
+    }
+    #search:focus { outline: none; border-color: var(--accent); }
+    .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+    .chip { font-size: .76rem; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); cursor: pointer; background: var(--panel-2); user-select: none; transition: all .15s; }
+    .chip:hover { color: var(--text); }
+    .chip.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+    .cat-h { font-size: .72rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin: 18px 2px 8px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+    .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; transition: transform .25s cubic-bezier(.16,1,.3,1), border-color .15s, box-shadow .25s; display: flex; flex-direction: column; }
+    .card:hover { transform: translateY(-3px); border-color: var(--accent); box-shadow: var(--shadow); }
+    .card.sel { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+    .card .vid { aspect-ratio: 16/9; background: var(--panel-2); position: relative; cursor: pointer; }
+    .card video { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .card .vid .badge { position: absolute; right: 6px; bottom: 6px; font-size: .68rem; background: #000a; color: #fff; padding: 1px 6px; border-radius: 6px; }
+    .card .vid .on-badge { position: absolute; left: 6px; top: 6px; font-size: .7rem; background: var(--accent); color: #fff; padding: 1px 7px; border-radius: 6px; font-weight: 600; }
+    .card .body { padding: 9px 11px 11px; display: flex; flex-direction: column; gap: 6px; flex: 1; }
+    .card .name { font-weight: 600; font-size: .86rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; }
+    .card .line { color: var(--muted); font-size: .76rem; line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+    .card .styles { display: flex; gap: 4px; flex-wrap: wrap; }
+    .card .styles .chip { font-size: .68rem; padding: 2px 7px; }
+    .card .foot { display: flex; gap: 6px; align-items: center; margin-top: auto; }
+    .card .foot .meta { color: var(--muted); font-size: .7rem; flex: 1; }
+    .credit { color: var(--muted); font-size: .74rem; margin-top: 24px; line-height: 1.6; }
+    .credit a { color: var(--accent); }
+
+    /* ── Right: brief + films ─────────────────────────────────────── */
+    #side { flex: 0 0 460px; width: 460px; min-width: 0; border-left: 1px solid var(--border); background: var(--panel-2); display: flex; flex-direction: column; min-height: 0; }
+    .tabs { display: flex; border-bottom: 1px solid var(--border); background: var(--panel); }
+    .tab { flex: 1; text-align: center; padding: 11px 0; cursor: pointer; color: var(--muted); font-size: .88rem; border-bottom: 2px solid transparent; transition: all .15s; }
+    .tab.on { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+    .pane { flex: 1 1 auto; overflow-y: auto; padding: 14px 18px 40px; display: none; }
+    .pane.on { display: block; }
+    .step { font-size: .7rem; letter-spacing: .07em; text-transform: uppercase; color: var(--accent); margin: 20px 0 6px; font-weight: 600; }
+    .step:first-child { margin-top: 2px; }
+    label.f { display: block; font-size: .76rem; color: var(--muted); margin: 10px 0 5px; }
+    textarea, select, input[type=text], input[type=time], input[type=datetime-local] {
+      width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border);
+      background: var(--panel); color: var(--text); font-family: inherit; font-size: .88rem;
+    }
+    textarea { min-height: 96px; resize: vertical; line-height: 1.5; }
+    textarea:focus, select:focus, input:focus { outline: none; border-color: var(--accent); }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .seg { display: flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+    .seg button { flex: 1; background: var(--panel); border: 0; border-right: 1px solid var(--border); color: var(--muted); padding: 7px 0; cursor: pointer; font-family: inherit; font-size: .8rem; transition: all .12s; }
+    .seg button:last-child { border-right: 0; }
+    .seg button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+    .seg button:disabled { opacity: .4; cursor: not-allowed; }
+    .kinds { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+    .kind { border: 1px solid var(--border); border-radius: 10px; background: var(--panel); padding: 8px 4px; text-align: center; cursor: pointer; font-size: .8rem; color: var(--muted); transition: all .12s; }
+    .kind .i { font-size: 1.15rem; display: block; margin-bottom: 2px; }
+    .kind.on { border-color: var(--accent); color: var(--text); background: var(--accent-soft); font-weight: 600; }
+    .modes { display: flex; flex-direction: column; gap: 6px; }
+    .mode { display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); padding: 8px 10px; cursor: pointer; transition: all .12s; }
+    .mode input { margin-top: 3px; accent-color: var(--accent); }
+    .mode .t { font-weight: 600; font-size: .85rem; } .mode .t small { color: var(--muted); font-weight: 450; margin-left: 4px; }
+    .mode .d { color: var(--muted); font-size: .75rem; line-height: 1.4; margin-top: 2px; }
+    .mode.on { border-color: var(--accent); background: var(--accent-soft); }
+    .mode.off { opacity: .4; cursor: not-allowed; }
+    .tray { display: flex; gap: 6px; flex-wrap: wrap; min-height: 34px; padding: 6px; border: 1px dashed var(--border); border-radius: 9px; background: var(--panel); }
+    .tray .empty-t { color: var(--muted); font-size: .78rem; padding: 3px 4px; }
+    .pill { display: inline-flex; gap: 6px; align-items: center; font-size: .74rem; padding: 3px 4px 3px 9px; border-radius: 999px; background: var(--accent-soft); border: 1px solid var(--accent); color: var(--text); font-family: ui-monospace, Menlo, monospace; }
+    .pill button { background: none; border: 0; color: var(--muted); cursor: pointer; font-size: .9rem; line-height: 1; padding: 0 4px; }
+    .pill button:hover { color: var(--bad); }
+    .inline { display: flex; gap: 6px; align-items: center; margin-top: 6px; }
+    .inline input { flex: 1; }
+    .checks { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; font-size: .84rem; }
+    .checks label { display: flex; gap: 8px; align-items: flex-start; cursor: pointer; }
+    .checks input { accent-color: var(--accent); margin-top: 2px; }
+    .checks small { color: var(--muted); display: block; font-size: .74rem; }
+    .hint { color: var(--muted); font-size: .74rem; margin-top: 6px; line-height: 1.45; }
+    .hint code, .credit code { font-size: .72rem; }
+    .box { border: 1px solid var(--border); border-radius: 10px; background: var(--panel); padding: 4px 12px 12px; margin-top: 10px; }
+    .days { display: flex; gap: 4px; margin-top: 6px; }
+    .days .chip { flex: 1; text-align: center; padding: 4px 0; }
+    .files { font-size: .78rem; color: var(--muted); margin-top: 6px; }
+    .submit { margin-top: 18px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .msg { font-size: .8rem; flex-basis: 100%; }
+    .msg.err { color: var(--bad); } .msg.ok { color: var(--ok); }
+    .msg a { color: var(--accent); }
+    pre.preview { font-size: .72rem; background: var(--panel); border: 1px solid var(--border); border-radius: 9px; padding: 10px; white-space: pre-wrap; max-height: 360px; overflow: auto; color: var(--text); }
+    .film { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 12px; margin-bottom: 12px; }
+    .film .top { display: flex; gap: 8px; align-items: center; }
+    .film .ttl { flex: 1; min-width: 0; font-weight: 600; font-size: .88rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .st { font-size: .7rem; padding: 2px 8px; border-radius: 999px; border: 1px solid currentColor; white-space: nowrap; }
+    .st.done { color: var(--ok); } .st.failed { color: var(--bad); } .st.run { color: var(--run); }
+    .st.pending { color: var(--warn); } .st.wait { color: var(--wait); }
+    .film .meta { color: var(--muted); font-size: .74rem; margin-top: 4px; }
+    .film video, .film img.sb { width: 100%; border-radius: 8px; margin-top: 9px; background: #000; display: block; max-height: 420px; }
+    .film pre { font-size: .7rem; color: var(--muted); background: var(--panel-2); padding: 8px; border-radius: 8px; max-height: 120px; overflow: auto; white-space: pre-wrap; margin: 9px 0 0; }
+    .film .acts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 9px; }
+    .film .acts .btn { font-size: .76rem; padding: 4px 9px; }
+    .empty { color: var(--muted); font-size: .85rem; text-align: center; padding: 40px 10px; }
+    .banner { background: var(--panel); border: 1px solid var(--bad); color: var(--text); border-radius: 10px; padding: 14px; margin: 10px 0; font-size: .86rem; }
+    [hidden] { display: none !important; }
+    @media (max-width: 900px) {
+      body { overflow: auto; height: auto; display: block; }
+      main { flex-direction: column-reverse; }
+      #side { flex: none; width: auto; border-left: 0; border-bottom: 1px solid var(--border); }
+      .pane { overflow: visible; }
+      header .count { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <span class="brand"><span class="dot"></span> Shotcraft <span class="count">鏡頭工坊 · video-shotcraft skill</span></span>
+    <span class="count" id="count"></span>
+    <span class="spacer"></span>
+    <a class="link" id="gallery-link" href="https://vincentwei1021.github.io/video-shotcraft/library.html" target="_blank" rel="noopener">Gallery ↗</a>
+    <button id="theme" title="Toggle theme">🌗</button>
+    <a class="link" href="/#portal">← Cowork</a>
+  </header>
+  <main>
+    <section id="lib-wrap">
+      <div class="toolbar">
+        <input id="search" type="search" placeholder="Search shots…  ( / )" autocomplete="off">
+        <div class="chips" id="cats"></div>
+        <div class="chips" id="energy"></div>
+      </div>
+      <div class="hint" style="margin:0 2px 4px">Hover a card to play its preview. Click a style chip (or the video) to add that shot to the brief — picked shots are constraints the agent must use; leave empty to let it choose.</div>
+      <div id="lib"><div class="empty">Loading shot cards…</div></div>
+      <div class="credit">Shot cards, demos &amp; template © Wei Yihao — <a href="https://github.com/Vincentwei1021/video-shotcraft" target="_blank" rel="noopener">video-shotcraft</a> (Apache-2.0); previews stream from its public Gallery.
+        Renders with <a href="https://github.com/remotion-dev/remotion/blob/main/LICENSE.md" target="_blank" rel="noopener">Remotion</a> (free for individuals &amp; small teams).
+        <span id="ver"></span></div>
+    </section>
+
+    <aside id="side">
+      <div class="tabs">
+        <div class="tab on" data-pane="brief">New</div>
+        <div class="tab" data-pane="films">My films <span id="nfilms"></span></div>
+      </div>
+
+      <div class="pane on" id="pane-brief">
+        <div class="step">1 · Create as</div>
+        <div class="kinds" id="kinds">
+          <div class="kind on" data-v="task"><span class="i">🎬</span>Task</div>
+          <div class="kind" data-v="recurring"><span class="i">🔁</span>Recurring</div>
+          <div class="kind" data-v="goal"><span class="i">🎯</span>Goal</div>
+          <div class="kind" data-v="workflow"><span class="i">🧩</span>Workflow</div>
+        </div>
+        <div class="hint" id="kind-hint"></div>
+
+        <div class="step">2 · How much do you want to steer?</div>
+        <div class="modes" id="modes">
+          <label class="mode" data-v="auto"><input type="radio" name="mode" value="auto"><div><div class="t">Autonomous <small>自主自由創作 · recommended</small></div><div class="d">The agent decides look, shots, storyboard and sound, and runs through to the final film without stopping.</div></div></label>
+          <label class="mode" data-v="guided"><input type="radio" name="mode" value="guided"><div><div class="t">Guided co-creation <small>共同創作</small></div><div class="d">It pauses for you to approve the product brief, visual direction, shot mapping and final storyboard (the task waits for input at each one).</div></div></label>
+          <label class="mode" data-v="template"><input type="radio" name="mode" value="template"><div><div class="t">Ink Press template</div><div class="d">Re-skins the tested 36 s paper-and-ink promo with your product. Fastest and most predictable. Fixed at 16:9.</div></div></label>
+          <label class="mode" data-v="shot"><input type="radio" name="mode" value="shot"><div><div class="t">Single shot(s)</div><div class="d">Just the picked shot cards, adapted to your product, with no full film. Pick at least one shot on the left.</div></div></label>
+          <label class="mode" data-v="ask"><input type="radio" name="mode" value="ask"><div><div class="t">Recommend for me</div><div class="d">It runs a read-only product check, recommends a mode, and waits for your pick.</div></div></label>
+        </div>
+
+        <div class="step">3 · Product</div>
+        <label class="f" for="product">Product name</label>
+        <input type="text" id="product" placeholder="e.g. Slashman Tools — Unit Converter" maxlength="120">
+        <label class="f" for="source">Where to capture it from <span style="opacity:.7">(URL or local project path; optional)</span></label>
+        <input type="text" id="source" placeholder="https://slashmantools.us/unit-converter/   or   /home/wayne/workspace/github/slashman413/unit-converter">
+        <label class="f" for="message">What should the film say?</label>
+        <textarea id="message" placeholder="Audience, the 2–4 features to show, the one line people should remember, call to action…"></textarea>
+
+        <div class="step">4 · Shots</div>
+        <div class="tray" id="tray"></div>
+        <div class="inline"><input type="text" id="paste" placeholder="Paste card names copied from the Gallery (comma / newline)"><button class="btn sm" id="paste-go">Add</button></div>
+
+        <div class="step">5 · Format &amp; sound</div>
+        <label class="f">Aspect</label>
+        <div class="seg" id="aspect"></div>
+        <label class="f">Length</label>
+        <div class="seg" id="seconds"></div>
+        <div class="hint" id="format-hint" hidden></div>
+        <div class="row">
+          <div>
+            <label class="f" for="language">On-screen text</label>
+            <select id="language">
+              <option value="match">Match the product UI</option>
+              <option value="zh-TW">繁體中文</option>
+              <option value="en">English</option>
+              <option value="zh-CN">简体中文</option>
+            </select>
+          </div>
+          <div>
+            <label class="f" for="music">Music</label>
+            <div style="display:flex;gap:6px"><select id="music"></select><button class="btn sm" id="music-play" title="Preview track" hidden>▶</button></div>
+          </div>
+        </div>
+        <audio id="player" hidden></audio>
+        <div class="hint">With BGM, every cut lands on the beat, and you also get a <code>film-nobgm.mp4</code> so you can add your own music later.</div>
+
+        <div class="step">6 · Extras</div>
+        <div class="checks">
+          <label><input type="checkbox" id="jianying"><span>Export a JianYing (剪映) draft<small>Editable captions, per-shot clips and audio tracks. Tested by the skill author on JianYing Pro 11.2 for macOS.</small></span></label>
+          <label id="aa-wrap"><input type="checkbox" id="autoAnswer"><span>Let the orchestrator answer checkpoints for me<small>Off = the task is tagged <code>human-only</code> and waits for you at each checkpoint.</small></span></label>
+        </div>
+
+        <div class="box" id="box-recurring" hidden>
+          <label class="f">Repeat</label>
+          <div class="seg" id="cadence"><button data-v="daily">Daily</button><button data-v="weekly" class="on">Weekly</button><button data-v="monthly">Monthly</button></div>
+          <div class="days" id="days"></div>
+          <div class="row"><div><label class="f" for="at">At (Taiwan time)</label><input type="time" id="at" value="10:00"></div>
+            <div class="checks" style="margin-top:30px"><label><input type="checkbox" id="firstNow"><span>Make the first film now</span></label></div></div>
+          <div class="hint">Each run makes a fresh film from the same brief and recaptures the source, so it's useful when the product page changes. Runs unattended: Guided and Recommend aren't available.</div>
+        </div>
+        <div class="box" id="box-goal" hidden>
+          <div class="checks"><label><input type="checkbox" id="activate" checked><span>Activate now<small>Phases: capture → storyboard → produce → review. Done when an independent review passes. Guided modes run as Autonomous here.</small></span></label></div>
+        </div>
+        <div class="box" id="box-workflow" hidden>
+          <label class="f" for="wfid">Template id</label>
+          <input type="text" id="wfid" placeholder="shotcraft-ink-press-16x9">
+          <div class="checks">
+            <label><input type="checkbox" id="runNow" checked><span>Run it now for this product too</span></label>
+            <label><input type="checkbox" id="overwrite"><span>Overwrite if the id exists</span></label>
+          </div>
+          <div class="hint">Saves these settings (mode, shots, format, music, brain) as a reusable template. Product, source, message and notes become run params, so you can re-run it for another product from the Workflows tab. A Sonnet "second look" review step runs after the film.</div>
+        </div>
+
+        <div class="step">7 · Brain &amp; notes</div>
+        <div class="row">
+          <div><label class="f" for="brain">Brain</label><select id="brain"></select></div>
+          <div id="files-wrap"><label class="f" for="files">Attachments</label><input type="file" id="files" multiple style="font-size:.74rem;max-width:100%"></div>
+        </div>
+        <div class="files" id="filelist"></div>
+        <label class="f" for="notes">Notes <span style="opacity:.7">(brand colours, things to avoid, deadline…)</span></label>
+        <textarea id="notes" style="min-height:60px"></textarea>
+        <div class="hint">A film takes about 1–2 h of agent time on Opus and includes an independent review pass. Attachments (screenshots, recordings, logo, your own BGM) only work with Task and Recurring.</div>
+
+        <div class="submit">
+          <button class="btn primary" id="go" disabled>🎬 Create task</button>
+          <button class="btn" id="preview-btn" disabled>Preview brief</button>
+          <button class="btn" id="reset" title="Clear the form">Reset</button>
+          <span class="msg" id="msg"></span>
+        </div>
+        <pre class="preview" id="preview" hidden></pre>
+      </div>
+
+      <div class="pane" id="pane-films"><div id="films"><div class="empty">Loading…</div></div></div>
+    </aside>
+  </main>
+
+  <script>
+    const $ = (s, r = document) => r.querySelector(s);
+    const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const LS = { theme: 'cowork-theme', last: 'shotcraft-last' };
+    const KIND_LABEL = { task: '🎬 Create task', recurring: '🔁 Schedule', goal: '🎯 Create goal', workflow: '🧩 Save workflow' };
+    const KIND_HINT = {
+      task: 'One film, starting now. Best for most requests.',
+      recurring: 'The same brief on a schedule, e.g. a weekly promo of a page that keeps changing.',
+      goal: 'The orchestrator drives capture → storyboard → produce → review across several tasks until the film passes review.',
+      workflow: 'Save this setup as a reusable template, then run it per product.',
+    };
+    const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    let info = null, cards = [], categories = {}, cat = 'all', energy = 'all', films = [];
+    let kind = 'task', mode = 'auto', picked = [], weekdays = [1];
+    const artifactCache = new Map();
+
+    const applyTheme = (t) => document.documentElement.setAttribute('data-theme', t);
+    applyTheme(localStorage.getItem(LS.theme) || 'dark');
+    $('#theme').onclick = () => {
+      const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+      applyTheme(next); localStorage.setItem(LS.theme, next);
+    };
+
+    async function api(path, opts) {
+      const r = await fetch(`/api${path}`, opts);
+      if (!r.ok) { let m = `HTTP ${r.status}`; try { m = (await r.json()).error || m; } catch {} throw new Error(m); }
+      return r.json();
+    }
+
+    // ── Shot library ──────────────────────────────────────────────────
+    const energyOf = (c) => /高/.test(c.energy.slice(0, 4)) ? 'high' : /低/.test(c.energy.slice(0, 4)) ? 'low' : 'medium';
+    function renderFilters() {
+      const cats = [['all', 'All'], ...Object.entries(categories).map(([k, v]) => [k, v.en])];
+      $('#cats').innerHTML = cats.map(([k, l]) => `<span class="chip ${k === cat ? 'on' : ''}" data-cat="${esc(k)}">${esc(l)}</span>`).join('');
+      $$('.chip', $('#cats')).forEach(el => el.onclick = () => { cat = el.dataset.cat; renderFilters(); renderLib(); });
+      const en = [['all', 'Any energy'], ['high', '⚡ High'], ['medium', 'Medium'], ['low', 'Calm']];
+      $('#energy').innerHTML = en.map(([k, l]) => `<span class="chip ${k === energy ? 'on' : ''}" data-en="${k}">${l}</span>`).join('');
+      $$('.chip', $('#energy')).forEach(el => el.onclick = () => { energy = el.dataset.en; renderFilters(); renderLib(); });
+    }
+    const refOf = (c, s) => c.styles.length > 1 ? `${c.name} · ${s.key}` : c.name;
+    const isPicked = (c) => picked.some(p => p === c.name || p.startsWith(`${c.name} ·`));
+    let io = null;
+    function renderLib() {
+      const q = $('#search').value.trim().toLowerCase();
+      const hit = cards.filter(c => (cat === 'all' || c.category === cat) && (energy === 'all' || energyOf(c) === energy) &&
+        (!q || [c.name, c.summary, c.use, ...c.styles.map(s => s.key + ' ' + s.label)].join(' ').toLowerCase().includes(q)));
+      $('#count').textContent = `${hit.length} / ${cards.length} shot cards`;
+      if (!hit.length) { $('#lib').innerHTML = '<div class="empty">No shot matches.</div>'; return; }
+      const groups = new Map(Object.keys(categories).map(k => [k, []]));
+      for (const c of hit) { if (!groups.has(c.category)) groups.set(c.category, []); groups.get(c.category).push(c); }
+      for (const [k, list] of groups) if (!list.length) groups.delete(k);
+      $('#lib').innerHTML = [...groups].map(([g, list]) => `
+        <div class="cat-h">${esc(categories[g]?.en || g)} · ${esc(categories[g]?.zh || '')}</div>
+        <div class="grid">${list.map(c => {
+          const first = c.styles[0];
+          return `<div class="card ${isPicked(c) ? 'sel' : ''}" data-name="${esc(c.name)}">
+            <div class="vid" data-ref="${esc(first ? refOf(c, first) : c.name)}" title="${esc(c.use)}">
+              ${first?.preview ? `<video muted loop playsinline preload="none" data-src="${esc(first.preview)}#t=1"></video>` : ''}
+              ${isPicked(c) ? '<span class="on-badge">✓ in brief</span>' : ''}
+              <span class="badge">${esc((c.duration.match(/[\d.]+s/) || [''])[0])}</span>
+            </div>
+            <div class="body">
+              <div class="name">${esc(c.name)}</div>
+              <div class="line">${esc(c.summary)}</div>
+              ${c.styles.length > 1 ? `<div class="styles">${c.styles.map(s => `<span class="chip ${picked.includes(refOf(c, s)) ? 'on' : ''}" data-ref="${esc(refOf(c, s))}" data-preview="${esc(s.preview || '')}" title="${esc(s.label)}">${esc(s.key)}</span>`).join('')}</div>` : ''}
+              <div class="foot"><span class="meta">${esc(c.energy.split(/[（(]/)[0])}</span>
+                <button class="btn sm" data-ref="${esc(first ? refOf(c, first) : c.name)}">${isPicked(c) ? '✓ Added' : '+ Add'}</button></div>
+            </div></div>`;
+        }).join('')}</div>`).join('');
+
+      // Lazy-load preview frames as cards scroll into view; play on hover.
+      io?.disconnect();
+      io = new IntersectionObserver((ents) => ents.forEach(e => {
+        if (e.isIntersecting) { const v = e.target; if (!v.src) { v.preload = 'metadata'; v.src = v.dataset.src; } io.unobserve(v); }
+      }), { root: $('#lib-wrap'), rootMargin: '300px' });
+      $$('#lib video').forEach(v => {
+        io.observe(v);
+        const card = v.closest('.card');
+        card.onmouseenter = () => { if (!v.src) v.src = v.dataset.src; v.play().catch(() => {}); };
+        card.onmouseleave = () => { v.pause(); };
+      });
+      $$('#lib [data-ref]').forEach(el => el.onclick = (e) => {
+        e.stopPropagation();
+        // Style chip: swap the preview to that style on first click, toggle on the brief.
+        if (el.dataset.preview) { const v = el.closest('.card').querySelector('video'); if (v) { v.src = el.dataset.preview; v.play().catch(() => {}); } }
+        togglePick(el.dataset.ref);
+      });
+    }
+    function togglePick(ref) {
+      const name = ref.split('·')[0].trim();
+      if (picked.includes(ref)) picked = picked.filter(p => p !== ref);
+      else if (!ref.includes('·')) { picked = picked.filter(p => !p.startsWith(`${name} ·`) && p !== name); picked.push(ref); }
+      else { picked = picked.filter(p => p !== name); picked.push(ref); }
+      renderTray(); renderLibKeepScroll();
+    }
+    function renderLibKeepScroll() { const w = $('#lib-wrap'), y = w.scrollTop; renderLib(); w.scrollTop = y; }
+    function renderTray() {
+      $('#tray').innerHTML = picked.length
+        ? picked.map(p => `<span class="pill">${esc(p)}<button data-x="${esc(p)}" title="Remove">×</button></span>`).join('')
+        : `<span class="empty-t">${mode === 'shot' ? 'Pick at least one shot on the left →' : "None picked, so the agent chooses from all 124 cards."}</span>`;
+      $$('#tray [data-x]').forEach(b => b.onclick = () => togglePick(b.dataset.x));
+      validate();
+    }
+    $('#paste-go').onclick = () => {
+      const names = $('#paste').value.split(/[,\n]+/).map(s => s.trim().replace(/^`|`$/g, '')).filter(Boolean);
+      const bad = [];
+      for (const n of names) {
+        const [cn, sk] = n.split('·').map(s => s.trim());
+        const c = cards.find(x => x.name === cn);
+        if (!c || (sk && !c.styles.some(s => s.key === sk))) { bad.push(n); continue; }
+        const ref = sk && c.styles.length > 1 ? `${cn} · ${sk}` : cn;
+        if (!picked.includes(ref)) togglePick(ref);
+      }
+      $('#paste').value = bad.join(', ');
+      setMsg(bad.length ? `Unknown card(s): ${bad.join(', ')}` : '', bad.length ? 'err' : '');
+    };
+
+    // ── Brief form ────────────────────────────────────────────────────
+    const segVal = (id) => $(`#${id} button.on`)?.dataset.v;
+    function setSeg(id, v) { $$(`#${id} button`).forEach(b => b.classList.toggle('on', b.dataset.v === String(v))); }
+    function bindSeg(id) { $$(`#${id} button`).forEach(b => b.onclick = () => { if (!b.disabled) { setSeg(id, b.dataset.v); syncForm(); } }); }
+    const setMsg = (t, cls = '') => { $('#msg').className = `msg ${cls}`; $('#msg').innerHTML = t; };
+    const unattended = () => kind !== 'task';
+
+    function setKind(k) { kind = k; $$('.kind').forEach(el => el.classList.toggle('on', el.dataset.v === k)); syncForm(); }
+    function setMode(m) { mode = m; $$('#modes input').forEach(i => i.checked = i.value === m); syncForm(); renderTray(); }
+    $$('.kind').forEach(el => el.onclick = () => setKind(el.dataset.v));
+    $$('#modes input').forEach(i => i.onchange = () => { if (!i.closest('.mode').classList.contains('off')) setMode(i.value); });
+
+    function syncForm() {
+      // Recurring runs can't stop for a human; goals/workflows coerce guided → autonomous server-side.
+      const noStops = kind === 'recurring';
+      $$('.mode').forEach(el => {
+        const off = noStops && (el.dataset.v === 'guided' || el.dataset.v === 'ask');
+        el.classList.toggle('off', off); el.querySelector('input').disabled = off;
+        el.classList.toggle('on', el.dataset.v === mode);
+      });
+      if (noStops && (mode === 'guided' || mode === 'ask')) { setMode('auto'); return; }
+      $('#kind-hint').textContent = KIND_HINT[kind] + ((kind === 'goal' || kind === 'workflow') && (mode === 'guided' || mode === 'ask') ? ' Guided modes run as Autonomous here.' : '');
+      const tmpl = mode === 'template', shot = mode === 'shot';
+      $$('#aspect button').forEach(b => b.disabled = tmpl);
+      $$('#seconds button').forEach(b => b.disabled = tmpl || shot);
+      if (tmpl) setSeg('aspect', '16:9');
+      $('#format-hint').hidden = !(tmpl || shot);
+      $('#format-hint').textContent = tmpl ? 'Ink Press is fixed at 1920×1080, about 36 s.' : shot ? 'Each shot keeps its card\'s own duration.' : '';
+      $('#aa-wrap').hidden = !(mode === 'guided' || mode === 'ask') || kind !== 'task';
+      $('#box-recurring').hidden = kind !== 'recurring';
+      $('#box-goal').hidden = kind !== 'goal';
+      $('#box-workflow').hidden = kind !== 'workflow';
+      $('#files-wrap').style.visibility = (kind === 'task' || kind === 'recurring') ? '' : 'hidden';
+      $('#days').hidden = segVal('cadence') !== 'weekly';
+      const att = [...$$('#music option')].find(o => o.value === 'attached');
+      if (att) att.disabled = !(kind === 'task' || kind === 'recurring');
+      if (att?.disabled && $('#music').value === 'attached') $('#music').value = 'auto';
+      $('#go').textContent = KIND_LABEL[kind];
+      if (kind === 'workflow' && !$('#wfid').dataset.touched) $('#wfid').value = suggestId();
+      validate();
+    }
+    const slug = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
+    const suggestId = () => ['shotcraft', mode === 'template' ? 'ink-press' : mode === 'shot' ? 'shots' : 'auto', segVal('aspect')?.replace(':', 'x'), $('#music').value === 'none' ? 'sfx' : null].filter(Boolean).join('-');
+    $('#wfid').addEventListener('input', () => { $('#wfid').dataset.touched = '1'; validate(); });
+
+    function validate() {
+      const ok = info?.available && $('#product').value.trim().length >= 2 && $('#message').value.trim().length >= 3 &&
+        (mode !== 'shot' || picked.length) && (kind !== 'workflow' || /^[a-z0-9][a-z0-9-]{0,80}$/.test($('#wfid').value.trim())) &&
+        (kind !== 'recurring' || segVal('cadence') !== 'weekly' || weekdays.length);
+      $('#go').disabled = !ok; $('#preview-btn').disabled = !ok;
+    }
+    ['#product', '#message'].forEach(s => $(s).addEventListener('input', validate));
+
+    function renderDays() {
+      $('#days').innerHTML = DAYS.map((d, i) => `<span class="chip ${weekdays.includes(i) ? 'on' : ''}" data-d="${i}">${d}</span>`).join('');
+      $$('#days .chip').forEach(el => el.onclick = () => {
+        const d = +el.dataset.d; weekdays = weekdays.includes(d) ? weekdays.filter(x => x !== d) : [...weekdays, d].sort();
+        renderDays(); validate();
+      });
+    }
+    $('#music').onchange = () => { $('#music-play').hidden = !info?.bgm.includes($('#music').value); $('#player').pause(); $('#music-play').textContent = '▶'; validate(); };
+    $('#music-play').onclick = () => {
+      const p = $('#player');
+      if (!p.paused) { p.pause(); $('#music-play').textContent = '▶'; return; }
+      p.src = `/api/shotcraft/bgm/${encodeURIComponent($('#music').value)}`; p.play(); $('#music-play').textContent = '⏸';
+    };
+    $('#player').onended = () => { $('#music-play').textContent = '▶'; };
+
+    $('#files').onchange = () => {
+      const f = [...$('#files').files];
+      $('#filelist').textContent = f.length ? f.map(x => `${x.name} (${Math.ceil(x.size / 1024)} KB)`).join(', ') : '';
+    };
+    async function uploadAll(files) {
+      const out = [];
+      for (const f of files) {
+        const r = await fetch(`/api/uploads?name=${encodeURIComponent(f.name)}`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: f });
+        if (!r.ok) throw new Error(`${f.name}: upload failed (${r.status})`);
+        const j = await r.json(); out.push({ token: j.token, name: j.name });
+      }
+      return out;
+    }
+
+    function collect() {
+      return {
+        kind, mode, shots: picked,
+        product: $('#product').value.trim(), source: $('#source').value.trim(), message: $('#message').value.trim(),
+        aspect: segVal('aspect'), seconds: +segVal('seconds'), language: $('#language').value, music: $('#music').value,
+        jianying: $('#jianying').checked, autoAnswer: $('#autoAnswer').checked, brain: $('#brain').value, notes: $('#notes').value.trim(),
+        ...(kind === 'recurring' ? { firstNow: $('#firstNow').checked, recurrence: { type: segVal('cadence'), atTime: $('#at').value || '10:00', ...(segVal('cadence') === 'weekly' ? { weekdays } : {}) } } : {}),
+        ...(kind === 'goal' ? { activate: $('#activate').checked } : {}),
+        ...(kind === 'workflow' ? { workflowId: $('#wfid').value.trim(), runNow: $('#runNow').checked, overwrite: $('#overwrite').checked } : {}),
+      };
+    }
+    const post = (body) => api('/shotcraft/create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+
+    $('#preview-btn').onclick = async () => {
+      try {
+        const files = [...$('#files').files].map(f => ({ name: f.name }));
+        const r = await post({ ...collect(), dryRun: true, ...(files.length && (kind === 'task' || kind === 'recurring') ? { inputs: files } : {}) });
+        $('#preview').hidden = false; $('#preview').textContent = r.preview; setMsg('');
+        $('#preview').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      } catch (e) { setMsg(esc(e.message), 'err'); }
+    };
+
+    $('#go').onclick = async () => {
+      setMsg('Submitting…'); $('#go').disabled = true;
+      try {
+        const body = collect();
+        const files = (kind === 'task' || kind === 'recurring') ? [...$('#files').files] : [];
+        if (files.length) body.inputs = await uploadAll(files);
+        const r = await post(body);
+        saveLast(body);
+        $('#files').value = ''; $('#filelist').textContent = ''; $('#preview').hidden = true;
+        if (r.kind === 'goal') setMsg(`Goal created ✓ <a href="/#goals" target="_blank">${esc(r.goal.goalId)} (${esc(r.goal.status)})</a>`, 'ok');
+        else if (r.kind === 'workflow') setMsg(`Workflow <a href="/#workflows" target="_blank">${esc(r.workflow.id)}</a> saved ✓${r.run ? ` · run started (${r.run.tasks?.length || 0} tasks)` : ''}`, 'ok');
+        else setMsg(r.kind === 'recurring' ? `Scheduled ✓ First film ${r.task.scheduledAt ? new Date(r.task.scheduledAt).toLocaleString() : 'now'}.` : 'Queued ✓', 'ok');
+        await loadFilms();
+        if (r.task || r.run) { showTab('films'); r.task && document.getElementById(`film-${r.task.id}`)?.scrollIntoView({ block: 'start' }); }
+      } catch (e) { setMsg(esc(e.message), 'err'); }
+      finally { validate(); }
+    };
+
+    // Settings (not product content) persist as the next form's defaults.
+    function saveLast(b) {
+      localStorage.setItem(LS.last, JSON.stringify({ kind: b.kind, mode: b.mode, aspect: b.aspect, seconds: b.seconds, language: b.language, music: b.music, brain: b.brain, jianying: b.jianying }));
+    }
+    function applySettings(s) {
+      if (!s) return;
+      if (s.aspect) setSeg('aspect', s.aspect);
+      if (s.seconds) setSeg('seconds', s.seconds);
+      if (s.language) $('#language').value = s.language;
+      if (s.music && [...$('#music').options].some(o => o.value === s.music)) $('#music').value = s.music;
+      if (s.brain && info.brains.includes(s.brain)) $('#brain').value = s.brain;
+      $('#jianying').checked = !!s.jianying;
+      $('#music').onchange();
+      setMode(s.mode || 'auto');
+    }
+    function prefill(sc) {
+      if (!sc) return;
+      setKind('task'); applySettings(sc);
+      $('#product').value = sc.product || ''; $('#source').value = sc.source || ''; $('#message').value = sc.message || '';
+      $('#notes').value = sc.notes || ''; $('#autoAnswer').checked = !!sc.autoAnswer;
+      picked = [...(sc.shots || [])]; renderTray(); renderLib();
+      showTab('brief'); setMsg('Pre-filled from an earlier film. Tweak and submit.');
+      $('#message').focus();
+    }
+    $('#reset').onclick = () => {
+      ['#product', '#source', '#message', '#notes', '#paste'].forEach(s => $(s).value = '');
+      picked = []; $('#preview').hidden = true; setMsg(''); renderTray(); renderLib();
+    };
+
+    // ── Tabs ──────────────────────────────────────────────────────────
+    function showTab(id) {
+      $$('.tab').forEach(t => t.classList.toggle('on', t.dataset.pane === id));
+      $$('.pane').forEach(p => p.classList.toggle('on', p.id === `pane-${id}`));
+    }
+    $$('.tab').forEach(t => t.onclick = () => showTab(t.dataset.pane));
+
+    // ── My films ──────────────────────────────────────────────────────
+    function statusOf(t) {
+      const failed = t.failed === true || t.status === 'rejected' || (t.status === 'done' && /^FAILED\b/i.test((t.result || '').trim()));
+      if (failed) return ['failed', 'failed'];
+      if (t.status === 'done') return ['done', 'done'];
+      if (t.status === 'wait-input') return ['wait', 'needs you'];
+      if (t.status === 'in-progress' || t.status === 'claimed') return ['run', 'working'];
+      if (t.recurrence) return ['pending', 'scheduled'];
+      return ['pending', t.status];
+    }
+    async function artifactsOf(t) {
+      if (artifactCache.has(t.id) && t.status === 'done') return artifactCache.get(t.id);
+      try { const a = await api(`/artifacts/${encodeURIComponent(t.id)}`); artifactCache.set(t.id, a); return a; } catch { return []; }
+    }
+    const art = (id, f, inline = true) => `/api/artifacts/${encodeURIComponent(id)}/${encodeURIComponent(f)}${inline ? '?inline=1' : ''}`;
+    async function loadFilms() {
+      try { films = await api(`/inbox?tag=${encodeURIComponent(info?.tag || 'video-shotcraft')}&limit=50`); }
+      catch (e) { $('#films').innerHTML = `<div class="banner">${esc(e.message)}</div>`; return; }
+      $('#nfilms').textContent = films.length ? `(${films.length})` : '';
+      if (!films.length) { $('#films').innerHTML = '<div class="empty">No films yet. Fill in the brief and create one.<br><br>Goal and workflow tasks show up on the dashboard.</div>'; return; }
+      const playing = new Set($$('#films video').filter(v => !v.paused).map(v => v.dataset.task));
+      const out = await Promise.all(films.map(async (t) => {
+        const [cls, label] = statusOf(t);
+        const sc = t.context?.shotcraft || {};
+        const files = await artifactsOf(t);
+        const has = (f) => files.includes(f);
+        const stills = files.filter(f => /^(styleframe|storyboard).*\.(png|jpe?g)$/i.test(f));
+        let media = '';
+        if (has('film.mp4')) media = `<video controls preload="metadata" data-task="${esc(t.id)}" ${has('poster.jpg') ? `poster="${art(t.id, 'poster.jpg')}"` : ''} src="${art(t.id, 'film.mp4')}"></video>`;
+        else if (stills.length) media = `<img class="sb" src="${art(t.id, stills[stills.length - 1])}&v=${encodeURIComponent(t.updatedAt || '')}" alt="${esc(stills[stills.length - 1])}">`;
+        const doc = (f, l) => has(f) ? `<a class="btn" href="${art(t.id, f)}" target="_blank">${l}</a>` : '';
+        return { id: t.id, playing: playing.has(t.id), html: `
+          <div class="film" id="film-${esc(t.id)}">
+            <div class="top"><span class="ttl" title="${esc(t.title)}">${esc(sc.product || t.title)}</span><span class="st ${cls}">${esc(label)}</span></div>
+            <div class="meta">${esc(sc.mode || '')} · ${esc(sc.mode === 'template' ? '16:9 · 36s' : `${sc.aspect || ''}${sc.mode === 'shot' ? '' : ` · ${sc.seconds || '?'}s`}`)} · ${esc(sc.music === 'none' ? 'SFX only' : sc.music || '')} · ${esc((t.context?.brain || '').replace(/^local-cc-/, ''))} · ${new Date(t.createdAt).toLocaleString()}</div>
+            ${sc.shots?.length ? `<div class="meta">🎞 ${sc.shots.map(esc).join(', ')}</div>` : ''}
+            ${media}
+            ${cls === 'run' ? `<pre data-progress="${esc(t.id)}">…</pre>` : ''}
+            ${cls === 'wait' && t.result ? `<pre>${esc(t.result.slice(-700))}</pre>` : ''}
+            ${cls === 'failed' && t.result ? `<pre>${esc(t.result.slice(0, 600))}</pre>` : ''}
+            <div class="acts">
+              ${has('film.mp4') ? `<a class="btn" href="${art(t.id, 'film.mp4', false)}">⬇ film.mp4</a>` : ''}
+              ${has('film-nobgm.mp4') ? `<a class="btn" href="${art(t.id, 'film-nobgm.mp4', false)}">⬇ no-BGM</a>` : ''}
+              ${has('jianying-draft.zip') ? `<a class="btn" href="${art(t.id, 'jianying-draft.zip', false)}">⬇ 剪映 draft</a>` : ''}
+              ${doc('contact.jpg', 'Contact sheet')}${doc('STORYBOARD.md', 'Storyboard')}${doc('REVIEW.md', 'Review')}${doc('MODE-RECOMMENDATION.md', 'Mode advice')}
+              ${cls === 'wait' ? `<a class="btn primary" href="/#tasks/${encodeURIComponent(t.id)}" target="_blank">Answer →</a>` : ''}
+              <button class="btn" data-remake="${esc(t.id)}">↻ Remake</button>
+              <a class="btn" href="/#tasks/${encodeURIComponent(t.id)}" target="_blank">Open task</a>
+            </div>
+          </div>` };
+      }));
+      const wrap = $('#films');
+      const existing = new Map($$('.film', wrap).map(el => [el.id, el]));
+      wrap.innerHTML = '';
+      for (const c of out) {
+        const old = existing.get(`film-${c.id}`);
+        if (c.playing && old) { wrap.appendChild(old); continue; }
+        const d = document.createElement('div'); d.innerHTML = c.html.trim(); wrap.appendChild(d.firstChild);
+      }
+      $$('[data-remake]', wrap).forEach(b => b.onclick = () => prefill(films.find(f => f.id === b.dataset.remake)?.context?.shotcraft));
+      pollProgress();
+    }
+    async function pollProgress() {
+      for (const pre of $$('pre[data-progress]')) {
+        try {
+          const p = await api(`/inbox/${encodeURIComponent(pre.dataset.progress)}/progress`);
+          const lines = (p.log || '').trim().split('\n').filter(Boolean);
+          pre.textContent = lines.slice(-6).join('\n') || 'Waiting for the brain to start…';
+          pre.scrollTop = pre.scrollHeight;
+        } catch {}
+      }
+    }
+    setInterval(() => { if (films.some(t => ['in-progress', 'claimed'].includes(t.status))) pollProgress(); }, 6000);
+    let refreshTimer = null;
+    function scheduleRefresh() { clearTimeout(refreshTimer); refreshTimer = setTimeout(loadFilms, 800); }
+    function connectEvents() {
+      const es = new EventSource('/api/events');
+      es.onmessage = (m) => {
+        let ev; try { ev = JSON.parse(m.data); } catch { return; }
+        if (!ev || ev.type === 'ping' || ev.type === 'connected') return;
+        const task = ev.payload?.task;
+        const id = task?.id || ev.payload?.taskId;
+        if ((id && films.some(f => f.id === id)) || (Array.isArray(task?.tags) && task.tags.includes(info?.tag))) scheduleRefresh();
+      };
+    }
+
+    // ── Keyboard ──────────────────────────────────────────────────────
+    document.addEventListener('keydown', (e) => {
+      const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName || '');
+      if (e.key === '/' && !typing) { e.preventDefault(); $('#search').focus(); $('#search').select(); }
+      else if (e.key === 'Escape' && document.activeElement === $('#search')) { $('#search').value = ''; renderLib(); $('#search').blur(); }
+    });
+    $('#search').addEventListener('input', renderLib);
+
+    // ── Boot ──────────────────────────────────────────────────────────
+    (async () => {
+      try {
+        info = await api('/shotcraft');
+        $('#aspect').innerHTML = Object.entries(info.aspects).map(([k, v]) => `<button data-v="${esc(k)}" title="${v.w}×${v.h}">${esc(k)}</button>`).join('');
+        $('#seconds').innerHTML = info.lengths.map(s => `<button data-v="${s}">${s}s</button>`).join('');
+        setSeg('aspect', '16:9'); setSeg('seconds', 30);
+        ['aspect', 'seconds', 'cadence'].forEach(bindSeg);
+        $('#music').innerHTML = `<option value="auto">Agent picks (library BGM or SFX-only)</option><option value="none">No BGM: SFX only</option><option value="attached">My attached track</option>`
+          + info.bgm.map(b => `<option value="${esc(b)}">♪ ${esc(b.replace(/\.mp3$/, ''))}</option>`).join('');
+        $('#brain').innerHTML = info.brains.map(b => `<option value="${esc(b)}">${esc(b.replace(/^local-cc-/, ''))}${b === info.defaultBrain ? ' (default)' : ''}</option>`).join('');
+        $('#brain').value = info.defaultBrain;
+        $('#gallery-link').href = info.galleryUrl + 'library.html';
+        $('#ver').textContent = info.version ? `Skill @ ${info.version} · ${info.skillDir}` : '';
+        renderDays();
+        const last = JSON.parse(localStorage.getItem(LS.last) || 'null');
+        applySettings(last || { mode: 'auto' });
+        if (last?.kind) setKind(last.kind); else syncForm();
+        if (!info.available) {
+          $('#lib').innerHTML = `<div class="banner">video-shotcraft skill not found at <code>${esc(info.skillDir)}</code>. Install it: <code>git clone https://github.com/Vincentwei1021/video-shotcraft ${esc(info.skillDir)}</code></div>`;
+        } else {
+          ({ cards, categories } = await api('/shotcraft/shots'));
+          // Deep link: /shotcraft.html?shots=a,b · style
+          const q = new URLSearchParams(location.search).get('shots');
+          if (q) { $('#paste').value = q; $('#paste-go').onclick(); }
+          renderFilters(); renderLib();
+        }
+      } catch (e) { $('#lib').innerHTML = `<div class="banner">${esc(e.message)}</div>`; }
+      renderTray();
+      await loadFilms();
+      connectEvents();
+    })();
+  </script>
+</body>
+</html>
