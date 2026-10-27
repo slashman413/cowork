@@ -1866,6 +1866,9 @@ export class Dispatcher {
     // to the prior attempt's output).
     let plog: WriteStream | null = null;
     try { plog = createWriteStream(join(artDir, 'progress.log'), { flags: 'w' }); } catch { plog = null; }
+    // The open is async: if the task is deleted (its artifacts dir removed) before
+    // it completes, the stream emits 'error' — unhandled, that crashes the server.
+    plog?.on('error', () => { plog = null; });
     const logProgress = (s: string) => { try { plog?.write(s); } catch { /* best-effort */ } };
     logProgress(`[${new Date().toISOString()}] ▶ ${plan.label} (${plan.exec}:${plan.model || 'default'}) started\n   task: ${task.title}\n\n`);
 
