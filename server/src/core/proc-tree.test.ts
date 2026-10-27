@@ -102,3 +102,48 @@ test('Store.deleteTask emits taskDeleted with the full id (short-id delete inclu
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('end-to-end: a task deleted mid-run has its brain tree killed and its run discarded (no handover)', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'cowork-e2e-'));
+  const pidDir = mkdtempSync(join(tmpdir(), 'proctree-'));
+  try {
+    const paths: Record<string, string> = {};
+    for (const k of ['inbox', 'artifacts', 'inputs', 'status', 'decisions', 'workflows', 'goals', 'agencyAgents']) {
+      paths[k] = join(root, k);
+      mkdirSync(paths[k], { recursive: true });
+    }
+    const config = {
+      paths, server: { port: 0 }, inbox: { maxRetries: 3 },
+      orchestration: { taskTimeoutMs: 60000, killGraceMs: 300, brains: {}, agents: {} }
+    } as unknown as Config;
+    const bus = new EventBus();
+    const store = new Store(config, bus);
+    const d = new Dispatcher(config, store, bus);
+    (d as any).agentId = store.registerAgent({ platform: 'cowork', agentName: 'orchestrator', capabilities: [] } as any).id;
+    (d as any).buildPrompt = () => 'prompt';
+    let verified = false;
+    (d as any).llmVerdict = async () => { verified = true; return { ok: true }; };
+
+    const task = store.createTask({ title: 'gpu hog', from: { platform: 'p', agent: 'a' } } as any);
+    const brain = `sleep 300 & echo $! > ${pidDir}/plain; setsid sleep 300 & echo $! > ${pidDir}/escaped; ` +
+      `sh -c 'trap "" TERM; while :; do sleep 0.1; done' & echo $! > ${pidDir}/stubborn; wait`;
+    const plan = { agent: 'x', label: 'dsh-like', platform: 'dsh', exec: 'script', model: '', brainId: 'local-dsh-qwen3-8-27b',
+      command: ['sh', '-c', brain], attempt: 0, chainLen: 1, pinned: true, isRoster: false };
+    const run = (d as any).execute(store.getTask(task.id), plan) as Promise<void>;
+
+    const pids = await treePids(pidDir);
+    assert.ok(pids.every(alive), 'brain tree running');
+    assert.equal(store.deleteTask(task.id).deleted, true);
+
+    await run;   // resolves once the killed brain closes
+    assert.ok(await waitFor(() => pids.every(p => !alive(p))), `brain tree killed: ${pids.filter(alive)}`);
+    assert.equal(verified, false, 'deleted run is not verified');
+    assert.equal(store.getTask(task.id), null, 'deleted task is not resurrected by handover/complete');
+    assert.equal((d as any).running.size, 0);
+    assert.equal((d as any).children.size, 0);
+    assert.equal((d as any).cancelled.size, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(pidDir, { recursive: true, force: true });
+  }
+});
