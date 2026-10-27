@@ -59,6 +59,14 @@ test('artifact-lint: lintContent flags critical and warning defects', () => {
   assert.ok(rProse.some(i => i.severity === 'critical' && i.rule === 'unresolved-template'));
   assert.ok(rProse.some(i => i.severity === 'warning' && i.rule === 'placeholder'));
   assert.ok(rProse.some(i => i.severity === 'warning' && i.rule === 'broken-link'));
+
+  // Quoted or meta mentions of lorem ipsum in prose should NOT trigger critical lorem-ipsum
+  const rProseMeta = lintContent('rules.md', 'The linter detects "Lorem ipsum" filler text and rejects empty deliverables.', () => true);
+  assert.ok(!rProseMeta.some(i => i.rule === 'lorem-ipsum'));
+
+  // True unquoted filler in markdown prose MUST trigger critical lorem-ipsum
+  const rProseFiller = lintContent('draft.md', 'Here is the draft:\nLorem ipsum dolor sit amet, consectetur adipiscing elit.', () => true);
+  assert.ok(rProseFiller.some(i => i.severity === 'critical' && i.rule === 'lorem-ipsum'));
 });
 
 test('artifact-lint: lintArtifacts scans directory and ignores runtime files', () => {

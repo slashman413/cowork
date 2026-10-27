@@ -10,7 +10,8 @@
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test src/*.test.ts src/**/*.test.ts",
-    "audit-skills": "tsx src/cli/audit-skills.ts"
+    "audit-skills": "tsx src/cli/audit-skills.ts",
+    "integrate": "tsx src/cli/integrate.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.0",

@@ -54,16 +54,18 @@ const TEXT_DELIVERABLE = new Set(['.md', '.markdown', '.txt', '.html', '.htm', '
 const PROSE = new Set(['.md', '.markdown', '.txt']);
 export const LINT_IGNORE = ['result.md', 'progress.log', 'changes.patch'];
 
-/** Remove fenced code blocks, inline code and HTML comments from markdown/plain text. */
+/** Remove fenced code blocks, inline code, HTML comments and quoted rule mentions from markdown/plain text. */
 export function stripCode(text: string): string {
   return text
     .replace(/^(```|~~~)[^\n]*\n[\s\S]*?^\1[^\n]*$/gm, '')
     .replace(/`[^`\n]*`/g, '')
-    .replace(/<!--[\s\S]*?-->/g, '');
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/["'\u201c\u2018]lorem ipsum["'\u201d\u2019]/gi, '');
 }
 
 const TEMPLATE_TAG = /\{\{\s*[A-Za-z_][\w.]*\s*\}\}/;
 const LOREM = /\blorem ipsum\b/i;
+const LOREM_META = /\b(?:rule|defect|linter|linting|gate|detect|detects|flag|flagging|reject|rejects|check|checks|verify|verifies|placeholder|filler|prose|template)\b[^\n]*\blorem ipsum\b|\blorem ipsum\b[^\n]*\b(?:rule|defect|linter|linting|gate|detect|detects|flag|flagging|reject|rejects|check|checks|verify|verifies|placeholder|filler|prose|template)\b/i;
 const PLACEHOLDER = /\[(?:TODO|TBD|insert [^\]]{1,60}|placeholder[^\]]{0,40}|your [^\]]{1,40} here)\]|\bTODO:|\bTBD\b|\bFIXME\b/i;
 
 /** Lint the content of one file. `exists` resolves a relative link target. */
@@ -89,13 +91,15 @@ export function lintContent(file: string, text: string, exists: (rel: string) =>
     const dead = (text.match(/href\s*=\s*["']#["']/gi) || []).length;
     if (dead >= 5) add('warning', 'dead-anchors', `${dead} placeholder links (href="#")`);
     const visible = text.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi, '').replace(/<[^>]+>/g, ' ');
-    if (LOREM.test(visible)) add('critical', 'lorem-ipsum', 'contains "lorem ipsum" filler text');
+    const hasHtmlLorem = visible.split('\n').some(l => LOREM.test(l) && !LOREM_META.test(l));
+    if (hasHtmlLorem) add('critical', 'lorem-ipsum', 'contains "lorem ipsum" filler text');
     return issues;
   }
 
   if (PROSE.has(ext)) {
     const prose = stripCode(text);
-    if (LOREM.test(prose)) add('critical', 'lorem-ipsum', 'contains "lorem ipsum" filler text');
+    const hasLorem = prose.split('\n').some(l => LOREM.test(l) && !LOREM_META.test(l));
+    if (hasLorem) add('critical', 'lorem-ipsum', 'contains "lorem ipsum" filler text');
     const tag = prose.match(TEMPLATE_TAG);
     if (tag) add('critical', 'unresolved-template', `unresolved template tag ${tag[0]}`);
     const ph = prose.match(PLACEHOLDER);

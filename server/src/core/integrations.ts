@@ -141,6 +141,8 @@ export function parseRepoRef(input: string, opts: { allowHosts?: string[]; allow
   const hosts = (opts.allowHosts && opts.allowHosts.length ? opts.allowHosts : DEFAULT_ALLOWED_HOSTS).map(h => h.toLowerCase());
   let host = 'github.com', owner: string, repo: string, subpath: string | undefined, url: string;
 
+  const scp = raw.match(/^git@([A-Za-z0-9._-]+):([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+?)(\.git)?$/);
+
   if (opts.allowFileUrls && raw.startsWith('file://')) {
     const p = raw.slice('file://'.length).replace(/\/+$/, '');
     repo = path.basename(p).replace(/\.git$/, '');
@@ -151,6 +153,14 @@ export function parseRepoRef(input: string, opts: { allowHosts?: string[]; allow
     [owner, repo] = raw.split('/');
     repo = repo.replace(/\.git$/, '');
     url = `https://github.com/${owner}/${repo}.git`;
+  } else if (scp) {
+    host = scp[1].toLowerCase();
+    if (!hosts.includes(host)) {
+      throw new Error(`host ${host} is not in integrations.allowHosts (${hosts.join(', ')})`);
+    }
+    owner = scp[2];
+    repo = scp[3];
+    url = `https://${host}/${owner}/${repo}.git`;
   } else {
     let u: URL;
     try { u = new URL(raw); } catch { throw new Error(`not a repository URL or owner/repo: ${raw}`); }

@@ -20,6 +20,14 @@ test('integrations: parseRepoRef validates and extracts repo metadata', () => {
   assert.equal(r2.repo, 'react');
   assert.equal(r2.ref, 'v18.2.0');
 
+  // git@ SCP format
+  const rScp = parseRepoRef('git@github.com:slashman413/cowork.git');
+  assert.equal(rScp.host, 'github.com');
+  assert.equal(rScp.owner, 'slashman413');
+  assert.equal(rScp.repo, 'cowork');
+  assert.equal(rScp.url, 'https://github.com/slashman413/cowork.git');
+  assert.equal(rScp.id, 'slashman413__cowork');
+
   // full github URL with tree and subpath
   const r3 = parseRepoRef('https://github.com/anthropics/skills/tree/main/skills/browser');
   assert.equal(r3.owner, 'anthropics');

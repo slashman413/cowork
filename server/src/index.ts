@@ -630,6 +630,10 @@ async function main() {
     if (!intEnabled()) return res.status(404).send('not found');
     const root = integrations.webRoot(path.basename(req.params.id));
     if (!root) return res.status(404).send('plugin not installed');
+    if (req.originalUrl.split('?')[0] === `/plugins/${req.params.id}`) {
+      const q = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+      return res.redirect(301, `/plugins/${req.params.id}/${q}`);
+    }
     res.setHeader('Content-Security-Policy', 'sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
