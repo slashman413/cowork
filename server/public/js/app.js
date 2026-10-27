@@ -645,7 +645,7 @@ class App {
     this.inboxSearch = '';     // Task Inbox title search (client-side, on top of the status filter)
     this.inboxLimit = 50;
     this.openTasks = new Set();  // retained (task cards no longer expand); harmless legacy state
-    this.taskFilesOpen = new Set();  // inbox task ids whose RESULT / ARTIFACTS / INPUTS block is expanded (collapsed by default)
+    this.taskFilesOpen = new Set();  // inbox task ids whose RESULT / ARTIFACTS / INPUTS / INTERACTION block is expanded (collapsed by default)
     this.agents = new Map();   // agent UUID → { name, platform } for human-readable labels
     this.chatMessages = [];    // Chat view conversation state (persists across nav within a session)
     this.chatSel = { brain: '', division: '', agent: '' };
@@ -710,9 +710,9 @@ class App {
       this.openMediaModal(btn.dataset.mediaTask, btn.dataset.mediaFile, btn.dataset.mediaType, btn.dataset.mediaKind || 'artifacts');
     });
     // Delegated: tapping anywhere on an inbox task card toggles its RESULT /
-    // ARTIFACTS / INPUTS file block, which is hidden by default — long file lists
-    // used to bury the card. Taps on interactive controls (buttons, links,
-    // inputs, copyable chips) are excluded so they keep their own behaviour.
+    // ARTIFACTS / INPUTS / INTERACTION block, which is hidden by default — long
+    // file lists used to bury the card. Taps on interactive controls (buttons,
+    // links, inputs, copyable chips) are excluded so they keep their own behaviour.
     // Document-level like the handlers above, so in-place re-renders never lose
     // the listener.
     document.addEventListener('click', (e) => {
@@ -972,11 +972,11 @@ class App {
   }
 
   /**
-   * Toggle a task card's RESULT / ARTIFACTS / INPUTS file block in place (flip
-   * the `hidden` attribute + caret + aria-expanded) without a full re-render.
-   * Open state is kept in this.taskFilesOpen so SSE / poll re-renders restore
-   * the user's per-card choice instead of collapsing everything. No-op when
-   * the card has no file block (nothing to toggle).
+   * Toggle a task card's RESULT / ARTIFACTS / INPUTS / INTERACTION block in
+   * place (flip the `hidden` attribute + caret + aria-expanded) without a full
+   * re-render. Open state is kept in this.taskFilesOpen so SSE / poll
+   * re-renders restore the user's per-card choice instead of collapsing
+   * everything. No-op when the card has no file block (nothing to toggle).
    */
   toggleTaskFiles(taskId) {
     const wrap = document.querySelector(`[data-task-files="${CSS.escape(taskId)}"]`);
@@ -2827,26 +2827,37 @@ class App {
           // the card toggles it (delegated .task-card handler in the constructor);
           // per-card open state is kept in this.taskFilesOpen so in-place
           // re-renders restore the user's choice instead of collapsing everything.
+          // The human-in-the-loop interaction form rides in the SAME block, in the
+          // LAST position (after INPUTS), so it is hidden by default with the same
+          // tap-to-toggle behaviour; the card's "⌛ awaiting input" / "✓ input
+          // received" badge above keeps it discoverable while collapsed.
           const sectionStyle = 'display:flex; flex-wrap:wrap; align-items:center; gap:4px; padding:4px 0 2px';
           const sectionLabel = (text, size) => `<span style="font-size:${size}; color:var(--text-muted); margin-right:2px; text-transform:uppercase; letter-spacing:.03em">${text}</span>`;
           const resultHtml = hasResult ? `<div class="task-result" style="${sectionStyle}">${sectionLabel('Result', '0.85rem')}${artifactChip(t.id, 'result.md', '0.9rem')}</div>` : '';
           const artsHtml = arts.length ? `<div class="task-artifacts" style="${sectionStyle}">${sectionLabel('Artifacts', '0.85rem')}${arts.map(f => artifactChip(t.id, f, '0.9rem')).join('')}</div>` : '';
           const inputsHtml = (inputs.length || canAttach) ? `<div class="task-inputs" style="${sectionStyle}">${sectionLabel('Inputs', '0.72rem')}${inputs.map(f => artifactChip(t.id, f, '0.78rem', 'inputs')).join('')}${canAttach ? `<input type="file" data-attach-files="${esc(t.id)}" multiple style="display:none">
           <button class="btn" data-attach-input="${esc(t.id)}" title="Attach files for the brain to read" style="font-size:0.75rem;margin:0">＋ Attach files</button>` : ''}</div>` : '';
-          if (!resultHtml && !artsHtml && !inputsHtml) return '';
+          // The interaction form (if any) is the LAST section inside the block.
+          const interactionHtml = this.interactionBlock(t);
+          if (!resultHtml && !artsHtml && !inputsHtml && !interactionHtml) return '';
           const filesOpen = this.taskFilesOpen ? this.taskFilesOpen.has(t.id) : false;
           const nFiles = (hasResult ? 1 : 0) + arts.length + inputs.length;
+          const headParts = [];
+          if (nFiles) headParts.push(`${nFiles} file${nFiles === 1 ? '' : 's'}`);
+          else if (!interactionHtml) headParts.push('Files');
+          if (canAttach) headParts.push('＋ attach');
+          if (interactionHtml) headParts.push('input');
           return `<div class="task-files" data-task-files="${esc(t.id)}"${filesOpen ? '' : ' hidden'} style="margin-top:2px">
-            <div class="task-files-head" role="button" tabindex="0" aria-expanded="${filesOpen}" title="Tap the card to show / hide the files" style="display:flex; align-items:center; gap:5px; padding:4px 0; cursor:pointer; user-select:none">
+            <div class="task-files-head" role="button" tabindex="0" aria-expanded="${filesOpen}" title="Tap the card to show / hide the files & input form" style="display:flex; align-items:center; gap:5px; padding:4px 0; cursor:pointer; user-select:none">
               <span class="task-files-caret" style="font-size:0.72rem; color:var(--text-muted)">${filesOpen ? '▾' : '▸'}</span>
-              <span style="font-size:0.72rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:.03em">${nFiles ? `${nFiles} file${nFiles === 1 ? '' : 's'}` : 'Files'}${canAttach ? ' · ＋ attach' : ''}</span>
+              <span style="font-size:0.72rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:.03em">${headParts.join(' · ')}</span>
             </div>
             ${resultHtml}
             ${artsHtml}
             ${inputsHtml}
+            ${interactionHtml}
           </div>`;
         })()}
-        ${this.interactionBlock(t)}
         ${t.claimedBy ? `<p style="font-size:0.8rem; color:var(--text-muted); margin-top:8px">Claimed by ${esc(this.agentLabel(t.claimedBy))}${t.completedAt ? ` · completed <span title="${esc(t.completedAt)}">${timeAgo(t.completedAt)}</span>` : ''}</p>` : ''}
       </div>`;
     }).join('') : `<div class="empty-state"><p>No tasks${this.inboxFilter ? ` with status "${esc(this.inboxFilter)}"` : ''}.</p></div>`;
