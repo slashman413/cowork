@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { parseRepoRef, detectRepo, defaultWrapBrain, Integrations } from './integrations.js';
+import { parseRepoRef, detectRepo, defaultWrapBrain, Integrations, dirSizeBytes } from './integrations.js';
 
 test('integrations: parseRepoRef validates and extracts repo metadata', () => {
   // owner/repo
@@ -125,3 +125,25 @@ test('integrations: buildWrapTask creates safe prompt for agent', () => {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test('integrations: maxRepoMB defaults to 3072 MB (3 GB) and respects overrides', () => {
+  const hubDefault = new Integrations({});
+  assert.equal((hubDefault as any).cfg.maxRepoMB ?? 3072, 3072);
+
+  const hubCustom = new Integrations({ maxRepoMB: 5120 });
+  assert.equal((hubCustom as any).cfg.maxRepoMB ?? 3072, 5120);
+});
+
+test('integrations: dirSizeBytes calculates size and enforces cap', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dir-size-test-'));
+  try {
+    fs.writeFileSync(path.join(tmp, 'file1.txt'), Buffer.alloc(1024)); // 1 KB
+    fs.writeFileSync(path.join(tmp, 'file2.txt'), Buffer.alloc(2048)); // 2 KB
+    assert.equal(dirSizeBytes(tmp, 4096), 3072);
+    // cap exceeded (cap = 2048 bytes) stops walk once over cap
+    assert.ok(dirSizeBytes(tmp, 2048) > 2048);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+

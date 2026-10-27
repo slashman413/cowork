@@ -218,7 +218,7 @@ function git(args: string[], cwd?: string, timeoutMs = 180000): Promise<string> 
   });
 }
 
-function dirSizeBytes(dir: string, cap: number): number {
+export function dirSizeBytes(dir: string, cap: number): number {
   let total = 0;
   const walk = (d: string) => {
     if (total > cap) return;
@@ -453,7 +453,7 @@ export class Integrations {
     args.push('--', ref.url, tmp);
     try {
       await git(args);
-      const capMB = this.cfg.maxRepoMB ?? 300;
+      const capMB = this.cfg.maxRepoMB ?? 3072;
       if (dirSizeBytes(tmp, capMB * 1024 * 1024) > capMB * 1024 * 1024) throw new Error(`repository is larger than integrations.maxRepoMB (${capMB} MB)`);
       if (ref.subpath && !fs.existsSync(path.join(tmp, ref.subpath))) throw new Error(`sub-path "${ref.subpath}" not found in the repository`);
       fs.rmSync(dir, { recursive: true, force: true });

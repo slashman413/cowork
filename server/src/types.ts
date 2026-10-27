@@ -466,7 +466,7 @@ export interface IntegrationsConfig {
   allowHosts?: string[];
   /** Skill-audit allow list: "ruleId" or "ruleId@relative/path" (false-positive suppression). */
   auditAllow?: string[];
-  /** Refuse clones bigger than this (default 300 MB). */
+  /** Refuse clones bigger than this (default 3072 MB / 3 GB). */
   maxRepoMB?: number;
   /** Brain pre-selected for "wrap with an agent" tasks (must be a LOCAL brain — Rule 6). */
   wrapBrain?: string;
