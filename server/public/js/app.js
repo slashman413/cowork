@@ -639,6 +639,7 @@ class App {
     this.inboxSearch = '';     // Task Inbox title search (client-side, on top of the status filter)
     this.inboxLimit = 50;
     this.openTasks = new Set();  // retained (task cards no longer expand); harmless legacy state
+    this.taskFilesOpen = new Set();  // inbox task ids whose RESULT / ARTIFACTS / INPUTS block is expanded (collapsed by default)
     this.agents = new Map();   // agent UUID → { name, platform } for human-readable labels
     this.chatMessages = [];    // Chat view conversation state (persists across nav within a session)
     this.chatSel = { brain: '', division: '', agent: '' };
@@ -701,6 +702,28 @@ class App {
       e.preventDefault();
       e.stopPropagation();
       this.openMediaModal(btn.dataset.mediaTask, btn.dataset.mediaFile, btn.dataset.mediaType, btn.dataset.mediaKind || 'artifacts');
+    });
+    // Delegated: tapping anywhere on an inbox task card toggles its RESULT /
+    // ARTIFACTS / INPUTS file block, which is hidden by default — long file lists
+    // used to bury the card. Taps on interactive controls (buttons, links,
+    // inputs, copyable chips) are excluded so they keep their own behaviour.
+    // Document-level like the handlers above, so in-place re-renders never lose
+    // the listener.
+    document.addEventListener('click', (e) => {
+      const card = e.target.closest('.task-card');
+      if (!card || e.target.closest('button, a, input, label, select, textarea, .copyable')) return;
+      this.toggleTaskFiles(card.dataset.task);
+    });
+    // Keyboard access for the same toggle (the files head row carries
+    // role="button" tabindex="0"): Enter / Space expand-collapse the block.
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      const head = e.target.closest ? e.target.closest('.task-files-head') : null;
+      if (!head) return;
+      const card = head.closest('.task-card');
+      if (!card) return;
+      e.preventDefault();
+      this.toggleTaskFiles(card.dataset.task);
     });
     // Delegated open/delete for the Chat view's recent-sessions strip (the chips
     // are re-rendered in place, so a document-level handler avoids stale listeners).
@@ -940,6 +963,26 @@ class App {
       ta.remove();
       return ok;
     } catch { return false; }
+  }
+
+  /**
+   * Toggle a task card's RESULT / ARTIFACTS / INPUTS file block in place (flip
+   * the `hidden` attribute + caret + aria-expanded) without a full re-render.
+   * Open state is kept in this.taskFilesOpen so SSE / poll re-renders restore
+   * the user's per-card choice instead of collapsing everything. No-op when
+   * the card has no file block (nothing to toggle).
+   */
+  toggleTaskFiles(taskId) {
+    const wrap = document.querySelector(`[data-task-files="${CSS.escape(taskId)}"]`);
+    if (!wrap) return;
+    this.taskFilesOpen = this.taskFilesOpen || new Set();
+    const open = this.taskFilesOpen.has(taskId);
+    if (open) this.taskFilesOpen.delete(taskId); else this.taskFilesOpen.add(taskId);
+    wrap.hidden = open;
+    const caret = wrap.querySelector('.task-files-caret');
+    if (caret) caret.textContent = open ? '▸' : '▾';
+    const head = wrap.querySelector('.task-files-head');
+    if (head) head.setAttribute('aria-expanded', open ? 'false' : 'true');
   }
 
   /**
@@ -2618,14 +2661,18 @@ class App {
       // mistaken for a silent failure.
       const closedNoRun = isTaskClosedNoRun(t);
       // The card no longer expands to show RESULT / DESCRIPTION inline. Instead the
-      // run's RESULT is a first-class `result.md` chip under ARTIFACTS and the brief
-      // is a `description.md` chip under INPUTS — both open in the markdown viewer
-      // modal. The dispatcher writes the real result.md for local runs; the server
-      // also serves both names synthetically from task.result / task.description, so
-      // the chips work even when no file is on disk (remote / older tasks).
+      // run's RESULT is a first-class `result.md` chip in its own RESULT section
+      // (first, above ARTIFACTS / INPUTS) and the brief is a `description.md` chip
+      // under INPUTS — both open in the markdown viewer modal. The dispatcher writes
+      // the real result.md for local runs; the server also serves both names
+      // synthetically from task.result / task.description, so the chips work even
+      // when no file is on disk (remote / older tasks).
       const artsRaw = Array.isArray(t.artifacts) ? t.artifacts : [];
-      const arts = (t.result && !closedNoRun && !artsRaw.includes('result.md'))
-        ? ['result.md', ...artsRaw] : artsRaw;
+      // result.md gets its own RESULT section — keep it out of the plain
+      // ARTIFACTS list so the run's result is not buried in the artifacts.
+      const resultOnDisk = artsRaw.includes('result.md');
+      const hasResult = !closedNoRun && (!!t.result || resultOnDisk);
+      const arts = artsRaw.filter(f => f !== 'result.md');
       const inputsRaw = Array.isArray(c.inputFiles) ? c.inputFiles : [];
       const inputs = (t.description && !inputsRaw.includes('description.md'))
         ? ['description.md', ...inputsRaw] : inputsRaw;
@@ -2744,14 +2791,31 @@ class App {
             <i data-lucide="folder" style="width:11px;height:11px;vertical-align:-1px"></i>artifacts/${esc(t.id)}/</span>
           ${parentLink}
         </div>
-        ${arts.length ? `<div class="task-artifacts" style="display:flex; flex-wrap:wrap; align-items:center; gap:4px; padding:6px 0 2px">
-          <span style="font-size:0.85rem; color:var(--text-muted); margin-right:2px; text-transform:uppercase; letter-spacing:.03em">Artifacts</span>
-          ${arts.map(f => artifactChip(t.id, f, '0.9rem')).join('')}</div>` : ''}
-        ${(inputs.length || canAttach) ? `<div class="task-inputs" style="display:flex; flex-wrap:wrap; align-items:center; gap:4px; padding:6px 0 2px">
-          <span style="font-size:0.72rem; color:var(--text-muted); margin-right:2px; text-transform:uppercase; letter-spacing:.03em">Inputs</span>
-          ${inputs.map(f => artifactChip(t.id, f, '0.78rem', 'inputs')).join('')}
-          ${canAttach ? `<input type="file" data-attach-files="${esc(t.id)}" multiple style="display:none">
-          <button class="btn" data-attach-input="${esc(t.id)}" title="Attach files for the brain to read" style="font-size:0.75rem;margin:0">＋ Attach files</button>` : ''}</div>` : ''}
+        ${(() => {
+          // RESULT / ARTIFACTS / INPUTS live in one collapsible block, HIDDEN by
+          // default — long file lists used to bury the card. Tapping anywhere on
+          // the card toggles it (delegated .task-card handler in the constructor);
+          // per-card open state is kept in this.taskFilesOpen so in-place
+          // re-renders restore the user's choice instead of collapsing everything.
+          const sectionStyle = 'display:flex; flex-wrap:wrap; align-items:center; gap:4px; padding:4px 0 2px';
+          const sectionLabel = (text, size) => `<span style="font-size:${size}; color:var(--text-muted); margin-right:2px; text-transform:uppercase; letter-spacing:.03em">${text}</span>`;
+          const resultHtml = hasResult ? `<div class="task-result" style="${sectionStyle}">${sectionLabel('Result', '0.85rem')}${artifactChip(t.id, 'result.md', '0.9rem')}</div>` : '';
+          const artsHtml = arts.length ? `<div class="task-artifacts" style="${sectionStyle}">${sectionLabel('Artifacts', '0.85rem')}${arts.map(f => artifactChip(t.id, f, '0.9rem')).join('')}</div>` : '';
+          const inputsHtml = (inputs.length || canAttach) ? `<div class="task-inputs" style="${sectionStyle}">${sectionLabel('Inputs', '0.72rem')}${inputs.map(f => artifactChip(t.id, f, '0.78rem', 'inputs')).join('')}${canAttach ? `<input type="file" data-attach-files="${esc(t.id)}" multiple style="display:none">
+          <button class="btn" data-attach-input="${esc(t.id)}" title="Attach files for the brain to read" style="font-size:0.75rem;margin:0">＋ Attach files</button>` : ''}</div>` : '';
+          if (!resultHtml && !artsHtml && !inputsHtml) return '';
+          const filesOpen = this.taskFilesOpen ? this.taskFilesOpen.has(t.id) : false;
+          const nFiles = (hasResult ? 1 : 0) + arts.length + inputs.length;
+          return `<div class="task-files" data-task-files="${esc(t.id)}"${filesOpen ? '' : ' hidden'} style="margin-top:2px">
+            <div class="task-files-head" role="button" tabindex="0" aria-expanded="${filesOpen}" title="Tap the card to show / hide the files" style="display:flex; align-items:center; gap:5px; padding:4px 0; cursor:pointer; user-select:none">
+              <span class="task-files-caret" style="font-size:0.72rem; color:var(--text-muted)">${filesOpen ? '▾' : '▸'}</span>
+              <span style="font-size:0.72rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:.03em">${nFiles ? `${nFiles} file${nFiles === 1 ? '' : 's'}` : 'Files'}${canAttach ? ' · ＋ attach' : ''}</span>
+            </div>
+            ${resultHtml}
+            ${artsHtml}
+            ${inputsHtml}
+          </div>`;
+        })()}
         ${this.interactionBlock(t)}
         ${t.claimedBy ? `<p style="font-size:0.8rem; color:var(--text-muted); margin-top:8px">Claimed by ${esc(this.agentLabel(t.claimedBy))}${t.completedAt ? ` · completed <span title="${esc(t.completedAt)}">${timeAgo(t.completedAt)}</span>` : ''}</p>` : ''}
       </div>`;
