@@ -2631,7 +2631,8 @@ class App {
 
   async renderInbox() {
     this.inboxLimit = this.inboxLimit || 50;
-    // Filters + New-task + Purge collapse into a single toggle so the task list
+    // Filters + Purge collapse into a single toggle (the "+" New-task button
+    // sits beside it, always visible) so the task list
     // stays reachable on small viewports. Default open on wide screens, collapsed
     // on narrow ones; the toggle then persists the choice for the session.
     if (this.inboxControlsOpen === undefined) this.inboxControlsOpen = window.innerWidth >= 640;
@@ -2874,17 +2875,18 @@ class App {
     this.contentEl.innerHTML = `
       <div id="inbox-sticky">
       <div style="display:flex; gap:8px; margin-bottom:10px; align-items:center; flex-wrap:wrap">
-        <button class="btn" id="inbox-controls-toggle" title="Show or hide the status filters, New-task and Purge controls"
+        <button class="btn" id="inbox-controls-toggle" title="Show or hide the status filters and Purge controls"
           style="font-size:0.78rem; display:inline-flex; align-items:center; gap:6px">
           <i data-lucide="sliders-horizontal" style="width:14px;height:14px"></i>
           <span>Filters &amp; actions</span>
           <span class="ctrl-caret" style="color:var(--text-muted)">${open ? '▾' : '▸'}</span>
         </button>
+        <button class="btn" id="new-task-btn" title="New task — create and dispatch a task" aria-label="New task"
+          style="font-size:1rem; font-weight:600; line-height:1; padding:4px 10px; color:#22C55E; border-color:#22C55E66">+</button>
         ${activeChip}
       </div>
       <div id="inbox-controls" style="display:flex; gap:8px; margin-bottom:10px; align-items:center; flex-wrap:wrap;${open ? '' : ' display:none;'}">${pills}
         <span style="margin-left:auto; display:flex; gap:6px; align-items:center; flex-wrap:wrap">
-          <button class="btn" id="new-task-btn" title="Create and dispatch a new task" style="font-size:0.78rem; color:#22C55E; border-color:#22C55E66">＋ New task</button>
           <span style="font-size:0.75rem;color:var(--text-muted)">purge done &gt;</span>
           <input id="purge-days" type="number" min="0" value="30" style="width:58px;padding:4px 6px;background:var(--bg-tertiary);border:1px solid var(--bg-tertiary);border-radius:8px;color:inherit;font-size:0.78rem">
           <span style="font-size:0.75rem;color:var(--text-muted)">days</span>
