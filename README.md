@@ -525,8 +525,8 @@ flips**:
    server/gen-tls-cert.sh ~/.cowork/tls cowork-host 100.80.243.33 cowork.tailXXXX.ts.net
    ```
 
-   For a warning-free cert on a Tailscale tailnet, prefer `tailscale serve` (real
-   Let's Encrypt cert) over a self-signed one.
+   For a warning-free cert on a Tailscale tailnet, use `deploy/update-tailscale-cert.sh`
+   to automatically obtain and install a Let's Encrypt certificate from Tailscale.
 
 2. **Point the config at the files.** Add a `tls` block under `server` in
    `~/.cowork/config.json` (the live config — the repo `config.json` is only the

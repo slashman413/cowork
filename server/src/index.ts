@@ -667,55 +667,94 @@ async function main() {
 
   // ── Task artifacts (persistent per-task dir; downloadable) ─────────────────
   const artifactsRoot = config.paths.artifacts;
+
+  function listFilesRecursive(dir: string, base = ''): string[] {
+    let results: string[] = [];
+    try {
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.name.startsWith('.') || entry.name === '__pycache__') continue;
+        const rel = base ? `${base}/${entry.name}` : entry.name;
+        if (entry.isDirectory()) {
+          results.push(...listFilesRecursive(path.join(dir, entry.name), rel));
+        } else if (entry.isFile()) {
+          results.push(rel);
+        }
+      }
+    } catch {}
+    return results.sort();
+  }
+
   app.get('/api/artifacts/:taskId', (req, res) => {
     const dir = path.join(artifactsRoot, path.basename(req.params.taskId));
     if (!fs.existsSync(dir)) return res.json([]);
-    res.json(fs.readdirSync(dir).filter(f => { try { return fs.statSync(path.join(dir, f)).isFile(); } catch { return false; } }));
+    res.json(listFilesRecursive(dir));
   });
-  app.get('/api/artifacts/:taskId/:file', (req, res) => {
-    // basename() on both segments blocks path traversal.
-    const file = path.join(artifactsRoot, path.basename(req.params.taskId), path.basename(req.params.file));
+  app.get('/api/artifacts/:taskId/*file', (req, res) => {
+    const taskId = path.basename(req.params.taskId);
+    const rawFile = Array.isArray(req.params.file) ? req.params.file.join('/') : String(req.params.file || '');
+    const taskDir = path.resolve(artifactsRoot, taskId);
+    const file = path.resolve(taskDir, rawFile);
+
+    // Path traversal guard: must be strictly inside taskDir
+    if (!file.startsWith(taskDir + path.sep)) {
+      return res.status(403).json({ error: 'forbidden' });
+    }
+
     // The dashboard opens a task's RESULT in the markdown viewer via the artifacts
     // route with the synthetic name "result.md". The local dispatcher writes a real
     // result.md to the artifacts dir, so prefer that on disk; but for tasks with no
     // file (remote brains, older runs) fall back to the task record's result text
     // rather than 404ing the chip.
-    if (req.params.file === 'result.md' && !fs.existsSync(file)) {
-      const task = store.getTask(path.basename(req.params.taskId));
+    if (rawFile === 'result.md' && !fs.existsSync(file)) {
+      const task = store.getTask(taskId);
       if (task && task.result) {
         res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
         res.setHeader('Content-Disposition', 'attachment; filename="result.md"');
         return res.send(`# ${task.title || task.id}\n\n${task.result}\n`);
       }
     }
-    if (!file.startsWith(artifactsRoot) || !fs.existsSync(file)) return res.status(404).json({ error: 'not found' });
+    if (!fs.existsSync(file)) return res.status(404).json({ error: 'not found' });
+
+    let st: fs.Stats;
+    try {
+      st = fs.statSync(file);
+    } catch {
+      return res.status(404).json({ error: 'not found' });
+    }
+    if (!st.isFile()) return res.status(400).json({ error: 'not a file' });
+
     // ?inline=1 serves without Content-Disposition: attachment, so <video>/<img>
     // on the Video Studio page play in place (send() handles Range for seeking).
     if (req.query.inline === '1') return res.sendFile(file);
-    res.download(file);
+    res.download(file, path.basename(file), (err) => {
+      if (err && !res.headersSent) {
+        res.status(500).json({ error: 'download failed' });
+      }
+    });
   });
   // Upload — a REMOTE brain client pushes each file it produced into the task's
   // artifacts dir (the local dispatcher collects them from disk instead). Raw
   // binary body so any size/type streams; path-guarded; stamps task.artifacts so
   // the inbox card lists it, and /api/artifacts/:taskId already serves it live.
-  app.post('/api/artifacts/:taskId/:file', express.raw({ type: '*/*', limit: '256mb' }), (req, res) => {
+  app.post('/api/artifacts/:taskId/*file', express.raw({ type: '*/*', limit: '256mb' }), (req, res) => {
     try {
       const taskId = path.basename(req.params.taskId);
-      const fileName = path.basename(req.params.file);
-      if (!fileName || fileName === '.' || fileName === '..') throw new Error('invalid filename');
-      const dir = path.join(artifactsRoot, taskId);
-      const dest = path.join(dir, fileName);
-      if (!dest.startsWith(artifactsRoot + path.sep)) throw new Error('path escape');
+      const rawFile = Array.isArray(req.params.file) ? req.params.file.join('/') : String(req.params.file || '');
+      if (!rawFile || rawFile === '.' || rawFile === '..') throw new Error('invalid filename');
+      const taskDir = path.resolve(artifactsRoot, taskId);
+      const dest = path.resolve(taskDir, rawFile);
+      if (!dest.startsWith(taskDir + path.sep)) throw new Error('path escape');
       const body = Buffer.isBuffer(req.body) ? req.body : Buffer.from(req.body || '');
       if (!body.length) throw new Error('empty body');
-      fs.mkdirSync(dir, { recursive: true });
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
       fs.writeFileSync(dest, body);
       const task = store.getTask(taskId);
       if (task) {
-        task.artifacts = [...new Set([...(task.artifacts || []), fileName])];
+        task.artifacts = [...new Set([...(task.artifacts || []), rawFile])];
         store.saveTask(task);
       }
-      res.json({ ok: true, taskId, file: fileName, bytes: body.length });
+      res.json({ ok: true, taskId, file: rawFile, bytes: body.length });
     } catch (e: any) { res.status(400).json({ error: e.message }); }
   });
 
@@ -734,11 +773,12 @@ async function main() {
   });
   // List / download a task's attached input files (path-guarded in the store).
   app.get('/api/inputs/:taskId', (req, res) => res.json(store.listInputs(req.params.taskId)));
-  app.get('/api/inputs/:taskId/:file', (req, res) => {
+  app.get('/api/inputs/:taskId/*file', (req, res) => {
+    const rawFile = Array.isArray(req.params.file) ? req.params.file.join('/') : String(req.params.file || '');
     // The dashboard opens a task's own brief in the markdown viewer via the
     // inputs route with the synthetic name "description.md" — serve it straight
     // from the task record rather than requiring a real file on disk.
-    if (req.params.file === 'description.md') {
+    if (rawFile === 'description.md') {
       const task = store.getTask(req.params.taskId);
       if (task && task.description) {
         res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
@@ -746,9 +786,13 @@ async function main() {
         return res.send(task.description);
       }
     }
-    const file = store.inputFilePath(req.params.taskId, req.params.file);
+    const file = store.inputFilePath(req.params.taskId, rawFile);
     if (!file) return res.status(404).json({ error: 'not found' });
-    res.download(file);
+    res.download(file, path.basename(file), (err) => {
+      if (err && !res.headersSent) {
+        res.status(500).json({ error: 'download failed' });
+      }
+    });
   });
 
   // ── Agents registry (worker profiles with an ordered brain chain) ──────────

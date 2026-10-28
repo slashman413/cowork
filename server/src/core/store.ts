@@ -548,16 +548,30 @@ export class Store {
     const task = this.getTask(taskId);
     const dir = this.inputsDir(task?.id || taskId);
     if (!fs.existsSync(dir)) return [];
-    try { return fs.readdirSync(dir).filter(f => { try { return fs.statSync(path.join(dir, f)).isFile(); } catch { return false; } }); }
-    catch { return []; }
+    try {
+      const results: string[] = [];
+      const scan = (cur: string, base: string) => {
+        for (const e of fs.readdirSync(cur, { withFileTypes: true })) {
+          if (e.name.startsWith('.') || e.name === '__pycache__') continue;
+          const rel = base ? `${base}/${e.name}` : e.name;
+          if (e.isDirectory()) scan(path.join(cur, e.name), rel);
+          else if (e.isFile()) results.push(rel);
+        }
+      };
+      scan(dir, '');
+      return results.sort();
+    } catch { return []; }
   }
 
   /** Absolute path of one input file (path-guarded), or null if absent. */
   public inputFilePath(taskId: string, file: string): string | null {
     const task = this.getTask(taskId);
-    const dir = this.inputsDir(task?.id || taskId);
-    const p = path.join(dir, path.basename(file));
+    const dir = path.resolve(this.inputsDir(task?.id || taskId));
+    const p = path.resolve(dir, file);
     if (!p.startsWith(dir + path.sep) || !fs.existsSync(p)) return null;
+    try {
+      if (!fs.statSync(p).isFile()) return null;
+    } catch { return null; }
     return p;
   }
 
@@ -1206,10 +1220,17 @@ export class Store {
     const artDir = this.artifactsDir(prev.id);
     let artFiles: string[] = [];
     try {
-      artFiles = fs.readdirSync(artDir).filter(f => { try { return fs.statSync(path.join(artDir, f)).isFile(); } catch { return false; } });
+      const scan = (cur: string, base: string) => {
+        for (const e of fs.readdirSync(cur, { withFileTypes: true })) {
+          if (e.name.startsWith('.') || e.name === '__pycache__') continue;
+          const rel = base ? `${base}/${e.name}` : e.name;
+          if (e.isDirectory()) scan(path.join(cur, e.name), rel);
+          else if (e.isFile()) artFiles.push(rel);
+        }
+      };
+      scan(artDir, '');
     } catch { /* no artifacts */ }
     for (const f of artFiles) {
-      if (/[\\/]/.test(f)) continue;
       place(f, dest => fs.copyFileSync(path.join(artDir, f), dest));
     }
     return stored;

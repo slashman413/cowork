@@ -536,7 +536,9 @@ function artifactChip(taskId, f, fontSize = '0.9rem', kind = 'artifacts') {
   if (media) {
     return `<button class="btn media-artifact" data-media-task="${esc(taskId)}" data-media-file="${esc(f)}" data-media-type="${media.type}" data-media-kind="${esc(kind)}" title="Preview “${esc(f)}” in the ${media.type} viewer" style="${base}"><i data-lucide="${media.icon}" style="width:12px;height:12px"></i>${esc(f)}</button>`;
   }
-  return `<a href="/api/${kind}/${encodeURIComponent(taskId)}/${encodeURIComponent(f)}" download class="btn" style="${base}"><i data-lucide="download" style="width:12px;height:12px"></i>${esc(f)}</a>`;
+  const encodedPath = f.split('/').map(encodeURIComponent).join('/');
+  const downloadName = f.split('/').pop() || f;
+  return `<a href="/api/${kind}/${encodeURIComponent(taskId)}/${encodedPath}" download="${esc(downloadName)}" class="btn" style="${base}"><i data-lucide="download" style="width:12px;height:12px"></i>${esc(f)}</a>`;
 }
 
 /** Brain chip accent (translucent bg / border / text share one hue). */
@@ -1007,7 +1009,9 @@ class App {
     const container = document.getElementById('modal-container');
     const content = document.getElementById('modal-content');
     if (!container || !content) return;
-    const url = `/api/${kind}/${encodeURIComponent(taskId)}/${encodeURIComponent(file)}`;
+    const encodedPath = file.split('/').map(encodeURIComponent).join('/');
+    const downloadName = file.split('/').pop() || file;
+    const url = `/api/${kind}/${encodeURIComponent(taskId)}/${encodedPath}`;
     const barBtn = 'font-size:0.75rem;padding:3px 8px;display:inline-flex;align-items:center;gap:4px';
     content.classList.add('modal-md');
     content.innerHTML = `
@@ -1018,7 +1022,7 @@ class App {
         </h3>
         <div style="display:flex;gap:6px;flex:0 0 auto">
           ${plain ? '' : `<button class="btn mdm-toggle" title="Toggle raw / rendered" style="${barBtn}" disabled>Raw</button>`}
-          <a class="btn" href="${url}" download title="Download this file" style="${barBtn}"><i data-lucide="download" style="width:13px;height:13px"></i></a>
+          <a class="btn" href="${url}" download="${esc(downloadName)}" title="Download this file" style="${barBtn}"><i data-lucide="download" style="width:13px;height:13px"></i></a>
           <button class="btn mdm-close" title="Close" style="${barBtn}"><i data-lucide="x" style="width:14px;height:14px"></i></button>
         </div>
       </div>
@@ -1088,7 +1092,9 @@ class App {
     const container = document.getElementById('modal-container');
     const content = document.getElementById('modal-content');
     if (!container || !content) return;
-    const url = `/api/${kind}/${encodeURIComponent(taskId)}/${encodeURIComponent(file)}`;
+    const encodedPath = file.split('/').map(encodeURIComponent).join('/');
+    const downloadName = file.split('/').pop() || file;
+    const url = `/api/${kind}/${encodeURIComponent(taskId)}/${encodedPath}`;
     const barBtn = 'font-size:0.75rem;padding:3px 8px;display:inline-flex;align-items:center;gap:4px';
     const icon = (MEDIA_KIND.find(k => k.type === type) || {}).icon || 'file';
     // The media element itself. src is the (path-guarded) file route; a load
@@ -1109,7 +1115,7 @@ class App {
           <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(file)}</span>
         </h3>
         <div style="display:flex;gap:6px;flex:0 0 auto">
-          <a class="btn" href="${url}" download title="Download this file" style="${barBtn}"><i data-lucide="download" style="width:13px;height:13px"></i></a>
+          <a class="btn" href="${url}" download="${esc(downloadName)}" title="Download this file" style="${barBtn}"><i data-lucide="download" style="width:13px;height:13px"></i></a>
           <button class="btn mdm-close" title="Close" style="${barBtn}"><i data-lucide="x" style="width:14px;height:14px"></i></button>
         </div>
       </div>

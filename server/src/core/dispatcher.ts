@@ -2079,7 +2079,19 @@ export class Dispatcher {
     try { writeFileSync(join(artDir, 'result.md'), `# ${task.title}\n\n${output.text}\n`); } catch { /* ignore */ }
     let artifacts: string[] = [];
     try {
-      artifacts = readdirSync(artDir).filter(f => { try { return statSync(join(artDir, f)).isFile(); } catch { return false; } });
+      const scanArtifacts = (cur: string, base: string) => {
+        for (const entry of readdirSync(cur, { withFileTypes: true })) {
+          if (entry.name.startsWith('.') || entry.name === '__pycache__') continue;
+          const rel = base ? `${base}/${entry.name}` : entry.name;
+          if (entry.isDirectory()) {
+            scanArtifacts(join(cur, entry.name), rel);
+          } else if (entry.isFile()) {
+            artifacts.push(rel);
+          }
+        }
+      };
+      scanArtifacts(artDir, '');
+      artifacts.sort();
     } catch { /* ignore */ }
 
     // The result is a QUESTION back to the user (not a failure — verdict is ok —
