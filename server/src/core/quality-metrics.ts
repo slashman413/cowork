@@ -13,7 +13,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Task } from '../types.js';
 import type { Lesson } from './lessons.js';
-import { isRateLimitFailure } from './result-verifier.js';
+import { isRateLimitFailure, type SpecUnverifiableCause } from './result-verifier.js';
 import { taskTier } from './tiers.js';
 
 export type RejectionClass = 'rateLimit' | 'timeout' | 'exitCode' | 'quality' | 'other';
@@ -93,6 +93,43 @@ export interface SpecVerdictMetrics {
     human: SpecVerdictSourceInputs;
     sharpened: SpecVerdictSourceInputs;
   };
+  /** Why the UNVERIFIABLE verdicts happened (all sources). */
+  unverifiableByCause: Record<SpecUnverifiableCause, number>;
+  /** P1-1 shadow→enforce gate inputs. Only DECISIVE verdicts count. */
+  shadowGate: SpecShadowGate;
+}
+
+/**
+ * The shadow→enforce gate counts only DECISIVE verdicts (APPROVED +
+ * CHANGES_REQUESTED). UNVERIFIABLE says nothing about the judge's accuracy —
+ * in the first shadow window 8 of 14 verdicts were UNVERIFIABLE (7 "no judge
+ * brain available") and still counted toward the old totalJudged ≥ 10 gate.
+ * The false-reject rate needs a human/agent sample of the CR tasks, so the code
+ * only reports whether the volume threshold is met.
+ */
+export interface SpecShadowGate {
+  decisive: number;
+  approved: number;
+  changesRequested: number;
+  /** Not counted toward the threshold. */
+  unverifiable: number;
+  minDecisive: number;
+  /** decisive ≥ minDecisive — the volume half of the gate. */
+  volumeMet: boolean;
+  maxFalseRejectRate: number;
+  rule: string;
+}
+
+export const DEFAULT_MIN_DECISIVE_VERDICTS = 10;
+export const DEFAULT_MAX_FALSE_REJECT_RATE = 0.1;
+
+/** Bucket an UNVERIFIABLE spec verdict by cause; records written before the
+ *  `cause` field existed are classified from their summary / crashed flag. */
+export function unverifiableCause(sv: { cause?: string; crashed?: boolean; summary?: string } | undefined): SpecUnverifiableCause {
+  if (sv?.cause === 'no-judge' || sv?.cause === 'judge-crashed' || sv?.cause === 'judge-unverifiable') return sv.cause;
+  if (/no judge brain available/i.test(sv?.summary || '')) return 'no-judge';
+  if (sv?.crashed) return 'judge-crashed';
+  return 'judge-unverifiable';
 }
 
 export interface QualityMetrics {
@@ -125,7 +162,8 @@ export interface QualityMetrics {
  * human-only cards excluded).
  */
 export function computeQualityMetrics(
-  lessons: Lesson[], tasks: Task[], from: number, to: number, opts: { lessonsSkipped?: number } = {}
+  lessons: Lesson[], tasks: Task[], from: number, to: number,
+  opts: { lessonsSkipped?: number; minDecisive?: number; maxFalseRejectRate?: number } = {}
 ): QualityMetrics {
   const days = Math.max(0, (to - from) / 86_400_000);
   const weeks = days / 7;
@@ -179,7 +217,15 @@ export function computeQualityMetrics(
     bySource: {
       human: { total: 0, judged: 0, approved: 0, changesRequested: 0, unverifiable: 0 },
       sharpened: { total: 0, judged: 0, approved: 0, changesRequested: 0, unverifiable: 0 },
-    }
+    },
+    unverifiableByCause: { 'no-judge': 0, 'judge-crashed': 0, 'judge-unverifiable': 0 },
+    shadowGate: {
+      decisive: 0, approved: 0, changesRequested: 0, unverifiable: 0,
+      minDecisive: opts.minDecisive ?? DEFAULT_MIN_DECISIVE_VERDICTS,
+      volumeMet: false,
+      maxFalseRejectRate: opts.maxFalseRejectRate ?? DEFAULT_MAX_FALSE_REJECT_RATE,
+      rule: '',
+    },
   };
   const byTier: Record<string, number> = {};
   let tagged = 0, mechAttempts = 0, mechOpus = 0;
@@ -228,10 +274,21 @@ export function computeQualityMetrics(
           specVerdicts.bySource[srcKey].judged++;
         } else if (v === 'UNVERIFIABLE') {
           specVerdicts.bySource[srcKey].unverifiable++;
+          specVerdicts.unverifiableByCause[unverifiableCause(ctx.specVerdict)]++;
         }
       }
     }
   }
+
+  const gate = specVerdicts.shadowGate;
+  for (const src of [specVerdicts.bySource.human, specVerdicts.bySource.sharpened]) {
+    gate.approved += src.approved;
+    gate.changesRequested += src.changesRequested;
+    gate.unverifiable += src.unverifiable;
+  }
+  gate.decisive = gate.approved + gate.changesRequested;
+  gate.volumeMet = gate.decisive >= gate.minDecisive;
+  gate.rule = `enforce only when decisive (APPROVED + CHANGES_REQUESTED) ≥ ${gate.minDecisive} AND sampled falseRejectRate ≤ ${gate.maxFalseRejectRate}; UNVERIFIABLE never counts`;
 
   return {
     window: { from: new Date(from).toISOString(), to: new Date(to).toISOString(), days: Math.round(days * 10) / 10, weeks: Math.round(weeks * 100) / 100 },

@@ -279,6 +279,9 @@ export interface SpecVerifierConfig {
   enforceAfter?: string;
   /** Maximum false-reject rate (0..1) for the shadow review task to enable enforce. Default 0.10. */
   maxFalseRejectRate?: number;
+  /** Shadow→enforce volume gate: DECISIVE verdicts (APPROVED + CHANGES_REQUESTED)
+   *  needed before the review may flip to enforce. UNVERIFIABLE never counts. Default 10. */
+  minDecisiveVerdicts?: number;
   /** Wall-clock budget for one judge run (ms). Default 300000 (5 min). */
   timeoutMs?: number;
   /** Judge brain fallback chains keyed by executor model family. */

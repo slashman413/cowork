@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { classifyRejection, classifyWaitInput, computeQualityMetrics, metricsWindow, readLessons } from './quality-metrics.js';
+import { classifyRejection, classifyWaitInput, computeQualityMetrics, metricsWindow, readLessons, unverifiableCause } from './quality-metrics.js';
 import type { Lesson } from './lessons.js';
 import type { Task } from '../types.js';
 
@@ -80,6 +80,11 @@ test('computeQualityMetrics: classes, repeat rate-limit share, wait-input mix, t
     bySource: {
       human: { total: 0, judged: 0, approved: 0, changesRequested: 0, unverifiable: 0 },
       sharpened: { total: 0, judged: 0, approved: 0, changesRequested: 0, unverifiable: 0 }
+    },
+    unverifiableByCause: { 'no-judge': 0, 'judge-crashed': 0, 'judge-unverifiable': 0 },
+    shadowGate: {
+      decisive: 0, approved: 0, changesRequested: 0, unverifiable: 0, minDecisive: 10, volumeMet: false, maxFalseRejectRate: 0.1,
+      rule: 'enforce only when decisive (APPROVED + CHANGES_REQUESTED) ≥ 10 AND sampled falseRejectRate ≤ 0.1; UNVERIFIABLE never counts'
     }
   });
   assert.equal(m.timeouts.count, 1);
@@ -153,4 +158,57 @@ test('computeQualityMetrics: splits acceptance and spec-verdicts by acceptanceSo
   assert.deepEqual(m.specVerdicts.bySource.sharpened, {
     total: 2, judged: 1, approved: 0, changesRequested: 1, unverifiable: 1
   });
+});
+
+// ── P1-1 shadow→enforce gate: only DECISIVE verdicts count ────────────────────
+
+test('shadow gate counts only APPROVED + CHANGES_REQUESTED; UNVERIFIABLE never reaches the threshold', () => {
+  const T0 = Date.parse('2026-10-30T00:00:00.000Z');
+  const at = (min: number) => new Date(T0 + min * 60_000).toISOString();
+  const sv = (id: string, verdict: string, min: number, extra: Record<string, unknown> = {}) =>
+    ({ id, status: 'done', createdAt: at(min), completedAt: at(min), context: { specVerdict: { verdict, at: at(min), ...extra } } });
+  const tasks = [
+    // 9 UNVERIFIABLE (the 2026-10-20 window had 8/14) …
+    ...Array.from({ length: 7 }, (_, i) => sv(`nj${i}`, 'UNVERIFIABLE', i, { summary: 'UNVERIFIABLE — no judge brain available (disabled or cooling)' })),
+    sv('cr0', 'UNVERIFIABLE', 10, { crashed: true, summary: 'UNVERIFIABLE — judge crashed or timed out (fail-open)' }),
+    sv('ju0', 'UNVERIFIABLE', 11, { cause: 'judge-unverifiable', summary: 'all criteria unverifiable' }),
+    // … and only 5 decisive verdicts.
+    sv('a0', 'APPROVED', 20), sv('a1', 'APPROVED', 21), sv('a2', 'APPROVED', 22), sv('a3', 'APPROVED', 23),
+    sv('c0', 'CHANGES_REQUESTED', 24),
+  ] as unknown as Task[];
+
+  const m = computeQualityMetrics([], tasks, T0, T0 + 86_400_000);
+  assert.equal(m.specVerdicts.total, 14, 'all 14 are still reported');
+  assert.deepEqual(m.specVerdicts.unverifiableByCause, { 'no-judge': 7, 'judge-crashed': 1, 'judge-unverifiable': 1 });
+  const g = m.specVerdicts.shadowGate;
+  assert.equal(g.decisive, 5);
+  assert.equal(g.approved, 4);
+  assert.equal(g.changesRequested, 1);
+  assert.equal(g.unverifiable, 9);
+  assert.equal(g.volumeMet, false, '14 total but only 5 decisive must NOT meet the ≥10 gate');
+
+  const more = [...tasks, ...Array.from({ length: 5 }, (_, i) => sv(`b${i}`, 'APPROVED', 30 + i))] as unknown as Task[];
+  const m2 = computeQualityMetrics([], more, T0, T0 + 86_400_000);
+  assert.equal(m2.specVerdicts.shadowGate.decisive, 10);
+  assert.equal(m2.specVerdicts.shadowGate.volumeMet, true);
+});
+
+test('shadow gate honours minDecisive / maxFalseRejectRate overrides and the window start (post-deploy verdicts only)', () => {
+  const T0 = Date.parse('2026-10-30T00:00:00.000Z');
+  const at = (min: number) => new Date(T0 + min * 60_000).toISOString();
+  const tasks = [-60, 5, 6, 7].map((min, i) => ({
+    id: `t${i}`, status: 'done', createdAt: at(min), completedAt: at(min),
+    context: { specVerdict: { verdict: 'APPROVED', at: at(min) } },
+  })) as unknown as Task[];
+  const m = computeQualityMetrics([], tasks, T0, T0 + 86_400_000, { minDecisive: 3, maxFalseRejectRate: 0.05 });
+  assert.equal(m.specVerdicts.shadowGate.decisive, 3, 'the verdict before the window start (deploy) is excluded');
+  assert.equal(m.specVerdicts.shadowGate.volumeMet, true);
+  assert.equal(m.specVerdicts.shadowGate.maxFalseRejectRate, 0.05);
+});
+
+test('unverifiableCause: explicit cause wins; legacy records classified from summary / crashed', () => {
+  assert.equal(unverifiableCause({ cause: 'judge-crashed' }), 'judge-crashed');
+  assert.equal(unverifiableCause({ summary: 'UNVERIFIABLE — no judge brain available (disabled or cooling)' }), 'no-judge');
+  assert.equal(unverifiableCause({ crashed: true, summary: 'judge crashed' }), 'judge-crashed');
+  assert.equal(unverifiableCause({ summary: 'criteria could not be checked' }), 'judge-unverifiable');
 });

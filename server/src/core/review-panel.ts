@@ -15,6 +15,8 @@
  * own the I/O.
  */
 
+import { JUDGE_COMPLIANCE_RULES, ARTIFACT_LISTING_RULE, JUDGE_RULES_HEADING } from './result-verifier.js';
+
 export type PanelBucket = 'act_on' | 'consider' | 'noted' | 'dismissed';
 
 export interface PanelFinding {
@@ -62,9 +64,14 @@ export const PANEL_RUBRIC = [
   `For every FAIL, tag the severity in the reason: \`critical\`, \`warning\` or \`nit\`.`,
 ].join('\n');
 
-/** Reviewer prompt = the existing verifier prompt + the rubric lenses. */
+/** Reviewer prompt = the existing verifier prompt + the rubric lenses. The
+ *  judging rules ride in buildVerifierPrompt; they are added here only when the
+ *  base prompt lacks them (e.g. a workflow gate's own prompt), never twice. */
 export function buildPanelReviewerPrompt(basePrompt: string): string {
-  return `${PANEL_RUBRIC}\n\n${basePrompt}`;
+  const rules = basePrompt.includes(JUDGE_RULES_HEADING)
+    ? ''
+    : `${JUDGE_RULES_HEADING}\n${[...JUDGE_COMPLIANCE_RULES, ARTIFACT_LISTING_RULE].join('\n')}\n\n`;
+  return `${PANEL_RUBRIC}\n\n${rules}${basePrompt}`;
 }
 
 /** lead-judgment.md "Nitpick Gravity" + "I Would Have Done It Differently", verbatim. */
@@ -102,6 +109,9 @@ export function buildLeadJudgmentPrompt(input: {
     `Merge findings that describe the same issue differently and list every family that raised it. Findings two or more families raised independently are the highest signal. Read a lone family's finding, but weight it accordingly. Be especially careful about dismissing security findings and correctness bugs.`,
     ``,
     LEAD_FILTERS_VERBATIM,
+    ``,
+    `Dismiss any finding that breaks these judging rules, and say which rule:`,
+    ...JUDGE_COMPLIANCE_RULES,
     ``,
     `Put every finding in exactly one bucket:`,
     `- act_on — real issues affecting correctness, security, or maintainability given the actual goals. They would block a real PR.`,

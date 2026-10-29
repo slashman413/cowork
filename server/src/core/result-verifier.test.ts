@@ -6,6 +6,7 @@ import {
   detectInputRequest, DEFAULT_QUESTION_PATTERNS, detectBackgroundWait, DEFAULT_BACKGROUND_WAIT_PATTERNS,
   parseStatusFooter, truncateHeadTail, extractEvidenceBlock, parseSpecVerdict,
   selectSpecJudge, selectSpecJudges, isSmallSpecTask, DEFAULT_SPEC_JUDGES,
+  explainSpecJudgeSkips, JUDGE_COMPLIANCE_RULES, ARTIFACT_LISTING_RULE, JUDGE_RULES_HEADING,
 } from './result-verifier.js';
 
 /**
@@ -545,4 +546,69 @@ test('PS-5: unaccountedFailedDeps returns failed deps the result does not name (
   assert.deepEqual(unaccountedFailedDeps(deps, 'child BBBBBBBB failed — absorbed into aaaaaaaa'), ['cccccccc-1111-2222-3333-444444444444']);
   assert.deepEqual(unaccountedFailedDeps(deps, 'bbbbbbbb-1111-2222-3333-444444444444 and cccccccc ISSUES'), []);
   assert.deepEqual(unaccountedFailedDeps([], 'x'), []);
+});
+
+// ── P1-1 judging rules (2026-10-30, from the ee175cea false reject) ───────────
+
+test('buildVerifierPrompt carries the three judging rules + the artifact-listing rule, before the task', () => {
+  const prompt = buildVerifierPrompt(
+    { title: 'Daily LINE sticker', description: 'Submit for review OR produce the full submission ZIP. Research: downloads or ranking.' },
+    'done\nSTATUS: DONE',
+    { acceptance: ['Submit or produce the ZIP'], artifacts: [{ name: 'stickers_pack/upload.zip', size: 3 }] },
+  );
+  assert.match(prompt, /JUDGING RULES \(apply before marking any criterion FAIL\):/);
+  // (a) alternative delivery path is compliant
+  assert.match(prompt, /ALTERNATIVE DELIVERY PATHS:.*"submit for review OR produce the full submission ZIP".*ANY one of them satisfies it — mark it PASS/);
+  assert.match(prompt, /Never FAIL a criterion because a different alternative was not taken/);
+  // (b) never require non-public data
+  assert.match(prompt, /NON-PUBLIC DATA: never require data that is not publicly available \(e\.g\. per-sticker LINE download counts/);
+  assert.match(prompt, /Missing non-public data is never a FAIL on its own, and when the criterion accepts an "or" alternative that was delivered, it is a PASS/);
+  // (c) documented operational constraints are compliant
+  assert.match(prompt, /DOCUMENTED OPERATIONAL CONSTRAINTS:.*max-2-LINE-submissions-per-Taiwan-day cap.*is compliant, not a failure/);
+  // artifact listing must be checked before "missing"
+  assert.match(prompt, /CHECK THE ARTIFACT LISTING BEFORE CALLING ANYTHING MISSING/);
+  assert.match(prompt, /ARTIFACTS ON DISK \(recursive listing/);
+  assert.ok(prompt.indexOf(JUDGE_RULES_HEADING) < prompt.indexOf('TASK: Daily LINE sticker'), 'rules come before the task');
+  for (const r of [...JUDGE_COMPLIANCE_RULES, ARTIFACT_LISTING_RULE]) assert.ok(prompt.includes(r));
+  assert.equal(prompt.split(JUDGE_RULES_HEADING).length, 2, 'rules appear exactly once');
+});
+
+test('buildVerifierPrompt lists a capped-listing note string verbatim', () => {
+  const prompt = buildVerifierPrompt({ title: 't' }, 'r', { acceptance: ['a'], artifacts: [{ name: 'a.md', size: 1 }, '… 5 more file(s) on disk not listed (listing capped at 300)'] });
+  assert.match(prompt, /- … 5 more file\(s\) on disk not listed/);
+});
+
+test('selectSpecJudges: other-family fallbackPool extends the configured chain only after it', () => {
+  const brains: Record<string, any> = {
+    exec: { location: 'local', exec: 'agy', model: 'gemini-3.8-flash-high' },
+    'local-agy-claude-opus-5-5-medium': { location: 'local', exec: 'agy', model: 'claude-opus-5-5-medium' },
+    'local-cc-opus-5-5': { location: 'local', exec: 'claude', model: 'claude-opus-5-5' },
+    'local-agy-gemini-4-argon-medium': { location: 'local', exec: 'agy', model: 'gemini-4-argon-medium' },
+    'local-dsh-qwen': { location: 'local', exec: 'dsh', model: 'qwen3.8-27b' },
+  };
+  const pool = ['local-cc-opus-5-5', 'local-agy-gemini-4-argon-medium', 'local-dsh-qwen'];
+  assert.deepEqual(selectSpecJudges('exec', { brains, fallbackPool: pool }),
+    ['local-agy-claude-opus-5-5-medium', 'local-cc-opus-5-5', 'local-dsh-qwen']);
+  const cooling = new Set(['local-agy-claude-opus-5-5-medium', 'local-cc-opus-5-5']);
+  assert.deepEqual(selectSpecJudges('exec', { brains, fallbackPool: pool, isCooling: id => cooling.has(id) }), ['local-dsh-qwen']);
+  assert.deepEqual(selectSpecJudges('exec', { brains, isCooling: id => cooling.has(id) }), [], 'no pool → none, as before');
+});
+
+test('explainSpecJudgeSkips: names every candidate and why it is unusable', () => {
+  const brains: Record<string, any> = {
+    exec: { location: 'local', exec: 'agy', model: 'gemini-3.8-flash-high' },
+    'local-cc-opus-5-5': { location: 'local', exec: 'claude', model: 'claude-opus-5-5', disabled: true },
+    'local-agy-gemini-4-argon-medium': { location: 'local', exec: 'agy', model: 'gemini-4-argon-medium' },
+    'remote-x': { location: 'remote', exec: 'claude', model: 'claude-opus-5-5' },
+  };
+  const skips = explainSpecJudgeSkips('exec', {
+    brains, isCooling: id => id === 'local-agy-claude-opus-5-5-medium',
+    fallbackPool: ['local-agy-gemini-4-argon-medium', 'remote-x'],
+  });
+  assert.deepEqual(skips, [
+    { id: 'local-agy-claude-opus-5-5-medium', why: 'not registered in orchestration.brains' },
+    { id: 'local-cc-opus-5-5', why: 'disabled' },
+    { id: 'local-agy-gemini-4-argon-medium', why: 'same model family as the executor' },
+    { id: 'remote-x', why: 'remote (the verifier only spawns local brains)' },
+  ]);
 });

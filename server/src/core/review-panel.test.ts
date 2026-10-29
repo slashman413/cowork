@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { v4 as uuidv4 } from 'uuid';
-import { selectSpecJudges } from './result-verifier.js';
+import { selectSpecJudges, buildVerifierPrompt, JUDGE_COMPLIANCE_RULES, ARTIFACT_LISTING_RULE, JUDGE_RULES_HEADING } from './result-verifier.js';
 import { parseLeadJudgment, applyBucketRules, buildLeadJudgmentPrompt, buildPanelReviewerPrompt, effectivePanelSize, LEAD_FILTERS_VERBATIM } from './review-panel.js';
 import { computeQualityMetrics } from './quality-metrics.js';
 import { Workflows } from './workflows.js';
@@ -278,4 +278,21 @@ test('quality metrics: rounds per gate and Dismissed share from gate-panel lesso
   assert.equal(m.panel.avgRoundsPerGate, 1.5);
   assert.deepEqual(m.panel.buckets, { actOn: 1, consider: 1, noted: 1, dismissed: 3 });
   assert.equal(m.panel.dismissedShare, 50);
+});
+
+test('buildPanelReviewerPrompt carries the judging rules exactly once (added when the base prompt lacks them)', () => {
+  const bare = buildPanelReviewerPrompt('TASK: x\nRESULT: y');
+  assert.ok(bare.includes(JUDGE_RULES_HEADING));
+  for (const r of [...JUDGE_COMPLIANCE_RULES, ARTIFACT_LISTING_RULE]) assert.ok(bare.includes(r), r.slice(0, 40));
+  assert.match(bare, /ALTERNATIVE DELIVERY PATHS/);
+  assert.match(bare, /NON-PUBLIC DATA/);
+  assert.match(bare, /DOCUMENTED OPERATIONAL CONSTRAINTS/);
+  const full = buildPanelReviewerPrompt(buildVerifierPrompt({ title: 't' }, 'r', { acceptance: ['a'] }));
+  assert.equal(full.split(JUDGE_RULES_HEADING).length, 2, 'not duplicated when buildVerifierPrompt already has them');
+});
+
+test('buildLeadJudgmentPrompt tells the lead to dismiss findings that break the judging rules', () => {
+  const p = buildLeadJudgmentPrompt({ title: 't', acceptance: ['a'], reviews: [{ family: 'gemini', brain: 'g', text: '1. FAIL — no per-sticker downloads' }] });
+  assert.match(p, /Dismiss any finding that breaks these judging rules/);
+  for (const r of JUDGE_COMPLIANCE_RULES) assert.ok(p.includes(r));
 });

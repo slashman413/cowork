@@ -261,6 +261,75 @@ test('all cross-family judges cooling/unavailable records UNVERIFIABLE and does 
   assert.equal(out!.context!.specVerdict?.judgeBrain, null);
 });
 
+test('no-judge UNVERIFIABLE records cause + why each candidate judge was skipped', async () => {
+  const h = harness('shadow');
+  h.store.noteBrainRateLimited('local-agy-gemini-4-argon-medium');
+  (h.config.orchestration.brains as any)['local-agy-gemini-3.8-flash-high'].disabled = true;
+
+  const t = h.createInProgress({ acceptance: ['Tests pass'] });
+  const out = await h.store.completeTask({ taskId: t.id, result: 'All tests pass.\nSTATUS: DONE\nEVIDENCE:\n- npm test → pass' });
+
+  const sv = out!.context!.specVerdict!;
+  assert.equal(sv.verdict, 'UNVERIFIABLE');
+  assert.equal(sv.cause, 'no-judge');
+  assert.deepEqual(sv.skippedJudges, [
+    { id: 'local-agy-gemini-4-argon-medium', why: 'cooling after a rate limit' },
+    { id: 'local-agy-gemini-3.8-flash-high', why: 'disabled' },
+    // other-family fallback pool (every judge chain): Claude brains can't judge a Claude executor
+    { id: 'local-agy-claude-opus-5-5-medium', why: 'same model family as the executor' },
+    { id: 'local-cc-opus-5-5', why: 'same model family as the executor' },
+  ]);
+  assert.match(sv.summary, /local-agy-gemini-4-argon-medium: cooling after a rate limit/);
+  assert.match(sv.summary, /local-agy-gemini-3\.8-flash-high: disabled/);
+  const shadow = h.lessons().filter((l: any) => l.kind === 'quality-shadow');
+  assert.equal(shadow.length, 1);
+  assert.match(shadow[0].reason, /cause=no-judge/);
+});
+
+test('configured judges all unavailable → falls back to an other-family tier brain instead of UNVERIFIABLE', async () => {
+  const h = harness('shadow');
+  (h.config.orchestration as any).tiers = { judgment: ['local-cc-opus-5-5'], standard: ['local-agy-gemini-4-argon-medium'], mechanical: ['local-agy-gemini-3.8-flash-high'] };
+  // Gemini executor; both configured (Claude) judges on quota — the 2026-10-20/21 pattern.
+  h.store.noteBrainRateLimited('local-agy-claude-opus-5-5-medium');
+  h.store.noteBrainRateLimited('local-cc-opus-5-5');
+  (h.config.orchestration.brains as any)['local-qwen-judge'] = { location: 'local', exec: 'dsh', model: 'qwen3.8-27b' };
+  (h.config.orchestration as any).tiers.mechanical.push('local-qwen-judge');
+  const t = h.createInProgress({ acceptance: ['Tests pass'] });
+  t.context = { ...t.context, brain: 'local-agy-gemini-3.8-flash-high' };
+  h.store.saveTask(t);
+
+  const out = await (h.dispatcher as any).specVerdict(t, 'All tests pass.\nSTATUS: DONE', 'local-agy-gemini-3.8-flash-high', 1, ['Tests pass']);
+  assert.equal(out.ok, true);
+  assert.deepEqual(h.specCalls.map(c => c.judgeId), ['local-qwen-judge'], 'gemini brains are skipped (same family), qwen tier brain judges');
+  const fresh = h.store.getTask(t.id)!;
+  assert.equal(fresh.context!.specVerdict?.verdict, 'APPROVED');
+});
+
+test('spec judge sees the RECURSIVE on-disk artifact listing (subfolders) and the judging rules', async () => {
+  const h = harness('shadow');
+  const t = h.createInProgress({ acceptance: ['Sticker pack (main, tab, APNG, M4A) produced', 'Promo copy for Threads/Dcard/IG'] });
+  const dir = path.join(h.paths.artifacts, t.id);
+  fs.mkdirSync(path.join(dir, 'stickers_pack'), { recursive: true });
+  fs.mkdirSync(path.join(dir, 'promo'), { recursive: true });
+  fs.mkdirSync(path.join(dir, 'outputs'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'stickers_pack', '01.png'), 'x'.repeat(10));
+  fs.writeFileSync(path.join(dir, 'promo', 'dcard.md'), 'post');
+  fs.writeFileSync(path.join(dir, 'outputs', 'Lulu_upload.zip'), 'zip');
+  fs.writeFileSync(path.join(dir, 'progress.log'), 'noise');
+
+  await h.store.completeTask({ taskId: t.id, result: 'Pack done, see threads.md.\nSTATUS: DONE\nEVIDENCE:\n- ls → ok' });
+  assert.equal(h.specCalls.length, 1);
+  const prompt = h.specCalls[0].prompt;
+  assert.match(prompt, /- stickers_pack\/01\.png \(10 bytes\)/);
+  assert.match(prompt, /- promo\/dcard\.md \(4 bytes\)/);
+  assert.match(prompt, /- outputs\/Lulu_upload\.zip \(3 bytes\)/);
+  assert.doesNotMatch(prompt, /progress\.log/);
+  assert.match(prompt, /ALTERNATIVE DELIVERY PATHS/);
+  assert.match(prompt, /NON-PUBLIC DATA/);
+  assert.match(prompt, /DOCUMENTED OPERATIONAL CONSTRAINTS/);
+  assert.match(prompt, /CHECK THE ARTIFACT LISTING BEFORE CALLING ANYTHING MISSING/);
+});
+
 test('legacy task without acceptance criteria is untouched by spec verifier and uses legacy llmVerdict', async () => {
   const h = harness('enforce');
   const t = h.createInProgress(); // no acceptance

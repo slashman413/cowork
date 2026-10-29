@@ -308,7 +308,10 @@ async function main() {
   app.get('/api/metrics/quality', (req, res) => {
     const { from, to } = metricsWindow(req.query as Record<string, unknown>);
     const { lessons, skipped } = readLessons(config.paths.decisions);
-    res.json(computeQualityMetrics(lessons, store.listTasks(), from, to, { lessonsSkipped: skipped }));
+    const spec = config.orchestration.verifier?.spec;
+    res.json(computeQualityMetrics(lessons, store.listTasks(), from, to, {
+      lessonsSkipped: skipped, minDecisive: spec?.minDecisiveVerdicts, maxFalseRejectRate: spec?.maxFalseRejectRate,
+    }));
   });
 
   // ── P2-2 correct loop: lessons grouped into classes (≥2) with a structure-first

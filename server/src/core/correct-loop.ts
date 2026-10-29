@@ -181,7 +181,7 @@ export function remedyMenu(c: LessonClass): RemedyOption[] {
       if (prev !== undefined && t - prev <= REPEAT_WINDOW_MS) repeats.push(e);
       lastHit.set(e.brain, t);
     }
-    add('brain-cooldown', `cool the brain down for ≥${REPEAT_WINDOW_MS / 60_000} min after a "${normalizeReason(sample.reason)}" notice (P0-1 breaker; widen orchestration.brainCooldown.patterns if this text is not matched)`, repeats);
+    add('brain-cooldown', `cool the brain down for ≥${REPEAT_WINDOW_MS / 60_000} min after a "${normalizeReason(sample.reason)}" notice (Store rate-limit cooldown; extend isRateLimitFailure / verifier.failPatterns if this text is not matched)`, repeats);
   }
 
   // 3. env requires-filter — events share a missing path/tool/secret.

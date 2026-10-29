@@ -9,7 +9,7 @@ import { isFailedTask } from './store.js';
 import type { Workflows } from './workflows.js';
 import type { Goals } from './goals.js';
 import { FIGURE_IT_OUT_RULES } from './goals.js';
-import { verifyOutput, isRateLimitFailure, isCliRateLimitSignal, buildVerifierPrompt, parseLlmVerdict, parseSpecVerdict, selectSpecJudges, DEFAULT_SPEC_JUDGES, extractEvidenceBlock, detectInputRequest, detectBackgroundWait, unaccountedFailedDeps, parseStatusFooter, type StatusFooter, type VerifyVerdict, type VerifierArtifact, type SpecVerdictRecord, type InputOptions, type InputRequest, type BackgroundOptions, type BackgroundWait } from './result-verifier.js';
+import { verifyOutput, isRateLimitFailure, isCliRateLimitSignal, buildVerifierPrompt, parseLlmVerdict, parseSpecVerdict, selectSpecJudges, explainSpecJudgeSkips, DEFAULT_SPEC_JUDGES, extractEvidenceBlock, detectInputRequest, detectBackgroundWait, unaccountedFailedDeps, parseStatusFooter, type StatusFooter, type VerifyVerdict, type VerifierArtifact, type SpecVerdictRecord, type InputOptions, type InputRequest, type BackgroundOptions, type BackgroundWait } from './result-verifier.js';
 import { buildLesson, appendLesson, type LessonPanel } from './lessons.js';
 import { buildPanelReviewerPrompt, buildLeadJudgmentPrompt, parseLeadJudgment } from './review-panel.js';
 import { describeAutoAnswer, logAutoAnswer } from './rulings.js';
@@ -1764,18 +1764,39 @@ export class Dispatcher {
   }
 
   /** Collect artifacts produced by `task` with byte sizes (for the spec verifier). */
-  private collectArtifactsWithSizes(task: Task): VerifierArtifact[] {
+  /** Cap on files listed to the spec judge (the prompt stays bounded). */
+  static readonly SPEC_ARTIFACT_LIST_MAX = 300;
+
+  /**
+   * The on-disk artifact listing the spec judge checks deliverables against —
+   * RECURSIVE (outputs/, stickers_pack/, promo/ …), relative paths with sizes.
+   * It used to list the top level only, so on ee175cea the judge called three
+   * deliverables "missing" that sat in subfolders.
+   */
+  private collectArtifactsWithSizes(task: Task): Array<string | VerifierArtifact> {
     const seen = new Map<string, number>();
     const artRoot = this.config.paths?.artifacts;
+    const max = Dispatcher.SPEC_ARTIFACT_LIST_MAX;
+    let unlisted = 0;
     if (artRoot && task.id) {
-      const dir = this.artifactsDir(task.id);
-      try {
-        for (const f of readdirSync(dir)) {
-          if (f === 'progress.log' || f === 'result.md') continue;
-          const st = statSync(join(dir, f));
-          if (st.isFile()) seen.set(f, st.size);
+      const root = this.artifactsDir(task.id);
+      const walk = (dir: string, rel: string, depth: number) => {
+        let names: string[] = [];
+        try { names = readdirSync(dir).sort(); } catch { return; }
+        for (const f of names) {
+          if (f.startsWith('.') || f === 'node_modules') continue;
+          if (!rel && (f === 'progress.log' || f === 'result.md')) continue;
+          const abs = join(dir, f);
+          const name = rel ? `${rel}/${f}` : f;
+          let st;
+          try { st = statSync(abs); } catch { continue; }
+          if (st.isDirectory()) { if (depth < 6) walk(abs, name, depth + 1); continue; }
+          if (!st.isFile()) continue;
+          if (seen.size >= max) { unlisted++; continue; }
+          seen.set(name, st.size);
         }
-      } catch { /* no artifacts dir on disk */ }
+      };
+      walk(root, '', 0);
     }
     const extra = Array.isArray((task as any).artifacts)
       ? (task as any).artifacts
@@ -1793,7 +1814,9 @@ export class Dispatcher {
         seen.set(item.name, Number(item.size) || 0);
       }
     }
-    return Array.from(seen.entries()).map(([name, size]) => ({ name, size }));
+    const out: Array<string | VerifierArtifact> = Array.from(seen.entries()).map(([name, size]) => ({ name, size }));
+    if (unlisted) out.push(`… ${unlisted} more file(s) on disk not listed (listing capped at ${max})`);
+    return out;
   }
 
   /** Spawn a single spec-judge brain through the normal exec path with a short timeout. */
@@ -1899,30 +1922,35 @@ export class Dispatcher {
     const evidence = extractEvidenceBlock(text);
     const prompt = buildVerifierPrompt(task, text, { acceptance, artifacts, evidence });
 
-    const candidates = selectSpecJudges(executorBrainId, {
+    const judgeOpts = {
       brains: this.config.orchestration.brains,
       judges: specCfg.judges,
-      isCooling: id => !!this.store.brainCooldownUntil(id),
-      result: text,
-      acceptance,
-    });
+      isCooling: (id: string) => !!this.store.brainCooldownUntil(id),
+      fallbackPool: this.specJudgeFallbackPool(),
+    };
+    const candidates = selectSpecJudges(executorBrainId, { ...judgeOpts, result: text, acceptance });
 
     if (candidates.length === 0) {
+      const skipped = explainSpecJudgeSkips(executorBrainId, judgeOpts);
+      const why = skipped.map(s => `${s.id}: ${s.why}`).join('; ') || 'no candidates configured';
       const record: SpecVerdictRecord = {
         verdict: 'UNVERIFIABLE',
         mode,
         judgeBrain: null,
         executorBrain: executorBrainId,
-        criteria: acceptance.map(c => ({ criterion: c, status: 'UNVERIFIABLE', reason: 'no judge brain available (disabled or cooling)' })),
+        criteria: acceptance.map(c => ({ criterion: c, status: 'UNVERIFIABLE', reason: 'no judge brain available' })),
         failedCriteria: [],
-        summary: 'UNVERIFIABLE — no judge brain available (disabled or cooling)',
+        summary: `UNVERIFIABLE — no judge brain available (${why})`.slice(0, 600),
         at: new Date().toISOString(),
+        cause: 'no-judge',
+        skippedJudges: skipped,
       };
+      console.warn(`Dispatcher: spec verifier has no judge for task ${task.id} (executor ${executorBrainId}) — ${why}`);
       this.persistSpecVerdict(task, record);
       if (mode === 'shadow') {
         this.recordLesson(task.id, {
           kind: 'quality-shadow', brain: executorBrainId, agent, attempt: attemptNumber,
-          reason: `UNVERIFIABLE (judge=none): ${record.summary}`, resultText: text,
+          reason: `UNVERIFIABLE (judge=none, cause=no-judge): ${record.summary}`, resultText: text,
         });
       }
       return { ok: true };
@@ -1980,12 +2008,13 @@ export class Dispatcher {
         summary: 'UNVERIFIABLE — judge crashed or timed out (fail-open)',
         at: new Date().toISOString(),
         crashed: true,
+        cause: 'judge-crashed',
       };
       this.persistSpecVerdict(task, record);
       if (mode === 'shadow') {
         this.recordLesson(task.id, {
           kind: 'quality-shadow', brain: executorBrainId, agent, attempt: attemptNumber,
-          reason: `UNVERIFIABLE (judge=${record.judgeBrain || 'none'}, crashed): ${record.summary}`, resultText: text,
+          reason: `UNVERIFIABLE (judge=${record.judgeBrain || 'none'}, cause=judge-crashed): ${record.summary}`, resultText: text,
         });
       }
       return { ok: true };
@@ -2000,6 +2029,7 @@ export class Dispatcher {
       failedCriteria: parsed.failedCriteria,
       summary: parsed.summary,
       at: new Date().toISOString(),
+      ...(parsed.verdict === 'UNVERIFIABLE' ? { cause: 'judge-unverifiable' as const } : {}),
     };
     this.persistSpecVerdict(task, record);
 
@@ -2019,6 +2049,20 @@ export class Dispatcher {
       };
     }
     return { ok: true };
+  }
+
+  /** Brains the spec verifier may fall back to when the executor family's
+   *  configured judges are all unavailable: the tier lists (judgment, standard,
+   *  mechanical) then every family's judge chain. Other-family only (enforced in
+   *  selectSpecJudges). */
+  private specJudgeFallbackPool(): string[] {
+    const tiers = this.config.orchestration.tiers || {};
+    const judges = this.config.orchestration.verifier?.spec?.judges || {};
+    const pool = [
+      ...(tiers.judgment || []), ...(tiers.standard || []), ...(tiers.mechanical || []),
+      ...Object.values(judges).flatMap(v => (Array.isArray(v) ? v : [])),
+    ];
+    return pool.filter((id, i) => id && pool.indexOf(id) === i);
   }
 
   /**

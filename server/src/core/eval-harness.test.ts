@@ -219,3 +219,18 @@ test('workflows/eval-prompt-change.json validates and pins every step to the eva
     assert.match(s.description, /SANDBOX REPLAY — do not perform outward actions/);
   }
 });
+
+test('eval judge prompt + rubric v2 carry the three judging rules', async () => {
+  const { JUDGE_COMPLIANCE_RULES, JUDGE_RULES_HEADING } = await import('./result-verifier.js');
+  const { RUBRIC_VERSION } = await import('./eval-harness.js');
+  const { items } = blindPairs([{ taskId: 'x', title: 'T', description: 'D', a: 'aaa', b: 'bbb' }], 's');
+  const p = buildJudgePrompt(items);
+  assert.equal(RUBRIC_VERSION, 'v2');
+  assert.match(p, /# Rubric \(v2\)/);
+  assert.ok(p.includes(JUDGE_RULES_HEADING));
+  for (const r of JUDGE_COMPLIANCE_RULES) assert.ok(p.includes(r), r.slice(0, 40));
+  const completion = EVAL_RUBRIC.find(r => r.key === 'completion')!.desc;
+  assert.match(completion, /alternative path the brief allows counts in full/);
+  assert.match(completion, /never deduct for missing non-public data/);
+  assert.match(completion, /documented operational constraint/);
+});

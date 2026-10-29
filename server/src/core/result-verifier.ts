@@ -46,7 +46,16 @@ export interface SpecVerdictRecord {
   summary: string;
   at: string;
   crashed?: boolean;
+  /** Why an UNVERIFIABLE verdict happened: no judge could be selected, the judge
+   *  crashed / timed out, or the judge itself answered UNVERIFIABLE. */
+  cause?: SpecUnverifiableCause;
+  /** For cause `no-judge`: every candidate judge and why it was skipped. */
+  skippedJudges?: SpecJudgeSkip[];
 }
+
+export type SpecUnverifiableCause = 'no-judge' | 'judge-crashed' | 'judge-unverifiable';
+
+export interface SpecJudgeSkip { id: string; why: string }
 
 export interface ParsedSpecVerdict extends VerifyVerdict {
   verdict: SpecVerdictStatus;
@@ -347,6 +356,27 @@ export function hasMeasuredNumber(text: string): boolean {
  *   One line per criterion `PASS|FAIL|UNVERIFIABLE — reason`, then
  *   `VERDICT: APPROVED | CHANGES_REQUESTED`.
  */
+/**
+ * Judge rules from the 2026-10-26 / 10-29 P1-1 shadow reviews. The one
+ * CHANGES_REQUESTED in the first shadow window (task ee175cea) was a false
+ * reject: the judge ignored the brief's "submit OR produce the submission ZIP"
+ * path, demanded per-sticker LINE download counts LINE does not publish, and
+ * penalised the documented max-2-submissions-per-TW-day cap. Shared by the spec
+ * verifier, the PS-2 panel reviewers and the P2-1 eval judge.
+ */
+export const JUDGE_COMPLIANCE_RULES: readonly string[] = [
+  `- ALTERNATIVE DELIVERY PATHS: when the brief or a criterion allows alternatives (e.g. "submit for review OR produce the full submission ZIP", "download OR ranking data"), delivering ANY one of them satisfies it — mark it PASS. Never FAIL a criterion because a different alternative was not taken.`,
+  `- NON-PUBLIC DATA: never require data that is not publicly available (e.g. per-sticker LINE download counts, another account's private analytics). Missing non-public data is never a FAIL on its own, and when the criterion accepts an "or" alternative that was delivered, it is a PASS.`,
+  `- DOCUMENTED OPERATIONAL CONSTRAINTS: a documented constraint or ruling that limits what this run could do (e.g. the max-2-LINE-submissions-per-Taiwan-day cap, a platform quota, a CEO ruling, a RULING: line in the result) is compliant, not a failure. If the result names the constraint and did the allowed part, mark the criterion PASS.`,
+];
+
+/** Spec-verifier / panel only (the eval judge sees no artifact listing). */
+export const ARTIFACT_LISTING_RULE =
+  `- CHECK THE ARTIFACT LISTING BEFORE CALLING ANYTHING MISSING: "ARTIFACTS ON DISK" below is the real file listing of the task's artifacts dir, subfolders included (e.g. outputs/, stickers_pack/, promo/). A file or folder that appears there EXISTS, even when the RESULT text does not mention it. Only FAIL a deliverable as missing when it is absent from both the listing and the result.`;
+
+/** Heading that marks the rules block (used to avoid injecting it twice). */
+export const JUDGE_RULES_HEADING = `JUDGING RULES (apply before marking any criterion FAIL):`;
+
 export function buildVerifierPrompt(
   task: VerifierTaskInput,
   result: string,
@@ -371,13 +401,17 @@ export function buildVerifierPrompt(
     `You are a strict SPEC-COMPLIANCE VERIFIER in a multi-agent company. Judge whether the RESULT, EVIDENCE, and ARTIFACTS below satisfy EVERY acceptance criterion of the TASK.`,
     `Do NOT give the benefit of the doubt for unverified claims, missing evidence, empty/missing artifacts, rate-limit/quota notices, errors, or refusals.`,
     ``,
+    JUDGE_RULES_HEADING,
+    ...JUDGE_COMPLIANCE_RULES,
+    ARTIFACT_LISTING_RULE,
+    ``,
     `TASK: ${task.title}`,
     (task.description || '').slice(0, 2000),
     ``,
     `ACCEPTANCE CRITERIA:`,
     ...criteria.map((c, i) => `${i + 1}. ${c}`),
     ``,
-    `ARTIFACTS PRODUCED (with sizes):`,
+    `ARTIFACTS ON DISK (recursive listing of the task's artifacts dir, with sizes):`,
     ...artifactLines,
     ``,
     `EVIDENCE BLOCK:`,
@@ -592,6 +626,56 @@ export interface SelectSpecJudgeOptions {
   /** PS-2: extra candidate brains (e.g. the tier lists) tried after the
    *  configured judge chain when filling a panel with more families. */
   panelPool?: string[];
+  /** Single-judge mode: brains tried AFTER the configured chain when every
+   *  configured judge is unavailable (disabled / cooling). Only brains of a
+   *  different model family than the executor qualify. Without this, a 2-deep
+   *  chain whose two brains share one quota left 7 of 8 shadow verdicts
+   *  UNVERIFIABLE ("no judge brain available") in 2026-10. */
+  fallbackPool?: string[];
+}
+
+/** Why `id` cannot judge right now, or null when it can. */
+function judgeUnavailable(id: string, executorBrainId: string, opts: SelectSpecJudgeOptions): string | null {
+  if (id === executorBrainId) return 'same brain as the executor';
+  if (opts.brains) {
+    const b = opts.brains[id];
+    if (!b) return 'not registered in orchestration.brains';
+    if (b.disabled) return 'disabled';
+    if (b.location === 'remote') return 'remote (the verifier only spawns local brains)';
+  }
+  if (opts.isCooling && opts.isCooling(id)) return 'cooling after a rate limit';
+  return null;
+}
+
+/** The configured judge chain for the executor's model family (before availability filtering). */
+function configuredJudgeChain(executorBrainId: string, opts: SelectSpecJudgeOptions): readonly string[] {
+  const family = brainFamily(opts.brains?.[executorBrainId], executorBrainId);
+  const cfg = opts.judges;
+  if (family === 'claude') return cfg?.claude?.length ? cfg.claude : DEFAULT_SPEC_JUDGES.claude;
+  if (family === 'gemini') return cfg?.gemini?.length ? cfg.gemini : DEFAULT_SPEC_JUDGES.gemini;
+  if (family === 'qwen') return (cfg?.qwen?.length ? cfg.qwen : cfg?.['qwen3.8-27b']?.length ? cfg['qwen3.8-27b'] : undefined) ?? DEFAULT_SPEC_JUDGES.qwen;
+  return (cfg?.[family]?.length ? cfg[family]! : cfg?.default?.length ? cfg.default : undefined) ?? DEFAULT_SPEC_JUDGES.default;
+}
+
+/**
+ * Every judge candidate (configured chain, then the other-family fallback pool)
+ * with the reason it was skipped. Recorded on a `no-judge` UNVERIFIABLE verdict
+ * so the cause is visible instead of a bare "no judge brain available".
+ */
+export function explainSpecJudgeSkips(executorBrainId: string, opts: SelectSpecJudgeOptions = {}): SpecJudgeSkip[] {
+  const execFamily = brainFamily(opts.brains?.[executorBrainId], executorBrainId);
+  const out: SpecJudgeSkip[] = [];
+  for (const id of configuredJudgeChain(executorBrainId, opts)) {
+    if (!id || out.some(s => s.id === id)) continue;
+    out.push({ id, why: judgeUnavailable(id, executorBrainId, opts) || 'available' });
+  }
+  for (const id of opts.fallbackPool || []) {
+    if (!id || out.some(s => s.id === id)) continue;
+    const why = judgeUnavailable(id, executorBrainId, opts)
+      || (brainFamily(opts.brains?.[id], id) === execFamily ? 'same model family as the executor' : null);
+    out.push({ id, why: why || 'available' });
+  }
+  return out;
 }
 
 /**
@@ -602,16 +686,7 @@ export interface SelectSpecJudgeOptions {
 export function selectSpecJudges(executorBrainId: string, opts: SelectSpecJudgeOptions = {}): string[] {
   const family = brainFamily(opts.brains?.[executorBrainId], executorBrainId);
   const cfg = opts.judges;
-  let raw: readonly string[];
-  if (family === 'claude') {
-    raw = cfg?.claude?.length ? cfg.claude : DEFAULT_SPEC_JUDGES.claude;
-  } else if (family === 'gemini') {
-    raw = cfg?.gemini?.length ? cfg.gemini : DEFAULT_SPEC_JUDGES.gemini;
-  } else if (family === 'qwen') {
-    raw = (cfg?.qwen?.length ? cfg.qwen : cfg?.['qwen3.8-27b']?.length ? cfg['qwen3.8-27b'] : undefined) ?? DEFAULT_SPEC_JUDGES.qwen;
-  } else {
-    raw = (cfg?.[family]?.length ? cfg[family]! : cfg?.default?.length ? cfg.default : undefined) ?? DEFAULT_SPEC_JUDGES.default;
-  }
+  const raw = configuredJudgeChain(executorBrainId, opts);
 
   const small = opts.smallTask ?? (opts.result !== undefined && opts.acceptance !== undefined
     ? isSmallSpecTask(opts.result, opts.acceptance)
@@ -620,12 +695,13 @@ export function selectSpecJudges(executorBrainId: string, opts: SelectSpecJudgeO
 
   const out: string[] = [];
   for (const id of ordered) {
-    if (!id || id === executorBrainId || out.includes(id)) continue;
-    if (opts.brains) {
-      const b = opts.brains[id];
-      if (!b || b.disabled || b.location === 'remote') continue;
-    }
-    if (opts.isCooling && opts.isCooling(id)) continue;
+    if (!id || out.includes(id) || judgeUnavailable(id, executorBrainId, opts)) continue;
+    out.push(id);
+  }
+  // Configured chain first; other-family fallbacks only extend it.
+  for (const id of opts.fallbackPool || []) {
+    if (!id || out.includes(id) || judgeUnavailable(id, executorBrainId, opts)) continue;
+    if (brainFamily(opts.brains?.[id], id) === family) continue;
     out.push(id);
   }
   const panel = opts.panel ?? 1;
