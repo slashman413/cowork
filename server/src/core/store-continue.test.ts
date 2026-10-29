@@ -234,3 +234,19 @@ test('continueTask accepts prompt + inputs + brain together (the full dialog pay
   assert.match(next.description!, /Refine it\./, 'prompt applied');
   assert.ok((next.context?.inputFiles as string[]).includes('extra.md'), 'extra input applied');
 });
+
+test('continueTask also seeds the prior run\'s final OUTPUTS (artifacts/<id>/outputs/*)', async () => {
+  const { store, root } = makeStore();
+  const orig = store.createTask({
+    title: 'Build the deck', description: 'Make slides.', from: { platform: 'p', agent: 'a' }, priority: 'medium'
+  } as any);
+  seedArtifacts(root, orig.id, { 'notes.md': '# notes' });
+  seedArtifacts(root, path.join(orig.id, 'outputs'), { 'deck.pptx': 'PPTX', 'notes.md': '# final notes' });
+  await store.completeTask({ taskId: orig.id, result: 'Deck done.', internal: true });
+
+  const next = store.continueTask(orig.id)!;
+  assert.deepEqual(store.listInputs(next.id).sort(), ['deck.pptx', 'notes-1.md', 'notes.md', 'previous-result.md'],
+    'outputs are seeded alongside artifacts; a name clash is collide-suffixed');
+  const dp = store.inputFilePath(next.id, 'deck.pptx');
+  assert.ok(dp && fs.readFileSync(dp, 'utf8') === 'PPTX');
+});

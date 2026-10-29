@@ -13,6 +13,7 @@ There is exactly **one** place for the files you produce:
 
 ```
 $COWORK_ARTIFACTS_DIR      →  cowork/artifacts/<task-id>/
+$COWORK_OUTPUTS_DIR        →  cowork/artifacts/<task-id>/outputs/
 ```
 
 That variable is set for you on every run, and your working directory is already
@@ -23,12 +24,16 @@ that folder. So:
 - **Never write outside it** unless the task explicitly names a destination. Do not
   write into the repo root, `server/`, or anyone's home directory.
 - Everything you leave there becomes a **downloadable artifact** on the task card.
+- **Final deliverables go in `outputs/`** (`$COWORK_OUTPUTS_DIR`): the report, deck,
+  video, or build the brief asked for. The task card lists them as **OUTPUTS**, right
+  after RESULT. Working files (notes, logs, scripts, patches, scratch data) stay in
+  the artifacts folder and show up as **ARTIFACTS**.
 - Your stdout becomes the task **result** (summary). Long output is truncated in the
   result — the full text is saved for you as `result.md`, so put the deliverable in
   the artifacts dir, not only in stdout.
 
 **Do not create a "report".** There is no report store. `task.result` +
-`artifacts/<task-id>/` is the complete record of a task.
+`artifacts/<task-id>/` (with its `outputs/`) is the complete record of a task.
 
 ## 2. You have full permissions
 

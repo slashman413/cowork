@@ -620,6 +620,10 @@ export interface Task {
   result?: string;
   /** Filenames collected from the task's artifacts dir (downloadable when done). */
   artifacts?: string[];
+  /** Final deliverable filenames the task placed in artifacts/<id>/outputs/
+   *  ($COWORK_OUTPUTS_DIR) — listed in their own OUTPUTS section, apart from the
+   *  working ARTIFACTS. */
+  outputs?: string[];
   /**
    * True when the task FINISHED by exhausting its whole fallback chain — every
    * brain failed verification (result is a "FAILED after N attempt(s) (chain

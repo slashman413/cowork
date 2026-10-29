@@ -516,7 +516,7 @@ function mediaKindFor(f) { return MEDIA_KIND.find(k => k.re.test(f)) || null; }
 // would mangle its formatting.
 const TEXT_RE = /\.(txt|log)$/i;
 
-// One file chip for a task's ARTIFACTS or INPUTS list (`kind` picks the API
+// One file chip for a task's OUTPUTS, ARTIFACTS or INPUTS list (`kind` picks the API
 // route). Markdown files (.md / .markdown) open in the in-app markdown viewer,
 // plain-text files (.txt / .log) open in the same viewer as raw text, and
 // images / video / audio open in the in-app media viewer (buttons wired to
@@ -2710,6 +2710,9 @@ class App {
       const resultOnDisk = artsRaw.includes('result.md');
       const hasResult = !closedNoRun && (!!t.result || resultOnDisk);
       const arts = artsRaw.filter(f => f !== 'result.md');
+      // OUTPUTS: the final deliverables the run placed in artifacts/<id>/outputs/
+      // ($COWORK_OUTPUTS_DIR) — their own section, right after RESULT.
+      const outs = Array.isArray(t.outputs) ? t.outputs : [];
       const inputsRaw = Array.isArray(c.inputFiles) ? c.inputFiles : [];
       const inputs = (t.description && !inputsRaw.includes('description.md'))
         ? ['description.md', ...inputsRaw] : inputsRaw;
@@ -2829,7 +2832,7 @@ class App {
           ${parentLink}
         </div>
         ${(() => {
-          // RESULT / ARTIFACTS / INPUTS live in one collapsible block, HIDDEN by
+          // RESULT / OUTPUTS / ARTIFACTS / INPUTS live in one collapsible block, HIDDEN by
           // default — long file lists used to bury the card. Tapping anywhere on
           // the card toggles it (delegated .task-card handler in the constructor);
           // per-card open state is kept in this.taskFilesOpen so in-place
@@ -2841,14 +2844,15 @@ class App {
           const sectionStyle = 'display:flex; flex-wrap:wrap; align-items:center; gap:4px; padding:4px 0 2px';
           const sectionLabel = (text, size) => `<span style="font-size:${size}; color:var(--text-muted); margin-right:2px; text-transform:uppercase; letter-spacing:.03em">${text}</span>`;
           const resultHtml = hasResult ? `<div class="task-result" style="${sectionStyle}">${sectionLabel('Result', '0.85rem')}${artifactChip(t.id, 'result.md', '0.9rem')}</div>` : '';
+          const outsHtml = outs.length ? `<div class="task-outputs" style="${sectionStyle}">${sectionLabel('Outputs', '0.85rem')}${outs.map(f => artifactChip(t.id, f, '0.9rem', 'outputs')).join('')}</div>` : '';
           const artsHtml = arts.length ? `<div class="task-artifacts" style="${sectionStyle}">${sectionLabel('Artifacts', '0.85rem')}${arts.map(f => artifactChip(t.id, f, '0.9rem')).join('')}</div>` : '';
           const inputsHtml = (inputs.length || canAttach) ? `<div class="task-inputs" style="${sectionStyle}">${sectionLabel('Inputs', '0.72rem')}${inputs.map(f => artifactChip(t.id, f, '0.78rem', 'inputs')).join('')}${canAttach ? `<input type="file" data-attach-files="${esc(t.id)}" multiple style="display:none">
           <button class="btn" data-attach-input="${esc(t.id)}" title="Attach files for the brain to read" style="font-size:0.75rem;margin:0">＋ Attach files</button>` : ''}</div>` : '';
           // The interaction form (if any) is the LAST section inside the block.
           const interactionHtml = this.interactionBlock(t);
-          if (!resultHtml && !artsHtml && !inputsHtml && !interactionHtml) return '';
+          if (!resultHtml && !outsHtml && !artsHtml && !inputsHtml && !interactionHtml) return '';
           const filesOpen = this.taskFilesOpen ? this.taskFilesOpen.has(t.id) : false;
-          const nFiles = (hasResult ? 1 : 0) + arts.length + inputs.length;
+          const nFiles = (hasResult ? 1 : 0) + outs.length + arts.length + inputs.length;
           const headParts = [];
           if (nFiles) headParts.push(`${nFiles} file${nFiles === 1 ? '' : 's'}`);
           else if (!interactionHtml) headParts.push('Files');
@@ -2860,6 +2864,7 @@ class App {
               <span style="font-size:0.72rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:.03em">${headParts.join(' · ')}</span>
             </div>
             ${resultHtml}
+            ${outsHtml}
             ${artsHtml}
             ${inputsHtml}
             ${interactionHtml}
@@ -3790,9 +3795,14 @@ class App {
       try {
         const t = await this.api.get(`/inbox/${encodeURIComponent(node.dataset.wfTask)}`);
         const arts = Array.isArray(t.artifacts) ? t.artifacts : [];
+        const outs = Array.isArray(t.outputs) ? t.outputs : [];
         // Deep link into the full task in the Inbox — opens in a new tab so the
         // run view stays put. `#tasks/<id>` is handled by navigate()/focusInboxTask.
         const taskUrl = `#tasks/${encodeURIComponent(t.id)}`;
+        const outHtml = outs.length ? `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin:8px 0 2px">
+            <span style="font-size:0.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.03em">Outputs</span>
+            ${outs.map(f => artifactChip(t.id, f, '0.8rem', 'outputs')).join('')}
+          </div>` : '';
         const artHtml = arts.length ? `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin:8px 0 2px">
             <span style="font-size:0.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.03em">Artifacts</span>
             ${arts.map(f => artifactChip(t.id, f, '0.8rem')).join('')}
@@ -3808,7 +3818,7 @@ class App {
             <span class="copyable" data-copy="${esc(t.id)}" title="Task ID — click to copy" style="cursor:pointer;font-family:ui-monospace,SFMono-Regular,Menlo,monospace"><i data-lucide="hash" style="width:11px;height:11px;vertical-align:-1px"></i>${esc(t.id)}</span>
             <span class="copyable" data-copy="artifacts/${esc(t.id)}/" title="Artifacts directory — click to copy" style="cursor:pointer;font-family:ui-monospace,SFMono-Regular,Menlo,monospace"><i data-lucide="folder" style="width:11px;height:11px;vertical-align:-1px"></i>artifacts/${esc(t.id)}/</span>
           </div>
-          ${artHtml}
+          ${outHtml}${artHtml}
           ${mdViewer(t.result || t.description || '(no output yet)', 'OUTPUT')}`;
         createIcons();
         // Local copy handler (the inbox's delegated one isn't bound in this view).

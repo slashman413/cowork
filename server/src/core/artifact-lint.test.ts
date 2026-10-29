@@ -89,3 +89,19 @@ test('artifact-lint: lintArtifacts scans directory and ignores runtime files', (
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test('artifact-lint: lintArtifacts also lints final deliverables in outputs/', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'artifact-lint-test-'));
+  try {
+    fs.mkdirSync(path.join(tmp, 'outputs'));
+    fs.writeFileSync(path.join(tmp, 'notes.md'), '# Notes\n\nWorking notes.');
+    fs.writeFileSync(path.join(tmp, 'outputs', 'report.md'), '   ');
+    const rep = lintArtifacts(tmp);
+    assert.deepEqual(rep.files.sort(), ['notes.md', 'outputs/report.md']);
+    assert.equal(rep.critical.length, 1);
+    assert.equal(rep.critical[0].file, 'outputs/report.md');
+    assert.equal(rep.critical[0].rule, 'empty-file');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});

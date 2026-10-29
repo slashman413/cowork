@@ -368,7 +368,9 @@ brain in the chain, so a clientless remote rung never stalls a task.
 (the dispatcher collects them from disk); remote brains save to the same env dir
 and the client **uploads** each file via `POST /api/artifacts/:taskId/:file`.
 Either way they land in `artifacts/<task-id>/` and become downloadable from the
-Inbox.
+Inbox. **Outputs** (the task's final deliverables) go in the `outputs/` subfolder
+(`$COWORK_OUTPUTS_DIR`; remote clients upload via `POST /api/outputs/:taskId/:file`)
+and get their own OUTPUTS section on the card, after RESULT and before ARTIFACTS.
 
 **Input files** flow the other way — a person attaches files for the brain to
 **read**. Attach them in the Chat composer (📎) or on any Inbox card ("＋ Attach

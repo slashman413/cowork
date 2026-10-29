@@ -578,6 +578,7 @@ function buildPrompt(task, artDir, inputInfo) {
   }
   lines.push(
     `If you generate any files (reports, media, data), save them to the directory: ${artDir} (also in $COWORK_ARTIFACTS_DIR) — they are uploaded to the dashboard as downloadable artifacts when the task completes.`,
+    `Put the FINAL deliverable files the user asked for in its outputs/ subfolder: ${join(artDir, 'outputs')} (also $COWORK_OUTPUTS_DIR) — the dashboard lists them as OUTPUTS, apart from working files (notes, logs, scripts) that stay in the artifacts folder.`,
     'Your final stdout becomes the task result shown on the dashboard.');
   return lines.join('\n');
 }
@@ -595,7 +596,7 @@ function runModel(brain, prompt, artDir) {
     : null;
   if (!argv) return Promise.resolve({ ok: false, text: `unknown/misconfigured exec ${brain.exec}` });
   return new Promise((resolve) => {
-    const child = spawn(argv[0], argv.slice(1), { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, COWORK_ARTIFACTS_DIR: artDir } });
+    const child = spawn(argv[0], argv.slice(1), { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, COWORK_ARTIFACTS_DIR: artDir, COWORK_OUTPUTS_DIR: join(artDir, 'outputs') } });
     let out = '', err = '';
     const timer = setTimeout(() => { child.kill('SIGTERM'); resolve({ ok: false, text: `TIMEOUT\n${out}\n${err}` }); }, TASK_TIMEOUT_MS);
     child.stdout.on('data', d => out += d); child.stderr.on('data', d => err += d);
@@ -609,14 +610,15 @@ function runModel(brain, prompt, artDir) {
 }
 // Upload every file the model dropped in artDir to the server's per-task
 // artifacts dir (raw binary POST), so the web UI can serve them for download.
-async function uploadArtifacts(taskId, artDir) {
+// route 'outputs' pushes artDir/outputs/ (the final deliverables) instead.
+async function uploadArtifacts(taskId, artDir, route = 'artifacts') {
   let files = [];
   try { files = readdirSync(artDir).filter(f => { try { return statSync(join(artDir, f)).isFile(); } catch { return false; } }); }
   catch { return 0; }
   let n = 0;
   for (const f of files) {
     try {
-      const res = await fetch(`${URL_BASE}/api/artifacts/${encodeURIComponent(taskId)}/${encodeURIComponent(f)}`, {
+      const res = await fetch(`${URL_BASE}/api/${route}/${encodeURIComponent(taskId)}/${encodeURIComponent(f)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/octet-stream', ...(API_KEY ? { Authorization: `Bearer ${API_KEY}` } : {}) },
         body: readFileSync(join(artDir, f))
@@ -658,7 +660,7 @@ async function handle(task, agentId) {
   running.add(task.id);
   const artDir = join(os.tmpdir(), 'cowork-artifacts', task.id);
   const inputDir = join(os.tmpdir(), 'cowork-inputs', task.id);
-  mkdirSync(artDir, { recursive: true });
+  mkdirSync(join(artDir, 'outputs'), { recursive: true });
   console.log(`[${AGENT_NAME}] claimed ${task.id} on ${brain.id} — ${task.title}`);
   try {
     await tool('heartbeat', { agent_id: agentId, status: 'working', current_task: task.title });
@@ -671,6 +673,8 @@ async function handle(task, agentId) {
     try { writeFileSync(join(artDir, 'result.md'), `# ${task.title}\n\n${text}\n`); } catch { /* ignore */ }
     const uploaded = await uploadArtifacts(task.id, artDir);
     if (uploaded) console.log(`[${AGENT_NAME}] uploaded ${uploaded} artifact(s) for ${task.id}`);
+    const outputs = await uploadArtifacts(task.id, join(artDir, 'outputs'), 'outputs');
+    if (outputs) console.log(`[${AGENT_NAME}] uploaded ${outputs} output(s) for ${task.id}`);
     const result = ok
       ? (text.length > 2000 ? text.slice(0, 2000) + `\n…(full output in artifacts/${task.id}/result.md)` : text)
       : `FAILED on ${brain.id}: ${text.slice(0, 1000)}`;

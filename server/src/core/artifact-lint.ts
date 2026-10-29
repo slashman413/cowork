@@ -53,6 +53,9 @@ export interface LintOptions {
 const TEXT_DELIVERABLE = new Set(['.md', '.markdown', '.txt', '.html', '.htm', '.json', '.csv', '.yaml', '.yml']);
 const PROSE = new Set(['.md', '.markdown', '.txt']);
 export const LINT_IGNORE = ['result.md', 'progress.log', 'changes.patch'];
+/** Subfolder of artifacts/<id>/ holding the task's FINAL deliverables
+ *  ($COWORK_OUTPUTS_DIR) — shown as OUTPUTS, apart from working artifacts. */
+export const OUTPUTS_SUBDIR = 'outputs';
 
 /** Remove fenced code blocks, inline code, HTML comments and quoted rule mentions from markdown/plain text. */
 export function stripCode(text: string): string {
@@ -118,7 +121,8 @@ export function lintContent(file: string, text: string, exists: (rel: string) =>
   return issues;
 }
 
-/** Lint every top-level text deliverable in an artifacts dir. */
+/** Lint every top-level text deliverable in an artifacts dir, plus those in its
+ *  outputs/ subfolder (reported as "outputs/<name>"). */
 export function lintArtifacts(dir: string, opts: LintOptions = {}): LintReport {
   const ignore = new Set([...(opts.ignore || []), ...LINT_IGNORE]);
   const maxBytes = opts.maxBytes ?? 2 * 1024 * 1024;
@@ -130,8 +134,9 @@ export function lintArtifacts(dir: string, opts: LintOptions = {}): LintReport {
   ]);
   let names: string[] = [];
   try { names = fs.readdirSync(dir); } catch { return report; }
+  try { names.push(...fs.readdirSync(path.join(dir, OUTPUTS_SUBDIR)).map(f => `${OUTPUTS_SUBDIR}/${f}`)); } catch { /* no outputs */ }
   for (const name of names) {
-    if (ignore.has(name) || name.startsWith('.')) continue;
+    if (ignore.has(name) || path.basename(name).startsWith('.')) continue;
     const abs = path.join(dir, name);
     let st: fs.Stats;
     try { st = fs.statSync(abs); } catch { continue; }

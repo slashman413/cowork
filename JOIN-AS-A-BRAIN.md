@@ -98,6 +98,8 @@ systemctl --user daemon-reload && systemctl --user enable --now cowork-remote-br
 - **Artifacts**: any files your model saves to `$COWORK_ARTIFACTS_DIR` (set for you
   per task) are uploaded to the server (`POST /api/artifacts/:taskId/:file`) and
   become downloadable from the Inbox — remote brains get artifacts too, not just local.
+  Final deliverables saved to `$COWORK_OUTPUTS_DIR` (`<artifacts>/outputs/`) upload via
+  `POST /api/outputs/:taskId/:file` and are listed separately as **OUTPUTS**.
 - To leave cleanly and remove your brains: call the `deregister_agent` tool (or remove
   them in the Brains view). Brains are NOT auto-removed on disconnect — they persist
   until deregistered.

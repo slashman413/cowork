@@ -25,6 +25,7 @@ import { getObsidianVault } from './core/obsidian.js';
 import { VideoStudio, VIDEO_STUDIO_TAG, ASPECTS } from './core/video-studio.js';
 import { normalizeRecurrence, nextRunAt } from './core/recurrence.js';
 import { Shotcraft, SHOTCRAFT_TAG, GALLERY_URL, ASPECTS as SHOTCRAFT_ASPECTS, LENGTHS as SHOTCRAFT_LENGTHS } from './core/shotcraft.js';
+import { OUTPUTS_SUBDIR } from './core/artifact-lint.js';
 import { sharedIntegrations, defaultAuditTargets, defaultWrapBrain } from './core/integrations.js';
 import { auditPath, mergeReports } from './core/skill-auditor.js';
 import { AUTH_COOKIE, KeylessLog, keyMatches, readCookie, resolveApiKey } from './core/auth.js';
@@ -668,12 +669,15 @@ async function main() {
   // ── Task artifacts (persistent per-task dir; downloadable) ─────────────────
   const artifactsRoot = config.paths.artifacts;
 
-  function listFilesRecursive(dir: string, base = ''): string[] {
+  // `skipTop` names top-level entries to leave out (the artifacts listing skips
+  // outputs/, which is served on its own by the /api/outputs routes).
+  function listFilesRecursive(dir: string, base = '', skipTop: string[] = []): string[] {
     let results: string[] = [];
     try {
       const entries = fs.readdirSync(dir, { withFileTypes: true });
       for (const entry of entries) {
         if (entry.name.startsWith('.') || entry.name === '__pycache__') continue;
+        if (!base && skipTop.includes(entry.name)) continue;
         const rel = base ? `${base}/${entry.name}` : entry.name;
         if (entry.isDirectory()) {
           results.push(...listFilesRecursive(path.join(dir, entry.name), rel));
@@ -688,7 +692,7 @@ async function main() {
   app.get('/api/artifacts/:taskId', (req, res) => {
     const dir = path.join(artifactsRoot, path.basename(req.params.taskId));
     if (!fs.existsSync(dir)) return res.json([]);
-    res.json(listFilesRecursive(dir));
+    res.json(listFilesRecursive(dir, '', [OUTPUTS_SUBDIR]));
   });
   app.get('/api/artifacts/:taskId/*file', (req, res) => {
     const taskId = path.basename(req.params.taskId);
@@ -752,6 +756,50 @@ async function main() {
       const task = store.getTask(taskId);
       if (task) {
         task.artifacts = [...new Set([...(task.artifacts || []), rawFile])];
+        store.saveTask(task);
+      }
+      res.json({ ok: true, taskId, file: rawFile, bytes: body.length });
+    } catch (e: any) { res.status(400).json({ error: e.message }); }
+  });
+
+  // ── Task OUTPUTS (final deliverables in artifacts/<id>/outputs/) ───────────
+  // Same layout + guards as the artifacts routes; the dashboard lists these in
+  // their own OUTPUTS section, after RESULT and before the working ARTIFACTS.
+  const outputsDir = (taskId: string) => path.resolve(artifactsRoot, path.basename(taskId), OUTPUTS_SUBDIR);
+  app.get('/api/outputs/:taskId', (req, res) => {
+    const dir = outputsDir(req.params.taskId);
+    if (!fs.existsSync(dir)) return res.json([]);
+    res.json(listFilesRecursive(dir));
+  });
+  app.get('/api/outputs/:taskId/*file', (req, res) => {
+    const dir = outputsDir(req.params.taskId);
+    const rawFile = Array.isArray(req.params.file) ? req.params.file.join('/') : String(req.params.file || '');
+    const file = path.resolve(dir, rawFile);
+    if (!file.startsWith(dir + path.sep)) return res.status(403).json({ error: 'forbidden' });
+    let st: fs.Stats;
+    try { st = fs.statSync(file); } catch { return res.status(404).json({ error: 'not found' }); }
+    if (!st.isFile()) return res.status(400).json({ error: 'not a file' });
+    if (req.query.inline === '1') return res.sendFile(file);
+    res.download(file, path.basename(file), (err) => {
+      if (err && !res.headersSent) res.status(500).json({ error: 'download failed' });
+    });
+  });
+  // Upload — a REMOTE brain client pushes each file from its outputs/ folder.
+  app.post('/api/outputs/:taskId/*file', express.raw({ type: '*/*', limit: '256mb' }), (req, res) => {
+    try {
+      const taskId = path.basename(req.params.taskId);
+      const rawFile = Array.isArray(req.params.file) ? req.params.file.join('/') : String(req.params.file || '');
+      if (!rawFile || rawFile === '.' || rawFile === '..') throw new Error('invalid filename');
+      const dir = outputsDir(taskId);
+      const dest = path.resolve(dir, rawFile);
+      if (!dest.startsWith(dir + path.sep)) throw new Error('path escape');
+      const body = Buffer.isBuffer(req.body) ? req.body : Buffer.from(req.body || '');
+      if (!body.length) throw new Error('empty body');
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.writeFileSync(dest, body);
+      const task = store.getTask(taskId);
+      if (task) {
+        task.outputs = [...new Set([...(task.outputs || []), rawFile])];
         store.saveTask(task);
       }
       res.json({ ok: true, taskId, file: rawFile, bytes: body.length });

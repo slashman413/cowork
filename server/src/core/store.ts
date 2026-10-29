@@ -1193,7 +1193,7 @@ export class Store {
    * Copy a FINISHED task's outputs into a fresh task's inputs dir so a
    * continuation run reads exactly what the prior run produced: its RESULT
    * (written as previous-result.md) plus every OUTPUT ARTIFACT file
-   * (artifacts/<prevId>/*). Names collide-suffix like {@link materializeInputs}.
+   * (artifacts/<prevId>/**, which includes the final OUTPUTS in outputs/). Names collide-suffix like {@link materializeInputs}.
    * Returns the stored input filenames (for context.inputFiles).
    */
   private seedContinuationInputs(newTaskId: string, prev: Task): string[] {

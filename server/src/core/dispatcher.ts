@@ -13,7 +13,7 @@ import { STREAMING_EXECS, streamArgs, createStreamRenderer } from './progress-st
 import { briefPersona } from './persona-brief.js';
 import { ClaudeProfile } from './claude-profile.js';
 import { killProcessTree } from './proc-tree.js';
-import { lintArtifacts, lintReason } from './artifact-lint.js';
+import { lintArtifacts, lintReason, OUTPUTS_SUBDIR } from './artifact-lint.js';
 import { isAgyModelRejection, diagnoseAgyModelFailure, listAgyModels } from './agy-models.js';
 
 /** Remove ANSI CSI/OSC escape sequences and lone carriage returns. */
@@ -1449,6 +1449,7 @@ export class Dispatcher {
     lines.push(
       ``,
       `If you generate any files (documents, media, data), save them to the directory: ${artifactsDir} — they become downloadable from the dashboard when the task completes.`,
+      `Put the FINAL deliverable files the user asked for (the report, deck, video, build, …) in its outputs/ subfolder: ${join(artifactsDir, OUTPUTS_SUBDIR)} (also $COWORK_OUTPUTS_DIR). The dashboard lists them as OUTPUTS, apart from the working files (notes, logs, scripts, scratch data) that stay in the artifacts folder.`,
       `When done, your final output (stdout) becomes the task result visible to the CEO on the dashboard.`,
       `If you CANNOT finish without more information or a decision from the user, do NOT guess or invent an answer. End your output with a line beginning "NEEDS_INPUT:" followed by your question(s), one per line. The task will then pause and wait for the user to answer instead of being marked done.`,
       `If you launched LONG-RUNNING BACKGROUND WORK (a background shell/command, a spawned sub-agent, a CI/deploy/render job) that has NOT finished yet, do NOT report a partial result as if the task were done. End your output with a line beginning "WAITING_ON_BACKGROUND:" describing what you are waiting on. The task will be re-run shortly to check whether that work finished, instead of being marked done and closed while it is still in flight.`
@@ -1881,7 +1882,8 @@ export class Dispatcher {
 
     // Persistent per-task artifacts dir (agents save files here → downloadable).
     const artDir = this.artifactsDir(task.id);
-    try { mkdirSync(artDir, { recursive: true }); } catch { /* ignore */ }
+    const outDir = join(artDir, OUTPUTS_SUBDIR);
+    try { mkdirSync(outDir, { recursive: true }); } catch { /* ignore */ }
     // Attempt start (minus a little clock slack): the artifact gate only lints files
     // written during THIS attempt, so an earlier brain's leftovers can't fail it.
     const attemptStartedMs = Date.now() - 2000;
@@ -1931,6 +1933,7 @@ export class Dispatcher {
           COWORK_TASK_CONTEXT: JSON.stringify(task.context || {}),
           COWORK_API: `${this.config.server.tls ? 'https' : 'http'}://localhost:${this.config.server.port}/api`,
           COWORK_ARTIFACTS_DIR: artDir,
+          COWORK_OUTPUTS_DIR: outDir,
           // When the server runs https with a self-signed cert, node-based child
           // brains (claude CLI, exec:script pipelines) must trust it to reach
           // COWORK_API — add the cert as an extra CA rather than disabling
@@ -2077,22 +2080,24 @@ export class Dispatcher {
 
     // Persist a markdown copy + collect any artifacts the agent produced.
     try { writeFileSync(join(artDir, 'result.md'), `# ${task.title}\n\n${output.text}\n`); } catch { /* ignore */ }
-    let artifacts: string[] = [];
-    try {
-      const scanArtifacts = (cur: string, base: string) => {
-        for (const entry of readdirSync(cur, { withFileTypes: true })) {
-          if (entry.name.startsWith('.') || entry.name === '__pycache__') continue;
-          const rel = base ? `${base}/${entry.name}` : entry.name;
-          if (entry.isDirectory()) {
-            scanArtifacts(join(cur, entry.name), rel);
-          } else if (entry.isFile()) {
-            artifacts.push(rel);
-          }
+    // outputs/ (the final deliverables) is listed on its own as task.outputs, so
+    // the artifacts scan skips it rather than showing those files twice.
+    const scanFiles = (cur: string, base: string, into: string[]) => {
+      for (const entry of readdirSync(cur, { withFileTypes: true })) {
+        if (entry.name.startsWith('.') || entry.name === '__pycache__') continue;
+        if (cur === artDir && entry.name === OUTPUTS_SUBDIR) continue;
+        const rel = base ? `${base}/${entry.name}` : entry.name;
+        if (entry.isDirectory()) {
+          scanFiles(join(cur, entry.name), rel, into);
+        } else if (entry.isFile()) {
+          into.push(rel);
         }
-      };
-      scanArtifacts(artDir, '');
-      artifacts.sort();
-    } catch { /* ignore */ }
+      }
+    };
+    let artifacts: string[] = [];
+    try { scanFiles(artDir, '', artifacts); artifacts.sort(); } catch { /* ignore */ }
+    let outputs: string[] = [];
+    try { scanFiles(outDir, '', outputs); outputs.sort(); } catch { /* ignore */ }
 
     // The result is a QUESTION back to the user (not a failure — verdict is ok —
     // and not a finished deliverable). Park the task on `wait-input` with the
@@ -2106,6 +2111,7 @@ export class Dispatcher {
         if (t) {
           t.context = { ...(t.context || {}), ranAgent: plan.agent, ranDivision: plan.division, ranBrain: plan.brainId, isRoster: plan.isRoster };
           if (artifacts.length) (t as any).artifacts = artifacts;
+          if (outputs.length) t.outputs = outputs;
           this.store.saveTask(t);
         }
         this.recordLesson(task.id, { kind: 'wait-input', brain: plan.brainId, agent: plan.agent, attempt: plan.attempt + 1, questions: req.questions, resultText: output.text });
@@ -2125,6 +2131,7 @@ export class Dispatcher {
       if (t) {
         t.context = { ...(t.context || {}), ranAgent: plan.agent, ranDivision: plan.division, ranBrain: plan.brainId, isRoster: plan.isRoster };
         if (artifacts.length) (t as any).artifacts = artifacts;
+        if (outputs.length) t.outputs = outputs;
         this.store.saveTask(t);
       }
       this.store.deferForBackground({ taskId: task.id, note: bgWait.note, result: output.text.slice(0, 4000), pollMs: this.backgroundPollMs() });
@@ -2149,6 +2156,7 @@ export class Dispatcher {
       done.context = { ...(done.context || {}), ranAgent: plan.agent, ranDivision: plan.division, ranBrain: plan.brainId, isRoster: plan.isRoster };
       if (verdict.ok) this.store.clearBrainRateLimited(plan.brainId);   // it works again
       if (artifacts.length) (done as any).artifacts = artifacts;
+      if (outputs.length) done.outputs = outputs;
       this.store.saveTask(done);
     }
     // internal: the dispatcher already verified this run — skip the completion guard.
