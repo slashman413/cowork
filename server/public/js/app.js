@@ -2173,6 +2173,8 @@ class App {
   // ── Chat (dispatch a task to a brain/agent and stream back its result) ─────
 
   async renderChat() {
+    // Voice assistant mode (public/js/voice.js) takes over the whole Chat view.
+    if (this.isVoiceMode?.()) return this.renderVoice();
     const [brains, divisions, conn] = await Promise.all([
       this.api.get('/brains'),
       this.api.get('/roster-divisions'),
@@ -2201,7 +2203,8 @@ class App {
             <select id="chat-brain" style="${sel}">${brainOpts}</select>
             <select id="chat-div" style="${sel}">${divOpts}</select>
             <select id="chat-agent" style="${sel}"><option value="">— none (chat brain directly) —</option></select>
-            <button id="chat-new" class="icon-btn-ghost" style="margin-left:auto;font-size:0.78rem;padding:6px 10px;border-radius:12px;width:auto;height:auto">＋ New chat</button>
+            <button id="chat-voice" class="icon-btn-ghost" title="Voice assistant — talk an idea through: it grills you, plans, and (with your OK) executes" style="margin-left:auto;font-size:0.78rem;padding:6px 10px;border-radius:12px;width:auto;height:auto;gap:5px"><i data-lucide="mic" style="width:14px;height:14px"></i> Voice</button>
+            <button id="chat-new" class="icon-btn-ghost" style="font-size:0.78rem;padding:6px 10px;border-radius:12px;width:auto;height:auto">＋ New chat</button>
           </div>
           
           <div id="chat-attachments" class="chat-attachments"></div>
@@ -2251,6 +2254,7 @@ class App {
     this.contentEl.querySelector('#chat-send').addEventListener('click', doSend);
     input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doSend(); } });
     this.contentEl.querySelector('#chat-new').addEventListener('click', () => this.startNewChat());
+    this.contentEl.querySelector('#chat-voice').addEventListener('click', () => this.setVoiceMode(true));
 
     // File attachments (staged client-side; uploaded as task inputs on send).
     const fileEl = this.contentEl.querySelector('#chat-files');

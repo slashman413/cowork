@@ -27,6 +27,12 @@ function stripAnsi(s: string): string {
           .replace(OSC_CSI_RE, '').replace(/\r/g, '');
 }
 
+/** A turn of a live dialogue (voice assistant): its reply is the deliverable, so
+ *  the question-parking / background-deferral / LLM-verifier gates don't apply. */
+export function isConversational(task: { context?: Record<string, any> }): boolean {
+  return task.context?.conversational === true;
+}
+
 /** A fully-resolved execution plan for one attempt of one task. */
 interface ExecPlan {
   agent: string;                // special agent name or roster agent slug
@@ -180,6 +186,15 @@ export class Dispatcher {
     const clsMsg = orch.classifier?.enabled ? `classifier ${orch.classifier.model}` : 'classifier off';
     console.log(`Dispatcher: started (agents: ${agentNames.join(', ')}; max ${orch.maxConcurrent} concurrent; ${clsMsg}; staleClaim ${orch.staleClaimMs ?? 0}ms)`);
   }
+
+  /** Run a dispatch pass soon instead of waiting up to pollIntervalMs — used by
+   *  interactive surfaces (voice assistant) right after they enqueue a turn.
+   *  Coalesced: many kicks within the debounce window cause one tick. */
+  public kick(): void {
+    if (this.stopped || this.kickTimer) return;
+    this.kickTimer = setTimeout(() => { this.kickTimer = null; this.tick(); }, 150);
+  }
+  private kickTimer: ReturnType<typeof setTimeout> | null = null;
 
   public stop(): void {
     this.stopped = true;
@@ -1446,6 +1461,15 @@ export class Dispatcher {
         ``
       );
     }
+    if (isConversational(task)) {
+      // A live dialogue turn: the reply itself is the deliverable. No NEEDS_INPUT /
+      // WAITING_ON_BACKGROUND markers — a question to the user is a normal reply.
+      lines.push(
+        ``,
+        `This is ONE TURN of a live conversation. Your stdout is spoken/shown to the user verbatim as your reply. Asking the user a question is a normal, complete reply — do NOT emit NEEDS_INPUT or WAITING_ON_BACKGROUND markers. Scratch files (if any) go in: ${artifactsDir}`
+      );
+      return lines.join('\n');
+    }
     lines.push(
       ``,
       `If you generate any files (documents, media, data), save them to the directory: ${artifactsDir} — they become downloadable from the dashboard when the task completes.`,
@@ -1783,6 +1807,8 @@ export class Dispatcher {
     //   (3) LLM quality gate — only a genuine deliverable is judged for completion.
     const detVerdict = this.deterministicVerdict({ ok: true, text });
     let verdict = detVerdict;
+    // Conversational turns skip question-parking + the LLM gate (see execute()).
+    if (verdict.ok && isConversational(task)) return { action: 'complete' };
     if (verdict.ok) {
       const req = detectInputRequest(text, this.inputOpts());
       if (req.needsInput) {
@@ -2022,8 +2048,14 @@ export class Dispatcher {
     //       verifier would FAIL a "still waiting" result and hand it off wrongly.
     //   (3) LLM quality gate — only a genuine deliverable is judged for completion.
     const detVerdict = this.deterministicVerdict(output);
-    const inputReq: InputRequest = detVerdict.ok ? detectInputRequest(output.text, this.inputOpts()) : { needsInput: false, questions: [] };
-    const bgWait: BackgroundWait = detVerdict.ok && !inputReq.needsInput
+    // A CONVERSATIONAL turn (voice assistant / chat — context.conversational) is a
+    // reply in a live dialogue: asking the user a question IS the deliverable, so
+    // it must never be parked on wait-input (the orchestrator would auto-answer on
+    // the user's behalf), deferred, linted or LLM-judged. Only the deterministic
+    // failure gate (rate limit / empty) still applies, so handover keeps working.
+    const conversational = isConversational(task);
+    const inputReq: InputRequest = detVerdict.ok && !conversational ? detectInputRequest(output.text, this.inputOpts()) : { needsInput: false, questions: [] };
+    const bgWait: BackgroundWait = detVerdict.ok && !inputReq.needsInput && !conversational
       ? detectBackgroundWait(output.text, this.backgroundOpts()) : { waiting: false };
     // Only defer while under the safety cap; past it, treat the result as final so a
     // never-finishing background job can't loop the task forever.
@@ -2035,11 +2067,11 @@ export class Dispatcher {
     //       are downgraded to warnings so a real deliverable is never discarded
     //       outright (same fail-open stance as the LLM gate).
     const lastAttempt = plan.attempt + 1 >= (plan.pinned ? this.config.inbox.maxRetries : plan.chainLen);
-    const lint = detVerdict.ok && !inputReq.needsInput && !bgDefer
+    const lint = detVerdict.ok && !inputReq.needsInput && !bgDefer && !conversational
       ? this.artifactVerdict(task, artDir, attemptStartedMs, lastAttempt) : null;
     const verdict: VerifyVerdict = !detVerdict.ok
       ? detVerdict
-      : inputReq.needsInput || bgDefer
+      : inputReq.needsInput || bgDefer || conversational
         ? { ok: true }                                 // question / bg-wait → skip the LLM gate, park below
         : lint && !lint.ok
           ? lint

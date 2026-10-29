@@ -161,3 +161,22 @@ test('classifyCliFailure: agy model rejection → transient outage cools, retire
   const quoted = await classifyCliFailure({ exec: 'agy', model: 'gemini-3-pro', text: long, stderr: '' }, { ok: false, reason: 'LLM said no' }, 'LLM said no', async () => null);
   assert.deepEqual([quoted.agyDiag, quoted.rateLimited, quoted.failReason], [undefined, false, 'LLM said no']);
 });
+
+// ── Conversational turns (voice assistant) ────────────────────────────────────
+
+test('a conversational turn that asks the user a question completes (never wait-input)', async () => {
+  const { guard, put } = harness();
+  const q = 'Could you clarify who the audience is? I recommend developers.';
+  // Same text on a normal task is parked as a question…
+  const normal = put(chainRung('c1'));
+  assert.equal((await guard(normal, q)).action, 'wait-input');
+  // …but a conversational turn's question IS its reply.
+  const conv = put({ ...chainRung('c2'), context: { ...chainRung('c2').context, conversational: true } });
+  assert.deepEqual(await guard(conv, q), { action: 'complete' });
+});
+
+test('a conversational turn still hands over on a rate-limit notice', async () => {
+  const { guard, put } = harness();
+  const conv = put({ ...chainRung('c3'), context: { ...chainRung('c3').context, conversational: true } });
+  assert.equal((await guard(conv, "You've hit your session limit. Please try again later.")).action, 'handover');
+});

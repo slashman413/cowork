@@ -188,6 +188,27 @@ dispatched as a task — the reply is the task result.
 |---|---|
 | ![Chat — choose a division](docs/images/cowork-chat.png) | ![Chat — choose an agent within the division](docs/images/cowork-chat-agents.png) |
 
+### 🎙 Voice assistant (Chat → **Voice**)
+
+Talk a new idea through, hands-free if you like. Each turn runs on the best brain that is
+enabled and **not cooling down on a rate limit** (claude › codex › agy › hermes/dsh ›
+ollama; pin an order with `orchestration.voice.brains`). If that brain gets rate-limited, the
+turn moves to the next one.
+
+1. **Grill:** it uses the **grill-me** skill (`/grilling`): one question at a time, each with a
+   recommended answer, until nothing is ambiguous. Open questions are listed as it goes.
+2. **Plan:** it proposes a plan: a yes/no success criterion and a few ordered phases.
+3. **Execute (only with your permission):** tap **Approve & execute**, or say "go ahead"
+   while the plan is on screen. The plan becomes an active **Goal** that the Achiever/Judger
+   loop drives through tasks until the success criterion is met. Phase progress is read
+   aloud as it happens.
+
+Speech-to-text and text-to-speech run in the browser (Web Speech API: Chrome, Edge or
+Safari). The mic needs HTTPS or localhost. You can always type instead. Turns are tasks
+tagged `voice` with `context.conversational`, so a question back to you counts as a
+finished reply and is never parked on `wait-input`. REST: `/api/voice/brains` and
+`/api/voice/sessions[/:id[/turn|/execute]]`. Sessions are stored in `voice-sessions/`.
+
 For programmatic access, wire the MCP connection into your agent clients:
 
 **Scripted (recommended):** `deploy/install-skill.sh` installs the `cowork` coordination

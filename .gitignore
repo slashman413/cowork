@@ -26,6 +26,9 @@ workflow-runs/
 # state — same class as inbox/ and workflow-runs/, and they carry private goal
 # context (tokens paths, revenue targets). Never commit them.
 goals/
+# Voice-assistant sessions (voice-sessions/<id>.json) — per-server runtime state
+# carrying private idea transcripts. Never commit them.
+voice-sessions/
 
 # Business audit / ops-health reports dropped by dispatched agents. These are
 # per-server runtime output carrying private business context (revenue targets,
