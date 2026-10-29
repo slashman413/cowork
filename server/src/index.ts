@@ -3,6 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import http from 'http';
 import https from 'https';
+import { createMultiplexedServer } from './core/server-listener.js';
 import { activeConfigPath, loadConfig, persistRegistries, removeBrainCascade, restoreClientBrains } from './config.js';
 import { EventBus } from './core/events.js';
 import { Store } from './core/store.js';
@@ -240,38 +241,28 @@ async function main() {
     console.warn(`Public dir ${publicDir} not found, skipping static file serving.`);
   }
 
-  // Serve over HTTPS when server.tls is configured and the cert/key are present.
-  // A secure context (https:// or localhost) is what unlocks browser features
-  // like the clipboard API on a LAN/Tailscale IP. Falls back to plain http://
-  // otherwise.
-  let scheme = 'http';
-  const tls = config.server.tls;
-  if (tls) {
-    if (fs.existsSync(tls.certFile) && fs.existsSync(tls.keyFile)) {
-      scheme = 'https';
-    } else {
-      console.warn(
-        `server.tls is set but the cert/key were not found ` +
-        `(${tls.certFile}, ${tls.keyFile}); falling back to http://.`
-      );
-    }
-  }
-
+  // Multiplexed listener: supports both HTTPS (with signed TLS certificate & SNI)
+  // and plain HTTP (for localhost secure context & automatic redirect from IP to trusted domain).
+  let trustedDomainName: string | null = null;
   const onListen = () => {
     console.log(`=========================================`);
     console.log(` Multi-Agent Cowork MCP Server Started`);
-    console.log(` HTTP API: ${scheme}://${config.server.host}:${config.server.port}/api`);
-    console.log(` MCP Endpoint: ${scheme}://${config.server.host}:${config.server.port}/mcp`);
-    console.log(` SSE Stream: ${scheme}://${config.server.host}:${config.server.port}/api/events`);
+    if (trustedDomainName) {
+      console.log(` Trusted HTTPS : https://${trustedDomainName}:${config.server.port}/`);
+      console.log(` Local HTTP    : http://localhost:${config.server.port}/`);
+      console.log(` MCP Endpoint  : https://${trustedDomainName}:${config.server.port}/mcp`);
+      console.log(` SSE Stream    : https://${trustedDomainName}:${config.server.port}/api/events`);
+    } else {
+      console.log(` HTTP API: ${config.server.tls ? 'https' : 'http'}://${config.server.host}:${config.server.port}/api`);
+      console.log(` MCP Endpoint: ${config.server.tls ? 'https' : 'http'}://${config.server.host}:${config.server.port}/mcp`);
+      console.log(` SSE Stream: ${config.server.tls ? 'https' : 'http'}://${config.server.host}:${config.server.port}/api/events`);
+    }
     console.log(`=========================================`);
   };
 
-  const httpServer = scheme === 'https'
-    ? https.createServer(
-        { cert: fs.readFileSync(tls!.certFile), key: fs.readFileSync(tls!.keyFile) },
-        app
-      ).listen(config.server.port, config.server.host, onListen)
-    : http.createServer(app).listen(config.server.port, config.server.host, onListen);
+  const listenerResult = createMultiplexedServer(app, config, onListen);
+  trustedDomainName = listenerResult.trustedDomain;
+  const server = listenerResult.server;
 
   // Stale agent cleanup every 5 minutes, ~3 min timeout (200000ms)
   const cleanup = setInterval(() => {
@@ -934,7 +925,7 @@ async function main() {
     sysMetrics.stop();
     usagePoller.stop();
     dispatcher.stop();
-    httpServer.close(() => process.exit(0));
+    server.close(() => process.exit(0));
     // Open SSE connections keep the server alive — force-exit after 3s
     setTimeout(() => process.exit(0), 3000).unref();
   };

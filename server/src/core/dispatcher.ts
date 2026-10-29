@@ -1393,14 +1393,14 @@ export class Dispatcher {
 
   private buildPrompt(task: Task, plan: { agent: string; division?: string; isRoster: boolean; exec?: string }): string {
     const port = this.config.server.port;
-    // Self-referential API base for orchestrator subtask dispatch. Follows the
-    // server's own scheme: when server.tls is set the server binds https://, so
-    // these localhost calls must too. We pass the CA cert to curl to verify the
-    // self-signed cert on localhost.
-    const selfBase = `${this.config.server.tls ? 'https' : 'http'}://localhost:${port}`;
+    // Self-referential API base for orchestrator subtask dispatch. Loopback
+    // calls to localhost run over plain HTTP (handled by the multiplexed server),
+    // which is fast, secure (kernel loopback), and immune to TLS cert hostname
+    // mismatch (e.g. Let's Encrypt FQDNs).
+    const selfBase = `http://localhost:${port}`;
     // With an API key the child gets it as $COWORK_API_KEY (see runTask env) and
     // the curl references the variable, so the key never lands in the prompt.
-    const curlFlags = (this.config.server.tls ? `-s --cacert "${this.config.server.tls.certFile}"` : '-s')
+    const curlFlags = '-s'
       + (this.config.server.apiKey ? ' -H "Authorization: Bearer $COWORK_API_KEY"' : '');
     const role = plan.agent;
     const artifactsDir = this.artifactsDir(task.id);
@@ -1989,13 +1989,13 @@ export class Dispatcher {
           COWORK_TASK_TITLE: task.title,
           COWORK_TASK_DESCRIPTION: task.description,
           COWORK_TASK_CONTEXT: JSON.stringify(task.context || {}),
-          COWORK_API: `${this.config.server.tls ? 'https' : 'http'}://localhost:${this.config.server.port}/api`,
+          COWORK_API: `http://localhost:${this.config.server.port}/api`,
           COWORK_ARTIFACTS_DIR: artDir,
           COWORK_OUTPUTS_DIR: outDir,
           // When the server runs https with a self-signed cert, node-based child
           // brains (claude CLI, exec:script pipelines) must trust it to reach
-          // COWORK_API — add the cert as an extra CA rather than disabling
-          // verification. Harmless when tls is off.
+          // COWORK_API or remote endpoints — add the cert as an extra CA rather than
+          // disabling verification. Harmless when tls is off.
           ...(this.config.server.tls ? { NODE_EXTRA_CA_CERTS: this.config.server.tls.certFile } : {}),
           // Children that call COWORK_API (orchestrator curls, scripts) send this
           // as "Authorization: Bearer $COWORK_API_KEY".

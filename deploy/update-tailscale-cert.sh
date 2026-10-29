@@ -36,7 +36,26 @@ cp -f "$TMP_DIR/cert.pem" "$DEST_DIR/cert.pem"
 cp -f "$TMP_DIR/key.pem" "$DEST_DIR/key.pem"
 chmod 600 "$DEST_DIR/cert.pem" "$DEST_DIR/key.pem"
 
+# Also ensure localhost fallback cert exists in DEST_DIR for local SNI fallback
+if [ ! -f "$DEST_DIR/localhost.pem" ] || [ ! -f "$DEST_DIR/localhost-key.pem" ]; then
+  echo "Generating local fallback certificate for localhost/127.0.0.1..."
+  openssl req -x509 -newkey rsa:2048 -nodes \
+    -keyout "$DEST_DIR/localhost-key.pem" \
+    -out "$DEST_DIR/localhost.pem" \
+    -days 3650 \
+    -subj "/CN=localhost" \
+    -addext "subjectAltName=DNS:localhost,IP:127.0.0.1,IP:::1" >/dev/null 2>&1 || true
+  chmod 600 "$DEST_DIR/localhost.pem" "$DEST_DIR/localhost-key.pem" 2>/dev/null || true
+fi
+
 echo "Successfully installed Let's Encrypt TLS certificate to:"
 echo "  $DEST_DIR/cert.pem"
 echo "  $DEST_DIR/key.pem"
 echo "Domain: $DOMAIN"
+echo
+echo "Cowork Web Server Access URLs:"
+echo "  • Trusted HTTPS (Chrome / Mobile / Remote): https://$DOMAIN:6868/"
+echo "  • Local Machine (Secure Context in Chrome):   http://localhost:6868/"
+echo
+echo "Note: Chrome natively treats http://localhost as a Secure Context (window.isSecureContext=true)"
+echo "with zero SSL warnings. For remote or mobile access, use the trusted HTTPS URL above."

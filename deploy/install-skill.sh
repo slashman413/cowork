@@ -38,7 +38,7 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SKILLS_DIR="$REPO/deploy/skills"
 
 CLIENT=""            # empty => auto-detect
-URL="https://localhost:6868"
+URL="${COWORK_URL:-}"
 KEY="${COWORK_API_KEY:-}"
 DO_SKILL=1
 DO_MCP=1
@@ -56,6 +56,18 @@ while [ $# -gt 0 ]; do
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
+
+if [ -z "$URL" ]; then
+  TS_DOMAIN=""
+  if command -v tailscale >/dev/null 2>&1; then
+    TS_DOMAIN="$(tailscale status --json 2>/dev/null | jq -r '.Self.DNSName // empty' | sed 's/\.$//' || true)"
+  fi
+  if [ -n "$TS_DOMAIN" ] && [ -f "$HOME/.cowork/tls/cert.pem" ]; then
+    URL="https://$TS_DOMAIN:6868"
+  else
+    URL="http://localhost:6868"
+  fi
+fi
 
 URL="${URL%/}"           # trim trailing slash
 MCP_URL="$URL/mcp"

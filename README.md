@@ -535,21 +535,33 @@ button) in a **secure context** — `https://` or `http://localhost`. Reach the
 dashboard over `http://<lan-or-tailscale-ip>:6868` and `navigator.mediaDevices` is
 undefined, so Dictate can't start. Serving over HTTPS fixes it.
 
-The server serves HTTPS automatically once `server.tls` points at a cert/key pair
-that exists on disk; if the files are missing it logs a warning and falls back to
-`http://`. Migrate in this order — **do the cutover deliberately, because every MCP
-client and skill still pointing at `http://…:6868/mcp` breaks the moment the scheme
-flips**:
+When `server.tls` points at valid cert/key files, Cowork runs a **multiplexed dual-protocol listener**
+on port 6868 that accepts both HTTP and HTTPS simultaneously:
 
-1. **Generate a cert/key** (self-signed is fine for a LAN/tailnet). Include every
-   hostname/IP you'll browse to as SANs:
+- **Localhost in Chrome (`http://localhost:6868/`)**: Chrome and modern browsers natively treat
+  `http://localhost` as a W3C-standard **Secure Context** (`window.isSecureContext === true`).
+  The New-task *Dictate* mic button and clipboard work out of the box with **zero certificate warnings**.
+- **Remote / Mobile on Tailscale (`https://<machine>.tailXXXX.ts.net:6868/`)**: Remote connections
+  use the valid Let's Encrypt TLS certificate provisioned via Tailscale. Chrome shows a verified,
+  trusted green lock.
+- **Automatic IP/Domain HTTP-to-HTTPS Redirection**: Requests arriving over plain HTTP for external
+  hostnames or IPs are automatically redirected (302) to the trusted HTTPS domain.
+- **SNI Fallback**: Multi-domain TLS SNI callback routes domain traffic to the trusted certificate
+  and loopback TLS traffic to the local fallback certificate.
 
-   ```bash
-   server/gen-tls-cert.sh ~/.cowork/tls cowork-host 100.80.243.33 cowork.tailXXXX.ts.net
-   ```
+Migrate in this order:
 
-   For a warning-free cert on a Tailscale tailnet, use `deploy/update-tailscale-cert.sh`
-   to automatically obtain and install a Let's Encrypt certificate from Tailscale.
+1. **Obtain or Generate a TLS Certificate:**
+   - **Tailscale Let's Encrypt (Recommended, Zero Warnings)**:
+     ```bash
+     deploy/update-tailscale-cert.sh
+     ```
+     This fetches a genuine Let's Encrypt certificate via `tailscale cert` and installs it to
+     `~/.cowork/tls/cert.pem` and `~/.cowork/tls/key.pem`.
+   - **Self-Signed (Alternative)**:
+     ```bash
+     server/gen-tls-cert.sh ~/.cowork/tls cowork-host 100.80.243.33 cowork.tailXXXX.ts.net
+     ```
 
 2. **Point the config at the files.** Add a `tls` block under `server` in
    `~/.cowork/config.json` (the live config — the repo `config.json` is only the
@@ -577,45 +589,28 @@ flips**:
      deploy/redeploy-server-when-idle.sh
    ```
 
-   Confirm it came up on HTTPS:
+   Confirm it came up:
 
    ```bash
-   journalctl --user -u cowork-mcp -n 5 | grep 'API:'
-   curl --cacert ~/.cowork/tls/cert.pem https://localhost:6868/api/status | jq .uptime   # HTTPS handshake + a live number
+   journalctl --user -u cowork-mcp -n 10 | grep -E 'Trusted HTTPS|Local HTTP|API:'
+   curl -s http://localhost:6868/api/status | jq .uptime
    ```
 
-4. **Repoint every client to `https://`.** Re-run the installer with an `https` URL
-   so each client's `mcpServers.cowork` entry and skill are updated, then restart the
-   clients:
+4. **Accessing the Dashboard in Chrome:**
+   - **On the host machine**: Open `http://localhost:6868/` (Secure Context active, 0 SSL warnings).
+   - **From remote devices or mobile**: Open `https://<tailscale-domain>:6868/` (Trusted Let's Encrypt SSL lock).
+
+5. **Updating Agent Clients and Skills:**
+   Run `deploy/install-skill.sh`, which automatically detects your Tailscale domain or localhost
+   configuration:
 
    ```bash
-   deploy/install-skill.sh --client all --url https://cowork-host:6868
+   deploy/install-skill.sh --client all
    ```
 
-   Remote brain clients started with `COWORK_URL=http://…` must be relaunched with
-   `COWORK_URL=https://…`. A self-signed cert triggers a one-time browser warning
-   ("Proceed to site") — once you proceed, the origin is a secure context and Dictate
-   works.
-
-   **Node clients must trust the self-signed cert**, or their MCP handshake fails
-   with `SELF_SIGNED_CERT_IN_CHAIN`. Point them at the cert as an extra CA in the
-   environment that launches the client (e.g. the shell running `claude`, or the
-   remote-brain client's env):
-
-   ```bash
-   export NODE_EXTRA_CA_CERTS=~/.cowork/tls/cert.pem
-   ```
-
-   Prefer this over `NODE_TLS_REJECT_UNAUTHORIZED=0` (which disables verification
-   entirely); only fall back to it on a private tailnet if trusting the CA is
-   impractical.
-
-> **Server-side self-dispatch is already scheme-aware** — you don't configure it.
-> The dispatcher builds the orchestrator's `curl` commands and the child-brain
-> `COWORK_API` env from `server.tls`, so when TLS is on they point at
-> `https://localhost:6868` (curl with `--cacert`, node children get
-> `NODE_EXTRA_CA_CERTS` injected automatically). No repo `http://localhost:6868`
-> is left hardcoded across the flip.
+> **Server-side self-dispatch is loopback-optimized** — local subtask dispatch runs over
+> `http://localhost:6868` through the multiplexed listener, avoiding TLS handshake overhead
+> and certificate hostname mismatch errors entirely.
 
 To roll back, set `server.tls` to `null` (or remove the block) and redeploy — the
 server returns to `http://`.
