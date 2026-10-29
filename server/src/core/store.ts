@@ -10,6 +10,10 @@ import { normalizeRecurrence, recurrenceFromLegacyHours, nextRunAt, type TaskRec
 import { isRateLimitFailure } from './result-verifier.js';
 import { canonicalBrainId } from '../config.js';
 import { agyWindowMatchesModel } from './usage-probe.js';
+import { normalizeContextBrief } from './brief.js';
+import { assertTier } from './tiers.js';
+import { buildLesson, appendLesson } from './lessons.js';
+import { appendRulings } from './rulings.js';
 
 /**
  * A veto the Dispatcher registers on the store so EXTERNAL task completions
@@ -22,7 +26,9 @@ import { agyWindowMatchesModel } from './usage-probe.js';
  * an interaction packet instead of marking it done or handing it off.
  */
 export type CompletionDecision =
-  | { action: 'complete'; result?: string }
+  /** `context` is merged into the task's context on completion (e.g. the
+   *  STATUS-footer quality flag / rulings — see parseStatusFooter). */
+  | { action: 'complete'; result?: string; context?: Record<string, unknown> }
   | { action: 'handover' }
   | { action: 'wait-input'; questions?: string[] }
   /** The agent is still waiting on long background work it launched — DEFER the
@@ -95,6 +101,10 @@ export class Store {
     this.config = config;
     this.eventBus = eventBus;
     this.roster = new Roster(config.paths.agencyAgents);
+  }
+
+  public getConfig(): Config {
+    return this.config;
   }
 
   public initialize(): void {
@@ -591,6 +601,24 @@ export class Store {
       status: 'pending',
       createdAt: new Date().toISOString()
     };
+    // Brief contract (P0-3): validate + normalize context.acceptance/verify/
+    // timeboxMin/scope (throws → 400 on the API / isError on MCP).
+    task.context = normalizeContextBrief(task.context);
+    assertTier(task.context?.tier);
+    if (task.context?.tier) task.context = { ...task.context, tier: String(task.context.tier).trim().toLowerCase() };
+    if (task.context === undefined) delete task.context;
+    // An orchestrator subtask must say how it will be judged. Not rejected yet —
+    // warn and count it in the lesson ledger so the miss rate is measurable.
+    if (task.from?.agent === 'orchestrator' && !(Array.isArray(task.context?.acceptance) && task.context!.acceptance.length)) {
+      console.warn(`Store: orchestrator-created task ${id} ("${task.title}") has no acceptance criteria`);
+      if (this.config.paths?.decisions) {
+        appendLesson(this.config.paths.decisions, buildLesson({
+          kind: 'brief-missing-acceptance', task: id, title: task.title || '',
+          agent: 'orchestrator', brain: String(task.context?.brain || ''), attempt: 0,
+          reason: 'orchestrator-created subtask has no context.acceptance'
+        }));
+      }
+    }
     // A pin to a retired brain id (BRAIN_ID_ALIASES) is stored as the canonical id.
     if (typeof task.context?.brain === 'string') {
       const canon = canonicalBrainId(this.config, task.context.brain);
@@ -816,6 +844,7 @@ export class Store {
         return this.deferForBackground({ taskId: task.id, note: decision.note, result: params.result, pollMs: decision.pollMs });
       }
       if (decision.result !== undefined) result = decision.result;
+      if (decision.context) task.context = { ...(task.context || {}), ...decision.context };
     }
 
     task.status = 'done';
@@ -833,6 +862,12 @@ export class Store {
     // reset time, so the dashboard can offer an auto-re-run-on-reset toggle and the
     // dispatcher can honour it (see classifyRateLimit / Dispatcher.autoRerunRateLimited).
     if (task.failed) this.classifyRateLimit(task);
+
+    // P2-3 decision trail: RULING lines + orchestrator auto-answers → rulings.tsv.
+    // The watermark keeps a re-run from re-logging auto-answers already written.
+    if (appendRulings(this.config.paths.decisions, task) > 0) {
+      task.context = { ...(task.context || {}), rulingsLoggedAt: task.completedAt };
+    }
 
     const taskFile = this.resolveTaskFile(task.id) || `${task.id}.json`;
     this.writeTaskFile(taskFile, task);
@@ -867,6 +902,7 @@ export class Store {
     delete ctx.claimCount; delete ctx.lastClaimAt; delete ctx.failedCount;
     delete ctx.remoteWaitSince;
     delete ctx.ranAgent; delete ctx.ranDivision; delete ctx.ranBrain; delete ctx.isRoster;
+    delete ctx.specVerdict; delete ctx.specFindings;
     delete ctx.dispatched; delete ctx.inputFiles;
     delete ctx.humanInput; delete ctx.awaitingInput; delete ctx.inputQuestions;
     delete ctx.attempts; delete ctx.continuedFrom; delete ctx.continuedInto;
@@ -1011,6 +1047,7 @@ export class Store {
     ctx.dispatched = false;
     delete ctx.remoteWaitSince;
     delete ctx.ranAgent; delete ctx.ranDivision; delete ctx.ranBrain; delete ctx.isRoster;
+    delete ctx.specVerdict; delete ctx.specFindings;
 
     task.context = ctx;
     task.status = 'pending';
@@ -1062,6 +1099,8 @@ export class Store {
     brain?: string | null;
     scheduledAt?: string | null;
     loopIntervalHours?: number | null;
+    /** Acceptance criteria update (PS-1). */
+    acceptance?: string[] | null;
     /** A flexible recurrence spec (see core/recurrence.ts), or null/'none' to
      *  clear the cadence. Takes precedence over `loopIntervalHours` when both are
      *  supplied. Invalid specs throw. */
@@ -1104,6 +1143,15 @@ export class Store {
       } else {
         delete ctx.brain;
         delete ctx.brainAuto;
+      }
+    }
+    if (patch.acceptance !== undefined) {
+      if (patch.acceptance === null || (Array.isArray(patch.acceptance) && patch.acceptance.length === 0)) {
+        delete ctx.acceptance;
+        delete ctx.acceptanceSource;
+      } else if (Array.isArray(patch.acceptance)) {
+        ctx.acceptance = patch.acceptance.map(s => String(s || '').trim()).filter(Boolean);
+        ctx.acceptanceSource = 'human';
       }
     }
     task.context = ctx;

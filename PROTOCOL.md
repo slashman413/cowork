@@ -122,6 +122,40 @@ Set it via MCP `create_task { recurrence }`, REST `POST /api/inbox { recurrence 
 (and `/inbox/:id/edit`), or the dashboard's *Repeat* control. `loopIntervalHours`
 is still honoured as `{ type: "hours", interval: N }`.
 
+### Brief contract (acceptance / verify / timebox / scope)
+
+A task can say how it will be judged. All four fields are optional and live
+**inside `context`** (REST `POST /api/inbox` and MCP `create_task` alike):
+
+```json
+"context": {
+  "acceptance": ["report.md lists every failing test", "npm test exits 0"],
+  "verify": ["cd server && npm test", "curl -s localhost:6868/api/health"],
+  "timeboxMin": 30,
+  "scope": { "write": ["server/src/core/"], "forbid": ["~/.cowork/config.json"] }
+}
+```
+
+The dispatcher renders them as `# Acceptance criteria`, `# How to verify`,
+`# Timebox` and `# Scope` prompt sections (not in the context JSON). A wrong
+shape returns 400. Workflow steps declare the same keys at step level and
+expansion copies them into each task's context. Orchestrator subtasks are
+expected to carry `acceptance` + `verify`; a missing `acceptance` is logged and
+counted in `decisions/lessons.jsonl` as `kind: "brief-missing-acceptance"`
+(warning only, not rejected yet).
+
+### Brain tier (`context.tier`)
+
+`context.tier` (or a workflow step's `tier`) is one of `mechanical`,
+`standard`, `judgment` or `review`. When the task has no pinned
+`context.brain` and its agent has no `agentChains` override, it runs on
+`orchestration.tiers[<tier>]` first, then its normal chain (duplicates
+dropped, disabled brains stripped). `review` picks brains of a different model
+family than `context.reviewOf`: Gemini judges Claude, and opus-class judges
+Gemini and qwen. Without `reviewOf` it uses the judgment list. An unknown tier
+returns 400. A task with no tier keeps its chain unchanged. Measured by
+`GET /api/metrics/quality?days=7` (`tiers.mechanicalOpusShare`).
+
 ### Priority Levels
 
 | Priority | Use When |

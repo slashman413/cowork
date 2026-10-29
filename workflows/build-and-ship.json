@@ -8,35 +8,122 @@
       "key": "architecture",
       "title": "Architect the build",
       "description": "Turn this spec into a build-ready technical plan: component decomposition, data model, stack choice with a trade-off on the riskiest decision, the CI/CD gates GitHub Actions must enforce (lint, typecheck, test, build), and a build sequence of shippable increments. Spec: \"{{spec}}\". Output as markdown.",
+      "acceptance": [
+        "architecture.md is saved in the artifacts dir and contains sections for components, data model, stack choice, CI/CD gates and build sequence",
+        "The riskiest stack decision is named with at least one rejected alternative and the trade-off",
+        "CI/CD gates list lint, typecheck, test and build explicitly",
+        "Build sequence is a numbered list of shippable increments, each with its own done condition"
+      ],
+      "verify": [
+        "test -s architecture.md && grep -ciE '^#+ .*(component|data model|stack|ci|sequence)' architecture.md  # expect >= 5",
+        "grep -iE 'lint|typecheck|test|build' architecture.md"
+      ],
       "agent": "engineering-backend-architect"
     },
     {
       "key": "build",
       "title": "Dispatch engineers to build the real product",
       "description": "You are managing the build. Take the architecture plan provided and ACTUALLY dispatch each increment as a real subtask to the engineering agents via the Cowork REST API — one POST per increment — wiring context.dependsOn so each job receives the outputs of the increments it builds on. The work must produce REAL running code committed to a git repo, plus a .github/workflows CI pipeline that lints/tests/builds on push. Include a final integration job that dependsOn all increments. After dispatching, output a manifest: increment -> task id -> dependencies -> where the code lives. Leave routing to the engineering division so brain chains stay UI-controlled.",
+      "acceptance": [
+        "One POST /api/inbox per increment was made, and every created task id is listed in manifest.md (increment -> task id -> dependsOn -> repo path)",
+        "Each increment subtask carries context.acceptance and context.verify, and context.dependsOn matches the architecture's build order",
+        "A final integration subtask exists whose context.dependsOn lists every increment task id",
+        "The target git repo path (and remote URL, if any) is stated in manifest.md"
+      ],
+      "verify": [
+        "test -s manifest.md",
+        "for each task id in manifest.md: GET /api/inbox/<id> on the Cowork API (same base URL as your POSTs) returns 200 and the task's context.acceptance is non-empty",
+        "git -C <repo path from manifest.md> log --oneline -1  # repo exists"
+      ],
       "agent": "orchestrator",
-      "dependsOn": ["architecture"]
+      "dependsOn": ["architecture"],
+      "gate": {
+        "reviewer": "engineering-code-reviewer",
+        "maxRounds": 3,
+        "escalateBrainAt": 2,
+        "panel": 2
+      }
     },
     {
       "key": "ci",
       "title": "Wire the GitHub Actions pipeline",
       "description": "Using the architecture plan and the build manifest provided, author the GitHub Actions workflow(s) for this product: jobs for lint, typecheck, test, and build triggered on push and pull_request, matrix where it helps, dependency caching, and branch-protection-friendly required checks. Output the workflow YAML plus a one-paragraph explanation of what each job gates.",
+      "acceptance": [
+        "At least one workflow file is committed under <repo>/.github/workflows/ (name it in the result)",
+        "The workflow triggers on push and pull_request and has lint, typecheck, test and build jobs (or steps)",
+        "Dependency caching is configured (actions/setup-* cache or actions/cache)",
+        "The result has a one-paragraph explanation of what each job gates"
+      ],
+      "verify": [
+        "ls <repo>/.github/workflows/*.yml",
+        "grep -E 'pull_request|push' <repo>/.github/workflows/*.yml",
+        "python3 -c 'import yaml,sys; [yaml.safe_load(open(f)) for f in sys.argv[1:]]' <repo>/.github/workflows/*.yml  # parses"
+      ],
       "agent": "engineering-devops-automator",
-      "dependsOn": ["build"]
+      "dependsOn": ["build"],
+      "gate": {
+        "reviewer": "engineering-code-reviewer",
+        "maxRounds": 3,
+        "escalateBrainAt": 2
+      }
     },
     {
       "key": "review",
       "title": "Code review the build",
       "description": "Review the delivered code and CI pipeline provided against the spec and the architecture plan. Check correctness, security, error handling, test coverage, and that the GH Actions gates actually block bad merges. List concrete, prioritized findings (blocker / should-fix / nit) with the file and the fix. Output as markdown.",
+      "acceptance": [
+        "review.md is saved in the artifacts dir with findings grouped as blocker / should-fix / nit",
+        "Every finding names a file (and line when possible) and the concrete fix",
+        "The review states explicitly whether the CI gates would block a failing test or lint error from merging"
+      ],
+      "verify": [
+        "test -s review.md && grep -ciE 'blocker|should-fix|nit' review.md",
+        "every file path cited in review.md exists in the repo (ls <path>)"
+      ],
       "agent": "engineering-code-reviewer",
+      "tier": "judgment",
       "dependsOn": ["build", "ci"]
     },
     {
       "key": "push-verify",
       "title": "Push and verify the pipeline is green",
       "description": "Take the reviewed code + CI pipeline provided, apply the blocker/should-fix findings, then push the branch and VERIFY: confirm the GitHub Actions run completed and every required check is green. If anything is red, state exactly what failed and what remains. Do not claim success without the pipeline result as evidence. Output a short release note: what shipped, the commit/branch, the CI status, and any residual follow-ups.",
+      "acceptance": [
+        "All blocker findings from review.md are fixed in commits on the pushed branch (list commit shas)",
+        "The branch is pushed and the latest GitHub Actions run for its head commit has conclusion success",
+        "release-notes.md is saved in the artifacts dir with what shipped, branch, commit sha, CI run URL and residual follow-ups",
+        "If any check is red, the result ends with STATUS: BLOCKED naming the failing job instead of claiming success"
+      ],
+      "verify": [
+        "git -C <repo> ls-remote origin <branch>  # matches local HEAD",
+        "gh run list --repo <owner/repo> --branch <branch> --limit 1 --json conclusion,url  # conclusion == success",
+        "test -s release-notes.md"
+      ],
       "agent": "engineering-git-workflow-master",
       "dependsOn": ["review"]
+    },
+    {
+      "key": "final-review",
+      "title": "Final whole-run audit against the spec",
+      "description": "Perform the final whole-run audit of the shipped product against the original spec (\"{{spec}}\"), architecture plan, code review, and release notes. Verify end-to-end spec compliance, confirm all review gate findings and rulings were properly resolved or documented, and write final-review.md with the ship verdict.",
+      "acceptance": [
+        "final-review.md is saved in the artifacts dir with a criterion-by-criterion audit against the spec and architecture",
+        "All prior review findings and any gate rulings are accounted for with commit SHA or artifact references",
+        "A final ship verdict (APPROVED or BLOCKED) is stated with supporting CI and repository evidence"
+      ],
+      "verify": [
+        "test -s final-review.md && grep -ciE 'APPROVED|BLOCKED' final-review.md",
+        "grep -ciE 'spec|architecture|ci' final-review.md"
+      ],
+      "agent": "engineering-code-reviewer",
+      "tier": "judgment",
+      "dependsOn": ["push-verify"],
+      "gate": {
+        "reviewer": "engineering-code-reviewer",
+        "maxRounds": 2,
+        "escalateBrainAt": 2,
+        "panel": 2
+      }
     }
   ]
 }

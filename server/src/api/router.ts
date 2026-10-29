@@ -9,6 +9,7 @@ const __dirname = path.dirname(__filename);
 import type { Store } from '../core/store.js';
 import { buildCalendar } from '../core/calendar.js';
 import type { EventBus } from '../core/events.js';
+import { shouldSharpenTask, sharpenTask } from '../core/sharpener.js';
 
 export function createApiRouter(store: Store, eventBus: EventBus): Router {
   const router = Router();
@@ -80,7 +81,7 @@ export function createApiRouter(store: Store, eventBus: EventBus): Router {
     }
   });
 
-  router.post('/inbox', (req, res) => {
+  router.post('/inbox', async (req, res) => {
     try {
       const body = req.body || {};
       // Minimal shape validation — tasks are persisted as-is to disk and every
@@ -97,6 +98,8 @@ export function createApiRouter(store: Store, eventBus: EventBus): Router {
         to: { platform: body.to?.platform, agent: body.to?.agent },
         priority: ['low', 'normal', 'high', 'urgent'].includes(body.priority) ? body.priority : 'normal',
         skill: body.skill,
+        // Brief contract (P0-3) rides inside context: context.acceptance /
+        // verify / timeboxMin / scope. Validated in the store (bad shape → 400).
         context: body.context,
         tags: Array.isArray(body.tags) ? body.tags : undefined,
         interaction: body.interaction && Array.isArray(body.interaction.fields) ? body.interaction : undefined,
@@ -112,6 +115,12 @@ export function createApiRouter(store: Store, eventBus: EventBus): Router {
         // Staged input uploads (from POST /api/uploads) the brain should read.
         inputs: Array.isArray(body.inputs) ? body.inputs : undefined
       });
+      // Intake brief sharpener (PS-1): synchronous pre-pass on cheap brain with 60 s cap
+      const cfg = store.getConfig?.();
+      if (cfg && shouldSharpenTask(task, cfg)) {
+        await sharpenTask(task, { config: cfg, decisionsDir: cfg.paths?.decisions });
+        store.saveTask(task);
+      }
       res.status(201).json(task);
     } catch (e: any) {
       res.status(400).json({ error: e.message });
@@ -224,6 +233,8 @@ export function createApiRouter(store: Store, eventBus: EventBus): Router {
       if ('agent' in c) patch.agent = c.agent;
       if ('division' in c) patch.division = c.division;
       if ('brain' in c) patch.brain = c.brain;
+      if ('acceptance' in b) patch.acceptance = b.acceptance;
+      else if ('acceptance' in c) patch.acceptance = c.acceptance;
       // Scheduling. Accept scheduledAt/scheduled_at; '' or null clears it.
       if ('scheduledAt' in b) patch.scheduledAt = b.scheduledAt;
       else if ('scheduled_at' in b) patch.scheduledAt = b.scheduled_at;

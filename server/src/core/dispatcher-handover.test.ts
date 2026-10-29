@@ -69,7 +69,8 @@ test('a genuine reported deliverable is allowed to complete', async () => {
   const { guard, put } = harness();
   const task = put(chainRung('t2'));
   const decision = await guard(task, '# Implementation\n\nHere is the finished feature with full detail and tests.');
-  assert.deepEqual(decision, { action: 'complete' });
+  assert.equal(decision.action, 'complete');
+  assert.equal(decision.result, undefined, 'result not rewritten');
 });
 
 test('an empty reported result hands over', async () => {
@@ -107,14 +108,16 @@ test('a completion not attributable to a brain passes straight through', async (
   // No context.brain — e.g. a human agent or pipeline reporting completion.
   const task = put({ id: 't6', title: 'x', description: '', status: 'in-progress', context: {} });
   const decision = await guard(task, "You've hit your session limit");
-  assert.deepEqual(decision, { action: 'complete' }, 'guard must not touch non-brain completions');
+  assert.equal(decision.action, 'complete', 'guard must not touch non-brain completions');
+  assert.equal(decision.result, undefined);
 });
 
 test('verifier disabled → reported soft failures pass through untouched', async () => {
   const { guard, put } = harness(false);
   const task = put(chainRung('t7'));
   const decision = await guard(task, "You've hit your session limit");
-  assert.deepEqual(decision, { action: 'complete' }, 'with the verifier off, exit-0 results are trusted');
+  assert.equal(decision.action, 'complete', 'with the verifier off, exit-0 results are trusted');
+  assert.equal(decision.result, undefined);
 });
 
 test('a reported rate-limit refusal cools the brain; an LLM rejection that mentions rate limits does not', async () => {

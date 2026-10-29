@@ -1,7 +1,7 @@
 {
   "id": "product-brief",
   "name": "Product Brief (fan-out → synthesis)",
-  "description": "Three specialists research a product idea in parallel, then one synthesis step fans them in. A diamond DAG that shows fan-out and fan-in in one run.",
+  "description": "Three specialists research a product idea in parallel, then one synthesis step fans them in. A diamond DAG that shows fan-out and fan-in in one run. (Candidate for PS-3 arena mode on the 'synthesis' step once promoted.)",
   "params": ["idea"],
   "steps": [
     {
