@@ -38,7 +38,7 @@
 // Node 18+ (global fetch). No npm install. Run: `node remote-brain-client.mjs`.
 
 import { spawn, spawnSync } from 'node:child_process';
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, rmSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import os from 'node:os';
@@ -582,7 +582,25 @@ function buildPrompt(task, artDir, inputInfo) {
     'Your final stdout becomes the task result shown on the dashboard.');
   return lines.join('\n');
 }
+function ensureDshPatch() {
+  try {
+    const pluginPath = join(HERE, 'dsh', 'dsh-progress-plugin.mjs');
+    if (!existsSync(pluginPath)) return null;
+    const patchPath = join(HERE, 'dsh', 'dsh-progress-patch.yml');
+    const expected = `# Cowork dsh live progress and context compaction plugin overlay\n- insert:\n    - id: dsh-cowork-progress\n      name: '${pluginPath}'\n`;
+    let current = '';
+    try { current = readFileSync(patchPath, 'utf8'); } catch {}
+    if (current !== expected) {
+      writeFileSync(patchPath, expected, 'utf8');
+    }
+    return patchPath;
+  } catch {
+    return null;
+  }
+}
+
 function runModel(brain, prompt, artDir) {
+  const dshPatch = brain.exec === 'dsh' ? ensureDshPatch() : null;
   const argv = brain.exec === 'claude' ? ['claude', '-p', prompt, ...(brain.model ? ['--model', brain.model] : []), ...(brain.effort ? ['--effort', brain.effort] : []), '--dangerously-skip-permissions']
     : brain.exec === 'hermes' ? ['hermes', ...(brain.model ? ['-m', brain.model] : []), '-z', prompt]
     : brain.exec === 'agy' ? ['agy', '-p', prompt, ...(brain.model ? ['--model', brain.model] : []), '--dangerously-skip-permissions']
@@ -592,7 +610,7 @@ function runModel(brain, prompt, artDir) {
     // Talks to a local OpenAI-compatible endpoint via the provider in
     // $DSH_HOME/settings.yaml; DSH_HOME + the provider apiKeyEnv are pinned so the
     // brain is self-contained regardless of spawn cwd (SGLang ignores the value).
-    : brain.exec === 'dsh' ? ['env', `DSH_HOME=${process.env.HOME}/.dsh`, 'SGLANG_API_KEY=dummy', 'DSH_PERMISSION_MODE=danger-full-access', 'dsh', '--profile', 'headless', prompt]
+    : brain.exec === 'dsh' ? ['env', `DSH_HOME=${process.env.HOME}/.dsh`, 'SGLANG_API_KEY=dummy', 'DSH_PERMISSION_MODE=danger-full-access', 'dsh', '--profile', 'headless', ...(dshPatch ? ['--patch', dshPatch] : []), prompt]
     : null;
   if (!argv) return Promise.resolve({ ok: false, text: `unknown/misconfigured exec ${brain.exec}` });
   return new Promise((resolve) => {

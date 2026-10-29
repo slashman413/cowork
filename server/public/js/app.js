@@ -2766,8 +2766,8 @@ class App {
       const isRunning = t.status === 'in-progress' || t.status === 'claimed';
       const progressHtml = isRunning ? `<div class="task-progress" style="margin:4px 0 8px; border:1px solid var(--border-hover); border-radius:10px; overflow:hidden; background:var(--bg-tertiary)">
         <div style="display:flex; align-items:center; gap:7px; padding:6px 10px; font-size:0.74rem; text-transform:uppercase; letter-spacing:.03em; color:#0EA5E9; border-bottom:1px solid var(--border-hover)">
-          <span class="progress-pulse" style="width:8px;height:8px;border-radius:50%;background:#0EA5E9;display:inline-block;animation:progressPulse 1.4s ease-in-out infinite"></span>
-          Live progress — what it's doing right now
+          <span class="progress-pulse" data-progress-pulse="${esc(t.id)}" style="width:8px;height:8px;border-radius:50%;background:#0EA5E9;display:inline-block;animation:progressPulse 1.4s ease-in-out infinite"></span>
+          <span data-progress-label="${esc(t.id)}">Live progress — what it's doing right now</span>
           <span data-progress-age="${esc(t.id)}" style="margin-left:auto; text-transform:none; letter-spacing:0; color:var(--text-muted)"></span>
         </div>
         <pre data-progress="${esc(t.id)}" style="margin:0; padding:9px 11px; max-height:320px; overflow:auto; white-space:pre-wrap; word-break:break-word; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:0.74rem; line-height:1.45; color:var(--text-secondary)">Loading live output…</pre>
@@ -3199,6 +3199,56 @@ class App {
         const txt = (p.log || '').replace(/\s+$/, '');
         el.textContent = txt || (p.running ? 'Running — no output captured yet…' : 'No live output captured for this run.');
         if (atBottom) el.scrollTop = el.scrollHeight;
+
+        // Detect if task is currently under context compaction
+        let isCompacting = false;
+        let compactionStatus = '⏳ Compacting context…';
+        if (p.running && txt) {
+          const activeKeywords = [
+            'Context threshold crossed',
+            'Prefilling context',
+            'Generating summary',
+            'Context compaction initiated',
+            'Context compaction in progress'
+          ];
+          const doneKeywords = [
+            'Context compaction complete',
+            'Summary generation finished'
+          ];
+          let lastActiveIdx = -1;
+          for (const kw of activeKeywords) {
+            const idx = txt.lastIndexOf(kw);
+            if (idx > lastActiveIdx) lastActiveIdx = idx;
+          }
+          let lastDoneIdx = -1;
+          for (const kw of doneKeywords) {
+            const idx = txt.lastIndexOf(kw);
+            if (idx > lastDoneIdx) lastDoneIdx = idx;
+          }
+          if (lastActiveIdx !== -1 && lastActiveIdx > lastDoneIdx) {
+            isCompacting = true;
+            const lines = txt.split('\n');
+            const lastLine = [...lines].reverse().find(l => /\[Compaction\]|Context compaction/i.test(l)) || '';
+            if (/Prefill/i.test(lastLine)) {
+              compactionStatus = '⏳ Compacting context (prefilling)…';
+            } else if (/Generating/i.test(lastLine)) {
+              compactionStatus = '⏳ Compacting context (generating summary)…';
+            }
+          }
+        }
+        const labelEl = this.contentEl.querySelector(`[data-progress-label="${(window.CSS && CSS.escape) ? CSS.escape(id) : id}"]`);
+        const pulseEl = this.contentEl.querySelector(`[data-progress-pulse="${(window.CSS && CSS.escape) ? CSS.escape(id) : id}"]`);
+        if (labelEl) {
+          if (isCompacting) {
+            labelEl.textContent = `Live progress — ${compactionStatus}`;
+            labelEl.style.color = '#F59E0B';
+            if (pulseEl) pulseEl.style.background = '#F59E0B';
+          } else {
+            labelEl.textContent = "Live progress — what it's doing right now";
+            labelEl.style.color = '';
+            if (pulseEl) pulseEl.style.background = '#0EA5E9';
+          }
+        }
         // "last activity Ns ago" — makes a stalled run (no new output) obvious.
         const age = this.contentEl.querySelector(`[data-progress-age="${(window.CSS && CSS.escape) ? CSS.escape(id) : id}"]`);
         if (age && p.updatedAt) {

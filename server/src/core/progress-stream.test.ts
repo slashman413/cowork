@@ -61,3 +61,21 @@ test('agy: tool steps and streamed text deltas render; result.response is the an
   assert.match(log, /✔ agent finished · 11s/);
   assert.equal(r.finalText(), 'Done! Listed.');
 });
+
+test('claude: compaction events render compaction notice', () => {
+  const r = createStreamRenderer('claude');
+  let log = '';
+  log += r.feed(j({ type: 'system', subtype: 'compaction' }));
+  log += r.feed(j({ type: 'assistant', message: { content: [{ type: 'text', text: 'Resuming after compaction.' }] } }));
+  assert.match(log, /⚙ Context compaction in progress…/);
+  assert.match(log, /💬 Resuming after compaction\./);
+});
+
+test('agy: compaction lifecycle events render progress notices', () => {
+  const r = createStreamRenderer('agy');
+  let log = '';
+  log += r.feed(j({ event: 'compaction_start' }));
+  log += r.feed(j({ event: 'compaction_end' }));
+  assert.match(log, /⚙ Context compaction in progress…/);
+  assert.match(log, /✔ Context compaction complete/);
+});

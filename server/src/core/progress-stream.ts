@@ -83,6 +83,7 @@ export function createStreamRenderer(exec: string): StreamRenderer {
     switch (ev.type) {
       case 'system':
         if (ev.subtype === 'init') return `[${ts()}] ⚙ session started · model ${ev.model || '?'}\n`;
+        if (ev.subtype === 'compacting' || ev.subtype === 'compaction') return `[${ts()}] ⚙ Context compaction in progress…\n`;
         return '';                  // thinking_tokens / hooks etc. — noise
       case 'assistant': {
         let o = '';
@@ -120,6 +121,8 @@ export function createStreamRenderer(exec: string): StreamRenderer {
 
   const onAgy = (ev: any): string => {
     if (ev.event === 'init') return `[${ts()}] ⚙ session started\n`;
+    if (ev.event === 'compaction_start' || ev.event === 'compaction') return `[${ts()}] ⚙ Context compaction in progress…\n`;
+    if (ev.event === 'compaction_end') return `[${ts()}] ✔ Context compaction complete\n`;
     if (ev.event === 'result') {
       const r = ev.result || {};
       if (typeof r.response === 'string') result = r.response;

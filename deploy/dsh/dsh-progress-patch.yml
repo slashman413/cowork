@@ -1,0 +1,4 @@
+# Cowork dsh live progress and context compaction plugin overlay
+- insert:
+    - id: dsh-cowork-progress
+      name: '/home/wayne/workspace/github/slashman413/cowork/deploy/dsh/dsh-progress-plugin.mjs'

@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from 'child_process';
-import { join } from 'node:path';
+import { join, resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, statSync, createWriteStream, type WriteStream } from 'node:fs';
 import type { Config, RoleConfig, Task, AchieverDecision } from '../types.js';
 import type { EventBus } from './events.js';
@@ -66,6 +67,28 @@ interface ExecPlan {
  * Tasks WITHOUT a role are left alone (they may be aimed at live interactive
  * agents polling the inbox themselves). Tag a task `manual` to always skip it.
  */
+/** Ensure dsh live progress & compaction reporting patch overlay exists and return its path. */
+export function ensureDshPatch(artifactsPath?: string): string | undefined {
+  try {
+    let pluginPath = fileURLToPath(new URL('../../../deploy/dsh/dsh-progress-plugin.mjs', import.meta.url));
+    if (!existsSync(pluginPath) && artifactsPath) {
+      const repoRoot = resolve(artifactsPath, '..');
+      pluginPath = join(repoRoot, 'deploy', 'dsh', 'dsh-progress-plugin.mjs');
+    }
+    if (!existsSync(pluginPath)) return undefined;
+    const patchPath = join(dirname(pluginPath), 'dsh-progress-patch.yml');
+    const expectedContent = `# Cowork dsh live progress and context compaction plugin overlay\n- insert:\n    - id: dsh-cowork-progress\n      name: '${pluginPath}'\n`;
+    let currentContent = '';
+    try { currentContent = readFileSync(patchPath, 'utf-8'); } catch {}
+    if (currentContent !== expectedContent) {
+      writeFileSync(patchPath, expectedContent, 'utf-8');
+    }
+    return patchPath;
+  } catch {
+    return undefined;
+  }
+}
+
 export class Dispatcher {
   /** Name of the always-on coordinator agent shown in Active Agents. */
   static readonly COORDINATOR_NAME = 'orchestrator';
@@ -375,6 +398,11 @@ export class Dispatcher {
   /** Persistent per-task artifacts dir (survives reboot — under the repo, gitignored). */
   private artifactsDir(taskId: string): string {
     return join(this.config.paths.artifacts, taskId);
+  }
+
+  /** Ensure dsh live progress & compaction reporting patch overlay exists and return its path. */
+  private ensureDshPatch(): string | undefined {
+    return ensureDshPatch(this.config.paths.artifacts);
   }
 
   /** True while a task still has an unanswered human-in-the-loop interaction
@@ -1533,7 +1561,7 @@ export class Dispatcher {
         // Local Ollama chat model (model required).
         if (!roleCfg.model) throw new Error('exec:ollama needs a model');
         return ['ollama', 'run', roleCfg.model, prompt];
-      case 'dsh':
+      case 'dsh': {
         // DeepSeek Harness, headless profile: "answer one task, print the result,
         // and exit" — the non-interactive shape a brain needs. dsh is NOT a model
         // server; it talks to a local OpenAI-compatible endpoint (here the SGLang
@@ -1547,9 +1575,13 @@ export class Dispatcher {
         // `headless` profile from $DSH_HOME (default is the launch cwd — wrong here),
         // and the provider needs its apiKeyEnv present (SGLang ignores the value).
         // env(1) sets both regardless of spawn cwd so the brain is self-contained.
+        // The dsh-cowork-progress patch overlay streams turn-by-turn tool executions
+        // and live compaction status/progress to stderr -> progress.log.
+        const patch = this.ensureDshPatch();
         return ['env', `DSH_HOME=${process.env.HOME}/.dsh`, 'SGLANG_API_KEY=dummy',
           'DSH_PERMISSION_MODE=danger-full-access',
-          'dsh', '--profile', 'headless', prompt];
+          'dsh', '--profile', 'headless', ...(patch ? ['--patch', patch] : []), prompt];
+      }
       case 'script':
         // Task is passed via COWORK_TASK_* env vars (see execute); the command
         // is a fixed pipeline, not an LLM prompt.
