@@ -25,6 +25,7 @@ import { systemDetails, DETAIL_KINDS, type DetailKind } from './core/system-deta
 import { controlService } from './core/service-control.js';
 import { getObsidianVault } from './core/obsidian.js';
 import { VideoStudio, VIDEO_STUDIO_TAG, ASPECTS } from './core/video-studio.js';
+import { AudioOverview, AUDIO_OVERVIEW_TAG, AUDIO_OVERVIEW_FILE, readTaskSourceFile } from './core/audio-overview.js';
 import { normalizeRecurrence, nextRunAt } from './core/recurrence.js';
 import { Shotcraft, SHOTCRAFT_TAG, GALLERY_URL, ASPECTS as SHOTCRAFT_ASPECTS, LENGTHS as SHOTCRAFT_LENGTHS } from './core/shotcraft.js';
 import { OUTPUTS_SUBDIR } from './core/artifact-lint.js';
@@ -500,6 +501,44 @@ async function main() {
         to: {},
         priority: 'normal',
       }, { inputs });
+      res.status(201).json(task);
+    } catch (e: any) { res.status(400).json({ error: e.message }); }
+  });
+
+  // ── Audio Overview 語音導讀: source → narration script → edge-tts mp3 ──────
+  // The page (/audio-overview.html) posts a source + options and watches tasks
+  // tagged "audio-overview"; the audio is a normal task, see core/audio-overview.ts.
+  const audioOverview = new AudioOverview({ defaultBrain: studio.cfg.defaultBrain, brains: studio.cfg.brains });
+  app.get('/api/audio-overview', (_req, res) => {
+    const vault = getObsidianVault(config.obsidian);
+    res.json({
+      tag: AUDIO_OVERVIEW_TAG, file: AUDIO_OVERVIEW_FILE, defaultBrain: audioOverview.defaultBrain, brains: audioOverview.brains,
+      obsidian: !!vault && vault.available(),
+    });
+  });
+  app.post('/api/audio-overview/tasks', (req, res) => {
+    try {
+      const brief = audioOverview.parseBrief(req.body);
+      let text = '', label = 'pasted text';
+      const src = brief.source;
+      if (src.kind === 'text') text = src.text;
+      else if (src.kind === 'task') {
+        text = readTaskSourceFile(config.paths.artifacts, src.taskId, src.file);
+        label = `task ${src.taskId} · ${src.file}`;
+      } else {
+        const vault = getObsidianVault(config.obsidian);
+        const note = vault && vault.available() ? vault.read(src.path) : null;
+        if (!note) throw new Error('obsidian note not found');
+        text = note.content; label = `Obsidian · ${note.path}`;
+      }
+      if (text.trim().length < 20) throw new Error('source has no usable text');
+      const spec = audioOverview.buildTask(brief, text, label);
+      const task = store.createTask({
+        ...spec,
+        from: { platform: 'dashboard', agent: 'audio-overview' },
+        to: {},
+        priority: 'normal',
+      });
       res.status(201).json(task);
     } catch (e: any) { res.status(400).json({ error: e.message }); }
   });

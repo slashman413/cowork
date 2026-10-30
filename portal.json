@@ -22,6 +22,15 @@
       "enabled": true,
       "probe": false
     },
+    "audiooverview": {
+      "url": "/audio-overview.html",
+      "label": "Audio Overview 語音導讀",
+      "description": "Turn a task output, an Obsidian note or pasted text into a narrated or two-host audio overview (edge-tts).",
+      "icon": "headphones",
+      "category": "Marketing",
+      "enabled": true,
+      "probe": false
+    },
     "shotcraft": {
       "url": "/shotcraft.html",
       "label": "Shotcraft 鏡頭工坊",

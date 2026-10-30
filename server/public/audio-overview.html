@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<!--
+  Audio Overview 語音導讀 — turn a task output, an Obsidian note or pasted text
+  into a narrated / two-host audio overview.
+
+  Served by the cowork server itself (like video-studio.html) and launched from the
+  Portal card. A thin client over:
+    GET  /api/audio-overview                 allowed brains, obsidian availability
+    POST /api/audio-overview/tasks           source + options → one ordinary cowork task (tag audio-overview)
+    GET  /api/inbox?tag=audio-overview       "Recent overviews", refreshed from SSE /api/events
+    GET  /api/inbox?status=done              source picker: finished tasks
+    GET  /api/outputs/:id, /api/artifacts/:id   their files;  /api/outputs/:id/audio-overview.mp3?inline=1 = the player
+    GET  /api/obsidian/search | /notes       Obsidian note picker
+  The script + mp3 are produced by a brain; see server/src/core/audio-overview.ts and
+  deploy/scripts/audio-overview-render.mjs.
+-->
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Audio Overview · Cowork</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root[data-theme="dark"] {
+      --bg: #0b0f17; --panel: #121826; --panel-2: #0e1320; --border: #232c3d;
+      --text: #e6edf7; --muted: #8b98ad; --accent: #7c5cff; --accent-soft: #7c5cff22;
+      --ok: #22c55e; --warn: #eab308; --bad: #ef4444; --run: #0ea5e9; --wait: #a855f7;
+    }
+    :root[data-theme="light"] {
+      --bg: #f6f8fc; --panel: #ffffff; --panel-2: #eef2f8; --border: #dbe2ee;
+      --text: #1a2130; --muted: #5b6779; --accent: #6b46e5; --accent-soft: #6b46e514;
+      --ok: #16a34a; --warn: #b8860b; --bad: #dc2626; --run: #0284c7; --wait: #9333ea;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      font-family: 'Inter', system-ui, sans-serif; background: var(--bg); color: var(--text);
+      display: grid; grid-template-rows: auto 1fr; height: 100vh; overflow: hidden;
+      transition: background .2s, color .2s;
+    }
+    header {
+      display: flex; align-items: center; gap: 12px; padding: 12px 18px;
+      border-bottom: 1px solid var(--border); background: var(--panel); z-index: 5;
+    }
+    header .brand { display: flex; align-items: center; gap: 9px; font-weight: 650; }
+    header .brand .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 12px var(--accent); }
+    header .count { color: var(--muted); font-size: .82rem; }
+    header .spacer { flex: 1; }
+    header a.link, header button, .btn {
+      color: var(--muted); text-decoration: none; font-size: .85rem; background: none;
+      border: 1px solid var(--border); border-radius: 8px; padding: 6px 11px; cursor: pointer;
+      font-family: inherit; transition: color .15s, border-color .15s, background .15s, transform .15s;
+    }
+    header a.link:hover, header button:hover, .btn:hover { color: var(--text); border-color: var(--accent); }
+    .btn:disabled { opacity: .5; cursor: not-allowed; }
+    .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+    .btn.primary:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 6px 18px var(--accent-soft); }
+
+    main { display: flex; min-height: 0; }
+    .col { overflow-y: auto; padding: 16px 20px 40px; min-width: 0; }
+    #form { flex: 0 0 480px; width: 480px; border-right: 1px solid var(--border); background: var(--panel-2); }
+    #list { flex: 1 1 auto; }
+    h2 { font-size: .72rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin: 0 0 10px; font-weight: 600; }
+    label.f { display: block; font-size: .76rem; color: var(--muted); margin: 12px 0 5px; letter-spacing: .02em; }
+    textarea, select, input[type=text] {
+      width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border);
+      background: var(--panel); color: var(--text); font-family: inherit; font-size: .88rem;
+    }
+    textarea { min-height: 150px; resize: vertical; line-height: 1.5; }
+    textarea:focus, select:focus, input:focus { outline: none; border-color: var(--accent); }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .seg { display: flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+    .seg button { flex: 1; background: var(--panel); border: 0; border-right: 1px solid var(--border); color: var(--muted); padding: 7px 0; cursor: pointer; font-family: inherit; font-size: .8rem; transition: all .12s; }
+    .seg button:last-child { border-right: 0; }
+    .seg button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+    .seg button:disabled { opacity: .45; cursor: not-allowed; }
+    .hint { color: var(--muted); font-size: .74rem; margin-top: 6px; line-height: 1.45; }
+    .privacy { margin-top: 16px; padding: 9px 11px; border: 1px solid var(--border); border-left: 3px solid var(--warn); border-radius: 8px; background: var(--panel); color: var(--muted); font-size: .76rem; line-height: 1.5; }
+    .submit { margin-top: 16px; display: flex; gap: 10px; align-items: center; }
+    .msg { font-size: .8rem; }
+    .msg.err { color: var(--bad); } .msg.ok { color: var(--ok); }
+    .empty { color: var(--muted); font-size: .86rem; padding: 24px 4px; }
+    .banner { color: var(--bad); font-size: .85rem; padding: 10px; }
+
+    .item { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 12px; margin-bottom: 12px; max-width: 760px; }
+    .item .top { display: flex; gap: 8px; align-items: center; }
+    .item .ttl { flex: 1; min-width: 0; font-weight: 600; font-size: .88rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .st { font-size: .7rem; padding: 2px 8px; border-radius: 999px; border: 1px solid currentColor; white-space: nowrap; }
+    .st.done { color: var(--ok); } .st.failed { color: var(--bad); } .st.run { color: var(--run); }
+    .st.pending { color: var(--warn); } .st.wait { color: var(--wait); }
+    .item .meta { color: var(--muted); font-size: .74rem; margin-top: 4px; }
+    .item audio { width: 100%; margin-top: 9px; display: block; }
+    .item pre { font-size: .7rem; color: var(--muted); background: var(--panel-2); padding: 8px; border-radius: 8px; max-height: 120px; overflow: auto; white-space: pre-wrap; margin: 9px 0 0; }
+    .item .acts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 9px; }
+    .item .acts .btn { font-size: .76rem; padding: 4px 9px; }
+    @media (max-width: 900px) { main { flex-direction: column; overflow-y: auto; } #form { flex: none; width: auto; border-right: 0; } .col { overflow: visible; } }
+  </style>
+</head>
+<body>
+  <header>
+    <span class="brand"><span class="dot"></span> Audio Overview <span class="count">語音導讀</span></span>
+    <span class="spacer"></span>
+    <button id="theme" title="Toggle theme">🌗</button>
+    <a class="link" href="/#portal">← Cowork</a>
+  </header>
+  <main>
+    <section class="col" id="form">
+      <h2>New overview</h2>
+      <label class="f">Source</label>
+      <div class="seg" id="srckind"><button data-v="task" class="on">Task output</button><button data-v="note" id="notebtn">Obsidian note</button><button data-v="text">Pasted text</button></div>
+
+      <div id="src-task">
+        <label class="f" for="taskpick">Finished task</label>
+        <select id="taskpick"><option value="">Loading…</option></select>
+        <label class="f" for="filepick">File (md / txt / html)</label>
+        <select id="filepick"><option value="">Pick a task first</option></select>
+      </div>
+      <div id="src-note" hidden>
+        <label class="f" for="notesearch">Search the vault</label>
+        <input type="text" id="notesearch" placeholder="Type to search notes…" autocomplete="off">
+        <select id="notepick" size="6" style="margin-top:6px"></select>
+      </div>
+      <div id="src-text" hidden>
+        <label class="f" for="pasted">Text</label>
+        <textarea id="pasted" placeholder="Paste the article, notes or report to turn into audio…"></textarea>
+      </div>
+
+      <label class="f" for="title">Title (optional)</label>
+      <input type="text" id="title" placeholder="Defaults to the source name">
+      <div class="row">
+        <div><label class="f">Style</label>
+          <div class="seg" id="style"><button data-v="narrator" class="on">Narrator</button><button data-v="dialogue">Two-host dialogue</button></div></div>
+        <div><label class="f">Language</label>
+          <div class="seg" id="lang"><button data-v="zh-TW" class="on">zh-TW</button><button data-v="en">en</button></div></div>
+      </div>
+      <div class="row">
+        <div><label class="f">Length</label>
+          <div class="seg" id="length"><button data-v="short" class="on">Short ~2–3 min</button><button data-v="medium">Medium ~5–6 min</button></div></div>
+        <div><label class="f" for="brain">Brain</label><select id="brain"></select></div>
+      </div>
+      <label class="f" for="notes">Extra notes (optional)</label>
+      <input type="text" id="notes" placeholder="Audience, tone, points to stress…">
+      <div class="privacy">Privacy: audio is synthesised with edge-tts, which sends the script text to Microsoft's online TTS service. Don't use confidential sources.</div>
+      <div class="submit"><button class="btn primary" id="go" disabled>🎧 Create overview</button><span class="msg" id="msg"></span></div>
+      <div class="hint">A brain writes the script, then a render script voices it (HsiaoChen / YunJhe for zh-TW, Aria / Guy for en) and builds <code>audio-overview.mp3</code>. Usually a few minutes.</div>
+    </section>
+    <section class="col" id="list">
+      <h2>Recent overviews <span id="n"></span></h2>
+      <div id="items"><div class="empty">Loading…</div></div>
+    </section>
+  </main>
+
+  <script>
+    const $ = (s, r = document) => r.querySelector(s);
+    const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const LS = { theme: 'cowork-theme', last: 'aoverview-last' };
+    let info = null, items = [], kind = 'task', notePick = '';
+    const outCache = new Map();   // taskId -> output file list (refetched while not done)
+
+    const applyTheme = (t) => document.documentElement.setAttribute('data-theme', t);
+    applyTheme(localStorage.getItem(LS.theme) || 'dark');
+    $('#theme').onclick = () => {
+      const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+      applyTheme(next); localStorage.setItem(LS.theme, next);
+    };
+    async function api(path, opts) {
+      const r = await fetch(`/api${path}`, opts);
+      if (!r.ok) { let m = `HTTP ${r.status}`; try { m = (await r.json()).error || m; } catch {} throw new Error(m); }
+      return r.json();
+    }
+    const outUrl = (id, f, inline = true) => `/api/outputs/${encodeURIComponent(id)}/${encodeURIComponent(f)}${inline ? '?inline=1' : ''}`;
+
+    // ── Form ──────────────────────────────────────────────────────────
+    const segVal = (id) => $(`#${id} button.on`)?.dataset.v;
+    function setSeg(id, v) { $$(`#${id} button`).forEach(b => b.classList.toggle('on', b.dataset.v === String(v))); }
+    ['style', 'lang', 'length'].forEach(id => $$(`#${id} button`).forEach(b => b.onclick = () => setSeg(id, b.dataset.v)));
+    $$('#srckind button').forEach(b => b.onclick = () => {
+      if (b.disabled) return;
+      kind = b.dataset.v; setSeg('srckind', kind);
+      ['task', 'note', 'text'].forEach(k => { $(`#src-${k}`).hidden = k !== kind; });
+      if (kind === 'note' && !$('#notepick').options.length) searchNotes();
+      validate();
+    });
+    function validate() {
+      const ok = kind === 'task' ? $('#taskpick').value && $('#filepick').value
+        : kind === 'note' ? !!$('#notepick').value : $('#pasted').value.trim().length >= 20;
+      $('#go').disabled = !ok;
+    }
+    ['taskpick', 'filepick', 'notepick'].forEach(id => $(`#${id}`).addEventListener('change', validate));
+    $('#pasted').addEventListener('input', validate);
+
+    // Task picker: finished tasks (not Audio Overview ones) → their md/txt/html outputs + artifacts.
+    const TEXT_RE = /\.(md|markdown|txt|html?)$/i;
+    async function loadTasks() {
+      try {
+        const ts = (await api('/inbox?status=done&limit=60')).filter(t => !(t.tags || []).includes(info.tag));
+        $('#taskpick').innerHTML = '<option value="">— pick a finished task —</option>' +
+          ts.map(t => `<option value="${esc(t.id)}">${esc((t.title || t.id).slice(0, 80))}</option>`).join('');
+      } catch (e) { $('#taskpick').innerHTML = `<option value="">${esc(e.message)}</option>`; }
+    }
+    $('#taskpick').addEventListener('change', async () => {
+      const id = $('#taskpick').value, sel = $('#filepick');
+      if (!id) { sel.innerHTML = '<option value="">Pick a task first</option>'; validate(); return; }
+      const [outs, arts] = await Promise.all([api(`/outputs/${id}`).catch(() => []), api(`/artifacts/${id}`).catch(() => [])]);
+      const opts = [...outs.map(f => `outputs/${f}`), ...arts].filter(f => TEXT_RE.test(f));
+      sel.innerHTML = opts.length ? opts.map(f => `<option value="${esc(f)}">${esc(f)}</option>`).join('')
+        : '<option value="">No md / txt / html files in this task</option>';
+      validate();
+    });
+    async function searchNotes() {
+      const q = $('#notesearch').value.trim();
+      try {
+        const notes = q ? await api(`/obsidian/search?q=${encodeURIComponent(q)}&limit=30`) : (await api('/obsidian/notes')).slice(0, 60);
+        $('#notepick').innerHTML = notes.map(n => `<option value="${esc(n.path)}">${esc(n.path)}</option>`).join('');
+      } catch (e) { $('#notepick').innerHTML = `<option value="">${esc(e.message)}</option>`; }
+      validate();
+    }
+    let noteTimer; $('#notesearch').addEventListener('input', () => { clearTimeout(noteTimer); noteTimer = setTimeout(searchNotes, 300); });
+
+    $('#go').onclick = async () => {
+      const msg = $('#msg'); msg.className = 'msg'; msg.textContent = 'Submitting…'; $('#go').disabled = true;
+      try {
+        const source = kind === 'task' ? { kind, taskId: $('#taskpick').value, file: $('#filepick').value }
+          : kind === 'note' ? { kind, path: $('#notepick').value } : { kind, text: $('#pasted').value };
+        const body = { source, title: $('#title').value, style: segVal('style'), lang: segVal('lang'), length: segVal('length'), brain: $('#brain').value, notes: $('#notes').value };
+        const task = await api('/audio-overview/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        localStorage.setItem(LS.last, JSON.stringify({ brain: body.brain, style: body.style, lang: body.lang, length: body.length }));
+        msg.className = 'msg ok'; msg.textContent = 'Queued ✓';
+        await load();
+        document.getElementById(`item-${task.id}`)?.scrollIntoView({ block: 'start' });
+      } catch (e) { msg.className = 'msg err'; msg.textContent = e.message; }
+      finally { validate(); }
+    };
+
+    // ── Recent overviews ──────────────────────────────────────────────
+    function statusOf(t) {
+      const failed = t.failed === true || t.status === 'rejected' || (t.status === 'done' && /^FAILED\b/i.test((t.result || '').trim()));
+      if (failed) return ['failed', 'failed'];
+      if (t.status === 'done') return ['done', 'done'];
+      if (t.status === 'wait-input') return ['wait', 'needs input'];
+      if (t.status === 'in-progress' || t.status === 'claimed') return ['run', 'rendering'];
+      return ['pending', t.status];
+    }
+    async function outputsOf(t) {
+      if (outCache.has(t.id) && t.status === 'done') return outCache.get(t.id);
+      try { const a = await api(`/outputs/${encodeURIComponent(t.id)}`); outCache.set(t.id, a); return a; } catch { return []; }
+    }
+    async function load() {
+      try { items = await api(`/inbox?tag=${encodeURIComponent(info.tag)}&limit=50`); }
+      catch (e) { $('#items').innerHTML = `<div class="banner">${esc(e.message)}</div>`; return; }
+      $('#n').textContent = items.length ? `(${items.length})` : '';
+      if (!items.length) { $('#items').innerHTML = '<div class="empty">No overviews yet — pick a source and create one.</div>'; return; }
+      const playing = new Set($$('#items audio').filter(a => !a.paused).map(a => a.dataset.task));
+      const cards = await Promise.all(items.map(async (t) => {
+        const [cls, label] = statusOf(t);
+        const ao = t.context?.audioOverview || {};
+        const files = await outputsOf(t);
+        const has = files.includes(info.file);
+        return { id: t.id, playing: playing.has(t.id), html: `
+          <div class="item" id="item-${esc(t.id)}">
+            <div class="top"><span class="ttl" title="${esc(t.title)}">${esc(ao.title || t.title)}</span><span class="st ${cls}">${esc(label)}</span></div>
+            <div class="meta">${esc(ao.style === 'dialogue' ? 'two-host dialogue' : 'narrator')} · ${esc(ao.lang || '')} · ${esc(ao.length || '')} · ${esc(ao.source || '')} · ${esc((t.context?.brain || '').replace(/^local-cc-/, ''))} · ${new Date(t.createdAt).toLocaleString()}</div>
+            ${has ? `<audio controls preload="metadata" data-task="${esc(t.id)}" src="${outUrl(t.id, info.file)}"></audio>` : ''}
+            ${cls === 'run' ? `<pre data-progress="${esc(t.id)}">…</pre>` : ''}
+            ${cls === 'failed' && t.result ? `<pre>${esc(t.result.slice(0, 600))}</pre>` : ''}
+            <div class="acts">
+              ${has ? `<a class="btn" href="${outUrl(t.id, info.file, false)}">⬇ mp3</a>` : ''}
+              ${files.includes('script.md') ? `<a class="btn" href="${outUrl(t.id, 'script.md')}" target="_blank">Script</a>` : ''}
+              <a class="btn" href="/#tasks/${encodeURIComponent(t.id)}" target="_blank">Open task</a>
+            </div>
+          </div>` };
+      }));
+      // Keep a playing <audio> untouched so a live refresh doesn't stop playback.
+      const wrap = $('#items');
+      const existing = new Map($$('.item', wrap).map(el => [el.id, el]));
+      wrap.innerHTML = '';
+      for (const c of cards) {
+        const old = existing.get(`item-${c.id}`);
+        if (c.playing && old) { wrap.appendChild(old); continue; }
+        const d = document.createElement('div'); d.innerHTML = c.html.trim(); wrap.appendChild(d.firstChild);
+      }
+      pollProgress();
+    }
+    async function pollProgress() {
+      for (const pre of $$('pre[data-progress]')) {
+        try {
+          const p = await api(`/inbox/${encodeURIComponent(pre.dataset.progress)}/progress`);
+          const lines = (p.log || '').trim().split('\n').filter(Boolean);
+          pre.textContent = lines.slice(-6).join('\n') || 'Waiting for the brain to start…';
+          pre.scrollTop = pre.scrollHeight;
+        } catch {}
+      }
+    }
+    setInterval(() => { if (items.some(t => ['in-progress', 'claimed'].includes(t.status))) pollProgress(); }, 6000);
+
+    let refreshTimer = null;
+    function scheduleRefresh() { clearTimeout(refreshTimer); refreshTimer = setTimeout(load, 800); }
+    function connectEvents() {
+      const es = new EventSource('/api/events');
+      es.onmessage = (m) => {
+        let ev; try { ev = JSON.parse(m.data); } catch { return; }
+        if (!ev || ev.type === 'ping' || ev.type === 'connected') return;
+        const task = ev.payload?.task;
+        const id = task?.id || ev.payload?.taskId;
+        if ((id && items.some(f => f.id === id)) || (Array.isArray(task?.tags) && task.tags.includes(info.tag))) scheduleRefresh();
+      };
+    }
+
+    // ── Boot ──────────────────────────────────────────────────────────
+    (async () => {
+      try {
+        info = await api('/audio-overview');
+        const last = JSON.parse(localStorage.getItem(LS.last) || '{}');
+        $('#brain').innerHTML = info.brains.map(b => `<option value="${esc(b)}">${esc(b.replace(/^local-cc-/, ''))}${b === info.defaultBrain ? ' (default)' : ''}</option>`).join('');
+        $('#brain').value = info.brains.includes(last.brain) ? last.brain : info.defaultBrain;
+        ['style', 'lang', 'length'].forEach(k => last[k] && setSeg(k, last[k]));
+        if (!info.obsidian) { $('#notebtn').disabled = true; $('#notebtn').title = 'Obsidian vault unavailable'; }
+        await loadTasks();
+      } catch (e) { $('#items').innerHTML = `<div class="banner">${esc(e.message)}</div>`; return; }
+      await load();
+      connectEvents();
+    })();
+  </script>
+</body>
+</html>
