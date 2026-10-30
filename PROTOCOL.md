@@ -153,6 +153,14 @@ The Cowork MCP Server exposes these tools via Streamable HTTP at `/mcp`:
 here so its client can claim the task), and `division` (override the routed
 division). With none set, the two-stage router picks division → agent.
 
+**Code tasks / worktrees** — if `context.repo` (aliases `repoPath`, `workdir`, `cwd`) names a
+directory inside a git repo, the brain runs in its own worktree `<repo>/.worktrees/<task-id>`
+on branch `cowork/<task-id>` (artifacts/outputs dirs unchanged). `context.worktree: false`
+opts out; `true` forces. On finish `artifacts/<id>/worktree.diff` is written and
+`task.worktree = {path, branch, base}` recorded. `POST /api/inbox/:id/worktree/merge`
+(409 on conflicts / dirty main checkout) and `/worktree/discard` act on it; unmerged
+worktrees of tasks finished >7 days ago are pruned (branch kept).
+
 ## 4. SSE Events
 
 The server pushes real-time events via Server-Sent Events at `/api/events`. Event

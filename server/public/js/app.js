@@ -2826,6 +2826,10 @@ class App {
             style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#22C55E99;border-color:#22C55E33;opacity:.6;cursor:default">✓ Continued</button>`
             : `<button class="btn" data-continue-task="${esc(t.id)}" data-brain="${esc(brainLabel)}" title="Continue this task — spawn a follow-up seeded with this run's outputs; pick which brain claims it"
             style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#22C55E;border-color:#22C55E66">▸ Continue</button>`) : ''}
+          ${(t.worktree && !t.worktree.merged && !t.worktree.discarded) ? `<button class="btn" data-worktree-merge="${esc(t.id)}" title="Merge branch ${esc(t.worktree.branch)} into the main checkout's current branch (refused on conflicts or a dirty main checkout)"
+            style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#22C55E;border-color:#22C55E66">⑂ Merge</button>
+          <button class="btn" data-worktree-discard="${esc(t.id)}" title="Discard this task's worktree and delete branch ${esc(t.worktree.branch)}"
+            style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#EF4444;border-color:#EF444466">🗑 Discard</button>` : ''}
           ${isTaskEditable(t) ? `<button class="btn" data-edit-task="${esc(t.id)}" title="Edit this task — change its title, brief, agent/brain, schedule and loop interval, then save"
             style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#0EA5E9;border-color:#0EA5E966">✎ Edit</button>` : ''}</div>
         <div class="task-ids" style="display:flex; flex-wrap:wrap; align-items:center; gap:12px; padding:4px 0 2px; font-size:0.72rem; color:var(--text-muted)">
@@ -3062,6 +3066,24 @@ class App {
           this.renderInbox();
         } catch (err) { this.toast('error', err.message); b.disabled = false; }
       }));
+
+    // Code-task worktree: merge its branch into main, or discard it.
+    for (const [attr, key, verb, confirmMsg] of [
+      ['[data-worktree-merge]', 'worktreeMerge', 'merge', 'Merge this task\'s branch into the main checkout\'s current branch?'],
+      ['[data-worktree-discard]', 'worktreeDiscard', 'discard', 'Discard this task\'s worktree and DELETE its branch? Unmerged work is lost.']
+    ]) {
+      this.contentEl.querySelectorAll(attr).forEach(b =>
+        b.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          if (!confirm(confirmMsg)) return;
+          b.disabled = true;
+          try {
+            const out = await this.api.post(`/inbox/${encodeURIComponent(b.dataset[key])}/worktree/${verb}`, {});
+            this.toast(verb === 'merge' ? 'merged' : 'discarded', out?.message || 'done');
+            this.renderInbox();
+          } catch (err) { this.toast('error', err.message); b.disabled = false; }
+        }));
+    }
 
     // Attach input files to an existing task (upload → append to context.inputFiles).
     this.contentEl.querySelectorAll('[data-attach-input]').forEach(b =>

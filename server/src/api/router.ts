@@ -9,6 +9,7 @@ const __dirname = path.dirname(__filename);
 import type { Store } from '../core/store.js';
 import { buildCalendar } from '../core/calendar.js';
 import type { EventBus } from '../core/events.js';
+import { mergeWorktree, removeWorktree } from '../core/worktree.js';
 
 export function createApiRouter(store: Store, eventBus: EventBus): Router {
   const router = Router();
@@ -303,6 +304,29 @@ export function createApiRouter(store: Store, eventBus: EventBus): Router {
     } catch (e: any) {
       res.status(400).json({ error: e.message });
     }
+  });
+
+  // Code-task worktree actions (see core/worktree.ts). Merge refuses on conflicts or
+  // a dirty main checkout; discard removes the worktree and deletes its branch.
+  router.post('/inbox/:id/worktree/merge', (req, res) => {
+    const task = store.getTask(req.params.id);
+    if (!task?.worktree || task.worktree.merged || task.worktree.discarded) return res.status(404).json({ error: 'Task has no open worktree' });
+    const out = mergeWorktree(task.worktree);
+    if (!out.ok) return res.status(409).json({ error: out.message });
+    task.worktree.merged = true;
+    removeWorktree(task.worktree, true);
+    store.saveTask(task);
+    res.json({ ok: true, message: out.message, task });
+  });
+
+  router.post('/inbox/:id/worktree/discard', (req, res) => {
+    const task = store.getTask(req.params.id);
+    if (!task?.worktree || task.worktree.merged || task.worktree.discarded) return res.status(404).json({ error: 'Task has no open worktree' });
+    const out = removeWorktree(task.worktree, true);
+    if (!out.ok) return res.status(500).json({ error: out.message });
+    task.worktree.discarded = true;
+    store.saveTask(task);
+    res.json({ ok: true, message: out.message, task });
   });
 
   // Delete one task + its artifacts + its input files.
