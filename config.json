@@ -66,10 +66,11 @@
       "minLength": 1,
       "failPatterns": [],
       "llm": {
-        "enabled": false,
-        "exec": "hermes",
-        "model": "qwen3.8-27b",
-        "timeoutMs": 120000
+        "enabled": true,
+        "exec": "claude",
+        "model": "claude-sonnet-5-5",
+        "timeoutMs": 120000,
+        "priorities": ["high", "urgent"]
       },
       "maxBackgroundDeferrals": 120
     },
