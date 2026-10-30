@@ -7,7 +7,7 @@
  * Commands:
  *   integrate <owner/repo or url> [--install] [--force]   Fetch, classify, audit (and install)
  *   integrate list                                        List all integrated repositories
- *   integrate install <id> [--force]                      Install detected skills / web portal plugin
+ *   integrate install <id> [--force] [--skills a,b]       Install detected skills (or a subset) / web portal plugin
  *   integrate update <id>                                 Pull latest commit, re-audit, refresh
  *   integrate rescan <id>                                 Re-audit without fetching (picks up wrappers)
  *   integrate uninstall <id> [--purge]                    Remove installed links/card (or delete clone)
@@ -69,8 +69,10 @@ async function main() {
 
   if (cmd === 'install') {
     const id = positional[1];
-    if (!id) throw new Error('Usage: npm run integrate -- install <id> [--force]');
-    const res = int.install(id, { force });
+    if (!id) throw new Error('Usage: npm run integrate -- install <id> [--force] [--skills a,b]');
+    const si = args.indexOf('--skills');
+    const skills = si >= 0 ? (args[si + 1] || '').split(',').map(s => s.trim()).filter(Boolean) : undefined;
+    const res = int.install(id, { force, skills });
     if (json) console.log(JSON.stringify(res, null, 2));
     else console.log(`Installed ${id}: ${res.status}`);
     return;

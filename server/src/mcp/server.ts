@@ -604,6 +604,7 @@ function buildServer(config: Config, store: Store, eventBus: EventBus, goals?: G
         repo: z.string().optional(),
         id: z.string().optional(),
         install: z.boolean().optional(),
+        skills: z.array(z.string()).optional().describe('install: only these detected skill names (default: all)'),
       },
       async (args) => {
         try {
@@ -613,7 +614,7 @@ function buildServer(config: Config, store: Store, eventBus: EventBus, goals?: G
           switch (args.action) {
             case 'list': out = int.list().map(i => ({ id: i.id, source: i.source, status: i.status, kinds: i.detected.kinds, audit: i.audit.verdict, skills: i.installed.skills.map(s => s.name), web: i.installed.web?.url })); break;
             case 'add': out = await int.add(args.repo || '', { install: args.install === true }); break;
-            case 'install': out = int.install(need()); break;
+            case 'install': out = int.install(need(), { skills: args.skills }); break;
             case 'rescan': out = int.rescan(need()); break;
             case 'update': out = await int.update(need()); break;
             case 'uninstall': out = int.uninstall(need()); break;

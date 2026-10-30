@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { stripCode, lintContent, lintArtifacts, lintReason } from './artifact-lint.js';
+import { stripCode, lintContent, lintArtifacts, lintReason, summariseSloplint } from './artifact-lint.js';
 
 test('artifact-lint: stripCode strips code blocks, inline code and comments', () => {
   const input = [
@@ -103,5 +103,35 @@ test('artifact-lint: lintArtifacts also lints final deliverables in outputs/', (
     assert.equal(rep.critical[0].rule, 'empty-file');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('artifact-lint: summariseSloplint keeps FAIL/REFLEX, skips the Hallmark stamp gate, and is warning-only', () => {
+  const json = JSON.stringify({ findings: [
+    { gate: '20', grade: 'FAIL', evidence: 'no Hallmark stamp' },
+    { gate: '19', grade: 'FAIL', evidence: 'buzzword "Unlock"' },
+    { gate: 'F23', grade: 'WARN', evidence: 'lacks lang' },
+  ] });
+  const issue = summariseSloplint('outputs/page.html', json);
+  assert.equal(issue?.severity, 'warning');
+  assert.equal(issue?.rule, 'sloplint');
+  assert.match(issue!.message, /1 design tell\(s\).*#19 buzzword/);
+  assert.equal(summariseSloplint('x.html', JSON.stringify({ findings: [{ gate: '20', grade: 'FAIL', evidence: 's' }] })), null);
+  assert.equal(summariseSloplint('x.html', 'not json'), null);
+});
+
+test('artifact-lint: lintArtifacts runs sloplint only on outputs/*.html and never adds criticals', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lint-sloplint-'));
+  try {
+    const script = path.join(dir, 'fake-sloplint.mjs');
+    fs.writeFileSync(script, `console.log(JSON.stringify({ findings: [{ gate: '19', grade: 'FAIL', evidence: 'buzzword' }] })); process.exit(1);`);
+    fs.mkdirSync(path.join(dir, 'outputs'));
+    fs.writeFileSync(path.join(dir, 'outputs', 'page.html'), '<html><body><h1>Real page</h1></body></html>');
+    fs.writeFileSync(path.join(dir, 'scratch.html'), '<html><body>scratch</body></html>');
+    const r = lintArtifacts(dir, { sloplint: script, ignore: ['fake-sloplint.mjs'] });
+    assert.equal(r.critical.length, 0);
+    assert.deepEqual(r.warnings.filter(w => w.rule === 'sloplint').map(w => w.file), ['outputs/page.html']);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });

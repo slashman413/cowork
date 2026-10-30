@@ -147,3 +147,38 @@ test('integrations: dirSizeBytes calculates size and enforces cap', () => {
   }
 });
 
+
+test('integrations: install({ skills }) installs only the named subset and rejects unknown names', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'integrations-subset-test-'));
+  try {
+    const hub = new Integrations({
+      root: path.join(tmp, 'integrations'),
+      registry: path.join(tmp, 'integrations.json'),
+      skillsHome: path.join(tmp, 'skills'),
+      clientSkillDirs: [],
+    }, { portalFile: path.join(tmp, 'portal.json') });
+    const id = 'acme__pack';
+    const dir = path.join(tmp, 'integrations', id);
+    const skills = ['alpha', 'beta', 'gamma'].map(name => {
+      const d = path.join(dir, 'skills', name);
+      fs.mkdirSync(d, { recursive: true });
+      fs.writeFileSync(path.join(d, 'SKILL.md'), `---\nname: ${name}\ndescription: ${name} skill\n---\nbody\n`);
+      return { name, dir: d };
+    });
+    (hub as any).put({
+      id, source: 'acme/pack', url: 'https://github.com/acme/pack.git', dir,
+      addedAt: new Date().toISOString(), fetchedAt: new Date().toISOString(), status: 'fetched',
+      detected: { kinds: ['skill'], skills },
+      audit: { verdict: 'pass', counts: { critical: 0, high: 0, medium: 0 }, scannedFiles: 3, findings: [], at: new Date().toISOString() },
+      installed: { skills: [] },
+    });
+
+    assert.throws(() => hub.install(id, { skills: ['alpha', 'nope'] }), /no skill\(s\) named nope/);
+    const res = hub.install(id, { skills: ['alpha', 'gamma'] });
+    assert.deepEqual(res.installed.skills.map(s => s.name).sort(), ['alpha', 'gamma']);
+    assert.ok(fs.existsSync(path.join(tmp, 'skills', 'alpha', 'SKILL.md')));
+    assert.ok(!fs.existsSync(path.join(tmp, 'skills', 'beta')));
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});

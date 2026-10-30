@@ -437,7 +437,9 @@ export class Integrations {
       const wasInstalled = !!(prev && (prev.installed.skills.length || prev.installed.web));
       if (opts.install || wasInstalled) {
         if (entry.status === 'quarantined' && !opts.force) return entry;
-        return this.install(entry.id, { force: opts.force });
+        // Keep a curated subset curated: refresh only the skills that were installed.
+        const skills = !opts.install && prev?.installed.skills.length ? prev.installed.skills.map(s => s.name).filter(n => entry.detected.skills.some(d => d.name === n)) : undefined;
+        return this.install(entry.id, { force: opts.force, skills });
       }
       return entry;
     } finally {
@@ -504,9 +506,15 @@ export class Integrations {
   }
 
   // ── install / uninstall ──────────────────────────────────────────────────
-  install(id: string, opts: { force?: boolean; kinds?: IntegrationKind[] } = {}): Integration {
+  /** `skills` limits a skill install to the named detected skills (curated subsets of big skill packs). */
+  install(id: string, opts: { force?: boolean; kinds?: IntegrationKind[]; skills?: string[] } = {}): Integration {
     const e = this.get(id);
     if (!e) throw new Error(`unknown integration ${id}`);
+    const pick = opts.skills?.length ? new Set(opts.skills) : null;
+    if (pick) {
+      const unknown = [...pick].filter(n => !e.detected.skills.some(s => s.name === n));
+      if (unknown.length) throw new Error(`${id} has no skill(s) named ${unknown.join(', ')} — detected: ${e.detected.skills.map(s => s.name).join(', ')}`);
+    }
     if (e.audit.verdict === 'quarantine' && !opts.force) {
       throw new Error(`${id} is quarantined (${e.audit.counts.critical} critical audit finding(s)) — review the findings; installing requires force`);
     }
@@ -516,6 +524,7 @@ export class Integrations {
 
     if (want.has('skill')) {
       for (const s of e.detected.skills) {
+        if (pick && !pick.has(s.name)) continue;
         const res = this.installSkill(e, s);
         if (typeof res === 'string') notes.push(res);
         else installed.skills = [...installed.skills.filter(x => x.name !== res.name), res];

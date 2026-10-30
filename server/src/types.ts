@@ -243,6 +243,9 @@ export interface VerifierConfig {
     model?: string;
     /** Wall-clock budget for one verification (ms). Default 300000. */
     timeoutMs?: number;
+    /** Only verify tasks of these priorities (default: all). A task's
+     *  context.verify = "llm" | "off" overrides this either way. */
+    priorities?: Array<'low' | 'normal' | 'high' | 'urgent'>;
   };
 }
 

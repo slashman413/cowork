@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isCliRateLimitSignal, stderrTail, verifyOutput, parseLlmVerdict, buildVerifierPrompt, DEFAULT_FAIL_PATTERNS, detectInputRequest, DEFAULT_QUESTION_PATTERNS, detectBackgroundWait, DEFAULT_BACKGROUND_WAIT_PATTERNS } from './result-verifier.js';
+import { isCliRateLimitSignal, stderrTail, verifyOutput, parseLlmVerdict, buildVerifierPrompt, shouldLlmVerify, DEFAULT_FAIL_PATTERNS, detectInputRequest, DEFAULT_QUESTION_PATTERNS, detectBackgroundWait, DEFAULT_BACKGROUND_WAIT_PATTERNS } from './result-verifier.js';
 
 /**
  * The result verifier is the fix for "a rate-limit reply looked like a done
@@ -298,4 +298,22 @@ test('isCliRateLimitSignal: only the stderr tail counts, not a 429 the CLI recov
   assert.equal(isCliRateLimitSignal({ gateFailed: true, gateReason: 'TIMEOUT after 600000ms', stderr: recovered + '\nError: 429 Too Many Requests\n\n' }), true);
   assert.equal(stderrTail('a\n\nb\r\nc\n  \nd\ne\nf\n'), 'b\nc\nd\ne\nf');
   assert.ok(stderrTail('x'.repeat(5000)).length <= 2000);
+});
+
+test('buildVerifierPrompt is two-stage and lists the output files', () => {
+  const p = buildVerifierPrompt({ title: 'T', description: 'd' }, 'r', ['report.md']);
+  assert.match(p, /Stage 1 — spec compliance/);
+  assert.match(p, /Stage 2/);
+  assert.match(p, /OUTPUT FILES: report\.md/);
+});
+
+test('shouldLlmVerify: priority scope with per-task opt-in/opt-out', () => {
+  const scope = ['high', 'urgent'];
+  assert.equal(shouldLlmVerify({ priority: 'high' }, scope), true);
+  assert.equal(shouldLlmVerify({ priority: 'urgent' }, scope), true);
+  assert.equal(shouldLlmVerify({ priority: 'normal' }, scope), false);
+  assert.equal(shouldLlmVerify({}, scope), false);
+  assert.equal(shouldLlmVerify({ priority: 'low', context: { verify: 'llm' } }, scope), true);
+  assert.equal(shouldLlmVerify({ priority: 'high', context: { verify: 'off' } }, scope), false);
+  assert.equal(shouldLlmVerify({ priority: 'normal' }, undefined), true);
 });

@@ -6,14 +6,14 @@ import type { EventBus } from './events.js';
 import type { Store, CompletionDecision } from './store.js';
 import type { Workflows } from './workflows.js';
 import type { Goals } from './goals.js';
-import { verifyOutput, isRateLimitFailure, isCliRateLimitSignal, buildVerifierPrompt, parseLlmVerdict, detectInputRequest, detectBackgroundWait, type VerifyVerdict, type InputOptions, type InputRequest, type BackgroundOptions, type BackgroundWait } from './result-verifier.js';
+import { verifyOutput, isRateLimitFailure, isCliRateLimitSignal, buildVerifierPrompt, shouldLlmVerify, parseLlmVerdict, detectInputRequest, detectBackgroundWait, type VerifyVerdict, type InputOptions, type InputRequest, type BackgroundOptions, type BackgroundWait } from './result-verifier.js';
 import { buildLesson, appendLesson } from './lessons.js';
 import { canonicalBrainId } from '../config.js';
 import { STREAMING_EXECS, streamArgs, createStreamRenderer } from './progress-stream.js';
 import { briefPersona } from './persona-brief.js';
 import { ClaudeProfile } from './claude-profile.js';
 import { killProcessTree } from './proc-tree.js';
-import { lintArtifacts, lintReason, OUTPUTS_SUBDIR } from './artifact-lint.js';
+import { lintArtifacts, lintReason, resolveSloplint, OUTPUTS_SUBDIR } from './artifact-lint.js';
 import { isAgyModelRejection, diagnoseAgyModelFailure, listAgyModels } from './agy-models.js';
 
 /** Remove ANSI CSI/OSC escape sequences and lone carriage returns. */
@@ -1602,10 +1602,12 @@ export class Dispatcher {
    *  input request (see the class doc + call sites). */
   private async llmVerdict(task: Task, text: string): Promise<VerifyVerdict> {
     const cfg = this.config.orchestration.verifier;
-    if (!cfg?.llm?.enabled) return { ok: true };
+    if (!cfg?.llm?.enabled || !shouldLlmVerify(task, cfg.llm.priorities)) return { ok: true };
     try {
+      let outputs: string[] = [];
+      try { outputs = readdirSync(join(this.artifactsDir(task.id), OUTPUTS_SUBDIR)); } catch { /* none */ }
       const argv = this.buildArgv({ exec: (cfg.llm.exec || 'hermes') as RoleConfig['exec'], model: cfg.llm.model || '' },
-        buildVerifierPrompt(task, text));
+        buildVerifierPrompt(task, text, outputs));
       const reply = await new Promise<string>((resolve) => {
         const child = spawn(argv[0], argv.slice(1), { env: { ...process.env }, stdio: ['ignore', 'pipe', 'pipe'] });
         let out = '';
@@ -1631,7 +1633,7 @@ export class Dispatcher {
     const mode = this.config.orchestration.verifier?.artifactLint ?? 'enforce';
     if (mode === 'off' || this.config.orchestration.verifier?.enabled === false) return { ok: true };
     try {
-      const report = lintArtifacts(artDir, { sinceMs, brief: `${task.title}\n${task.description || ''}` });
+      const report = lintArtifacts(artDir, { sinceMs, brief: `${task.title}\n${task.description || ''}`, sloplint: resolveSloplint() });
       if (!report.files.length) return { ok: true };
       const reject = mode === 'enforce' && report.critical.length > 0 && !lastAttempt;
       const t = this.store.getTask(task.id);

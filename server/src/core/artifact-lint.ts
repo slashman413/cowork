@@ -1,5 +1,7 @@
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
+import { execFileSync } from 'child_process';
 
 /**
  * Deterministic artifact quality gate (ADR-013, inspired by Nutlope/hallmark and
@@ -48,6 +50,9 @@ export interface LintOptions {
   /** The task brief. When it itself asks for filler or templates (mentions
    *  "lorem" / "{{" / "template"), those rules downgrade to warnings. */
   brief?: string;
+  /** Path to Hallmark's sloplint.mjs. When set, outputs/*.html deliverables are
+   *  also run through it and summarised as ONE warning per page (never critical). */
+  sloplint?: string;
 }
 
 const TEXT_DELIVERABLE = new Set(['.md', '.markdown', '.txt', '.html', '.htm', '.json', '.csv', '.yaml', '.yml']);
@@ -151,8 +156,42 @@ export function lintArtifacts(dir: string, opts: LintOptions = {}): LintReport {
       if (issue.severity === 'critical' && tolerated.has(issue.rule)) issue.severity = 'warning';
       (issue.severity === 'critical' ? report.critical : report.warnings).push(issue);
     }
+    if (opts.sloplint && name.startsWith(`${OUTPUTS_SUBDIR}/`) && /\.html?$/i.test(name)) {
+      const issue = sloplintFile(opts.sloplint, abs, name);
+      if (issue) report.warnings.push(issue);
+    }
   }
   return report;
+}
+
+/** Hallmark's sloplint.mjs if the hallmark skill is installed (shared skills home). */
+export function resolveSloplint(skillsHome = path.join(os.homedir(), '.agents', 'skills')): string | undefined {
+  const p = path.join(skillsHome, 'hallmark', 'scripts', 'sloplint.mjs');
+  return fs.existsSync(p) ? p : undefined;
+}
+
+/** Gate 20 only checks for Hallmark's own CSS stamp, which non-Hallmark pages never carry. */
+const SLOPLINT_SKIP_GATES = new Set(['20']);
+
+/** Summarise sloplint findings for one page from its --json report. */
+export function summariseSloplint(file: string, json: string): LintIssue | null {
+  let out: { findings?: Array<{ gate: string; grade: string; evidence: string }> };
+  try { out = JSON.parse(json); } catch { return null; }
+  const hits = (out.findings || []).filter(f => (f.grade === 'FAIL' || f.grade === 'REFLEX') && !SLOPLINT_SKIP_GATES.has(String(f.gate)));
+  if (!hits.length) return null;
+  const top = hits.slice(0, 3).map(f => `#${f.gate} ${f.evidence}`).join('; ');
+  return { file, severity: 'warning', rule: 'sloplint', message: `Hallmark sloplint: ${hits.length} design tell(s) — ${top}`.slice(0, 400) };
+}
+
+/** Run sloplint (static checks only) on one page. Fails open: any error → no finding. */
+function sloplintFile(script: string, abs: string, name: string): LintIssue | null {
+  let stdout = '';
+  try {
+    stdout = execFileSync(process.execPath, [script, abs, '--json'], { encoding: 'utf-8', timeout: 20_000, stdio: ['ignore', 'pipe', 'ignore'] });
+  } catch (e: any) {
+    stdout = typeof e?.stdout === 'string' ? e.stdout : '';   // exit 1 = findings, still JSON
+  }
+  return stdout ? summariseSloplint(name, stdout) : null;
 }
 
 /** Compact one-line reason for a rejected attempt. */

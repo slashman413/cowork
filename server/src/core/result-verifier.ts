@@ -233,22 +233,41 @@ function firstLine(text: string): string {
  * Build the prompt for the optional LLM "verifier agent". It reads the task and
  * the produced result and answers PASS / FAIL — a quality gate stacked on top of
  * the deterministic check for cases a pattern can't catch (e.g. a fluent but
- * off-topic or refusal answer). Parse the reply with {@link parseLlmVerdict}.
+ * off-topic or refusal answer). Two stages, after obra/superpowers' review
+ * pattern: (1) spec compliance — does it do what the brief asked, with the
+ * deliverable files it named; (2) only then, obvious quality defects. Parse the
+ * reply with {@link parseLlmVerdict}.
  */
-export function buildVerifierPrompt(task: { title: string; description: string }, result: string): string {
+export function buildVerifierPrompt(task: { title: string; description: string }, result: string, outputs: string[] = []): string {
   return [
-    `You are a strict RESULT VERIFIER in a multi-agent company. Judge ONLY whether the RESULT below is a genuine, on-topic completion of the TASK.`,
-    `FAIL it if the result is a rate-limit / quota / overloaded notice, an error or refusal, empty, truncated mid-thought, or does not actually address the task.`,
-    `PASS it if it is a real, on-topic deliverable (even if imperfect).`,
+    `You are a strict RESULT VERIFIER in a multi-agent company. Review the RESULT below against the TASK in two stages.`,
+    `Stage 1 — spec compliance: FAIL if the result is a rate-limit / quota / overloaded notice, an error or refusal, empty, truncated mid-thought, does not actually address the task, or claims deliverable files that the OUTPUT FILES list does not contain.`,
+    `Stage 2 — only if stage 1 passes: FAIL only for an obvious quality defect that makes the deliverable unusable (e.g. the core requested content is missing or self-contradictory). Style nits and minor gaps still PASS.`,
+    `PASS a real, on-topic deliverable (even if imperfect).`,
     ``,
     `TASK: ${task.title}`,
     (task.description || '').slice(0, 2000),
     ``,
+    `OUTPUT FILES: ${outputs.length ? outputs.slice(0, 30).join(', ') : '(none)'}`,
+    ``,
     `RESULT:`,
     (result || '').slice(0, 6000),
     ``,
-    `Answer with exactly one word on the first line: PASS or FAIL. On a second line, give a short reason.`,
+    `Answer with exactly one word on the first line: PASS or FAIL. On a second line, give a short reason naming the stage that failed.`,
   ].join('\n');
+}
+
+/**
+ * Whether the LLM gate runs for this task. `context.verify` = "llm" opts a task
+ * in, "off" opts it out; otherwise, when `priorities` is configured, only tasks
+ * of those priorities are checked (the gate costs a model call per task).
+ */
+export function shouldLlmVerify(task: { priority?: string; context?: Record<string, unknown> }, priorities?: string[]): boolean {
+  const opt = task.context?.verify;
+  if (opt === 'llm') return true;
+  if (opt === 'off') return false;
+  if (!priorities?.length) return true;
+  return priorities.includes(task.priority || 'normal');
 }
 
 /**

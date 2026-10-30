@@ -614,7 +614,7 @@ async function main() {
     const body = req.body || {};
     try {
       switch (req.params.action) {
-        case 'install': return res.json(integrations.install(id, { force: body.force === true, kinds: Array.isArray(body.kinds) ? body.kinds : undefined }));
+        case 'install': return res.json(integrations.install(id, { force: body.force === true, kinds: Array.isArray(body.kinds) ? body.kinds : undefined, skills: Array.isArray(body.skills) ? body.skills.map(String) : undefined }));
         case 'uninstall': return res.json(integrations.uninstall(id, { purge: body.purge === true }) || { id, purged: true });
         case 'update': return res.json(await integrations.update(id));
         case 'rescan': return res.json(integrations.rescan(id));
