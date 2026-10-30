@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { stripCode, lintContent, lintArtifacts, lintReason, summariseSloplint } from './artifact-lint.js';
+import { stripCode, lintContent, lintArtifacts, lintReason, summariseSloplint, resolveSloplint } from './artifact-lint.js';
 
 test('artifact-lint: stripCode strips code blocks, inline code and comments', () => {
   const input = [
@@ -133,5 +133,21 @@ test('artifact-lint: lintArtifacts runs sloplint only on outputs/*.html and neve
     assert.deepEqual(r.warnings.filter(w => w.rule === 'sloplint').map(w => w.file), ['outputs/page.html']);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('artifact-lint: resolveSloplint only trusts a hallmark skill installed from Nutlope/hallmark', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'lint-skills-'));
+  try {
+    const dir = path.join(home, 'hallmark', 'scripts');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'sloplint.mjs'), '');
+    assert.equal(resolveSloplint(home), undefined);                       // no provenance stamp
+    fs.writeFileSync(path.join(home, 'hallmark', '.cowork-integration.json'), JSON.stringify({ source: 'evil/hallmark' }));
+    assert.equal(resolveSloplint(home), undefined);
+    fs.writeFileSync(path.join(home, 'hallmark', '.cowork-integration.json'), JSON.stringify({ source: 'Nutlope/hallmark' }));
+    assert.equal(resolveSloplint(home), path.join(dir, 'sloplint.mjs'));
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
   }
 });

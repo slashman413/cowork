@@ -164,9 +164,16 @@ export function lintArtifacts(dir: string, opts: LintOptions = {}): LintReport {
   return report;
 }
 
-/** Hallmark's sloplint.mjs if the hallmark skill is installed (shared skills home). */
+/** Hallmark's sloplint.mjs, but only when the hallmark skill in the shared skills
+ *  home was installed by cowork integrations from Nutlope/hallmark (its provenance
+ *  stamp) — any other skill that happens to be named "hallmark" is never executed. */
 export function resolveSloplint(skillsHome = path.join(os.homedir(), '.agents', 'skills')): string | undefined {
-  const p = path.join(skillsHome, 'hallmark', 'scripts', 'sloplint.mjs');
+  const dir = path.join(skillsHome, 'hallmark');
+  try {
+    const stamp = JSON.parse(fs.readFileSync(path.join(dir, '.cowork-integration.json'), 'utf-8'));
+    if (stamp?.source !== 'Nutlope/hallmark') return undefined;
+  } catch { return undefined; }
+  const p = path.join(dir, 'scripts', 'sloplint.mjs');
   return fs.existsSync(p) ? p : undefined;
 }
 
@@ -187,7 +194,7 @@ export function summariseSloplint(file: string, json: string): LintIssue | null 
 function sloplintFile(script: string, abs: string, name: string): LintIssue | null {
   let stdout = '';
   try {
-    stdout = execFileSync(process.execPath, [script, abs, '--json'], { encoding: 'utf-8', timeout: 20_000, stdio: ['ignore', 'pipe', 'ignore'] });
+    stdout = execFileSync(process.execPath, [script, abs, '--json'], { encoding: 'utf-8', timeout: 20_000, stdio: ['ignore', 'pipe', 'ignore'], env: { PATH: process.env.PATH || '' } });
   } catch (e: any) {
     stdout = typeof e?.stdout === 'string' ? e.stdout : '';   // exit 1 = findings, still JSON
   }
