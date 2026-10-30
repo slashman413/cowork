@@ -23,7 +23,7 @@ test('repo default layout.json is valid and reproduces the built-in nav', () => 
     ['overview', 'portal', 'chat', 'tasks', 'calendar', 'workflows', 'goals', 'routing', 'brains', 'personas', 'workers', 'config']);
   assert.equal(v.pages.overview.type, 'dashboard');
   assert.deepEqual(v.pages.overview.rows!.map((r) => r.widgets.map((w) => w.type)),
-    [['sysbar'], ['stats'], ['dispatcher', 'activity'], ['platforms']]);
+    [['sysbar'], ['stats'], ['quality'], ['rulings'], ['dispatcher', 'activity'], ['platforms']]);
 });
 
 test('bad pages/widgets/options are dropped with an error; good ones survive', () => {

@@ -1,0 +1,67 @@
+{
+  "id": "eval-prompt-change",
+  "name": "Eval a prompt change (A/B replay + blinded judge)",
+  "description": "Measure a change to CONVENTIONS.md, the verifier prompt or a persona before it ships (P2-1). Picks 5 historical done tasks of the target family (a division or agent slug), replays each under variant A and variant B in sandboxed artifact dirs (no publishing, pushes or credentials; outward CLIs are blocked and logged), then ONE judge from a different model family than the executor (P1-1 mapping) scores both sets against a fixed rubric in a single blinded pass. Output: eval-report.md with per-task scores and Δ(A−B). Convention: A = the new text, B = the current/old text, so a positive Δ means the change helps. Variant paths are absolute or relative to the cowork repo root. All steps run on the exec:script brain local-script-eval-harness (node dist/eval-cli.js step).",
+  "params": ["family", "variantA", "variantB"],
+  "steps": [
+    {
+      "key": "select",
+      "title": "Eval {{family}}: pick 5 historical done tasks",
+      "description": "Select 5 replayable done tasks of family \"{{family}}\" from the inbox (seeded by the run id, recurring titles counted once, no Continue:/input-file tasks) and write selection.json.\nEVAL_ARGS: {\"family\": \"{{family}}\", \"n\": \"5\"}",
+      "brain": "local-script-eval-harness",
+      "acceptance": ["selection.json lists 5 tasks whose division or agent is {{family}}"],
+      "verify": ["jq '.tasks | length' selection.json → 5"]
+    },
+    {
+      "key": "replay-a",
+      "title": "Eval {{family}}: SANDBOX REPLAY with variant A",
+      "description": "SANDBOX REPLAY — do not perform outward actions. Replay each selected task under variant A ({{variantA}}) on the family's executor brain, one sandbox dir per task, secrets stripped, commit/push/publish CLIs blocked and logged; snapshot every workspace repo and the task list before/after.\nEVAL_ARGS: {\"family\": \"{{family}}\", \"variantA\": \"{{variantA}}\", \"variantB\": \"{{variantB}}\", \"executor\": \"auto\", \"timebox\": \"12\", \"concurrency\": \"3\"}",
+      "brain": "local-script-eval-harness",
+      "dependsOn": ["select"],
+      "timeboxMin": 45,
+      "scope": {
+        "write": ["artifacts/<this task>/replays/**"],
+        "forbid": [
+          "git commit / git push / git tag in any real repo",
+          "gh, vercel, wrangler, docker push, npm publish or any publish/deploy CLI",
+          "POST/PUT/PATCH/DELETE to external or cowork APIs (no task creation)",
+          "posting, uploading or sending anything to any platform",
+          "reading or using credentials (~/.priv, ~/.ssh, tokens, browser profiles)",
+          "systemctl / service restarts / editing ~/.cowork/config.json"
+        ]
+      },
+      "acceptance": ["replay-manifest.json has 5 results labelled A", "its sandbox check shows no repo changes and no tasks created"],
+      "verify": ["jq '.check' replay-manifest.json"]
+    },
+    {
+      "key": "replay-b",
+      "title": "Eval {{family}}: SANDBOX REPLAY with variant B",
+      "description": "SANDBOX REPLAY — do not perform outward actions. Replay each selected task under variant B ({{variantB}}) on the same executor brain, one sandbox dir per task, secrets stripped, commit/push/publish CLIs blocked and logged; snapshot every workspace repo and the task list before/after.\nEVAL_ARGS: {\"family\": \"{{family}}\", \"variantA\": \"{{variantA}}\", \"variantB\": \"{{variantB}}\", \"executor\": \"auto\", \"timebox\": \"12\", \"concurrency\": \"3\"}",
+      "brain": "local-script-eval-harness",
+      "dependsOn": ["select"],
+      "timeboxMin": 45,
+      "scope": {
+        "write": ["artifacts/<this task>/replays/**"],
+        "forbid": [
+          "git commit / git push / git tag in any real repo",
+          "gh, vercel, wrangler, docker push, npm publish or any publish/deploy CLI",
+          "POST/PUT/PATCH/DELETE to external or cowork APIs (no task creation)",
+          "posting, uploading or sending anything to any platform",
+          "reading or using credentials (~/.priv, ~/.ssh, tokens, browser profiles)",
+          "systemctl / service restarts / editing ~/.cowork/config.json"
+        ]
+      },
+      "acceptance": ["replay-manifest.json has 5 results labelled B", "its sandbox check shows no repo changes and no tasks created"],
+      "verify": ["jq '.check' replay-manifest.json"]
+    },
+    {
+      "key": "judge",
+      "title": "Eval {{family}}: blinded cross-family judge + eval-report.md",
+      "description": "One judge brain from a different model family than the executor (P1-1 judge mapping) scores all 10 results in a single pass, X/Y labels shuffled per task, against the fixed rubric (completion, evidence, honesty, scope, clarity; 0-5 each). Unblind, compute Δ(A−B) and write eval-report.md + scores.json.\nEVAL_ARGS: {\"judge\": \"auto\"}",
+      "brain": "local-script-eval-harness",
+      "dependsOn": ["replay-a", "replay-b"],
+      "acceptance": ["eval-report.md exists with per-task A/B scores, Δ(A−B) and the outward-action check"],
+      "verify": ["grep 'Δ(A − B)' eval-report.md"]
+    }
+  ]
+}

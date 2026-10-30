@@ -815,7 +815,7 @@ class App {
         workers: ['Workers', 'plug'], config: ['Configuration', 'settings'] };
       const pages = {
         overview: { id: 'overview', type: 'dashboard', label: 'Overview', icon: 'layout-dashboard',
-          rows: [{ widgets: [{ type: 'sysbar' }] }, { widgets: [{ type: 'stats' }] },
+          rows: [{ widgets: [{ type: 'sysbar' }] }, { widgets: [{ type: 'stats' }] }, { widgets: [{ type: 'quality', days: 7 }] }, { widgets: [{ type: 'rulings', days: 7, limit: 15 }] },
                  { minWidth: 380, widgets: [{ type: 'dispatcher' }, { type: 'activity' }] }, { widgets: [{ type: 'platforms' }] }] },
         portal: { id: 'portal', type: 'portal', label: 'Portal', icon: 'layout-grid' },
       };
@@ -1469,6 +1469,9 @@ class App {
       <input id="et-title" style="${fieldStyle}; margin-bottom:12px" value="${esc(task.title || '')}">
       <label style="${labelStyle}">Brief / requirements (markdown)</label>
       <textarea id="et-desc" rows="7" style="${fieldStyle}; margin-bottom:12px; resize:vertical">${esc(task.description || '')}</textarea>
+      ${(ctx.acceptance && Array.isArray(ctx.acceptance)) ? `
+      <label style="${labelStyle}">Acceptance criteria (one per line) ${ctx.acceptanceSource === 'sharpened' ? '<span class="badge" style="background:#0EA5E918; color:#0EA5E9; border:1px solid #0EA5E940; font-size:0.65rem; text-transform:none">sharpened</span>' : ''}</label>
+      <textarea id="et-acceptance" rows="4" style="${fieldStyle}; margin-bottom:12px; resize:vertical">${esc(ctx.acceptance.join('\n'))}</textarea>` : ''}
       <label style="${labelStyle}">Agent <span style="text-transform:none; letter-spacing:0">(optional — division, then agent)</span></label>
       <div style="display:flex; gap:8px; margin-bottom:12px">
         <select id="et-div" style="${fieldStyle}; flex:1">${divOpts}</select>
@@ -1522,6 +1525,8 @@ class App {
       const agent = agentEl.value;
       const when = content.querySelector('#et-when').value;
       const recurrence = readRecurrence(content, 'et-rec');
+      const accEl = content.querySelector('#et-acceptance');
+      const acceptance = accEl ? accEl.value.split('\n').map(s => s.trim()).filter(Boolean) : undefined;
       const okBtn = content.querySelector('#et-ok');
       okBtn.disabled = true;
       // context mirrors createTask: a named agent wins (dispatcher derives its
@@ -1531,6 +1536,7 @@ class App {
         title, description,
         priority: content.querySelector('#et-priority').value,
         context,
+        ...(acceptance !== undefined ? { acceptance } : {}),
         // Always send the schedule keys so a cleared field clears the value.
         scheduledAt: when ? new Date(when).toISOString() : '',
         // null clears the cadence; a spec sets it. Send it every save so switching
@@ -1643,13 +1649,17 @@ class App {
   async renderDashboard(page) {
     const widgets = (page.rows || []).flatMap(r => r.widgets);
     const has = (t) => widgets.some(w => w.type === t);
-    const [status, dispatcher, portal] = await Promise.all([
+    const qw = widgets.find(w => w.type === 'quality');
+    const rw = widgets.find(w => w.type === 'rulings');
+    const [status, dispatcher, portal, quality, rulings] = await Promise.all([
       (has('stats') || has('platforms')) ? this.api.get('/status') : null,
       has('dispatcher') ? this.api.get('/dispatcher').catch(() => null) : null,
       has('services') ? this.api.get('/portal').catch(() => null) : null,
       has('activity') ? this.refreshAgents() : null,
+      qw ? this.api.get(`/metrics/quality?days=${qw.days || 7}`).catch(() => null) : null,
+      rw ? this.api.get(`/rulings?days=${rw.days || 7}`).catch(() => null) : null,
     ]);
-    const ctx = { status, dispatcher, portal };
+    const ctx = { status, dispatcher, portal, quality, rulings };
 
     const rows = (page.rows || []).map((row) => {
       const cells = row.widgets.map((w) => {
@@ -1681,7 +1691,7 @@ class App {
 
   // One widget's HTML. Options were validated server-side (layout-config.ts);
   // every string that reaches the DOM still goes through esc()/md().
-  renderWidget(w, { status, dispatcher, portal }) {
+  renderWidget(w, { status, dispatcher, portal, quality, rulings }) {
     const head = (icon, title, extra = '') => `
       <div style="display:flex; align-items:center; gap:8px; margin-bottom:var(--space-md)">
         <i data-lucide="${icon}" style="width:18px;height:18px;color:var(--text-muted)"></i>
@@ -1717,6 +1727,34 @@ class App {
             <div><div class="stat-value">${esc(value ?? '—')}</div><div class="stat-label">${esc(label)}</div></div>
           </div>`;
         }).join('')}</div>`;
+      }
+
+      // Improvement-plan §5 quality metrics (GET /api/metrics/quality).
+      case 'quality': {
+        const q = quality;
+        const p = (v) => v == null ? '—' : `${v}%`;
+        const cards = q ? [
+          ['shield-x', q.rejections.total, `Rejections (${q.rejections.byClass.rateLimit} rate-limit · ${q.rejections.byClass.timeout} timeout · ${q.rejections.byClass.quality} quality)`],
+          ['repeat', p(q.repeatRateLimit.share), `Repeat rate-limit hits (${q.repeatRateLimit.repeats}/${q.repeatRateLimit.hits})`],
+          ['message-circle-question', q.waitInput.total, `Wait-input (${q.waitInput.permissionChoice} permission · ${q.waitInput.humanOnly} human-only)`],
+          ['badge-check', p(q.done.evidencePct), `Done with EVIDENCE (${q.done.count} done · ${q.done.doneWithConcerns} with concerns)`],
+          ['list-checks', p(q.acceptance.pct), `Tasks with acceptance (${q.acceptance.withAcceptance}/${q.acceptance.tasks})`],
+          ['timer-off', q.timeouts.perWeek ?? '—', 'Timeouts / week'],
+        ] : [];
+        return `${head('gauge', w.title || `Quality · last ${w.days || 7} days`)}${q ? `<div class="grid-4">${cards.map(([icon, value, label]) => `<div class="card stat-card">
+            <div class="stat-icon"><i data-lucide="${icon}"></i></div>
+            <div><div class="stat-value">${esc(value ?? '—')}</div><div class="stat-label">${esc(label)}</div></div>
+          </div>`).join('')}</div>` : '<p style="color:var(--text-muted); font-size:0.85rem">Quality metrics unavailable</p>'}`;
+      }
+
+      // P2-3 decision trail (GET /api/rulings): RULING lines + auto-answers.
+      case 'rulings': {
+        const list = rulings?.rulings || [];
+        const rows = list.slice(0, w.limit || 15).map(r => `<p style="margin:6px 0; font-size:0.85rem">
+            ${badge(r.ruling.startsWith('AUTO-ANSWER: ') ? 'auto-answer' : 'ruling', r.ruling.startsWith('AUTO-ANSWER: ') ? '#F59E0B' : '#7C3AED')}
+            ${esc(r.ruling.replace(/^AUTO-ANSWER: /, ''))}
+            <span style="color:var(--text-muted)">${esc(r.task.slice(0, 8))} · ${esc(r.agent || '—')} · ${esc(r.brain || '—')} · ${timeAgo(r.date)}</span></p>`).join('');
+        return `<div class="card">${head('gavel', w.title || `Rulings · last ${w.days || 7} days (${list.length})`)}<div style="max-height:340px; overflow-y:auto">${rows || '<p style="color:var(--text-muted); font-size:0.85rem">No rulings in this window</p>'}</div></div>`;
       }
 
       case 'dispatcher': {
@@ -2766,8 +2804,8 @@ class App {
       const isRunning = t.status === 'in-progress' || t.status === 'claimed';
       const progressHtml = isRunning ? `<div class="task-progress" style="margin:4px 0 8px; border:1px solid var(--border-hover); border-radius:10px; overflow:hidden; background:var(--bg-tertiary)">
         <div style="display:flex; align-items:center; gap:7px; padding:6px 10px; font-size:0.74rem; text-transform:uppercase; letter-spacing:.03em; color:#0EA5E9; border-bottom:1px solid var(--border-hover)">
-          <span class="progress-pulse" style="width:8px;height:8px;border-radius:50%;background:#0EA5E9;display:inline-block;animation:progressPulse 1.4s ease-in-out infinite"></span>
-          Live progress — what it's doing right now
+          <span class="progress-pulse" data-progress-pulse="${esc(t.id)}" style="width:8px;height:8px;border-radius:50%;background:#0EA5E9;display:inline-block;animation:progressPulse 1.4s ease-in-out infinite"></span>
+          <span data-progress-label="${esc(t.id)}">Live progress — what it's doing right now</span>
           <span data-progress-age="${esc(t.id)}" style="margin-left:auto; text-transform:none; letter-spacing:0; color:var(--text-muted)"></span>
         </div>
         <pre data-progress="${esc(t.id)}" style="margin:0; padding:9px 11px; max-height:320px; overflow:auto; white-space:pre-wrap; word-break:break-word; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:0.74rem; line-height:1.45; color:var(--text-secondary)">Loading live output…</pre>
@@ -2793,6 +2831,16 @@ class App {
           ${failed ? badge('failed', '#EF4444')
             : closedNoRun ? `<span class="badge" title="Done, but closed administratively without ever running a brain — so it has no artifacts and no result.md. The full explanation is in this task's result field below." style="background:#94A3B818; color:#94A3B8; border:1px solid #94A3B840">done · closed (never ran)</span>`
             : badge(t.status, STATUS_COLORS[t.status] || '#94A3B8')}
+          ${!failed && c.qualityFlag === 'concerns' ? `<span class="badge" title="${esc('Done with concerns: ' + (c.concerns || '(no CONCERNS text)'))}" style="background:#F59E0B18; color:#F59E0B; border:1px solid #F59E0B40">⚠ concerns</span>` : ''}
+          ${c.specVerdict && c.specVerdict.verdict ? (() => {
+            const sv = c.specVerdict;
+            const v = String(sv.verdict).toUpperCase();
+            const col = v === 'APPROVED' ? '#22C55E' : v === 'CHANGES_REQUESTED' ? '#EF4444' : '#94A3B8';
+            const icon = v === 'APPROVED' ? '✓' : v === 'CHANGES_REQUESTED' ? '✗' : '?';
+            const lbl = v === 'APPROVED' ? 'spec: approved' : v === 'CHANGES_REQUESTED' ? 'spec: changes' : 'spec: unverifiable';
+            const tip = `Spec verifier (${sv.mode || 'shadow'}, judge: ${sv.judgeBrain || 'none'}): ${sv.summary || v}`;
+            return `<span class="badge" title="${esc(tip)}" style="background:${col}18; color:${col}; border:1px solid ${col}40">${icon} ${lbl}</span>`;
+          })() : ''}
           ${t.status === 'scheduled' && t.scheduledAt ? badge(`⏰ ${new Date(t.scheduledAt).toLocaleString()}`, '#6366F1') : ''}
           ${t.recurrence ? badge(`🔁 ${describeRecurrence(t.recurrence)}`, '#3B82F6')
             : t.loopIntervalHours ? badge(`🔁 every ${t.loopIntervalHours}h`, '#3B82F6') : ''}
@@ -2839,6 +2887,15 @@ class App {
             <i data-lucide="folder" style="width:11px;height:11px;vertical-align:-1px"></i>artifacts/${esc(t.id)}/</span>
           ${parentLink}
         </div>
+        ${Array.isArray(c.acceptance) && c.acceptance.length ? `<div class="task-acceptance" style="margin:6px 0; padding:6px 10px; background:var(--bg-tertiary); border:1px solid var(--border-color); border-radius:8px; font-size:0.8rem">
+          <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px">
+            <span style="font-weight:600; text-transform:uppercase; letter-spacing:.03em; color:var(--text-muted); font-size:0.72rem">Acceptance criteria</span>
+            ${c.acceptanceSource === 'sharpened' ? `<span class="badge" title="Generated by brief sharpener" style="background:#0EA5E918; color:#0EA5E9; border:1px solid #0EA5E940; font-size:0.68rem">sharpened</span>` : ''}
+          </div>
+          <ul style="margin:0; padding-left:16px; color:var(--text-secondary); line-height:1.4">
+            ${c.acceptance.map(a => `<li>${esc(a)}</li>`).join('')}
+          </ul>
+        </div>` : ''}
         ${(() => {
           // RESULT / OUTPUTS / ARTIFACTS / INPUTS live in one collapsible block, HIDDEN by
           // default — long file lists used to bury the card. Tapping anywhere on
@@ -3221,6 +3278,56 @@ class App {
         const txt = (p.log || '').replace(/\s+$/, '');
         el.textContent = txt || (p.running ? 'Running — no output captured yet…' : 'No live output captured for this run.');
         if (atBottom) el.scrollTop = el.scrollHeight;
+
+        // Detect if task is currently under context compaction
+        let isCompacting = false;
+        let compactionStatus = '⏳ Compacting context…';
+        if (p.running && txt) {
+          const activeKeywords = [
+            'Context threshold crossed',
+            'Prefilling context',
+            'Generating summary',
+            'Context compaction initiated',
+            'Context compaction in progress'
+          ];
+          const doneKeywords = [
+            'Context compaction complete',
+            'Summary generation finished'
+          ];
+          let lastActiveIdx = -1;
+          for (const kw of activeKeywords) {
+            const idx = txt.lastIndexOf(kw);
+            if (idx > lastActiveIdx) lastActiveIdx = idx;
+          }
+          let lastDoneIdx = -1;
+          for (const kw of doneKeywords) {
+            const idx = txt.lastIndexOf(kw);
+            if (idx > lastDoneIdx) lastDoneIdx = idx;
+          }
+          if (lastActiveIdx !== -1 && lastActiveIdx > lastDoneIdx) {
+            isCompacting = true;
+            const lines = txt.split('\n');
+            const lastLine = [...lines].reverse().find(l => /\[Compaction\]|Context compaction/i.test(l)) || '';
+            if (/Prefill/i.test(lastLine)) {
+              compactionStatus = '⏳ Compacting context (prefilling)…';
+            } else if (/Generating/i.test(lastLine)) {
+              compactionStatus = '⏳ Compacting context (generating summary)…';
+            }
+          }
+        }
+        const labelEl = this.contentEl.querySelector(`[data-progress-label="${(window.CSS && CSS.escape) ? CSS.escape(id) : id}"]`);
+        const pulseEl = this.contentEl.querySelector(`[data-progress-pulse="${(window.CSS && CSS.escape) ? CSS.escape(id) : id}"]`);
+        if (labelEl) {
+          if (isCompacting) {
+            labelEl.textContent = `Live progress — ${compactionStatus}`;
+            labelEl.style.color = '#F59E0B';
+            if (pulseEl) pulseEl.style.background = '#F59E0B';
+          } else {
+            labelEl.textContent = "Live progress — what it's doing right now";
+            labelEl.style.color = '';
+            if (pulseEl) pulseEl.style.background = '#0EA5E9';
+          }
+        }
         // "last activity Ns ago" — makes a stalled run (no new output) obvious.
         const age = this.contentEl.querySelector(`[data-progress-age="${(window.CSS && CSS.escape) ? CSS.escape(id) : id}"]`);
         if (age && p.updatedAt) {

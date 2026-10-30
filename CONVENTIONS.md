@@ -70,6 +70,39 @@ Files a person attached to your task are listed in your prompt and live in
   deliverable — the verifier rejects those and hands the task to the next brain.
 - Do not claim you created a file you did not create. The artifacts list is generated
   from what is actually on disk, so an invented filename is immediately visible.
+- **End every result with a status footer** (`NEEDS_INPUT:` / `WAITING_ON_BACKGROUND:`
+  still take precedence when they apply):
+  ```
+  STATUS: DONE | DONE_WITH_CONCERNS | BLOCKED
+  EVIDENCE:
+  - <command run / URL checked / file produced> → <observed result>
+  CONCERNS: <only if DONE_WITH_CONCERNS>
+  ```
+  `BLOCKED` = cannot finish for a reason another brain would hit too (say why on the
+  STATUS line); the task fails and is not retried. A claim without evidence is not done:
+
+  | Claim | Required evidence |
+  |---|---|
+  | pushed | `git log origin/<branch>` shows the commit |
+  | deployed | HTTP 200 from the live URL |
+  | uploaded / published | the platform's id or URL |
+  | agent / subtask completed | its diff or artifact — never its self-report |
+  | tests pass | the runner's summary line |
+  | measured X% / Nx | the command that measured it + the sample count |
+  | file created | path + size |
+
+**Rulings, not stalls.** Ask the user (`NEEDS_INPUT:`) only when the next step is:
+(1) irreversible or destructive; (2) about security or credentials; (3) an
+outward-facing publish/merge that norms say to confirm; or (4) every path forward is a
+guess. Otherwise decide, keep going, and record each call in the result as
+`RULING: <decision> — <why> — <cost if wrong>`. §5's GitHub archive/visibility/workflow
+rule stays a hard stop.
+
+**Progress ledger (`progress.md`).** Long or multi-step tasks keep
+`artifacts/<task-id>/progress.md` updated after each step as `- [x] <step> — <evidence>`
+lines. At T-5 min of your timebox, write `progress.md` and return partial results with
+`WAITING_ON_BACKGROUND:` or `STATUS: BLOCKED`. On a re-run or handover, resume from
+`# Prior progress — resume, do not redo` without redoing completed steps.
 
 ## 5. Stay inside your task
 

@@ -1,32 +1,79 @@
 {
   "id": "product-spec",
   "name": "Product Spec (PM-led PRD)",
-  "description": "A product manager writes a detailed, build-ready PRD — fed by parallel user research and an engineering feasibility read, then sharpened by a sprint-scoping pass. Use this when you already know you want the thing and need the spec engineers can build against. Fan-in on the PM, then a scoping refinement. All roles pinned to product/engineering agents; brain chains remain editable in the UI.",
+  "description": "A product manager writes a detailed, build-ready PRD — fed by parallel user research and an engineering feasibility read, then sharpened by a sprint-scoping pass. Use this when you already know you want the thing and need the spec engineers can build against. Fan-in on the PM, then a scoping refinement. Optional arena mode (PS-3, behind orchestration.arena.enabled) runs parallel candidates across distinct model families (Claude + Gemini) on the PRD step, cross-judged and synthesized. Other candidate steps for arena: product-brief (synthesis), idea-to-launch (prd), gtm-campaign (offer/core message). Never use arena for media renders or operations. All roles pinned to product/engineering agents; brain chains remain editable in the UI.",
   "params": ["idea"],
   "steps": [
     {
       "key": "user-research",
       "title": "User & problem research: {{idea}}",
       "description": "Research the users and the real problem behind \"{{idea}}\": who has this problem, how they solve it today, the top 3 unmet needs, and the 5-8 concrete user stories that matter most. Cite evidence or clearly mark assumptions. Output as markdown.",
+      "acceptance": [
+        "user-research.md is saved in the artifacts dir naming the target user segment(s) and how they solve the problem today",
+        "Exactly 3 unmet needs are ranked",
+        "5-8 user stories in 'As a <user>, I want <x> so that <y>' form",
+        "Every claim cites a source URL or is marked ASSUMPTION"
+      ],
+      "verify": ["test -s user-research.md", "grep -c 'As a' user-research.md  # 5-8"],
       "agent": "product-trend-researcher"
     },
     {
       "key": "feasibility",
       "title": "Engineering feasibility read: {{idea}}",
       "description": "Give a fast engineering feasibility read on \"{{idea}}\": the core components, the hardest technical risk, external dependencies/APIs required, a rough effort tier (S/M/L) per component, and anything that would materially change scope. Output as markdown.",
+      "acceptance": [
+        "feasibility.md is saved in the artifacts dir listing core components, each with an S/M/L effort tier",
+        "The single hardest technical risk is named with a mitigation",
+        "External dependencies/APIs are listed by name (or 'none')"
+      ],
+      "verify": [
+        "test -s feasibility.md",
+        "grep -cE '\\b(S|M|L)\\b' feasibility.md  # >= number of components"
+      ],
       "division": "engineering"
     },
     {
       "key": "prd",
       "title": "Write the PRD: {{idea}}",
       "description": "You are the Product Manager. Using the user research and the engineering feasibility read provided, write the detailed PRD for \"{{idea}}\": problem statement, target users & prioritized user stories, MVP scope with an explicit OUT-of-scope list, functional + non-functional requirements, success metrics & instrumentation, key edge cases, dependencies, and open questions with owners. Be diplomatically ruthless about focus. Output the full PRD as markdown.",
+      "acceptance": [
+        "prd.md is saved in the artifacts dir with sections: problem, users & stories, MVP scope, out of scope, functional & non-functional requirements, success metrics, edge cases, dependencies, open questions",
+        "Every open question has an owner",
+        "Each success metric names how it is instrumented",
+        "MVP stories trace to the user-research stories"
+      ],
+      "verify": [
+        "test -s prd.md && grep -ciE '^#+ .*(problem|scope|out of scope|requirement|metric|edge|dependenc|open question)' prd.md  # >= 8"
+      ],
       "agent": "product-manager",
-      "dependsOn": ["user-research", "feasibility"]
+      "dependsOn": ["user-research", "feasibility"],
+      "arena": {
+        "runners": [
+          "local-cc-opus-5-5",
+          "local-agy-gemini-3.8-flash-high"
+        ],
+        "rubric": [
+          "Completeness: covers problem, users, stories, MVP scope, out-of-scope, functional/non-functional requirements, metrics, edge cases",
+          "Traceability: every user story traces to user research and every metric names its instrumentation",
+          "Boundary discipline: ruthless cut list and clear out-of-scope boundaries",
+          "Actionability: engineering can build directly from requirements and edge cases without guessing"
+        ]
+      }
     },
     {
       "key": "scope",
       "title": "Scope into a shippable first sprint: {{idea}}",
       "description": "Take the PRD provided and cut it into a shippable first sprint for \"{{idea}}\": the smallest slice that delivers real user value, an ordered backlog of tickets each with a one-line acceptance criterion, the explicit cut list (what's deferred and why), and the top risk to the sprint. Output as markdown.",
+      "acceptance": [
+        "sprint.md is saved in the artifacts dir with an ordered backlog where every ticket has a one-line acceptance criterion",
+        "An explicit cut list says what is deferred and why",
+        "The top sprint risk is named",
+        "Every ticket traces to an MVP item in the PRD"
+      ],
+      "verify": [
+        "test -s sprint.md",
+        "every backlog ticket line in sprint.md has an acceptance criterion"
+      ],
       "agent": "product-sprint-prioritizer",
       "dependsOn": ["prd"]
     }

@@ -9,6 +9,7 @@ import { registerBrain, removeBrainCascade, clientTaskView } from '../config.js'
 import { getObsidianVault } from '../core/obsidian.js';
 import { sharedIntegrations, defaultAuditTargets } from '../core/integrations.js';
 import { auditPath, mergeReports, formatSummary } from '../core/skill-auditor.js';
+import { shouldSharpenTask, sharpenTask } from '../core/sharpener.js';
 
 // Stateless streamable-HTTP pattern: build a fresh McpServer + transport per
 // request. Sharing one McpServer across concurrent transports cross-wires
@@ -251,7 +252,11 @@ function buildServer(config: Config, store: Store, eventBus: EventBus, goals?: G
     'launches it when its time arrives. Pass loop_interval_hours (simple hourly) ' +
     'or a `recurrence` object for a flexible cadence — minutes/hours/daily/weekly/' +
     'monthly/cron. The next run is FIXED-RATE (phased on the intended launch time), ' +
-    'so a fast run never delays the following one.',
+    'so a fast run never delays the following one. Brief contract: put ' +
+    'context.acceptance (string[] of checkable "done means" criteria), ' +
+    'context.verify (string[] of commands/checks), context.timeboxMin (minutes) ' +
+    'and context.scope ({write?: string[], forbid?: string[]}) in `context` — ' +
+    'the executing agent sees them as dedicated prompt sections.',
     {
       title: z.string(),
       description: z.string(),
@@ -315,6 +320,10 @@ function buildServer(config: Config, store: Store, eventBus: EventBus, goals?: G
           loopIntervalHours: args.loop_interval_hours,
           recurrence: args.recurrence as any
         });
+        if (shouldSharpenTask(task, config)) {
+          await sharpenTask(task, { config, decisionsDir: config.paths?.decisions });
+          store.saveTask(task);
+        }
         return { content: [{ type: 'text', text: JSON.stringify(task) }] };
       } catch (e: any) {
         return { content: [{ type: 'text', text: e.message }], isError: true };

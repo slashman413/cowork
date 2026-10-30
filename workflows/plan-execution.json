@@ -10,12 +10,27 @@
       "key": "analyze-plan",
       "title": "Analyze the plan into executable jobs",
       "description": "Read the plan and turn it into an execution-ready job list. For EACH job specify: (a) a unique job id, (b) exactly what deliverable it must produce, (c) which other jobs' OUTPUTS it must be based on (its inputs), (d) the specialist or division best suited to do it, and (e) a concrete, checkable acceptance criterion. Then state the overall Definition of Done: the checklist that proves the plan's GOAL is achieved and every REQUIREMENT is met. Plan: \"{{plan}}\". Output as markdown.",
+      "acceptance": [
+        "job-list.md is saved in the artifacts dir; every job has id, deliverable, inputs, owner (specialist or division) and one checkable acceptance criterion",
+        "A Definition of Done checklist covers the plan's GOAL and every stated REQUIREMENT",
+        "No job lacks an acceptance criterion (a job you cannot write one for is split or flagged)"
+      ],
+      "verify": [
+        "test -s job-list.md",
+        "count jobs vs acceptance criteria in job-list.md — the numbers match"
+      ],
       "division": "operations"
     },
     {
       "key": "execution-strategy",
       "title": "Sequence the jobs and wire their data flow",
       "description": "Using the job list above, produce the execution strategy: the topological order the jobs must run in, which jobs can run in parallel, and — critically — the exact output-to-input wiring (which job consumes which upstream job's RESULT). Mark the critical path and the highest-risk jobs. This is the map the orchestrator will dispatch against. Output as markdown.",
+      "acceptance": [
+        "strategy.md is saved in the artifacts dir with a topological order that includes every job id from the job list",
+        "Parallel groups, the critical path and the highest-risk jobs are each named",
+        "Every dependency edge names the upstream job whose RESULT the downstream job consumes, and the graph has no cycle"
+      ],
+      "verify": ["test -s strategy.md", "every job id in job-list.md appears in strategy.md"],
       "division": "operations",
       "dependsOn": ["analyze-plan"]
     },
@@ -23,6 +38,16 @@
       "key": "orchestrate-execution",
       "title": "Dispatch and manage the real jobs",
       "description": "You are managing execution of the plan. Take the job list and the wiring strategy provided above and ACTUALLY dispatch each job as a real subtask to the company's agents — one POST per job — leaving the agent unassigned so the router picks the best specialist, or pinning context.division / context.agent when the analysis already named one. For every job that is based on another job's output, set its context.dependsOn to the task id(s) of those upstream jobs so the specialist is handed its inputs. Include a final integration subtask that dependsOn all the leaf jobs. After dispatching, output a summary mapping each job -> task id -> its dependencies.",
+      "acceptance": [
+        "One POST /api/inbox per job; the result maps each job id -> created task id -> dependsOn task ids",
+        "Every dispatched subtask carries context.acceptance (copied from the job list) and context.verify",
+        "context.dependsOn of each subtask matches the wiring in the execution strategy",
+        "A final integration subtask dependsOn all leaf jobs"
+      ],
+      "verify": [
+        "for each task id in the result: GET /api/inbox/<id> on the Cowork API (same base URL as your POSTs) returns 200",
+        "each fetched task has a non-empty context.acceptance"
+      ],
       "agent": "orchestrator",
       "dependsOn": ["analyze-plan", "execution-strategy"]
     },
@@ -30,12 +55,27 @@
       "key": "integrate",
       "title": "Integrate the delivered work",
       "description": "Collect the outputs produced by the dispatched jobs and assemble them into the single combined deliverable the plan calls for. Reconcile any inconsistencies between the pieces. If the artifacts are large, output a clear manifest of what was produced and where each piece lives, plus the assembled top-level result. Output as markdown.",
+      "acceptance": [
+        "integrated.md is saved in the artifacts dir: the assembled deliverable or a manifest of every produced artifact with its path",
+        "Every dispatched job's output is accounted for (used, or listed as missing with its task id)",
+        "Inconsistencies found between pieces are listed with how each was resolved"
+      ],
+      "verify": ["test -s integrated.md", "every path listed in integrated.md exists (ls <path>)"],
       "dependsOn": ["orchestrate-execution"]
     },
     {
       "key": "verify-requirements",
       "title": "Verify the result against every requirement",
       "description": "Check the integrated result against the Definition of Done and every acceptance criterion from the plan analysis. For each requirement, output PASS or FAIL with the concrete evidence. List every remaining gap precisely enough that a specialist could fix it without re-reading the whole plan. Output as markdown.",
+      "acceptance": [
+        "verification.md is saved in the artifacts dir with one PASS/FAIL row per Definition-of-Done item and per job acceptance criterion",
+        "Every PASS cites concrete evidence (command + observed output, file path, or URL)",
+        "Every FAIL states the gap precisely enough for a specialist to fix it without re-reading the plan"
+      ],
+      "verify": [
+        "test -s verification.md && grep -cE 'PASS|FAIL' verification.md",
+        "re-run 2 of the cited evidence commands and confirm the same output"
+      ],
       "agent": "code-reviewer",
       "dependsOn": ["analyze-plan", "integrate"]
     },
@@ -43,6 +83,14 @@
       "key": "remediate",
       "title": "Fix the gaps found in verification",
       "description": "For each FAIL or gap from verification, dispatch a targeted fix subtask to the right specialist — one POST per fix — wiring context.dependsOn to the relevant prior outputs so the fixer has full context, then summarize what you dispatched. Skip anything already passing. If verification found no gaps, state plainly that no remediation is needed.",
+      "acceptance": [
+        "One fix subtask was dispatched per FAIL in verification.md, each with context.acceptance and context.dependsOn on the relevant prior outputs",
+        "The result lists FAIL item -> fix task id; or states plainly that there were no FAILs"
+      ],
+      "verify": [
+        "for each fix task id: GET /api/inbox/<id> on the Cowork API (same base URL as your POSTs) returns 200 with non-empty context.acceptance",
+        "count of FAIL rows in verification.md == count of fix tasks listed"
+      ],
       "agent": "orchestrator",
       "dependsOn": ["verify-requirements"]
     },
@@ -50,6 +98,15 @@
       "key": "deliver",
       "title": "Deliver the outcome",
       "description": "Produce the final delivery report: what was built, a requirement-by-requirement mapping that shows the plan's GOAL is achieved, where each artifact lives, and any residual risks or recommended follow-ups. This is the report the CEO reads to confirm the plan is done. Output as markdown.",
+      "acceptance": [
+        "delivery-report.md is saved in the artifacts dir mapping every requirement to PASS/FAIL with the evidence location",
+        "Every artifact is listed with its path or URL",
+        "Residual risks and follow-ups are listed (or 'none')"
+      ],
+      "verify": [
+        "test -s delivery-report.md",
+        "every requirement in the job list's Definition of Done appears in delivery-report.md"
+      ],
       "dependsOn": ["integrate", "verify-requirements"]
     }
   ]

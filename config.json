@@ -72,7 +72,58 @@
         "timeoutMs": 120000,
         "priorities": ["high", "urgent"]
       },
-      "maxBackgroundDeferrals": 120
+      "maxBackgroundDeferrals": 120,
+      "spec": {
+        "enabled": true,
+        "mode": "shadow",
+        "enforceAfter": "2026-10-27T02:10:00.000Z",
+        "maxFalseRejectRate": 0.1,
+        "timeoutMs": 300000,
+        "judges": {
+          "claude": [
+            "local-agy-gemini-4-argon-medium",
+            "local-agy-gemini-3.8-flash-high"
+          ],
+          "gemini": [
+            "local-agy-claude-opus-5-5-medium",
+            "local-cc-opus-5-5"
+          ],
+          "qwen": [
+            "local-agy-claude-opus-5-5-medium",
+            "local-cc-opus-5-5"
+          ],
+          "default": [
+            "local-agy-claude-opus-5-5-medium",
+            "local-cc-opus-5-5"
+          ]
+        }
+      },
+      "panel": {
+        "_comment": "PS-2 multi-family review panel. enabled=false forces every gate back to one reviewer. Gates opt in with gate.panel (build-and-ship build + final-review use 2). judgmentTier=true also runs the panel+lead in the spec verifier for tier:judgment tasks (off until the eval gate passes).",
+        "enabled": true,
+        "size": 2,
+        "judgmentTier": false
+      }
+    },
+    "sharpener": {
+      "enabled": true,
+      "mode": "shadow",
+      "brain": "local-agy-gemini-3.8-flash-high"
+    },
+    "methods": {
+      "enabled": true,
+      "cards": {
+        "investigation": "shadow",
+        "bug-fix": "shadow",
+        "feature": "shadow",
+        "research-report": "on",
+        "content": "shadow",
+        "ops-change": "shadow"
+      }
+    },
+    "arena": {
+      "_comment": "PS-3 arena workflow primitive for one-way-door deliverables. Spawns N parallel candidates across distinct model families, cross-judged and synthesized. Default false until blind A/B eval passes.",
+      "enabled": false
     },
     "staleClaimMs": 600000,
     "hardClaimMs": 5400000,
@@ -139,13 +190,39 @@
           "./deploy/video-pipeline.sh"
         ]
       },
+      "local-script-eval-harness": {
+        "description": "Eval harness (P2-1) — runs the steps of the eval-prompt-change workflow only. Do not route other tasks here.",
+        "location": "local",
+        "exec": "script",
+        "command": [
+          "node",
+          "dist/eval-cli.js",
+          "step"
+        ],
+        "maxConcurrent": 2
+      },
       "remote-example-cc-sonnet-5-5": {
-        "description": "EXAMPLE remote brain \u2014 a Claude Code client on another machine. Delete or edit; remote brains normally auto-register via register_agent (see JOIN-AS-A-BRAIN.md).",
+        "description": "EXAMPLE remote brain — a Claude Code client on another machine. Delete or edit; remote brains normally auto-register via register_agent (see JOIN-AS-A-BRAIN.md).",
         "location": "remote",
         "exec": "claude",
         "model": "claude-sonnet-5-5",
         "host": "your-remote-host"
       }
+    },
+    "tiers": {
+      "mechanical": [
+        "local-dsh-qwen3-8-27b",
+        "local-agy-gemini-3.8-flash-high",
+        "local-agy-gemini-3.8-flash-medium"
+      ],
+      "standard": [
+        "local-agy-gemini-4-argon-medium",
+        "local-agy-claude-opus-5-5-medium"
+      ],
+      "judgment": [
+        "local-cc-opus-5-5",
+        "remote-ai-code-gen-cc-opus-5-5"
+      ]
     }
   }
 }

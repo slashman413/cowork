@@ -1,7 +1,7 @@
 {
   "id": "idea-to-launch",
   "name": "Idea → Launch (full company)",
-  "description": "The flagship end-to-end company run. A CEO turns a raw idea into a strategic brief; researchers deep-dive the market and expand perspectives; a product manager writes the detailed spec; an architect designs the build; the orchestrator dispatches engineers to build the REAL product and push it to GitHub with GH Actions; marketing wires promotions + email auto-replies; sales enables the pitch; finance models the unit economics; and the Chief of Staff runs the final go/no-go launch review. A cross-functional diamond DAG — every downstream role is handed the outputs of the roles it depends on. Each step is pinned to a division/agent (never a brain), so every agent's brain fallback chain stays editable from the dashboard's Agents view.",
+  "description": "The flagship end-to-end company run. A CEO turns a raw idea into a strategic brief; researchers deep-dive the market and expand perspectives; a product manager writes the detailed spec; an architect designs the build; the orchestrator dispatches engineers to build the REAL product and push it to GitHub with GH Actions; marketing wires promotions + email auto-replies; sales enables the pitch; finance models the unit economics; and the Chief of Staff runs the final go/no-go launch review. A cross-functional diamond DAG — every downstream role is handed the outputs of the roles it depends on. Each step is pinned to a division/agent (never a brain), so every agent's brain fallback chain stays editable from the dashboard's Agents view. (Candidate for PS-3 arena mode on the 'prd' / positioning step once promoted.)",
   "params": ["idea"],
   "steps": [
     {

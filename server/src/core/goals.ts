@@ -4,6 +4,8 @@ import { globSync } from 'glob';
 import { v4 as uuidv4 } from 'uuid';
 import type { Config, GoalRecord, GoalPhase, AchieverDecision, GoalTemplate, Task } from '../types.js';
 import { GOAL_TEMPLATES } from './goal-templates.js';
+import { appendGoalDecision, goalTrailPath, readGoalTrail, taskTrailRows, trailLine, type GoalDecisionRow } from './goal-trail.js';
+import { brainFamily, reviewChain } from './tiers.js';
 
 /** The slice of Store that Goals touches. Keeping it structural lets the unit
  *  tests drive Goals with an in-memory fake exactly like workflows.test.ts. */
@@ -18,6 +20,27 @@ export interface GoalStore {
  *  "quiescent" — ready for the Achiever's next turn — when none of its
  *  generated tasks are in one of these. */
 const OPEN_STATUSES = new Set(['pending', 'claimed', 'in-progress', 'scheduled', 'wait-input']);
+
+/** Roles that review a phase rather than execute it — not counted by stepBudget. */
+const REVIEW_ROLES = new Set(['goal-judger', 'goal-attention']);
+
+/**
+ * pstack figure-it-out rigour rules for the goal planner (PS-7). Injected into
+ * the Achiever prompt; they shape which phase is planned next and when the
+ * criterion may be called met.
+ */
+export const FIGURE_IT_OUT_RULES = [
+  `Figure-it-out rules for planning:`,
+  `  1. FALSIFIABLE CRITERION — treat the success criterion as a predicate that a concrete check can prove FALSE (a number read from a named source, a URL that loads, a test that passes). If it is vague ("improve", "better", "grow"), your first move is to plan a phase that pins it to a measurable threshold and source — and evaluate it only by running that check, never by opinion.`,
+  `  2. RISKIEST UNKNOWN FIRST — order phases so the assumption most likely to kill the goal (an API that may not exist, a credential, a platform rule, whether anyone wants it) is tested first, cheaply, before effort is spent on the parts that depend on it.`,
+  `  3. VERIFY/BASELINE BEFORE FEATURES — before any feature or build phase, plan a verification/baseline phase that measures where the criterion stands today and sets up the check that will prove it later. Without a baseline, no later phase can show it moved the needle.`
+].join('\n');
+
+/** The "## Attention" section of a review, or '' when absent. */
+export function extractAttention(text: string | undefined): string {
+  const m = /^#{1,3}\s*Attention\b[\s\S]*/im.exec(text || '');
+  return m ? m[0].trim().slice(0, 8000) : '';
+}
 
 /**
  * Goals — a long-lived, phase-tracked, self-terminating orchestration aggregate.
@@ -74,6 +97,16 @@ export class Goals {
 
   private dir(): string {
     return this.config.paths.goals;
+  }
+
+  /** PS-7: append rows to goals/<id>/decisions.tsv (never throws). */
+  private trail(goalId: string, ...rows: Partial<GoalDecisionRow>[]): void {
+    appendGoalDecision(this.dir(), goalId, ...rows);
+  }
+
+  /** The phase's decision trail rows (PS-7), oldest first. */
+  decisionTrail(goalId: string, phaseKey?: string): GoalDecisionRow[] {
+    return readGoalTrail(this.dir(), goalId, phaseKey);
   }
 
   // ── Persistence ────────────────────────────────────────────────────────────
@@ -338,7 +371,7 @@ export class Goals {
   /** Count of EXECUTION tasks generated (excludes the read-mostly Judger) — the
    *  number the stepBudget caps. */
   private executionTaskCount(goalId: string): number {
-    return this.generatedTasks(goalId).filter(t => t.context?.role !== 'goal-judger').length;
+    return this.generatedTasks(goalId).filter(t => !REVIEW_ROLES.has(t.context?.role)).length;
   }
 
   private isOpen(t: Task | null): boolean { return !!t && OPEN_STATUSES.has(t.status); }
@@ -370,7 +403,8 @@ export class Goals {
    *  it is edge-triggered ready for the Achiever's next turn. The direct analogue
    *  of Workflows.runsAwaitingDecision. */
   private quiescent(rec: GoalRecord): boolean {
-    if (this.generatedTasks(rec.goalId).some(t => this.isOpen(t))) return false;
+    // The PS-7 Attention review is for the CEO, not the Achiever: it never holds the loop.
+    if (this.generatedTasks(rec.goalId).some(t => t.context?.role !== 'goal-attention' && this.isOpen(t))) return false;
     if (rec.phases.some(p => p.status === 'completing')) return false;
     return true;
   }
@@ -471,12 +505,16 @@ export class Goals {
       // turns until the failure ceiling kills it. This is the intended, graceful
       // stop — it counts as PROGRESS (the loop resolved), not a failure.
       this.block(goalId, decision.reason || 'Achiever declared the goal blocked', decision.unblockCriteria);
+      this.trail(goalId, { phase: this.currentPhase(rec)?.key || 'goal', decision: 'blocked the goal', why: decision.reason,
+        evidence: 'goal history', result: `blocked; unblock when: ${decision.unblockCriteria || 'auto-retry'}` });
       return { blocked: true };
     }
 
     if (decision.kind === 'evaluate') {
       const met = decision.met === true;
       rec.history.push({ kind: 'evaluate', met, reason: decision.reason, at });
+      this.trail(goalId, { phase: this.currentPhase(rec)?.key || 'goal', decision: 'evaluated the success criterion',
+        why: decision.reason, evidence: `criterion: ${rec.successCriteria}`, result: met ? 'MET' : 'not met' });
       if (met) {
         rec.status = 'achieved';
         this.clearBackoff(rec);
@@ -499,6 +537,8 @@ export class Goals {
       if (rec.phases.some(p => p.key === key)) { console.warn(`Goals: ${goalId} plan rejected — phase "${key}" exists`); return {}; }
       rec.phases.push({ key, title: title || key, status: 'planned', taskIds: [] });
       rec.history.push({ kind: 'plan', phaseKey: key, reason: decision.reason, at });
+      this.trail(goalId, { phase: key, decision: `planned phase "${title || key}"`, why: decision.reason,
+        evidence: 'goal history', result: 'planned' });
       this.clearBackoff(rec);   // forward progress → breaker back to CLOSED
       this.save(rec);
       console.log(`Goals: ${goalId} planned phase "${key}"`);
@@ -537,6 +577,8 @@ export class Goals {
       });
       phase.taskIds.push(...created);
       phase.status = 'active';
+      this.trail(goalId, { phase: phase.key, decision: `emitted ${created.length} task(s): ${specs.map(t => String(t.title).trim()).join('; ')}`,
+        why: decision.reason, evidence: `tasks ${created.map(id => id.slice(0, 8)).join(', ')}`, result: 'open' });
       this.clearBackoff(rec);   // forward progress → breaker back to CLOSED
       this.save(rec);
       console.log(`Goals: ${goalId} emitted ${created.length} task(s) for phase "${phase.key}"`);
@@ -582,6 +624,9 @@ export class Goals {
       'Work in scope:',
       doneWork || '(no completed tasks found)',
       '',
+      `Decision trail (TSV: ts phase decision why evidence result): ${goalTrailPath(this.dir(), goalId)}`,
+      opts.closeout ? '' : 'A reviewer from a different model family appends an "## Attention" section to your report — do not write one yourself.',
+      '',
       'Judge by EXECUTION, not description. A plan, analysis, strategy, or report is NOT',
       'progress toward the criterion — it is at most the setup for the work that is. For',
       'each task in scope, decide whether it actually CARRIED OUT real work and whether that',
@@ -615,6 +660,103 @@ export class Goals {
   }
 
   /**
+   * PS-7 cross-family trail review. At phase close a brain of a DIFFERENT model
+   * family than the phase's executor (tiers.reviewChain — Gemini reviews Claude,
+   * an opus-class Claude reviews Gemini/qwen/other) reads the decision trail plus
+   * the phase's task results and writes an "## Attention" section: weak evidence,
+   * skipped verification, scope creep. "No flags" is a valid result. Its section
+   * is merged into the Judger's phase report on whichever finishes last.
+   * `orchestration.goalAttention: false` turns it off.
+   */
+  emitAttentionTask(goalId: string, phaseKey: string): Task | null {
+    const orch = this.config.orchestration;
+    if (orch?.goalAttention === false) return null;
+    const rec = this.load(goalId);
+    const phase = rec?.phases.find(p => p.key === phaseKey);
+    if (!rec || !phase || (phase.attentionTaskId && this.isOpen(this.store.getTask(phase.attentionTaskId)))) return null;
+
+    const tasks = phase.taskIds.map(id => this.store.getTask(id)).filter((t): t is Task => !!t);
+    // Executor = the brain that ran most of the phase (fallback: the Achiever chain head).
+    const counts = new Map<string, number>();
+    for (const t of tasks) {
+      const b = String(t.context?.ranBrain || t.context?.brain || '');
+      if (b) counts.set(b, (counts.get(b) || 0) + 1);
+    }
+    const executor = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || rec.achieverBrainChain?.[0] || '';
+    const brains = orch?.brains || {};
+    const reviewer = reviewChain(executor, orch?.tiers, brains)[0];
+
+    const context: Record<string, any> = {
+      goalId, phaseKey, goalGenerated: true, role: 'goal-attention',
+      reviewOf: executor ? `${executor} [${brainFamily(brains[executor], executor)}]` : 'unknown'
+    };
+    if (reviewer) context.brain = reviewer;
+
+    const trailRows = this.decisionTrail(goalId, phaseKey).slice(-60);
+    const results = tasks.map(t => {
+      const res = (t.result || '').slice(0, 1500);
+      return `### ${t.title} [${t.status}] — ran on ${t.context?.ranBrain || '?'}\nartifacts: ${t.id}/\n${res || '(no result)'}`;
+    }).join('\n\n');
+
+    const description = [
+      `You are the CROSS-FAMILY TRAIL REVIEWER for phase "${phase.title || phaseKey}" of goal "${rec.title}".`,
+      `The phase ran on ${context.reviewOf}; you are a different model family on purpose — self-review is not a substitute.`,
+      '',
+      `Success criteria (binary): ${rec.successCriteria}`,
+      '',
+      `Decision trail — ${goalTrailPath(this.dir(), goalId)} (this phase's rows):`,
+      'ts\tphase\tdecision\twhy\tevidence\tresult',
+      trailRows.length ? trailRows.map(trailLine).join('\n') : '(no rows)',
+      '',
+      'Phase task results:',
+      results || '(no tasks found)',
+      '',
+      'Do NOT redo the work. Scan the trail and the results for what the CEO should pay attention to:',
+      '  - decisions or claims with weak or absent evidence (no command output, URL, id, or file behind them);',
+      '  - verification that was skipped, or claimed without proof in the result;',
+      '  - scope creep, premature or risky choices, or a symptom papered over;',
+      '  - gaps someone skimming the trail would miss.',
+      '',
+      `Write attention-${phaseKey}.md in your artifacts dir (relative path) and print the same text as your result. Format:`,
+      '## Attention',
+      'reviewed by <your model id>',
+      '- <flag, pointing to the trail row (ts / decision) or task it concerns>',
+      '',
+      '"No flags" is a valid value — write it on its own line when nothing deserves attention. Do not invent flags to look thorough.'
+    ].join('\n');
+
+    const task = this.store.createTask({
+      title: `Attention review — phase "${phase.title || phaseKey}" — ${rec.title}`,
+      description,
+      from: { platform: 'cowork', agent: 'goal-attention' },
+      to: {},
+      priority: 'normal',
+      context,
+      tags: ['goal', goalId, 'goal-attention']
+    });
+    phase.attentionTaskId = task.id;
+    this.save(rec);
+    this.trail(goalId, { phase: phaseKey, decision: 'requested cross-family Attention review', why: `executor ${context.reviewOf}`,
+      evidence: `task ${task.id.slice(0, 8)} on ${reviewer || 'router'}`, result: 'open' });
+    console.log(`Goals: ${goalId} → Attention review ${task.id} for phase "${phaseKey}" on ${reviewer || '(router)'}`);
+    return task;
+  }
+
+  /** Append the phase's Attention section to the Judger report once both exist.
+   *  Idempotent: a report that already carries an Attention heading is left alone. */
+  private mergeAttention(phase: GoalPhase): boolean {
+    const dir = this.config.paths.artifacts;
+    if (!phase.attention || !phase.reportArtifact || !dir) return false;
+    const file = path.join(dir, phase.reportArtifact);
+    try {
+      const report = fs.readFileSync(file, 'utf-8');
+      if (/^#{1,3}\s*Attention\b/im.test(report)) return false;
+      fs.appendFileSync(file, `${report.endsWith('\n') ? '' : '\n'}\n${phase.attention}\n`);
+      return true;
+    } catch { return false; }
+  }
+
+  /**
    * The taskCompleted subscriber's core. Reacts to a goal-generated task
    * finishing — the two-hop, poll-free Achiever↔Judger cycle (§8.2):
    *   completesPhase execution task done  → phase `completing`, emit Judger.
@@ -628,6 +770,24 @@ export class Goals {
     const rec = this.load(ctx.goalId);
     if (!rec) return;
 
+    if (ctx.role === 'goal-attention') {
+      const phaseKey = String(ctx.phaseKey || '');
+      const phase = rec.phases.find(p => p.key === phaseKey);
+      if (!phase) return;
+      const artifact = `${task.id}/attention-${phaseKey}.md`;
+      let text = '';
+      try { text = extractAttention(fs.readFileSync(path.join(this.config.paths.artifacts, artifact), 'utf-8')); } catch { /* fall back to result */ }
+      text = text || extractAttention(task.result);
+      phase.attention = text || `## Attention\nreviewed by ${ctx.brain || 'unknown'}\n(review produced no Attention section — status ${task.status})`;
+      phase.attentionArtifact = artifact;
+      this.mergeAttention(phase);
+      this.save(rec);
+      const flags = (text.match(/^\s*[-*]\s+\S/gm) || []).length;
+      this.trail(rec.goalId, { phase: phaseKey, decision: 'cross-family Attention review', why: `reviewer family ≠ executor (${ctx.reviewOf || '?'})`,
+        evidence: `artifacts/${artifact}`, result: !text ? `no Attention section (${task.status})` : /no flags/i.test(text) && !flags ? 'no flags' : `${flags} flag(s)` });
+      return;
+    }
+
     if (ctx.role === 'goal-judger') {
       const phaseKey = String(ctx.phaseKey || '');
       const phase = rec.phases.find(p => p.key === phaseKey);
@@ -635,11 +795,17 @@ export class Goals {
         phase.status = 'audited';
         phase.reportArtifact = `${task.id}/report-${phaseKey}.md`;
       }
+      if (phase) this.mergeAttention(phase);
       rec.minutes.push({ phaseKey, artifact: `${task.id}/minutes-${phaseKey}.md`, at: new Date().toISOString() });
       this.save(rec);
+      this.trail(rec.goalId, { phase: phaseKey, decision: ctx.closeout ? 'closeout report' : 'Judger audited the phase',
+        why: 'phase close', evidence: `artifacts/${task.id}/report-${phaseKey}.md`, result: task.status });
       console.log(`Goals: ${rec.goalId} phase "${phaseKey}" audited (task ${task.id})`);
       return;
     }
+
+    // PS-7: every finished phase task lands in the trail, with its RULING lines.
+    if (typeof ctx.phaseKey === 'string' && ctx.phaseKey) this.trail(rec.goalId, ...taskTrailRows(task, ctx.phaseKey));
 
     if (ctx.completesPhase) {
       const phaseKey = String(ctx.phaseKey || '');
@@ -650,6 +816,7 @@ export class Goals {
         // Wake the Judger immediately — completing→judger-emitted is atomic so
         // `completing` is only ever seen by the self-heal after a dropped event.
         this.emitJudgerTask(rec.goalId, phaseKey);
+        this.emitAttentionTask(rec.goalId, phaseKey);
       }
     }
   }

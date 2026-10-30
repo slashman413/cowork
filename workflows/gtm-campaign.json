@@ -1,7 +1,7 @@
 {
   "id": "gtm-campaign",
   "name": "GTM Campaign (promos + email auto-replies)",
-  "description": "Marketing and sales wire a launch: growth designs the offer and promotional angles, the email strategist builds the sequence AND the inbound auto-reply rules, content drafts the assets, sales builds the enablement layer, and analytics defines how success is measured. This is the 'marketing/sales wire product promotions and manage emails with auto-replies' pipeline. Roles pinned to marketing/sales agents; brain fallback chains editable from the dashboard.",
+  "description": "Marketing and sales wire a launch: growth designs the offer and promotional angles, the email strategist builds the sequence AND the inbound auto-reply rules, content drafts the assets, sales builds the enablement layer, and analytics defines how success is measured. This is the 'marketing/sales wire product promotions and manage emails with auto-replies' pipeline. Roles pinned to marketing/sales agents; brain fallback chains editable from the dashboard. (Candidate for PS-3 arena mode on the 'offer' / core message step once promoted.)",
   "params": ["product"],
   "steps": [
     {
@@ -14,6 +14,7 @@
       "key": "email-system",
       "title": "Email sequences + auto-reply rules: {{product}}",
       "description": "Using the offer and promo angles provided, build the email system for \"{{product}}\": (1) the launch sequence — welcome, 2-3 nurture emails, launch-day, and a win-back — each with subject line and body; (2) the AUTO-REPLY rules for inbound — new-signup autoresponder, pricing/FAQ auto-answers, support acknowledgement with SLA, and an escalation trigger for anything out of scope. Specify exactly how each would be wired into the marketing-automation stack (e.g. Mautic campaigns, segments, and trigger conditions) so ops can switch it on. Output as markdown with the assets drafted.",
+      "acceptance": ["Passes the unslop rules listed in `methods/content.md`"],
       "agent": "marketing-email-strategist",
       "dependsOn": ["offer"]
     },
@@ -21,6 +22,7 @@
       "key": "content",
       "title": "Draft the campaign content: {{product}}",
       "description": "Using the offer and the email system provided, draft the public-facing campaign content for \"{{product}}\": the landing page copy (hero, benefits, social proof, CTA), 3 social posts per channel for launch week, and the SEO title + meta description. Keep the voice consistent with the promo angles. Output as markdown.",
+      "acceptance": ["Passes the unslop rules listed in `methods/content.md`"],
       "agent": "marketing-content-creator",
       "dependsOn": ["offer", "email-system"]
     },
@@ -28,6 +30,7 @@
       "key": "sales-enablement",
       "title": "Sales enablement & outreach: {{product}}",
       "description": "Using the offer and content provided, build the sales layer for \"{{product}}\": the one-line pitch, an objection-handling table, a tiered pricing recommendation with rationale, and a 3-touch outbound sequence to the top target segment that stays consistent with the marketing promos. Output as markdown.",
+      "acceptance": ["Passes the unslop rules listed in `methods/content.md`"],
       "agent": "sales-outreach",
       "dependsOn": ["offer", "content"]
     },

@@ -244,9 +244,51 @@ export interface VerifierConfig {
     /** Wall-clock budget for one verification (ms). Default 300000. */
     timeoutMs?: number;
     /** Only verify tasks of these priorities (default: all). A task's
-     *  context.verify = "llm" | "off" overrides this either way. */
+     *  context.llmVerify = "llm" | "off" overrides this either way. */
     priorities?: Array<'low' | 'normal' | 'high' | 'urgent'>;
   };
+  /** Spec-compliance verifier (P1-1): cross-family judge for tasks with acceptance criteria. */
+  spec?: SpecVerifierConfig;
+  /** PS-2 multi-family review panel. */
+  panel?: ReviewPanelConfig;
+}
+
+export interface SpecVerifierJudgesConfig {
+  claude?: readonly string[] | string[];
+  gemini?: readonly string[] | string[];
+  qwen?: readonly string[] | string[];
+  default?: readonly string[] | string[];
+  [family: string]: readonly string[] | string[] | undefined;
+}
+
+/** PS-2 review panel switch (`orchestration.verifier.panel`). */
+export interface ReviewPanelConfig {
+  /** Master switch; false forces every gate back to a single reviewer. Default true. */
+  enabled?: boolean;
+  /** Panel size used where the panel applies without an explicit size (judgment-tier spec verifier). Default 2. */
+  size?: number;
+  /** Also run the panel in the dispatcher's spec verifier for `tier: judgment` tasks. Default false. */
+  judgmentTier?: boolean;
+}
+
+export interface SpecVerifierConfig {
+  /** Master switch for the spec-compliance verifier (P1-1). */
+  enabled?: boolean;
+  /** "shadow" stores context.specVerdict + appends lessons.jsonl kind:"quality-shadow"
+   *  without rejecting; "enforce" rejects CHANGES_REQUESTED and hands over to the next
+   *  brain with failing criteria appended to the brief. Default "shadow". */
+  mode?: 'shadow' | 'enforce';
+  /** ISO-8601 timestamp when the shadow review task evaluates and may enable enforce. */
+  enforceAfter?: string;
+  /** Maximum false-reject rate (0..1) for the shadow review task to enable enforce. Default 0.10. */
+  maxFalseRejectRate?: number;
+  /** Shadow→enforce volume gate: DECISIVE verdicts (APPROVED + CHANGES_REQUESTED)
+   *  needed before the review may flip to enforce. UNVERIFIABLE never counts. Default 10. */
+  minDecisiveVerdicts?: number;
+  /** Wall-clock budget for one judge run (ms). Default 300000 (5 min). */
+  timeoutMs?: number;
+  /** Judge brain fallback chains keyed by executor model family. */
+  judges?: SpecVerifierJudgesConfig;
 }
 
 export interface ClassifierConfig {
@@ -360,6 +402,47 @@ export interface OrchestrationConfig {
    *  re-queued at the reset without anyone ticking the card's toggle (which now
    *  only opts a task OUT). Set `enabled: false` to restore the old opt-in. */
   autoRerunRateLimited?: AutoRerunRateLimitedConfig;
+  /** Role → brain tiers (P1-4): mechanical / standard / judgment brain lists.
+   *  A task with context.tier (and no pinned brain / agentChains override) runs
+   *  on the tier list followed by its normal chain. `review` is resolved at
+   *  runtime to a different model family than the executor (core/tiers.ts). */
+  tiers?: Record<string, string[]>;
+  /** Brief sharpener at intake (PS-1): pre-pass on a cheap brain to generate acceptance criteria. */
+  sharpener?: SharpenerConfig;
+  /** PS-7: at goal phase close, a different-family brain reviews the phase's
+   *  decisions.tsv and writes an Attention section into the phase report.
+   *  Default ON; `false` turns the review task off (the trail is always kept). */
+  goalAttention?: boolean;
+  /** Per-task method cards from pinned pstack playbooks (PS-4). */
+  methods?: MethodsConfig;
+  /** Arena primitive for one-way-door deliverables (PS-3). */
+  arena?: ArenaConfig;
+}
+
+/** Config for {@link OrchestrationConfig.arena} (PS-3). */
+export interface ArenaConfig {
+  /** Master switch for arena workflow step primitive. Default false. */
+  enabled?: boolean;
+}
+
+/** Config for {@link OrchestrationConfig.methods} (PS-4). */
+export interface MethodsConfig {
+  /** Master switch for method card injection. Default false. */
+  enabled?: boolean;
+  /** Per-card injection state: "shadow" (not injected) | "on" (injected into prompt). Default "shadow". */
+  cards?: Record<string, 'shadow' | 'on'>;
+}
+
+/** Config for {@link OrchestrationConfig.sharpener} (PS-1). */
+export interface SharpenerConfig {
+  /** Master switch for the brief sharpener. Default true. */
+  enabled?: boolean;
+  /** 'shadow' | 'enforce'. Default 'shadow'. Sharpened criteria start in shadow. */
+  mode?: 'shadow' | 'enforce';
+  /** Cheap brain to run sharpening on (default: first enabled mechanical tier brain). */
+  brain?: string;
+  /** Timeout in ms. Default 60000. */
+  timeoutMs?: number;
 }
 
 /** Config for {@link OrchestrationConfig.autoRerunRateLimited}. */
@@ -584,6 +667,36 @@ export interface TaskWorktree {
   pruned?: boolean;
 }
 
+/**
+ * Brief contract (P0-3). Every field is optional. On a TASK these live on
+ * `task.context` (context.acceptance / .verify / .timeboxMin / .scope) — set
+ * them there on POST /api/inbox and MCP create_task. On a WORKFLOW STEP they
+ * are step-level fields that expansion copies into the task's context. The
+ * dispatcher renders them as dedicated prompt sections. See core/brief.ts.
+ */
+export interface TaskBrief {
+  /** Checkable "done means" criteria (artifact names, commands, URLs). */
+  acceptance?: string[];
+  /** Commands / checks that prove the acceptance criteria. */
+  verify?: string[];
+  /** Minutes to spend before returning partial results. */
+  timeboxMin?: number;
+  /** Paths/systems the worker may write to, and ones it must not touch. */
+  scope?: { write?: string[]; forbid?: string[] };
+  /** Origin of acceptance criteria: 'human' or 'sharpened' (PS-1). */
+  acceptanceSource?: 'human' | 'sharpened';
+  /** Exactly one outside check that the result is right (PS-1). */
+  outsideCheck?: string;
+  /** Expected deliverable filenames or shape (PS-1). */
+  deliverable?: string;
+  /** Method / playbook key (PS-1 / PS-4). */
+  playbook?: string;
+  /** Unresolved choices that belong to the user (PS-1). */
+  openChoices?: string[];
+  /** Opt-out flag for scheduled recurring ops jobs or user opt-out (PS-1). */
+  sharpen?: boolean;
+}
+
 export interface Task {
   id: string;
   title: string;
@@ -606,6 +719,7 @@ export interface Task {
    *  or dispatched); the dispatcher releases it to `pending` when its time comes. */
   status: 'wait-input' | 'scheduled' | 'pending' | 'claimed' | 'in-progress' | 'done' | 'rejected';
   skill?: string;
+  /** Free-form; carries the brief contract (acceptance/verify/timeboxMin/scope — {@link TaskBrief}). */
   context?: Record<string, any>;
   tags?: string[];
   /** Human-in-the-loop questions/checklist a person answers from the Inbox card
@@ -702,6 +816,118 @@ export interface WorkflowStep {
   priority?: 'low' | 'normal' | 'high' | 'urgent';
   /** Step keys (NOT task ids) this step waits for — the DAG edges. */
   dependsOn?: string[];
+  /** Brain tier (P1-4: mechanical / standard / judgment / review) — copied to context.tier. */
+  tier?: string;
+  /** Review→fix gate (P1-2: superpowers SDD fix rounds). */
+  gate?: WorkflowStepGate;
+  /** Brief contract (P0-3) — copied into the expanded task's context. */
+  acceptance?: TaskBrief['acceptance'];
+  verify?: TaskBrief['verify'];
+  timeboxMin?: TaskBrief['timeboxMin'];
+  scope?: TaskBrief['scope'];
+  /** Method / playbook key (PS-4: bug-fix, feature, investigation, content, ops-change, research-report). */
+  playbook?: string;
+  /** Arena primitive for one-way-door deliverables (PS-3). */
+  arena?: WorkflowStepArena;
+}
+
+/**
+ * Arena step option (PS-3, port of pstack arena phases A-F).
+ * Spawns N parallel sibling candidates across >=2 model families with identical brief,
+ * followed by a cross-judge scoring each candidate, followed by a judgment-tier synthesis
+ * that picks a base, grafts 1-2 elements from losers, and writes synthesis.md.
+ * If candidates wildly diverge, parks the step on wait-input.
+ */
+export interface WorkflowStepArena {
+  /** Runner brains (must span >= 2 distinct model families). */
+  runners: string[];
+  /** 3-6 gradeable criteria for scoring candidates. */
+  rubric: string[];
+}
+
+/**
+ * Review→fix gate option on a workflow step (P1-2).
+ * After the gated step finishes, a review task runs under `reviewer` (judge
+ * family per the P1-1 mapping; brief = the step's acceptance + its result +
+ * artifacts). On `CHANGES_REQUESTED` the engine re-queues the gated step with
+ * findings attached and a scoped re-review up to `maxRounds`; from round
+ * `escalateBrainAt` it escalates to the `judgment` tier (P1-4). At the cap,
+ * residual non-blocker findings are recorded as `RULING` lines and the run
+ * continues; a finding marked `BLOCKER` parks the run on `wait-input`.
+ */
+export interface WorkflowStepGate {
+  /** Agent slug that runs the review task (e.g. "engineering-code-reviewer"). */
+  reviewer: string;
+  /** Maximum review rounds before cap handling applies (default 3). */
+  maxRounds?: number;
+  /** 1-based round number from which the gated step escalates to the judgment tier (default 2). */
+  escalateBrainAt?: number;
+  /** PS-2: reviewers per round, one per distinct model family (never the
+   *  executor's). ≥2 adds a judgment-tier lead pass that buckets findings into
+   *  Act on / Consider / Noted / Dismissed. Default 1 = single reviewer.
+   *  Honoured only while `orchestration.verifier.panel.enabled` is not false. */
+  panel?: number;
+}
+
+export interface WorkflowGateRoundRecord {
+  round: number;
+  taskId: string;
+  reviewTaskId: string;
+  reviewer: string;
+  executorBrain?: string;
+  reviewerBrain?: string;
+  judgeBrain?: string | null;
+  judgeFamily?: string;
+  verdict: import('./core/result-verifier.js').SpecVerdictStatus;
+  criteria: import('./core/result-verifier.js').SpecCriterionVerdict[];
+  failedCriteria: string[];
+  findings?: string[];
+  summary: string;
+  escalated?: boolean;
+  action: 'approved' | 'requeue' | 'rulings' | 'wait-input';
+  /** PS-2 panel round: reviewers (brain/family) and the lead's bucket counts. */
+  panel?: {
+    reviewers: Array<{ taskId: string; brain: string; family: string; verdict?: string }>;
+    leadTaskId?: string;
+    leadParsed?: boolean;
+    buckets?: { actOn: number; consider: number; noted: number; dismissed: number };
+    findings?: Array<{ bucket: string; finding: string; families: string[]; rationale?: string; blocker?: boolean }>;
+  };
+  rulings?: string[];
+  blockerFindings?: string[];
+  at: string;
+}
+
+export interface WorkflowGateRecord {
+  stepKey: string;
+  taskId: string;
+  reviewer: string;
+  maxRounds: number;
+  escalateBrainAt: number;
+  currentRound: number;
+  status: 'pending' | 'reviewing' | 'fixing' | 'approved' | 'ruled' | 'wait-input';
+  verdict?: import('./core/result-verifier.js').SpecVerdictStatus;
+  escalated?: boolean;
+  escalatedAtRound?: number;
+  escalatedBrain?: string;
+  activeReviewTaskId?: string;
+  rounds: WorkflowGateRoundRecord[];
+  rulings?: string[];
+  blockerFindings?: string[];
+}
+
+/** Record of an arena execution on a workflow step (PS-3). */
+export interface WorkflowArenaRecord {
+  stepKey: string;
+  status: 'pending' | 'running' | 'judging' | 'synthesizing' | 'completed' | 'diverged' | 'wait-input';
+  runners: string[];
+  candidateTaskIds: string[];
+  judgeTaskId: string;
+  synthesisTaskId: string;
+  baseCandidate?: string;
+  divergenceSummary?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 /**
@@ -745,18 +971,24 @@ export interface WorkflowDecision {
 }
 
 /**
- * Persistent state for an ORCHESTRATED run. DAG runs need no record (they are
- * reconstructed from task context), but an adaptive run's goal and decision
- * history live nowhere else, so they are written to workflow-runs/<runId>.json.
+ * Persistent state for a workflow run in workflow-runs/<runId>.json.
+ * Written for orchestrated runs (goal + decision history) and for DAG runs that
+ * carry review→fix gates (P1-2: per-step gate rounds, verdicts, and rulings).
  */
 export interface WorkflowRunRecord {
   runId: string;
   workflowId: string;
-  mode: 'orchestrated';
+  mode: 'dag' | 'orchestrated';
   goal?: string;
   params: Record<string, string>;
-  status: 'running' | 'done' | 'failed';
+  status: 'running' | 'done' | 'failed' | 'wait-input';
   history: WorkflowDecision[];
+  /** Per-step review→fix gate state and round/verdict history (P1-2). */
+  gates?: Record<string, WorkflowGateRecord>;
+  /** Per-step arena state and tasks (PS-3). */
+  arenas?: Record<string, WorkflowArenaRecord>;
+  /** Residual non-blocker findings recorded as RULING lines when a gate hits maxRounds (P1-2). */
+  rulings?: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -767,11 +999,14 @@ export interface WorkflowRun {
   workflowId: string;
   createdAt: string;
   tasks: Task[];
-  status: 'running' | 'done' | 'failed';
+  status: 'running' | 'done' | 'failed' | 'wait-input';
   /** `orchestrated` runs carry their mode, goal, and decision log; DAG runs omit these. */
   mode?: 'dag' | 'orchestrated';
   goal?: string;
   history?: WorkflowDecision[];
+  gates?: Record<string, WorkflowGateRecord>;
+  arenas?: Record<string, WorkflowArenaRecord>;
+  rulings?: string[];
 }
 
 export type CoworkEventType = keyof CoworkEventPayloads;
@@ -856,6 +1091,13 @@ export interface GoalPhase {
   judgerTaskId?: string;
   /** Pointer into the Judger task's artifacts dir, "<taskId>/report-<key>.md". */
   reportArtifact?: string;
+  /** PS-7: the cross-family Attention review of this phase's decision trail. */
+  attentionTaskId?: string;
+  /** "<taskId>/attention-<key>.md" once the review finished. */
+  attentionArtifact?: string;
+  /** The review's "## Attention" section, kept so it can be merged into the
+   *  report whichever of Judger / Attention finishes last. */
+  attention?: string;
 }
 
 /** One row of a goal's audit trail — every autonomous move is recorded so the
