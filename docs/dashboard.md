@@ -13,6 +13,7 @@ Nav sections, page order, labels and the Overview's widgets come from **`layout.
 | [Overview](#overview) | Overview | `GET /api/status`, `GET /api/system`, `GET /api/system/details/:kind` |
 | [Portal](#portal) | Portal | `GET /api/portal` (portal.json) + `GET /api/services` |
 | [Inbox](#inbox) | Task Inbox | `GET/POST /api/inbox`, `PATCH /api/inbox/:id` |
+| [Recipes](#recipes) | Recipes | `GET/POST/PUT/DELETE /api/recipes*`, `POST /api/recipes/:id/run`, `POST /api/inbox/:id/rating` |
 | [Calendar](#calendar) | Calendar | `GET /api/calendar`, `POST /api/inbox/:id/edit`, `POST /api/inbox/:id/run-now` |
 | [Workflows](#workflows) | Workflows | `GET /api/workflows*`, `POST /api/workflows/:id/run`, `GET /api/workflow-runs*` |
 | [Agents](#agents) | Agents | `GET/PUT /api/agents-config`, `/api/chains*` |
@@ -202,6 +203,37 @@ What you can do here:
 
 Tasks created by a workflow run carry `context.workflowId` / `workflowRunId` /
 `stepKey`, which is how the Workflows tab groups them (see below).
+
+---
+
+## Recipes
+
+Reusable tasks. A task that came back with a good result can be saved as a **recipe**
+and run again with one click. Running a recipe creates an ordinary task, so the
+dispatcher, verifier and handover treat it like any other task.
+
+- **Capture:** a finished, non-failed task card has **★ Save as recipe**. The editor
+  shows the brief: select a phrase and press *Make field* to turn every occurrence into
+  a `{{key}}` fill-in. The agent, brain (*suggested*, or *always* when locked), tier,
+  acceptance criteria, timebox, tags and input files carry over. Input files are copied
+  into the recipe.
+- **Library:** cards show the score ("9/10 good"), the last 10 runs as dots, run
+  count, median duration and last run. You can search, sort by most used, best rated
+  or newest, and favourite a recipe.
+- **Run sheet:** only the recipe's fields, prefilled with the values you used last.
+  Brain is *Auto* unless the recipe is locked. *More options* has extra instructions
+  for this run, a start time and the recurrence editor, so a recipe can become a
+  recurring task.
+- **Feedback:** tasks made from a recipe get a "from recipe" chip and 👍/👎. A 👎
+  note is added to later runs as a *Known pitfall* (the 5 newest). With no vote, a
+  failed run counts as bad and a `STATUS: DONE` run counts as good.
+- **Versions:** editing the brief, fields or carry-over bumps the version and keeps
+  the old one under *History*. Each version has its own score.
+
+Recipes live in `recipes/<id>.json` next to `goals/`. The folder is gitignored because
+briefs hold private context. The score is never stored: it's worked out from the tasks
+that carry `context.recipe.id`. Code: `server/src/core/recipes.ts`,
+`server/src/api/recipes.ts`, `server/public/js/recipes.js`.
 
 ---
 

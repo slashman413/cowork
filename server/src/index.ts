@@ -15,6 +15,8 @@ import { createMcpServer } from './mcp/server.js';
 import { createApiRouter } from './api/router.js';
 import { createWorkflowRouter } from './api/workflows.js';
 import { createGoalRouter } from './api/goals.js';
+import { createRecipeRouter } from './api/recipes.js';
+import { Recipes } from './core/recipes.js';
 import { createSSEHandler } from './api/sse.js';
 import { Workflows } from './core/workflows.js';
 import { Goals } from './core/goals.js';
@@ -189,6 +191,11 @@ async function main() {
   }
   const goals = new Goals(config, store);
   app.use('/api', createGoalRouter(goals));
+
+  // Recipes: reusable tasks saved from good runs (core/recipes.ts). State lives in
+  // recipes/ next to goals/; a run creates an ordinary task.
+  const recipes = new Recipes(path.join(path.dirname(path.resolve(config.paths.goals)), 'recipes'), config.paths.inputs);
+  app.use('/api', createRecipeRouter(recipes, store));
   eventBus.on('taskCompleted', (evt: any) => {
     try { goals.onTaskCompleted(evt.payload.task); }
     catch (e) { console.error('Goals: taskCompleted handler failed:', e); }

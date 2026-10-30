@@ -50,3 +50,7 @@ server/*.py
 .env.*
 !.env.example
 decisions/rulings.tsv
+
+# Recipes (recipes/<id>.json, reusable tasks) — per-server runtime state carrying
+# private briefs, same class as goals/. Never commit them.
+recipes/

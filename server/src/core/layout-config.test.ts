@@ -20,7 +20,7 @@ test('repo default layout.json is valid and reproduces the built-in nav', () => 
   assert.equal(v.defaultPage, 'overview');
   assert.deepEqual(v.sections.map((s) => s.label), ['Operations', 'AI Fleet', 'System']);
   assert.deepEqual(v.sections.flatMap((s) => s.pages),
-    ['overview', 'portal', 'tasks', 'calendar', 'workflows', 'goals', 'routing', 'brains', 'personas', 'workers', 'config']);
+    ['overview', 'portal', 'tasks', 'recipes', 'calendar', 'workflows', 'goals', 'routing', 'brains', 'personas', 'workers', 'config']);
   assert.equal(v.pages.overview.type, 'dashboard');
   assert.deepEqual(v.pages.overview.rows!.map((r) => r.widgets.map((w) => w.type)),
     [['sysbar'], ['stats'], ['quality'], ['rulings'], ['dispatcher', 'activity'], ['platforms']]);

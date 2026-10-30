@@ -752,7 +752,7 @@ class App {
     } catch (e) {
       // Mirrors the repo layout.json, so an older server without /api/layout
       // (or a failed fetch) still gets the familiar nav.
-      const app = { tasks: ['Tasks', 'inbox'], calendar: ['Calendar', 'calendar-days'], workflows: ['Workflows', 'workflow'],
+      const app = { tasks: ['Tasks', 'inbox'], recipes: ['Recipes', 'chef-hat'], calendar: ['Calendar', 'calendar-days'], workflows: ['Workflows', 'workflow'],
         goals: ['Goals', 'target'], routing: ['Routing', 'bot'], brains: ['Brains', 'cpu'], personas: ['Personas', 'users-round'],
         workers: ['Workers', 'plug'], config: ['Configuration', 'settings'] };
       const pages = {
@@ -763,7 +763,7 @@ class App {
       };
       for (const [id, [label, icon]] of Object.entries(app)) pages[id] = { id, type: id, label, icon };
       this.layout = { brand: { title: 'Cowork', icon: 'zap', footer: 'Cowork Server' }, defaultPage: 'overview', pages,
-        sections: [{ label: 'Operations', pages: ['overview', 'portal', 'tasks', 'calendar', 'workflows', 'goals'] },
+        sections: [{ label: 'Operations', pages: ['overview', 'portal', 'tasks', 'recipes', 'calendar', 'workflows', 'goals'] },
                    { label: 'AI Fleet', pages: ['routing', 'brains', 'personas'] },
                    { label: 'System', pages: ['workers', 'config'] }],
         errors: [], fallback: e.message };
@@ -1606,6 +1606,7 @@ class App {
         case 'portal': await this.renderPortal(this.currentPage); break;
         case 'workers': await this.renderConnections(); break;
         case 'tasks': await this.renderInbox(); break;
+        case 'recipes': await this.renderRecipes(); break;
         case 'calendar': await this.renderCalendar(); break;
         case 'workflows': await this.renderWorkflows(); break;
         case 'goals': await this.renderGoals(); break;
@@ -2476,6 +2477,7 @@ class App {
             style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#EF4444;border-color:#EF444466">🗑 Discard</button>` : ''}
           ${isTaskEditable(t) ? `<button class="btn" data-edit-task="${esc(t.id)}" title="Edit this task — change its title, brief, agent/brain, schedule and loop interval, then save"
             style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#0EA5E9;border-color:#0EA5E966">✎ Edit</button>` : ''}</div>
+        ${this.recipeTaskCardHTML ? this.recipeTaskCardHTML(t, failed) : ''}
         ${parentLink ? `<div style="padding:4px 0 2px; font-size:0.72rem">${parentLink}</div>` : ''}
         ${(() => {
           // RESULT / OUTPUTS / ARTIFACTS / INPUTS live in one collapsible block, HIDDEN by
@@ -2692,6 +2694,9 @@ class App {
         e.stopPropagation();
         this.editTaskModal(b.dataset.editTask);
       }));
+
+    // Recipes: "★ Save as recipe" + 👍/👎 on recipe-made tasks (public/js/recipes.js).
+    this.bindRecipeTaskCards?.(this.contentEl);
 
     // Continue a done task — pick which brain claims the follow-up.
     this.contentEl.querySelectorAll('[data-continue-task]').forEach(b =>
