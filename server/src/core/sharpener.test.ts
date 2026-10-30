@@ -11,6 +11,7 @@ import {
   isGateOrReviewOrVerifierOrEvalTask,
   selectSharpenerBrain,
   sharpenTask,
+  sharpenInBackground,
 } from './sharpener.js';
 import type { Config, Task } from '../types.js';
 
@@ -273,4 +274,40 @@ test('sharpenTask: fail-open on brain execution error, logs sharpen-failed to le
   const entry = JSON.parse(raw.trim());
   assert.equal(entry.kind, 'sharpen-failed');
   assert.equal(entry.task, 'task-runner-err');
+});
+
+test('sharpenInBackground: never overwrites a claim made while the brain runs (double-dispatch regression)', async () => {
+  const cfg = mkConfig();
+  const disk = new Map<string, Task>([['t1', mkTask({ id: 't1' })]]);
+  const store = {
+    getTask: (id: string) => (disk.has(id) ? structuredClone(disk.get(id)!) : null),
+    saveTask: (t: Task) => { disk.set(t.id, structuredClone(t)); },
+  };
+  let release!: () => void;
+  const gate = new Promise<void>(r => { release = r; });
+  const runner = async () => {
+    await gate;
+    return { ok: true, text: JSON.stringify({ acceptance: ['a ok', 'b ok'], verify: ['true'], outsideCheck: 'curl -s x' }) };
+  };
+  const done = sharpenInBackground(store, 't1', { config: cfg, runner });
+
+  // Stamped synchronously, so the dispatcher skips its own pass.
+  assert.ok(disk.get('t1')!.context?.sharpenStartedAt);
+  assert.equal(shouldSharpenTask(disk.get('t1')!, cfg), false);
+
+  // The dispatcher claims the task while the sharpener is still running.
+  const claimed = store.getTask('t1')!;
+  claimed.status = 'in-progress';
+  claimed.claimedBy = 'dispatcher';
+  claimed.context = { ...claimed.context, dispatched: true };
+  store.saveTask(claimed);
+
+  release();
+  await done;
+  const after = disk.get('t1')!;
+  assert.equal(after.status, 'in-progress');
+  assert.equal(after.claimedBy, 'dispatcher');
+  assert.equal(after.context?.dispatched, true);
+  assert.equal(after.context?.acceptanceSource, 'sharpened');
+  assert.deepEqual(after.context?.acceptance, ['a ok', 'b ok']);
 });

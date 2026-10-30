@@ -16,7 +16,7 @@ import { buildPanelReviewerPrompt, buildLeadJudgmentPrompt, parseLeadJudgment } 
 import { describeAutoAnswer, logAutoAnswer } from './rulings.js';
 import { BRIEF_KEYS, parseBrief, renderBriefSections } from './brief.js';
 import { renderMethodPrompt } from './methods.js';
-import { shouldSharpenTask, sharpenTask } from './sharpener.js';
+import { shouldSharpenTask, sharpenTask, mergeSharpenedContext } from './sharpener.js';
 import { taskTier, mergeTierChain, reviewChain, brainFamily, type TierName } from './tiers.js';
 import { canonicalBrainId } from '../config.js';
 import { STREAMING_EXECS, streamArgs, createStreamRenderer } from './progress-stream.js';
@@ -2548,13 +2548,6 @@ export class Dispatcher {
     claimed.context = { ...(claimed.context || {}), dispatched: true };
     this.store.saveTask(claimed);
 
-    // Intake brief sharpener (PS-1): pre-pass on cheap brain if acceptance criteria missing
-    if (shouldSharpenTask(task, this.config)) {
-      await sharpenTask(task, { config: this.config, decisionsDir: this.config.paths?.decisions });
-      claimed.context = { ...(claimed.context || {}), ...(task.context || {}) };
-      this.store.saveTask(claimed);
-    }
-
     // Surface the worker as its own active agent so the dashboard shows WHO
     // is working (e.g. hermes/engineer · local-cc-opus-5-5), not just the coordinator.
     const worker = this.store.registerAgent({
@@ -2568,6 +2561,21 @@ export class Dispatcher {
 
     this.running.set(task.id, { role: plan.label, startedAt: Date.now(), workerAgentId: worker.id, brainId: plan.brainId });
     console.log(`Dispatcher: [${plan.label}/${plan.exec}:${plan.model || 'default'}${plan.effort ? '@' + plan.effort : ''}] running task ${task.id} — ${task.title}`);
+
+    // Brief sharpener (PS-1) for tasks that skipped intake: cheap-brain pre-pass if
+    // acceptance criteria are missing. Runs AFTER `running` is set so the task holds
+    // its brain slot meanwhile, and merges only the sharpened fields into a fresh
+    // read — never a stale snapshot over the claim.
+    if (shouldSharpenTask(task, this.config)) {
+      const work = structuredClone(task);
+      await sharpenTask(work, { config: this.config, decisionsDir: this.config.paths?.decisions });
+      const fresh = this.store.getTask(task.id);
+      if (fresh) {
+        mergeSharpenedContext(fresh, work);
+        this.store.saveTask(fresh);
+        task.context = fresh.context;
+      }
+    }
 
     // Persistent per-task artifacts dir (agents save files here → downloadable).
     const artDir = this.artifactsDir(task.id);

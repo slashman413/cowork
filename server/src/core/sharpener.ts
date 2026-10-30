@@ -13,7 +13,9 @@
  *   - orchestration.sharpener.enabled === false
  *
  * Timing:
- *   - synchronous at creation or just before first dispatch
+ *   - in the BACKGROUND at creation (sharpenInBackground — the create call must
+ *     not wait up to 60 s on the cheap brain), or just before first dispatch for
+ *     tasks that skipped intake; never both (context.sharpenStartedAt)
  *   - 60 s cap
  *   - on failure or bad JSON: dispatch unsharpened (fail-open) and log
  *     `kind: "sharpen-failed"` to decisions/lessons.jsonl
@@ -80,6 +82,8 @@ export function shouldSharpenTask(task: Task, cfg?: Config): boolean {
   if (cfg?.orchestration?.sharpener?.enabled === false) return false;
   if (task.context?.sharpen === false) return false;
   if (Array.isArray(task.context?.acceptance) && task.context.acceptance.length > 0) return false;
+  // Already sharpened (or being sharpened) at intake — don't spawn a second pass.
+  if (task.context?.sharpenStartedAt) return false;
   if (task.context?.tier === 'mechanical') return false;
   if (isGateOrReviewOrVerifierOrEvalTask(task)) return false;
   return true;
@@ -364,4 +368,44 @@ export async function sharpenTask(
   };
 
   return { sharpened: true, result: parsed };
+}
+
+/** Context keys a sharpen pass writes — the only ones a caller may merge back. */
+export const SHARPEN_CONTEXT_KEYS = ['acceptance', 'verify', 'outsideCheck', 'deliverable', 'playbook', 'openChoices', 'acceptanceSource'] as const;
+
+/** Copy the sharpened fields from `from` onto `into` (never status, claim, or other context). */
+export function mergeSharpenedContext(into: Task, from: Task): void {
+  const src = (from.context || {}) as Record<string, any>;
+  if (src.acceptanceSource !== 'sharpened') return;
+  const ctx: Record<string, any> = { ...(into.context || {}) };
+  // A brief the person (or another pass) already gave criteria to wins.
+  if (Array.isArray(ctx.acceptance) && ctx.acceptance.length > 0) return;
+  for (const k of SHARPEN_CONTEXT_KEYS) if (src[k] !== undefined) ctx[k] = src[k];
+  into.context = ctx;
+}
+
+/**
+ * Intake sharpening without blocking the caller (POST /inbox, MCP create_task).
+ * Stamps `context.sharpenStartedAt` so the dispatcher skips its own pass, then
+ * merges the result into a FRESH read of the task. The old synchronous version
+ * held the create response for up to 60 s and then saved its stale `pending`
+ * snapshot over the dispatcher's claim, so the task was claimed and run twice.
+ */
+export function sharpenInBackground(
+  store: { getTask(id: string): Task | null; saveTask(t: Task): void },
+  taskId: string,
+  opts: SharpenTaskOptions
+): Promise<void> {
+  const fresh = store.getTask(taskId);
+  if (!fresh || !shouldSharpenTask(fresh, opts.config)) return Promise.resolve();
+  fresh.context = { ...(fresh.context || {}), sharpenStartedAt: new Date().toISOString() };
+  store.saveTask(fresh);
+  const work = structuredClone(fresh);
+  return sharpenTask(work, opts).then(r => {
+    if (!r.sharpened) return;
+    const latest = store.getTask(taskId);
+    if (!latest) return;
+    mergeSharpenedContext(latest, work);
+    store.saveTask(latest);
+  }).catch(e => { console.error(`Sharpener: background pass for ${taskId} failed:`, e); });
 }
