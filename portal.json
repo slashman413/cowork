@@ -115,6 +115,18 @@
       "probe": "http://localhost:47989/serverinfo",
       "unit": "sunshine.service",
       "controllable": true
+    },
+    "deeptutor": {
+      "url": "http://localhost:3782",
+      "label": "DeepTutor",
+      "description": "AI tutoring platform — quizzes, RAG over uploaded docs, immersive reading, Audio Overview, layered memory. Needs an LLM provider configured in Settings.",
+      "icon": "graduation-cap",
+      "category": "Knowledge",
+      "enabled": true,
+      "probe": "http://localhost:3782/",
+      "unit": "deeptutor.service",
+      "controllable": true,
+      "order": 99
     }
   }
 }
