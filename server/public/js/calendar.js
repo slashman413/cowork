@@ -6,12 +6,16 @@
  *            dispatcher's own nextRunAt) + `run` entries for everything that ran
  *   series — one row per scheduled task: next fire, cadence, last run outcome
  *
- * Visual grammar (see docs/calendar-ux.md):
- *   dashed outline = projected (hasn't happened)   solid tint = a real run
+ * Visual grammar (see docs/calendar-ux.md — "calm by default, loud on exceptions"):
+ *   dashed outline = projected (hasn't happened)   dot + text = a finished run
+ *   tinted fill    = needs eyes (running / waiting / failed / overdue)
  *   colour = status (STATUS_COLORS in app.js + overdue / failed / skipped)
- *   🔁 = belongs to a recurring series             ⚠ = overdue (should have fired)
+ *   repeat icon (agenda / rail / sheet) = recurring series   ⚠ = overdue
+ *   The Show toggles double as the legend (their swatches draw the grammar).
  *
  * Views: month · week (time grid) · agenda (list; default on narrow screens).
+ * Phone (<720px): month shows status dots per day and a tap opens that day in
+ * agenda; week scrolls sideways with a sticky hour gutter.
  * Interactions: click an entry → detail sheet (run now / reschedule / edit /
  * open in Tasks); click an empty day/slot → New task pre-filled with that time;
  * drag a movable entry (a scheduled task's NEXT fire) to reschedule it.
@@ -21,7 +25,7 @@
  */
 (function () {
   const DAY = 86400000;
-  const HOUR_PX = 44;               // week grid: one hour row
+  const HOUR_PX = 48;               // week grid: one hour row (CSS reads it as --cal-hour)
   const DENSE_PER_DAY = 6;          // more fires of one series in a day → one summary chip
   const CAL_COLORS = {
     scheduled: '#6366F1', overdue: '#F59E0B', queued: '#EAB308', running: '#0EA5E9',
@@ -32,6 +36,10 @@
     'wait-input': 'waiting for input', done: 'done', failed: 'failed', skipped: 'closed without running', cancelled: 'cancelled',
   };
   const WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const NARROW = 720;               // px — phone layout breakpoint (matches calendar.css)
+  const isNarrow = () => window.innerWidth < NARROW;
+  // Statuses that deserve a filled chip; everything else past is a quiet dot row.
+  const LOUD = new Set(['overdue', 'running', 'wait-input', 'failed', 'queued']);
   const PREFS_KEY = 'cowork-calendar';
 
   const p2 = (n) => String(n).padStart(2, '0');
@@ -52,7 +60,7 @@
     let p = {};
     try { p = JSON.parse(localStorage.getItem(PREFS_KEY) || '{}'); } catch { /* defaults */ }
     return {
-      view: p.view || (window.innerWidth < 720 ? 'agenda' : 'week'),
+      view: p.view || (isNarrow() ? 'agenda' : 'week'),
       showPlanned: p.showPlanned !== false,
       showSeriesRuns: p.showSeriesRuns !== false,
       showAdhoc: !!p.showAdhoc,          // one-off ad-hoc tasks are noise on a schedule view: off by default
@@ -85,13 +93,16 @@
       return { from: anchor, to: addDays(anchor, 30) };   // agenda
     },
 
+    /** "October 2026" · "Oct 25 – 31, 2026" · "Oct 25 – Nov 1, 2026" · "Dec 28, 2026 – Jan 3, 2027". */
     _calTitle() {
       const { view, anchor } = this.cal;
       const { from, to } = this._calRange();
       if (view === 'month') return anchor.toLocaleDateString(undefined, { year: 'numeric', month: 'long' });
       const last = addDays(to, -1);
-      const fmt = (d, y) => d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', ...(y ? { year: 'numeric' } : {}) });
-      return `${fmt(from)} – ${fmt(last, true)}`;
+      const md = (d) => d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+      if (from.getFullYear() !== last.getFullYear()) return `${md(from)}, ${from.getFullYear()} – ${md(last)}, ${last.getFullYear()}`;
+      const tail = from.getMonth() === last.getMonth() ? last.getDate() : md(last);
+      return `${md(from)} – ${tail}, ${last.getFullYear()}`;
     },
 
     _calShift(dir) {
@@ -115,50 +126,79 @@
     async renderCalendar() {
       const c = this._calState();
       const { from, to } = this._calRange();
+      // Keep the old frame on screen while fetching; just signal it is stale.
+      this.contentEl.querySelector('.cal-main')?.classList.add('is-loading');
       const data = await this.api.get(`/calendar?from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`);
       c.data = data;
-      const prevScroll = this.contentEl.querySelector('.cal-week-body')?.scrollTop;
+      const prevScroll = this._calVScroller()?.scrollTop;
+      const prevScrollX = this.contentEl.querySelector('.cal-week')?.scrollLeft;
+      // Animate only when the period or view changed — not on the 60 s refresh.
+      const frameKey = `${c.view}|${dayKey(from)}`;
+      const enter = c.frameKey !== frameKey;
+      c.frameKey = frameKey;
 
       const overdue = data.series.filter((s) => s.overdue);
       const seg = ['month', 'week', 'agenda'].map((v) =>
-        `<button class="cal-seg-btn${c.view === v ? ' active' : ''}" data-view="${v}" aria-pressed="${c.view === v}">${v[0].toUpperCase() + v.slice(1)}</button>`).join('');
-      const toggle = (key, label, hint) =>
-        `<button class="btn pill cal-toggle${c[key] ? ' on' : ''}" data-toggle="${key}" aria-pressed="${!!c[key]}" title="${esc(hint)}">${esc(label)}</button>`;
+        `<button class="cal-seg-btn${c.view === v ? ' active' : ''}" data-view="${v}" aria-pressed="${c.view === v}" title="${v[0].toUpperCase() + v.slice(1)} (${v[0].toUpperCase()})">${v[0].toUpperCase() + v.slice(1)}</button>`).join('');
+      // Show toggles are also the legend: each swatch draws what it filters.
+      const toggle = (key, label, hint, swatch) =>
+        `<button class="cal-toggle${c[key] ? ' on' : ''}" data-toggle="${key}" aria-pressed="${!!c[key]}" title="${esc(hint)}">
+          <span class="cal-swatch ${swatch}" aria-hidden="true"></span>${esc(label)}</button>`;
       const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+      const visible = this._calVisible().length;
+      const title = this._calTitle();
+      const period = c.view === 'month' ? 'month' : c.view === 'week' ? 'week' : '30 days';
 
       this.contentEl.innerHTML = `
-        ${overdue.length ? `<div class="card cal-alert" role="alert"><i data-lucide="triangle-alert"></i>
+        ${overdue.length ? `<div class="cal-alert" role="alert"><i data-lucide="triangle-alert"></i>
           <div><strong>${overdue.length} scheduled task${overdue.length > 1 ? 's are' : ' is'} past ${overdue.length > 1 ? 'their' : 'its'} launch time.</strong>
-          The dispatcher releases due tasks every tick — if this persists, check that it is running.
-          ${overdue.map((s) => `<button class="cal-link" data-open="${esc(s.taskId)}">${esc(s.title)}</button>`).join(' · ')}</div></div>` : ''}
+          <span class="cal-alert-sub">The dispatcher releases due tasks every tick — if this persists, check that it is running.</span>
+          <span class="cal-alert-links">${overdue.map((s) => `<button class="cal-link" data-open="${esc(s.taskId)}">${esc(s.title)}</button>`).join('')}</span></div></div>` : ''}
         <div class="cal-toolbar">
           <div class="cal-nav">
-            <button class="icon-btn" data-nav="-1" aria-label="Previous"><i data-lucide="chevron-left"></i></button>
-            <button class="btn cal-today" data-nav="0">Today</button>
-            <button class="icon-btn" data-nav="1" aria-label="Next"><i data-lucide="chevron-right"></i></button>
-            <h3 class="cal-title">${esc(this._calTitle())}</h3>
+            <button class="btn cal-today" data-nav="0" title="Today (T)">Today</button>
+            <div class="cal-arrows">
+              <button class="icon-btn cal-arrow" data-nav="-1" aria-label="Previous ${period}" title="Previous (←)"><i data-lucide="chevron-left"></i></button>
+              <button class="icon-btn cal-arrow" data-nav="1" aria-label="Next ${period}" title="Next (→)"><i data-lucide="chevron-right"></i></button>
+            </div>
+            <h2 class="cal-title" aria-live="polite">${esc(title)}</h2>
           </div>
-          <div class="cal-seg" role="group" aria-label="Calendar view">${seg}</div>
+          <div class="cal-actions">
+            <div class="cal-seg" role="group" aria-label="Calendar view">${seg}</div>
+            <button class="btn btn-primary cal-new" data-new aria-label="Schedule task"><i data-lucide="plus"></i><span>Schedule task</span></button>
+          </div>
+        </div>
+        <div class="cal-subbar">
           <div class="cal-filters" role="group" aria-label="Show">
-            ${toggle('showPlanned', 'Upcoming', 'Projected fires of scheduled tasks (dashed)')}
-            ${toggle('showSeriesRuns', 'Scheduled runs', 'Past runs spawned by a schedule')}
-            ${toggle('showAdhoc', 'Ad-hoc tasks', 'One-off tasks with no schedule')}
+            ${toggle('showPlanned', 'Upcoming', 'Projected fires of scheduled tasks (dashed outline)', 'sw-planned')}
+            ${toggle('showSeriesRuns', 'Scheduled runs', 'Past runs spawned by a schedule (dot)', 'sw-runs')}
+            ${toggle('showAdhoc', 'Ad-hoc', 'Ad-hoc tasks: one-off tasks with no schedule', 'sw-adhoc')}
           </div>
-          <button class="btn btn-primary cal-new" data-new><i data-lucide="calendar-clock"></i> Schedule task</button>
+          <span class="cal-tz" title="All times are shown in this time zone"><i data-lucide="globe" class="cal-ico"></i>${esc(tz)}</span>
         </div>
         <div class="cal-layout">
-          <section class="card cal-main" aria-label="${esc(this._calTitle())}">${
-            c.view === 'month' ? this._calMonthHTML() : c.view === 'week' ? this._calWeekHTML() : this._calAgendaHTML()}</section>
+          <section class="card cal-main" aria-label="${esc(title)}">
+            ${!visible && c.view !== 'agenda' ? `<div class="cal-empty-note"><i data-lucide="calendar-check" class="cal-ico"></i>
+              Nothing to show this ${period}. ${c.showAdhoc ? '' : 'Ad-hoc tasks are hidden — '}click ${c.view === 'month' ? 'a day' : 'a slot'} to schedule a task.</div>` : ''}
+            <div class="cal-view${enter ? ' cal-enter' : ''}">${
+            c.view === 'month' ? this._calMonthHTML() : c.view === 'week' ? this._calWeekHTML() : this._calAgendaHTML()}</div>
+          </section>
           <aside class="card cal-rail" aria-label="Schedules">${this._calRailHTML()}</aside>
         </div>
-        <p class="cal-foot">Times in ${esc(tz)}. Dashed = upcoming, solid = ran. Drag an upcoming entry marked
-          <i data-lucide="move" class="cal-ico"></i> to reschedule · click an empty ${c.view === 'month' ? 'day' : 'slot'} to schedule a task · keys ← → T M W A.</p>`;
+        <p class="cal-foot">${isNarrow() ? 'Tap an entry for details and actions.' : `Drag the <b>next</b> upcoming run of a schedule to move it · click an empty ${c.view === 'month' ? 'day' : 'slot'} to schedule a task ·
+          <span class="cal-keys"><kbd>←</kbd><kbd>→</kbd> period <kbd>T</kbd> today <kbd>M</kbd><kbd>W</kbd><kbd>A</kbd> view</span>`}</p>`;
 
       this._calBind();
-      const body = this.contentEl.querySelector('.cal-week-body');
+      const body = this._calVScroller();
       if (body) {
         if (c.scrolled && prevScroll != null) body.scrollTop = prevScroll;
         else { body.scrollTop = Math.max(0, (new Date().getHours() - 2) * HOUR_PX); c.scrolled = true; }
+        const wk = this.contentEl.querySelector('.cal-week');
+        if (wk && !enter && prevScrollX != null) wk.scrollLeft = prevScrollX;
+        else if (wk && wk.scrollWidth > wk.clientWidth) {           // phone: bring today's column into view
+          const col = wk.querySelector('.cal-wk-col.today');
+          if (col) wk.scrollLeft = Math.max(0, col.offsetLeft - 44);
+        }
       }
       // Keep the now-line and relative times honest without waiting for SSE.
       this.addViewTimer(() => {
@@ -169,22 +209,35 @@
       }, 60000);
     },
 
+    /** The element that scrolls the week grid vertically: the body on desktop,
+     *  the whole .cal-week on a phone (it scrolls both ways so the hour gutter
+     *  and day header can both stay sticky). */
+    _calVScroller() {
+      const wk = this.contentEl.querySelector('.cal-week');
+      if (!wk) return null;
+      return getComputedStyle(wk).overflowY === 'auto' ? wk : wk.querySelector('.cal-week-body');
+    },
+
     // ── chips ──────────────────────────────────────────────────────────────
 
+    /** One entry. Quiet by default (finished runs = dot + text, projected = dashed
+     *  outline); LOUD statuses get a tinted fill so exceptions are what you see. */
     _calChip(e, opts = {}) {
       const color = CAL_COLORS[e.status] || '#94A3B8';
       const start = new Date(e.start);
       const movable = e.kind === 'planned' && e.head;
-      const recurring = !!e.cadence || (e.kind === 'run' && e.seriesId);
-      const label = `${hhmm(start)} ${e.title}${opts.count > 1 ? ` (${opts.count} runs)` : ''} — ${STATUS_LABEL[e.status] || e.status}${e.cadence ? `, ${e.cadence}` : ''}`;
-      return `<button class="cal-chip ${e.kind}${opts.block ? ' block' : ''}" style="--c:${color};${opts.style || ''}"
-          data-ev="${esc(e.id)}"${movable ? ` draggable="true" data-move="${esc(e.taskId)}"` : ''} title="${esc(label)}" aria-label="${esc(label)}">
-        ${e.status === 'overdue' ? '<span class="cal-mark" aria-hidden="true">⚠</span>' : ''}
-        <span class="cal-time">${hhmm(start)}</span>
-        <span class="cal-name">${esc(e.title)}</span>
-        ${opts.count > 1 ? `<span class="cal-count">×${opts.count}</span>` : ''}
-        ${recurring ? '<i data-lucide="repeat" class="cal-ico" aria-hidden="true"></i>' : ''}
-      </button>`;
+      const loud = LOUD.has(e.status);
+      const label = `${hhmm(start)} ${e.title}${opts.count > 1 ? ` (${opts.count} runs)` : ''} — ${STATUS_LABEL[e.status] || e.status}${e.cadence ? `, ${e.cadence}` : ''}${movable ? ' · drag to reschedule' : ''}`;
+      const cls = ['cal-chip', e.kind, loud ? 'loud' : 'quiet', movable ? 'head' : '',
+        opts.block ? 'block' : '', opts.short ? 'short' : '', opts.narrow ? 'narrow' : ''].filter(Boolean).join(' ');
+      const mark = e.status === 'overdue' ? '<span class="cal-mark" aria-hidden="true">⚠</span>' : '';
+      const dot = e.kind === 'run' && !loud && !opts.block ? '<span class="cal-dot" aria-hidden="true"></span>' : '';
+      const count = opts.count > 1 ? `<span class="cal-count">×${opts.count}</span>` : '';
+      const inner = opts.block && !opts.short
+        ? `<span class="cal-name">${mark}${esc(e.title)}</span><span class="cal-time">${hhmm(start)}${e.end && sameDay(start, new Date(e.end)) ? `–${hhmm(new Date(e.end))}` : ''}</span>${count}`
+        : `${dot}${mark}<span class="cal-time">${hhmm(start)}</span><span class="cal-name">${esc(e.title)}</span>${count}`;
+      return `<button class="${cls}" style="--c:${color};${opts.style || ''}"
+          data-ev="${esc(e.id)}"${movable ? ` draggable="true" data-move="${esc(e.taskId)}"` : ''} title="${esc(label)}" aria-label="${esc(label)}">${inner}</button>`;
     },
 
     /** Group one day's events: a series firing more than DENSE_PER_DAY times
@@ -218,22 +271,28 @@
       const month = this.cal.anchor.getMonth();
       const today = new Date();
       const byDay = this._calByDay();
-      const MAX = 4;
+      const MAX = 4, MAX_DOTS = 4;
       let cells = '';
       for (let i = 0; i < 42; i++) {
         const d = addDays(from, i);
         const items = this._calCollapse(byDay.get(dayKey(d)) || []);
         const shown = items.slice(0, MAX);
         const more = items.length - shown.length;
-        cells += `<div class="cal-day${d.getMonth() !== month ? ' out' : ''}${sameDay(d, today) ? ' today' : ''}${d < startOfDay(today) ? ' past' : ''}"
-            data-day="${dayKey(d)}" role="gridcell" aria-label="${esc(d.toDateString())}${items.length ? `, ${items.length} entries` : ''}">
-          <button class="cal-date" data-goday="${dayKey(d)}" aria-label="Open ${esc(d.toDateString())} in week view">${d.getDate()}</button>
+        const isToday = sameDay(d, today);
+        // Phone: one dot per entry (loud statuses first so failures are never hidden).
+        const dotItems = [...items].sort((a, b) => LOUD.has(b.e.status) - LOUD.has(a.e.status)).slice(0, MAX_DOTS);
+        const dots = items.length ? `<div class="cal-dots" aria-hidden="true">${dotItems.map((g) =>
+          `<span class="cal-dot${g.e.kind === 'planned' ? ' planned' : ''}" style="--c:${CAL_COLORS[g.e.status] || '#94A3B8'}"></span>`).join('')}${items.length > MAX_DOTS ? `<span class="cal-dots-more">+${items.length - MAX_DOTS}</span>` : ''}</div>` : '';
+        cells += `<div class="cal-day${d.getMonth() !== month ? ' out' : ''}${isToday ? ' today' : ''}${d < startOfDay(today) ? ' past' : ''}${d.getDay() % 6 === 0 ? ' weekend' : ''}"
+            data-day="${dayKey(d)}" role="gridcell" aria-label="${esc(d.toDateString())}${isToday ? ', today' : ''}${items.length ? `, ${items.length} entries` : ''}">
+          <button class="cal-date" data-goday="${dayKey(d)}" aria-label="Open ${esc(d.toDateString())}"${isToday ? ' aria-current="date"' : ''}>${d.getDate() === 1 ? `<span class="cal-date-mon">${esc(d.toLocaleDateString(undefined, { month: 'short' }))}</span>` : ''}${d.getDate()}</button>
           <div class="cal-chips">${shown.map((g) => this._calChip(g.e, { count: g.count })).join('')}
-          ${more > 0 ? `<button class="cal-more" data-goday="${dayKey(d)}">+${more} more</button>` : ''}</div>
+          ${more > 0 ? `<button class="cal-more" data-goday="${dayKey(d)}">${more} more</button>` : ''}</div>
+          ${dots}
         </div>`;
       }
       return `<div class="cal-month" role="grid">
-        <div class="cal-dow" role="row">${WD.map((w) => `<div role="columnheader">${w}</div>`).join('')}</div>
+        <div class="cal-dow" role="row">${WD.map((w, i) => `<div role="columnheader"${i % 6 === 0 ? ' class="weekend"' : ''}>${w}</div>`).join('')}</div>
         <div class="cal-grid">${cells}</div></div>`;
     },
 
@@ -244,26 +303,29 @@
       const now = new Date();
       const byDay = this._calByDay();
       const days = [...Array(7)].map((_, i) => addDays(from, i));
-      let head = '', allDay = '', cols = '';
+      const nowTop = (now.getHours() + now.getMinutes() / 60) * HOUR_PX;
+      let head = '', allDay = '', cols = '', weekHasToday = false;
       for (const d of days) {
         const isToday = sameDay(d, now);
-        head += `<div class="cal-wk-head${isToday ? ' today' : ''}"><span>${WD[d.getDay()]}</span><b>${d.getDate()}</b></div>`;
+        weekHasToday ||= isToday;
+        head += `<div class="cal-wk-head${isToday ? ' today' : ''}${d < startOfDay(now) ? ' past' : ''}"><span>${WD[d.getDay()]}</span><b${isToday ? ' aria-current="date"' : ''}>${d.getDate()}</b></div>`;
         const groups = this._calCollapse(byDay.get(dayKey(d)) || []);
         const dense = groups.filter((g) => g.count > 1);
         const timed = groups.filter((g) => g.count === 1).map((g) => g.e);
-        allDay += `<div class="cal-wk-allday">${dense.map((g) => this._calChip(g.e, { count: g.count })).join('')}</div>`;
-        cols += `<div class="cal-wk-col${isToday ? ' today' : ''}" data-day="${dayKey(d)}">
+        allDay += `<div class="cal-wk-allday${isToday ? ' today' : ''}">${dense.map((g) => this._calChip(g.e, { count: g.count })).join('')}</div>`;
+        cols += `<div class="cal-wk-col${isToday ? ' today' : ''}${d < startOfDay(now) ? ' past' : ''}" data-day="${dayKey(d)}">
           ${this._calLaneLayout(timed, d)}
-          ${isToday ? `<div class="cal-now" style="top:${(now.getHours() + now.getMinutes() / 60) * HOUR_PX}px" aria-hidden="true"></div>` : ''}
+          ${isToday ? `<div class="cal-now" style="top:${nowTop}px" aria-hidden="true"></div>` : ''}
         </div>`;
       }
-      const hours = [...Array(24)].map((_, h) => `<div class="cal-hour" style="height:${HOUR_PX}px"><span>${p2(h)}:00</span></div>`).join('');
+      const nearHour = Math.abs(nowTop - Math.round(nowTop / HOUR_PX) * HOUR_PX) < 12 ? Math.round(nowTop / HOUR_PX) : -1;
+      const hours = [...Array(24)].map((_, h) => `<div class="cal-hour" style="height:${HOUR_PX}px"><span${weekHasToday && h === nearHour ? ' class="under-now"' : ''}>${p2(h)}:00</span></div>`).join('');
       const hasDense = allDay.includes('cal-chip');
-      return `<div class="cal-week">
+      return `<div class="cal-week" style="--cal-hour:${HOUR_PX}px">
         <div class="cal-wk-row cal-wk-heads"><div class="cal-gutter"></div>${head}</div>
-        ${hasDense ? `<div class="cal-wk-row"><div class="cal-gutter cal-gutter-label">dense</div>${allDay}</div>` : ''}
+        ${hasDense ? `<div class="cal-wk-row cal-wk-dense"><div class="cal-gutter cal-gutter-label" title="Schedules firing more than ${DENSE_PER_DAY}× that day, collapsed to one chip">Frequent</div>${allDay}</div>` : ''}
         <div class="cal-week-body"><div class="cal-wk-row" style="height:${24 * HOUR_PX}px">
-          <div class="cal-gutter">${hours}</div>${cols}</div></div>
+          <div class="cal-gutter">${hours}${weekHasToday ? `<span class="cal-now-pill" style="top:${nowTop}px">${hhmm(now)}</span>` : ''}</div>${cols}</div></div>
       </div>`;
     },
 
@@ -288,10 +350,11 @@
         }
         const n = lanes.length;
         for (const it of cluster) {
-          const top = ((it.s - dayStart) / 3600000) * HOUR_PX;
-          const height = Math.max(20, ((it.end - it.s) / 3600000) * HOUR_PX - 2);
-          html += this._calChip(it.e, { block: true,
-            style: `top:${top}px;height:${height}px;left:calc(${(it.lane / n) * 100}% + 2px);width:calc(${100 / n}% - 4px)` });
+          const height = Math.max(22, ((it.end - it.s) / 3600000) * HOUR_PX - 2);
+          const top = Math.min(((it.s - dayStart) / 3600000) * HOUR_PX, 24 * HOUR_PX - height - 1);   // keep 23:45 inside the day
+          // short = one line (time + title); narrow = 3+ lanes, title only, never wraps per character.
+          html += this._calChip(it.e, { block: true, short: height < 40, narrow: n >= 3,
+            style: `top:${top}px;height:${height}px;left:calc(${(it.lane / n) * 100}% + 1px);width:calc(${100 / n}% - 3px)` });
         }
         cluster = []; clusterEnd = -1;
       };
@@ -309,24 +372,36 @@
       const byDay = this._calByDay();
       const keys = [...byDay.keys()].sort();
       if (!keys.length) {
-        return `<div class="empty-state"><div class="empty-state-icon"><i data-lucide="calendar-days"></i></div>
-          <h3>Nothing in the next 30 days</h3><p>Turn on more filters above, or schedule a task.</p></div>`;
+        const c = this.cal;
+        return `<div class="empty-state cal-empty"><div class="empty-state-icon"><i data-lucide="calendar-check"></i></div>
+          <h3>A clear 30 days</h3>
+          <p>${!c.showPlanned || !c.showAdhoc ? 'Some entry types are hidden by the Show filters above. ' : ''}Schedule a task to see it here.</p>
+          <button class="btn btn-primary" data-new><i data-lucide="plus"></i> Schedule task</button></div>`;
       }
       const today = dayKey(new Date());
       return `<div class="cal-agenda">${keys.map((k) => {
         const d = new Date(`${k}T00:00:00`);
         const rows = this._calCollapse(byDay.get(k)).map((g) => {
           const e = g.e, color = CAL_COLORS[e.status] || '#94A3B8';
-          return `<button class="cal-agenda-row ${e.kind}" style="--c:${color}" data-ev="${esc(e.id)}">
+          const meta = [
+            `<span class="cal-agenda-status">${esc(STATUS_LABEL[e.status] || e.status)}</span>`,
+            e.cadence ? `<span><i data-lucide="repeat" class="cal-ico" aria-hidden="true"></i> ${esc(e.cadence)}</span>` : '',
+            e.end ? `<span>${Math.max(1, Math.round((Date.parse(e.end) - Date.parse(e.start)) / 60000))} min</span>` : '',
+          ].filter(Boolean).join('<span class="cal-sep" aria-hidden="true">·</span>');
+          return `<button class="cal-agenda-row ${e.kind}${LOUD.has(e.status) ? ' loud' : ''}${e.kind === 'planned' && e.head ? ' head' : ''}" style="--c:${color}" data-ev="${esc(e.id)}">
             <span class="cal-agenda-time">${hhmm(new Date(e.start))}</span>
-            <span class="cal-dot" aria-hidden="true"></span>
-            <span class="cal-agenda-title">${e.status === 'overdue' ? '⚠ ' : ''}${esc(e.title)}${g.count > 1 ? ` <span class="cal-count">×${g.count}</span>` : ''}</span>
-            <span class="cal-agenda-meta">${e.cadence ? `<i data-lucide="repeat" class="cal-ico"></i> ${esc(e.cadence)}` : ''}</span>
-            <span class="cal-agenda-status">${esc(STATUS_LABEL[e.status] || e.status)}</span>
+            <span class="cal-agenda-bar" aria-hidden="true"></span>
+            <span class="cal-agenda-body">
+              <span class="cal-agenda-title">${e.status === 'overdue' ? '<span class="cal-mark" aria-hidden="true">⚠</span> ' : ''}${esc(e.title)}${g.count > 1 ? ` <span class="cal-count">×${g.count}</span>` : ''}</span>
+              <span class="cal-agenda-meta">${meta}</span>
+            </span>
           </button>`;
         }).join('');
-        return `<div class="cal-agenda-day${k === today ? ' today' : ''}">
-          <h4>${k === today ? 'Today · ' : ''}${esc(d.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' }))}</h4>${rows}</div>`;
+        const isToday = k === today;
+        return `<section class="cal-agenda-day${isToday ? ' today' : ''}" aria-label="${esc(d.toDateString())}">
+          <h4 class="cal-agenda-date"${isToday ? ' aria-current="date"' : ''}><span class="cal-agenda-wd">${esc(WD[d.getDay()])}</span><span class="cal-agenda-num">${d.getDate()}</span>
+            <span class="cal-agenda-mon">${isToday ? 'Today' : esc(d.toLocaleDateString(undefined, { month: 'short' }))}</span></h4>
+          <div class="cal-agenda-rows">${rows}</div></section>`;
       }).join('')}</div>`;
     },
 
@@ -334,21 +409,26 @@
 
     _calRailHTML() {
       const series = this.cal.data?.series || [];
-      if (!series.length) return `<h4 class="cal-rail-title">Schedules</h4><p class="cal-muted">No scheduled tasks. Use <b>Schedule task</b> to add one.</p>`;
-      return `<h4 class="cal-rail-title">Schedules <span class="cal-muted">${series.length}</span></h4>
+      if (!series.length) {
+        return `<h3 class="cal-rail-title">Schedules</h3>
+          <div class="cal-rail-empty"><i data-lucide="calendar-clock"></i><p>No scheduled tasks yet.</p>
+          <button class="btn" data-new><i data-lucide="plus"></i> Schedule task</button></div>`;
+      }
+      const overdueN = series.filter((s) => s.overdue).length;
+      return `<h3 class="cal-rail-title">Schedules <span class="cal-rail-count">${series.length}</span>${overdueN ? `<span class="cal-rail-warn">${overdueN} overdue</span>` : ''}</h3>
         <ul class="cal-series">${series.map((s) => {
           const next = s.next ? new Date(s.next) : null;
           const last = s.lastRun;
+          const nextTxt = next ? `${next.toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false })}` : '—';
           return `<li class="cal-series-item${s.overdue ? ' overdue' : ''}">
-            <button class="cal-series-main" data-open="${esc(s.taskId)}">
-              <span class="cal-series-title">${s.recurring ? '<i data-lucide="repeat" class="cal-ico"></i> ' : ''}${esc(s.title)}</span>
-              <span class="cal-series-meta">${esc(s.cadence)}${s.brain ? ` · ${esc(s.brain)}` : ''}</span>
-              <span class="cal-series-next">${s.overdue ? '⚠ overdue · ' : 'next '}${next ? `${esc(next.toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }))} · ${relTime(next.getTime())}` : '—'}</span>
-              ${last ? `<span class="cal-series-last" style="--c:${CAL_COLORS[last.status]}"><span class="cal-dot"></span>last run ${esc(STATUS_LABEL[last.status])} · ${relTime(Date.parse(last.at))}</span>` : ''}
+            <button class="cal-series-main" data-open="${esc(s.taskId)}" title="${esc(`${s.title}${s.brain ? ` — ${s.brain}` : ''}`)}">
+              <span class="cal-series-when${s.overdue ? ' warn' : ''}">${s.overdue ? '⚠ overdue' : next ? esc(relTime(next.getTime())) : '—'}<span class="cal-series-abs">${esc(nextTxt)}</span></span>
+              <span class="cal-series-title">${esc(s.title)}</span>
+              <span class="cal-series-meta">${s.recurring ? '<i data-lucide="repeat" class="cal-ico" aria-hidden="true"></i>' : ''}${esc(s.cadence)}${last ? `<span class="cal-sep" aria-hidden="true">·</span><span class="cal-series-last" style="--c:${CAL_COLORS[last.status] || '#94A3B8'}" title="Last run ${esc(STATUS_LABEL[last.status] || last.status)}"><span class="cal-dot"></span>${esc(relTime(Date.parse(last.at)))}</span>` : ''}</span>
             </button>
             <div class="cal-series-actions">
-              <button class="btn-svc" data-runnow="${esc(s.taskId)}" title="Release this fire now">▶ Run now</button>
-              <button class="btn-svc" data-edit="${esc(s.taskId)}" title="Edit title, brief, time and cadence">✎ Edit</button>
+              <button class="cal-icon-btn" data-runnow="${esc(s.taskId)}" title="Run now — release this fire" aria-label="Run ${esc(s.title)} now"><i data-lucide="play"></i></button>
+              <button class="cal-icon-btn" data-edit="${esc(s.taskId)}" title="Edit title, brief, time and cadence" aria-label="Edit ${esc(s.title)}"><i data-lucide="pencil"></i></button>
             </div>
           </li>`;
         }).join('')}</ul>`;
@@ -373,8 +453,9 @@
           <span class="cal-muted">${esc(STATUS_LABEL[x.status])}${x.end ? ` · ${Math.max(1, Math.round((Date.parse(x.end) - Date.parse(x.start)) / 60000))} min` : ''}</span></li>`;
 
       content.innerHTML = `
-        <div class="cal-detail">
-          <div class="cal-detail-head">
+        <div class="cal-detail" style="--c:${color}">
+          <button class="cal-icon-btn cal-detail-x" id="cal-close-x" aria-label="Close"><i data-lucide="x"></i></button>
+          <div class="cal-detail-head" style="--c:${color}">
             ${badge(STATUS_LABEL[e.status] || e.status, color)}
             ${e.kind === 'planned' && !e.head ? badge('projected', '#94A3B8') : ''}
             ${e.priority && e.priority !== 'normal' ? badge(e.priority, e.priority === 'urgent' ? '#EF4444' : '#F59E0B') : ''}
@@ -390,7 +471,7 @@
           ${isHead ? `<div class="cal-resched">
               <label for="cal-when">Move ${e.cadence ? 'the next run' : 'to'}</label>
               <input id="cal-when" type="datetime-local" value="${esc(isoToLocalInput(e.start))}">
-              <button class="btn" id="cal-resched-ok">Reschedule</button>
+              <button class="btn" id="cal-resched-ok"><i data-lucide="calendar-clock"></i> Reschedule</button>
             </div>${e.cadence ? `<p class="cal-note">Later runs keep the cadence's own phase — a fixed-time cadence (e.g. "every day at 08:00") snaps back after this run.</p>` : ''}` : ''}
           ${upcoming.length || history.length ? `<div class="cal-detail-lists">
             ${upcoming.length ? `<div><h5>Next runs</h5><ul>${upcoming.map(listRow).join('')}</ul></div>` : ''}
@@ -399,15 +480,14 @@
           <div class="cal-detail-actions">
             <a class="btn" href="#tasks/${encodeURIComponent(e.taskId)}"><i data-lucide="inbox"></i> Open in Tasks</a>
             ${e.seriesId && e.seriesId !== e.taskId ? `<a class="btn" href="#tasks/${encodeURIComponent(e.seriesId)}"><i data-lucide="repeat"></i> Open schedule</a>` : ''}
-            ${e.kind === 'planned' ? `<button class="btn" data-edit="${esc(e.taskId)}">✎ Edit schedule</button>
-              <button class="btn" data-runnow="${esc(e.taskId)}" style="color:#22C55E">▶ Run now</button>` : ''}
-            <button class="btn" id="cal-close">Close</button>
+            ${e.kind === 'planned' ? `<button class="btn" data-edit="${esc(e.taskId)}"><i data-lucide="pencil"></i> Edit schedule</button>
+              <button class="btn btn-primary" data-runnow="${esc(e.taskId)}"><i data-lucide="play"></i> Run now</button>` : `<button class="btn" id="cal-close">Close</button>`}
           </div>
         </div>`;
       container.classList.remove('hidden');
       createIcons();
       const close = () => container.classList.add('hidden');
-      content.querySelector('#cal-close').onclick = close;
+      content.querySelectorAll('#cal-close, #cal-close-x').forEach((b) => { b.onclick = close; });
       container.querySelector('.modal-backdrop').onclick = close;
       content.querySelectorAll('a.btn').forEach((a) => a.addEventListener('click', close));
       content.querySelectorAll('[data-ev]').forEach((b) => b.addEventListener('click', () => this._calOpenDetail(b.dataset.ev)));
@@ -450,6 +530,14 @@
 
     // ── wiring ─────────────────────────────────────────────────────────────
 
+    /** Open one day: week view on desktop, agenda from that day on a phone. */
+    _calGoDay(key) {
+      const c = this.cal;
+      c.anchor = new Date(`${key}T00:00:00`);
+      c.view = isNarrow() ? 'agenda' : 'week';
+      c.scrolled = false; this._calSavePrefs(); this.renderCalendar();
+    },
+
     _calBind() {
       const root = this.contentEl, c = this.cal;
       root.querySelectorAll('[data-nav]').forEach((b) => b.addEventListener('click', () => {
@@ -462,10 +550,10 @@
       root.querySelectorAll('[data-toggle]').forEach((b) => b.addEventListener('click', () => {
         c[b.dataset.toggle] = !c[b.dataset.toggle]; this._calSavePrefs(); this.renderCalendar();
       }));
-      root.querySelector('[data-new]')?.addEventListener('click', () => this.createTaskModal());
+      root.querySelectorAll('[data-new]').forEach((b) => b.addEventListener('click', () => this.createTaskModal()));
       root.querySelectorAll('[data-goday]').forEach((b) => b.addEventListener('click', (ev) => {
         ev.stopPropagation();
-        c.anchor = new Date(`${b.dataset.goday}T00:00:00`); c.view = 'week'; c.scrolled = false; this._calSavePrefs(); this.renderCalendar();
+        this._calGoDay(b.dataset.goday);
       }));
       root.querySelectorAll('[data-ev]').forEach((b) => b.addEventListener('click', (ev) => { ev.stopPropagation(); this._calOpenDetail(b.dataset.ev); }));
       root.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => {
@@ -478,6 +566,7 @@
       // Click empty space → New task pre-filled with that time.
       root.querySelectorAll('.cal-day').forEach((cell) => cell.addEventListener('click', (ev) => {
         if (ev.target.closest('.cal-chip, .cal-more, .cal-date')) return;
+        if (isNarrow()) { this._calGoDay(cell.dataset.day); return; }   // phone: chips are dots — tap opens the day
         const d = new Date(`${cell.dataset.day}T09:00:00`);
         if (d.getTime() <= Date.now()) d.setTime(Date.now() + 3600000 - (Date.now() % 900000));
         this.createTaskModal({ scheduledAt: d.toISOString() });

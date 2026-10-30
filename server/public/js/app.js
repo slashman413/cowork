@@ -27,35 +27,6 @@ function retryLabel(iso) {
   return `in ${Math.ceil(s / 86400)}d`;
 }
 
-// Extractive ~5-word summary of a chat's opening request, so the recent list reads
-// like "Fix login redirect bug" instead of just an agent/roster label. Purely local
-// (no LLM) — drops filler words, urls, markdown noise; falls back to a raw head slice.
-function summarizeRequest(text) {
-  if (!text) return '';
-  let t = String(text)
-    .replace(/📎[^\n]*/g, ' ')           // attachment note line
-    .replace(/https?:\/\/\S+/g, ' ')      // urls add no meaning to a title
-    .replace(/[`*_>#\[\]()]/g, ' ')       // markdown punctuation
-    .replace(/\s+/g, ' ').trim();
-  if (!t) return '';
-  // CJK-heavy text has no word spaces — take a short leading run of characters.
-  const cjk = (t.match(/[一-鿿]/g) || []).length;
-  if (cjk >= 4 && t.split(' ').length <= 3) return t.slice(0, 14);
-  const stop = new Set(('the a an to of for and or in on at with please can could would should '
-    + 'will i we you me my our your it this that be is are do does how what why when help need '
-    + 'want make create build fix add pls hey hi hello let us give show tell about so just').split(' '));
-  const kept = [];
-  for (const w of t.split(' ')) {
-    const lw = w.toLowerCase().replace(/[^a-z0-9]/g, '');
-    if (!lw || stop.has(lw)) continue;
-    kept.push(w);
-    if (kept.length >= 5) break;
-  }
-  const words = kept.length ? kept : t.split(' ').slice(0, 5);
-  const s = words.join(' ');
-  return s.charAt(0).toUpperCase() + s.slice(1);
-}
-
 // Countdown twin of timeAgo — "2h 10m", "3d 4h", "now" — for rate-limit resets.
 function timeUntil(iso) {
   if (!iso) return '';
@@ -649,17 +620,6 @@ class App {
     this.openTasks = new Set();  // retained (task cards no longer expand); harmless legacy state
     this.taskFilesOpen = new Set();  // inbox task ids whose RESULT / ARTIFACTS / INPUTS / INTERACTION block is expanded (collapsed by default)
     this.agents = new Map();   // agent UUID → { name, platform } for human-readable labels
-    this.chatMessages = [];    // Chat view conversation state (persists across nav within a session)
-    this.chatSel = { brain: '', division: '', agent: '' };
-    this.chatBusyBrains = new Set();  // brain keys ('' selection → 'auto') with a chat in flight — the composer locks per brain, not globally
-    this.chatAttachments = [];  // File[] staged in the composer, sent as task inputs
-    this.chatSessions = this.loadChatSessions();  // persisted recent chat sessions (ordered by creation time)
-    this.chatSessionId = null;                    // id of the session currently open in the composer
-    this.chatExpanded = new Set();                // ids of expanded nodes in the Recent tree view
-    // Recent-chats panel collapsed/expanded state, persisted across navigation and
-    // re-renders. Default COLLAPSED so the conversation opens with maximum height;
-    // the reclaimed space is absorbed by #chat-msgs' flex:1. (absent key → collapsed)
-    this.chatRecentOpen = (() => { try { return localStorage.getItem('cowork.chatRecentOpen') === '1'; } catch { return false; } })();
 
     this.contentEl = document.getElementById('content');
     this.viewTitleEl = document.getElementById('view-title');
@@ -733,24 +693,6 @@ class App {
       e.preventDefault();
       this.toggleTaskFiles(card.dataset.task);
     });
-    // Delegated open/delete for the Chat view's recent-sessions strip (the chips
-    // are re-rendered in place, so a document-level handler avoids stale listeners).
-    document.addEventListener('click', (e) => {
-      const del = e.target.closest('[data-chat-del]');
-      if (del) { e.preventDefault(); e.stopPropagation(); this.deleteChatSession(del.dataset.chatDel); return; }
-      const exp = e.target.closest('[data-chat-expand]');
-      if (exp) { e.preventDefault(); e.stopPropagation(); this.toggleChatExpand(exp.dataset.chatExpand); return; }
-      const open = e.target.closest('[data-chat-open]');
-      if (open) this.openChatSession(open.dataset.chatOpen);
-    });
-    // Persist the Recent-chats <details> collapse state whenever the user toggles it.
-    // `toggle` doesn't bubble, so we listen in the CAPTURE phase (which still reaches a
-    // document-level listener); this survives the in-place outerHTML refresh of the panel.
-    document.addEventListener('toggle', (e) => {
-      if (e.target?.id !== 'chat-recent') return;
-      this.chatRecentOpen = e.target.open;
-      try { localStorage.setItem('cowork.chatRecentOpen', e.target.open ? '1' : '0'); } catch { /* storage optional */ }
-    }, true);
   }
 
   initTheme() {
@@ -810,7 +752,7 @@ class App {
     } catch (e) {
       // Mirrors the repo layout.json, so an older server without /api/layout
       // (or a failed fetch) still gets the familiar nav.
-      const app = { chat: ['Chat', 'message-square'], tasks: ['Tasks', 'inbox'], calendar: ['Calendar', 'calendar-days'], workflows: ['Workflows', 'workflow'],
+      const app = { tasks: ['Tasks', 'inbox'], calendar: ['Calendar', 'calendar-days'], workflows: ['Workflows', 'workflow'],
         goals: ['Goals', 'target'], routing: ['Routing', 'bot'], brains: ['Brains', 'cpu'], personas: ['Personas', 'users-round'],
         workers: ['Workers', 'plug'], config: ['Configuration', 'settings'] };
       const pages = {
@@ -821,12 +763,16 @@ class App {
       };
       for (const [id, [label, icon]] of Object.entries(app)) pages[id] = { id, type: id, label, icon };
       this.layout = { brand: { title: 'Cowork', icon: 'zap', footer: 'Cowork Server' }, defaultPage: 'overview', pages,
-        sections: [{ label: 'Operations', pages: ['overview', 'portal', 'chat', 'tasks', 'calendar', 'workflows', 'goals'] },
+        sections: [{ label: 'Operations', pages: ['overview', 'portal', 'tasks', 'calendar', 'workflows', 'goals'] },
                    { label: 'AI Fleet', pages: ['routing', 'brains', 'personas'] },
                    { label: 'System', pages: ['workers', 'config'] }],
         errors: [], fallback: e.message };
       console.warn('layout.json unavailable, using built-in default:', e.message);
     }
+    // The Chat page was retired 2026-10-30; a server that predates that still lists it.
+    delete this.layout.pages?.chat;
+    for (const s of this.layout.sections || []) s.pages = (s.pages || []).filter(id => id !== 'chat');
+    this.layout.sections = (this.layout.sections || []).filter(s => s.pages.length);
     this.renderNav();
   }
 
@@ -889,16 +835,14 @@ class App {
         this.toast(data.type, this.describeEvent(data));
       }
       // A full re-render replaces the view's DOM, which would wipe whatever the
-      // user is mid-way through typing (chat message, search box) along with the
-      // caret. Never auto-re-render Chat — it drives its own updates via
-      // renderChatMessages, which only touches the transcript, not the composer.
+      // user is mid-way through typing (search box, form field) along with the caret.
       // Debounce so a burst of events causes one refresh, and re-check the
       // typing guard when the timer fires (not when the event arrived).
       clearTimeout(this._rerenderTimer);
       this._rerenderTimer = setTimeout(() => {
         const el = document.activeElement;
         const typing = !!el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || el.isContentEditable);
-        if (this.currentView !== 'chat' && !typing) this.renderCurrentView();
+        if (!typing) this.renderCurrentView();
       }, 800);
     }
   }
@@ -1660,7 +1604,6 @@ class App {
       switch (this.currentPage?.type) {
         case 'dashboard': await this.renderDashboard(this.currentPage); break;
         case 'portal': await this.renderPortal(this.currentPage); break;
-        case 'chat': await this.renderChat(); break;
         case 'workers': await this.renderConnections(); break;
         case 'tasks': await this.renderInbox(); break;
         case 'calendar': await this.renderCalendar(); break;
@@ -2252,326 +2195,7 @@ class App {
     }));
   }
 
-  // ── Chat (dispatch a task to a brain/agent and stream back its result) ─────
-
-  async renderChat() {
-    // Voice assistant mode (public/js/voice.js) takes over the whole Chat view.
-    if (this.isVoiceMode?.()) return this.renderVoice();
-    const [brains, divisions, conn] = await Promise.all([
-      this.api.get('/brains'),
-      this.api.get('/roster-divisions'),
-      this.api.get('/connections').catch(() => ({}))
-    ]);
-    const usage = conn?.usage || {};
-    this._chatDivisions = divisions;
-    const sel = 'padding:6px 10px;background:transparent;border:none;border-radius:12px;color:var(--text-secondary);font-size:0.8rem;cursor:pointer;outline:none;font-weight:500;transition:background 0.2s;';
-    const brainOpts = ['<option value="">🧠 Auto (route via chain)</option>']
-      .concat(Object.keys(brains).sort().map(b => {
-        const until = brainCooldownUntil(usage[b], brains[b]?.model || b);
-        const note = until ? ` — ⏳ rate-limited until ${until.toLocaleString()}` : '';
-        return `<option value="${esc(b)}">${esc(b + note)}</option>`;
-      })).join('');
-    const divOpts = ['<option value="">— any division —</option>']
-      .concat(Object.entries(divisions).sort().map(([d, i]) => `<option value="${esc(d)}">${esc(i.label || d)} (${i.agents.length})</option>`)).join('');
-
-    this.contentEl.innerHTML = `
-      <div style="display:flex;flex-direction:column;height:calc(100vh - 130px);min-height:420px;position:relative">
-        ${this.chatRecentBar()}
-        
-        <div id="chat-msgs" class="chat-messages-area"></div>
-        
-        <div class="chat-input-container">
-          <div class="chat-input-toolbar-top">
-            <select id="chat-brain" style="${sel}">${brainOpts}</select>
-            <select id="chat-div" style="${sel}">${divOpts}</select>
-            <select id="chat-agent" style="${sel}"><option value="">— none (chat brain directly) —</option></select>
-            <button id="chat-voice" class="icon-btn-ghost" title="Voice assistant — talk an idea through: it grills you, plans, and (with your OK) executes" style="margin-left:auto;font-size:0.78rem;padding:6px 10px;border-radius:12px;width:auto;height:auto;gap:5px"><i data-lucide="mic" style="width:14px;height:14px"></i> Voice</button>
-            <button id="chat-new" class="icon-btn-ghost" style="font-size:0.78rem;padding:6px 10px;border-radius:12px;width:auto;height:auto">＋ New chat</button>
-          </div>
-          
-          <div id="chat-attachments" class="chat-attachments"></div>
-          
-          <textarea id="chat-input" rows="1" placeholder="Ask anything..." class="chat-input-textarea"></textarea>
-          
-          <div class="chat-input-toolbar-bottom">
-            <input type="file" id="chat-files" multiple style="display:none">
-            <button id="chat-attach" class="icon-btn-ghost" title="Attach files" aria-label="Attach files"><i data-lucide="paperclip"></i></button>
-            <div style="flex:1"></div>
-            <button id="chat-send" class="icon-btn-primary" aria-label="Send"><i data-lucide="send"></i></button>
-          </div>
-        </div>
-      </div>`;
-
-    const brainEl = this.contentEl.querySelector('#chat-brain');
-    const divEl = this.contentEl.querySelector('#chat-div');
-    const agentEl = this.contentEl.querySelector('#chat-agent');
-    brainEl.value = this.chatSel.brain || '';
-    divEl.value = this.chatSel.division || '';
-    this.populateChatAgents(this.chatSel.division);
-    agentEl.value = this.chatSel.agent || '';
-
-    brainEl.addEventListener('change', () => { this.chatSel.brain = brainEl.value; });
-    divEl.addEventListener('change', () => { this.chatSel.division = divEl.value; this.chatSel.agent = ''; this.populateChatAgents(divEl.value); });
-    agentEl.addEventListener('change', () => { this.chatSel.agent = agentEl.value; });
-
-    const input = this.contentEl.querySelector('#chat-input');
-    
-    // Auto-resize textarea
-    input.addEventListener('input', () => {
-      input.style.height = 'auto';
-      input.style.height = Math.min(input.scrollHeight, 200) + 'px';
-    });
-
-    // Send even with no text if files are attached (e.g. "here, read these").
-    const doSend = () => {
-      const t = input.value.trim();
-      if (!t && !this.chatAttachments.length) return;
-      const busyKey = this.chatSel.brain || 'auto';
-      if (this.chatBusyBrains.has(busyKey)) {
-        this.toast('brain busy', `${busyKey === 'auto' ? 'Auto-routed chat' : busyKey} is still working — pick another brain or wait for its reply.`);
-        return;
-      }
-      input.value = ''; input.style.height = 'auto'; this.sendChat(t);
-    };
-    this.contentEl.querySelector('#chat-send').addEventListener('click', doSend);
-    input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doSend(); } });
-    this.contentEl.querySelector('#chat-new').addEventListener('click', () => this.startNewChat());
-    this.contentEl.querySelector('#chat-voice').addEventListener('click', () => this.setVoiceMode(true));
-
-    // File attachments (staged client-side; uploaded as task inputs on send).
-    const fileEl = this.contentEl.querySelector('#chat-files');
-    this.contentEl.querySelector('#chat-attach').addEventListener('click', () => fileEl.click());
-    fileEl.addEventListener('change', () => {
-      this.chatAttachments.push(...Array.from(fileEl.files || []));
-      fileEl.value = '';
-      this.renderChatAttachments();
-    });
-
-    this.renderChatMessages();
-    this.renderChatAttachments();
-    input.focus();
-  }
-
-  // ── Recent chat sessions (persisted client-side; 5 newest shown atop the view) ──
-
-  loadChatSessions() {
-    try { const v = JSON.parse(localStorage.getItem('cowork.chatSessions') || '[]'); return Array.isArray(v) ? v : []; }
-    catch { return []; }
-  }
-
-  saveChatSessions() {
-    // Cap what we persist so history can't grow unbounded; best-effort (a disabled
-    // or full localStorage must never break the chat).
-    try { localStorage.setItem('cowork.chatSessions', JSON.stringify(this.chatSessions.slice(0, 30))); }
-    catch { /* storage unavailable — recent list is a nicety, not required */ }
-  }
-
-  /** Snapshot the open conversation into the session list. No-op until there's at
-   *  least one completed message worth remembering.
-   *  Ordering is by CREATION time and is stable: `createdAt` is stamped once and
-   *  never changes, and the record is updated in place (never moved to the front).
-   *  `updatedAt` — the "activity" time shown in the list — is bumped ONLY when the
-   *  user actually sends a message (`bump: true`); merely opening a chat or switching
-   *  away from it must not disturb its timestamp or its position. */
-  persistCurrentChat({ bump = false } = {}) {
-    const msgs = this.chatMessages.filter(m => !m.pending && (m.content || '').trim());
-    if (!msgs.length) return;
-    const firstUser = msgs.find(m => m.role === 'user');
-    const reqText = firstUser?.content || '';
-    const title = reqText.replace(/\s+/g, ' ').trim().slice(0, 80) || 'chat';
-    const summary = summarizeRequest(reqText) || title.slice(0, 40) || 'chat';
-    if (!this.chatSessionId) this.chatSessionId = 's' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-    const existing = this.chatSessions.find(s => s.id === this.chatSessionId);
-    const now = new Date().toISOString();
-    const rec = {
-      id: this.chatSessionId,
-      title, summary,
-      sel: { ...this.chatSel },
-      messages: msgs.map(m => ({ role: m.role, content: m.content, meta: m.meta || null, taskId: m.taskId || null })),
-      createdAt: existing?.createdAt || existing?.updatedAt || now,
-      updatedAt: bump ? now : (existing?.updatedAt || now)
-    };
-    // In-place update preserves list position; only a brand-new chat is prepended.
-    this.chatSessions = existing
-      ? this.chatSessions.map(s => s.id === rec.id ? rec : s)
-      : [rec, ...this.chatSessions];
-    this.saveChatSessions();
-  }
-
-  startNewChat() {
-    this.persistCurrentChat({ bump: false });   // keep it, but don't disturb its time/order
-    this.chatMessages = [];
-    this.chatSessionId = null;
-    this.chatAttachments = [];
-    this.renderChatMessages();
-    this.renderChatAttachments();
-    this.renderChatRecent();
-  }
-
-  openChatSession(id) {
-    const rec = this.chatSessions.find(s => s.id === id);
-    if (!rec) return;
-    // Save whatever's open before switching away — WITHOUT bumping its time or
-    // position. Opening a recent chat used to reshuffle the whole list; it no longer does.
-    this.persistCurrentChat({ bump: false });
-    this.chatSessionId = rec.id;
-    this.chatAttachments = [];       // drop composer attachments when switching sessions
-    this.chatSel = { brain: '', division: '', agent: '', ...(rec.sel || {}) };
-    this.chatMessages = (rec.messages || []).map(m => ({ ...m }));
-    this.renderChat();              // rebuild selects + transcript from the restored state
-  }
-
-  deleteChatSession(id) {
-    this.chatSessions = this.chatSessions.filter(s => s.id !== id);
-    this.chatExpanded.delete(id);
-    this.saveChatSessions();
-    if (this.chatSessionId === id) { this.chatMessages = []; this.chatSessionId = null; this.renderChatMessages(); }
-    this.renderChatRecent();
-  }
-
-  toggleChatExpand(id) {
-    if (this.chatExpanded.has(id)) this.chatExpanded.delete(id);
-    else this.chatExpanded.add(id);
-    this.renderChatRecent();
-  }
-
-  /** Recent chats as a compact, expandable TREE. Order is fixed by CREATION time
-   *  (newest first) and does NOT change when a chat is opened. Each node's primary
-   *  label is a ~5-word summary of the opening request (not just the agent/roster),
-   *  with the target + activity time as secondary metadata. Click the row to open a
-   *  chat; click the ▸/▾ caret to expand a node and preview its opening request and
-   *  details. Container #chat-recent is always emitted (hidden when empty) for
-   *  in-place refresh; every interpolated value is esc()'d (no raw HTML). */
-  chatRecentBar(isOpen = this.chatRecentOpen) {
-    const recent = this.chatSessions
-      .slice()
-      .sort((a, b) => new Date(b.createdAt || b.updatedAt || 0) - new Date(a.createdAt || a.updatedAt || 0))
-      .slice(0, 15);
-    const nodes = recent.map(s => {
-      const active = s.id === this.chatSessionId;
-      const expanded = this.chatExpanded.has(s.id);
-      const target = s.sel?.agent || s.sel?.brain || (s.sel?.division ? 'division:' + s.sel.division : 'auto');
-      const summary = s.summary || s.title || 'chat';
-      const msgCount = (s.messages || []).length;
-      const firstReq = ((s.messages || []).find(m => m.role === 'user')?.content || s.title || '')
-        .replace(/\s+/g, ' ').trim();
-      const rowBg = active ? 'var(--bg-tertiary)' : 'transparent';
-      const head = `<div class="chat-tree-head" data-chat-open="${esc(s.id)}"
-          style="display:flex;align-items:flex-start;gap:7px;padding:6px 8px;border-radius:8px;cursor:pointer;background:${rowBg}">
-          <span data-chat-expand="${esc(s.id)}" title="${expanded ? 'Collapse' : 'Expand'}"
-            style="flex:0 0 auto;width:14px;text-align:center;color:var(--text-muted);font-size:0.7rem;cursor:pointer;user-select:none;transition:transform .15s;margin-top:4px">${expanded ? '▾' : '▸'}</span>
-          <div style="flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:3px">
-            <div style="display:flex;align-items:center;gap:6px">
-              ${active ? '<span style="width:5px;height:5px;border-radius:50%;background:#7C3AED;flex-shrink:0"></span>' : ''}
-              <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:0.8rem;font-weight:${active ? 600 : 500};color:var(--text-primary)">${esc(summary)}</span>
-            </div>
-            <div style="display:flex;align-items:center;gap:6px;font-size:0.68rem;color:var(--text-muted)">
-              <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:var(--bg-secondary);padding:1px 6px;border-radius:999px;color:var(--text-secondary)" title="${esc(target)}">${esc(target)}</span>
-              <span style="white-space:nowrap">${timeAgo(s.createdAt || s.updatedAt)}</span>
-            </div>
-          </div>
-          <span data-chat-del="${esc(s.id)}" title="Delete" style="flex:0 0 auto;opacity:.5;padding:0 2px;font-weight:600;cursor:pointer;margin-top:2px">×</span>
-        </div>`;
-      const detail = expanded ? `<div style="padding:2px 8px 8px 29px;font-size:0.74rem;color:var(--text-secondary);line-height:1.45">
-          <div style="white-space:normal;overflow:hidden;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical">${esc(firstReq) || '<span style="opacity:.6">(no request text)</span>'}</div>
-          <div style="margin-top:4px;color:var(--text-muted);font-size:0.68rem">↳ ${esc(target)} · ${msgCount} msg${msgCount === 1 ? '' : 's'}</div>
-        </div>` : '';
-      return `<div class="chat-tree-node" style="border-radius:8px">${head}${detail}</div>`;
-    }).join('');
-    // The whole panel is a native <details>: collapsing it reclaims its vertical
-    // footprint, which #chat-msgs (flex:1) absorbs — the conversation grows/shrinks
-    // dynamically. The open/closed state is persisted (see the 'toggle' handler in the
-    // constructor), so it survives navigation and session switches. The caret + count
-    // make the collapsed state a clear, one-line affordance that stays out of the way.
-    return `<details id="chat-recent" ${isOpen ? 'open' : ''} class="chat-recent" style="display:${recent.length ? 'block' : 'none'};margin-bottom:8px">
-      <summary style="font-size:0.7rem;color:var(--text-muted);padding:4px 8px;cursor:pointer;user-select:none;font-weight:600;display:flex;align-items:center;gap:5px">
-        <span class="chat-recent-caret" style="font-size:0.62rem;transition:transform .15s">▸</span>
-        <i data-lucide="history" style="width:12px;height:12px"></i> Recent chats
-        <span style="opacity:.65;font-weight:500">(${recent.length})</span>
-      </summary>
-      <div style="display:flex;flex-direction:column;gap:2px;align-items:stretch;max-height:280px;overflow-y:auto;margin-top:4px;padding-left:8px;border-left:1px solid var(--bg-tertiary);margin-left:12px">
-        ${nodes}
-      </div>
-    </details>`;
-  }
-
-  renderChatRecent() {
-    const el = this.contentEl.querySelector('#chat-recent');
-    const wasOpen = el ? el.open : true;
-    if (el) {
-      el.outerHTML = this.chatRecentBar(wasOpen);
-      createIcons(); // re-init any lucide icons we just injected
-    }
-  }
-
-  populateChatAgents(division) {
-    const el = this.contentEl.querySelector('#chat-agent');
-    if (!el) return;
-    const info = division && this._chatDivisions ? this._chatDivisions[division] : null;
-    const opts = info ? info.agents.slice().sort((a, b) => a.name.localeCompare(b.name))
-      .map(a => `<option value="${esc(a.slug)}">${esc(a.name)}</option>`).join('') : '';
-    el.innerHTML = '<option value="">— none (chat brain directly) —</option>' + opts;
-    el.disabled = !info;
-  }
-
-  chatBubble(m) {
-    const user = m.role === 'user';
-    const body = user ? esc(m.content).replace(/\n/g, '<br>')
-      : (m.pending ? '<span style="opacity:.6">▋ thinking…</span>' : md(m.content || '(no output)'));
-    const meta = m.meta ? `<div style="font-size:0.66rem;opacity:.6;margin-bottom:3px">${esc(m.meta)}</div>` : '';
-    // Every assistant reply is the result of a real task; surface a deep-link to it
-    // so the user can check status, verify the output/artifacts, and act on it. The
-    // `#tasks/<id>` hash is handled by navigate()/focusInboxTask (opens the exact
-    // task, expanded). Shown while running too — the id is stamped at dispatch.
-    const taskLink = (!user && m.taskId)
-      ? `<div style="margin-top:6px;font-size:0.72rem;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-          <a href="#tasks/${encodeURIComponent(m.taskId)}" target="_blank" rel="noopener" title="Open this task in Tasks — status, full result, inputs and downloadable artifacts" style="display:inline-flex;align-items:center;gap:4px;color:#0EA5E9;text-decoration:none"><i data-lucide="external-link" style="width:12px;height:12px"></i>Related task ↗</a>
-          <span class="copyable" data-copy="${esc(m.taskId)}" title="Task ID — click to copy" style="cursor:pointer;opacity:.65;font-family:ui-monospace,SFMono-Regular,Menlo,monospace">#${esc(m.taskId.slice(0, 8))}</span>
-        </div>`
-      : '';
-    return `<div style="display:flex;justify-content:${user ? 'flex-end' : 'flex-start'};margin:8px 0">
-      <div class="md-block" style="max-width:80%;padding:9px 12px;border-radius:12px;overflow-x:auto;font-size:0.88rem;line-height:1.5;background:${user ? '#7C3AED' : 'var(--bg-secondary)'};color:${user ? '#fff' : 'inherit'}">${meta}${body}${taskLink}</div>
-    </div>`;
-  }
-
-  renderChatMessages() {
-    const box = this.contentEl.querySelector('#chat-msgs');
-    if (!box) return;
-    box.innerHTML = this.chatMessages.length
-      ? this.chatMessages.map(m => this.chatBubble(m)).join('')
-      : '<div style="color:var(--text-muted);text-align:center;margin-top:40px;font-size:0.85rem">Start a conversation — your message is dispatched to the selected brain/agent and the reply is the task result.</div>';
-    createIcons();  // render the "Related task ↗" link glyphs we just injected
-    // Wire click-to-copy on the per-reply task-id chips (Chat has no delegated
-    // copy handler of its own, unlike the Inbox card renderer).
-    box.querySelectorAll('[data-copy]').forEach(el =>
-      el.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        const text = el.dataset.copy;
-        if (await this.copyText(text)) this.toast('copied', text);
-        else this.toast('copy failed', text);
-      }));
-    box.scrollTop = box.scrollHeight;
-  }
-
-  // The strip of staged file chips above the composer (hidden when empty).
-  renderChatAttachments() {
-    const box = this.contentEl.querySelector('#chat-attachments');
-    if (!box) return;
-    if (!this.chatAttachments.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
-    box.style.display = 'flex';
-    box.innerHTML = this.chatAttachments.map((f, i) => `
-      <span style="display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border-radius:999px;border:1px solid var(--bg-tertiary);background:var(--bg-secondary);font-size:0.74rem">
-        <i data-lucide="file" style="width:12px;height:12px"></i>
-        <span style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(f.name)}</span>
-        <span style="color:var(--text-muted)">${fmtBytes(f.size)}</span>
-        <span data-att-rm="${i}" title="Remove" style="cursor:pointer;opacity:.6;font-weight:600">×</span>
-      </span>`).join('');
-    box.querySelectorAll('[data-att-rm]').forEach(el => el.addEventListener('click', () => {
-      this.chatAttachments.splice(Number(el.dataset.attRm), 1);
-      this.renderChatAttachments();
-    }));
-    createIcons();
-  }
+  // ── Shared upload helper (task inputs) ─────────────────────────────────
 
   /** Upload staged File objects; returns [{token,name}] for a task's `inputs`.
    *  Raw fetch — the JSON-only APIClient can't send binary bodies. */
@@ -2590,78 +2214,6 @@ class App {
       out.push({ token: r.token, name: r.name });
     }
     return out;
-  }
-
-  buildChatDescription() {
-    const done = this.chatMessages.filter(m => !m.pending);
-    if (done.length <= 1) return done[done.length - 1]?.content || '';
-    return done.map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`).join('\n\n');
-  }
-
-  async sendChat(text) {
-    const { brain, division, agent } = this.chatSel;
-    // Lock only THIS brain (or the auto-route lane) while its task runs; the
-    // user can switch the selector and chat with any other brain in parallel.
-    const busyKey = brain || 'auto';
-    this.chatBusyBrains.add(busyKey);
-    const context = {};
-    if (brain) context.brain = brain;
-    if (agent) context.agent = agent; else if (division) context.division = division;
-    const target = agent || (division ? `division:${division}` : (brain || 'auto'));
-    // Take (and clear) the staged attachments for this send.
-    const attachments = this.chatAttachments;
-    this.chatAttachments = [];
-    this.renderChatAttachments();
-    const attachNote = attachments.length ? `📎 ${attachments.map(f => f.name).join(', ')}` : '';
-    const userContent = [text, attachNote].filter(Boolean).join('\n');
-    this.chatMessages.push({ role: 'user', content: userContent });
-    const ph = { role: 'assistant', content: '', pending: true, meta: `↳ ${target}${brain && agent ? ' · ' + brain : ''}` };
-    this.chatMessages.push(ph);
-    this.renderChatMessages();
-    try {
-      // Upload attachments first so the created task carries them as inputs.
-      const inputs = attachments.length ? await this.uploadInputFiles(attachments) : [];
-      const body = {
-        title: text.slice(0, 60) || (attachments.length ? `Review ${attachments.length} file(s)` : 'chat'),
-        description: this.buildChatDescription(),
-        from: { platform: 'chat', agent: 'dashboard' },
-        context, tags: ['chat']
-      };
-      if (inputs.length) body.inputs = inputs;
-      const task = await this.api.post('/inbox', body);
-      // Stamp the created task's id on the assistant bubble the moment it exists,
-      // so the "related task" link is available while the task is still running
-      // (lets the user open the Inbox and watch status/verify without waiting).
-      ph.taskId = task.id;
-      this.renderChatMessages();
-      const done = await this.pollChatTask(task.id);
-      const c = done.context || {};
-      const ranAgent = c.ranAgent ? (c.ranDivision ? `${c.ranDivision}/${c.ranAgent}` : c.ranAgent) : '';
-      const ranBrain = c.ranBrain || c.brain || brain || '';
-      ph.pending = false;
-      ph.content = done.status === 'done'
-        ? (done.failed ? `⚠️ ${done.result || 'Task failed.'}` : (done.result || '(no output)'))
-        : `⚠️ task ${done.status}${done.result ? ': ' + done.result : ''}`;
-      ph.meta = [ranAgent, ranBrain].filter(Boolean).join(' · ') || null;
-    } catch (e) {
-      ph.pending = false; ph.content = `⚠️ ${e.message}`;
-    } finally {
-      this.chatBusyBrains.delete(busyKey);
-      this.renderChatMessages();
-      this.persistCurrentChat({ bump: true });   // a real send: snapshot + mark activity
-      this.renderChatRecent();
-    }
-  }
-
-  async pollChatTask(id, timeoutMs = 1500000) {
-    const start = Date.now();
-    for (;;) {
-      await new Promise(r => setTimeout(r, 2000));
-      let t;
-      try { t = await this.api.get(`/inbox/${encodeURIComponent(id)}`); } catch { t = null; }
-      if (t && (t.status === 'done' || t.status === 'rejected')) return t;
-      if (Date.now() - start > timeoutMs) return { status: 'timed-out', result: '(no response within 25 min)', context: {} };
-    }
   }
 
   /**
@@ -4244,8 +3796,6 @@ class App {
     }));
   }
 
-  // ── Config ─────────────────────────────────────────────────────────────
-
   // ── Portal (launcher for local self-hosted web services) ────────────────
 
   async renderPortal(page = {}) {
@@ -4503,40 +4053,7 @@ class App {
     this.addViewTimer(poll, 3000);
   }
 
-  async renderConfig() {
-    const config = await this.api.get('/config');
-    this.contentEl.innerHTML = `
-      <div class="card">
-        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:var(--space-md)">
-          <div style="display:flex; align-items:center; gap:8px;">
-            <i data-lucide="settings" style="width:18px;height:18px;color:var(--text-muted)"></i>
-            <h3 style="font-size:0.95rem">Configuration</h3>
-            <span style="font-size:0.75rem; color:var(--text-muted); font-weight:400">(config.json — API keys masked)</span>
-          </div>
-          <button id="save-config-btn" class="btn btn-primary" style="font-size:0.8rem">Save Config</button>
-        </div>
-        <textarea id="config-editor" style="width:100%; height:70vh; font-family:monospace; font-size:0.83rem; padding:8px; background:var(--bg-tertiary); color:inherit; border:1px solid var(--bg-tertiary); border-radius:4px;">${esc(JSON.stringify(config, null, 2))}</textarea>
-      </div>`;
-      
-    if (window.lucide) window.lucide.createIcons();
-    
-    this.contentEl.querySelector('#save-config-btn')?.addEventListener('click', async (e) => {
-      const btn = e.target;
-      const editor = this.contentEl.querySelector('#config-editor');
-      try {
-        const newConfig = JSON.parse(editor.value);
-        btn.textContent = 'Saving...';
-        btn.disabled = true;
-        await this.api.put('/config', newConfig);
-        btn.textContent = 'Saved! Server restarting...';
-        btn.style.background = '#22c55e'; // green
-      } catch (err) {
-        alert('Failed to save config. Ensure it is valid JSON. Error: ' + err.message);
-        btn.textContent = 'Save Config';
-        btn.disabled = false;
-      }
-    });
-  }
+  // renderConfig() lives in public/js/config.js (form editor for config.json).
 }
 
 document.addEventListener('DOMContentLoaded', () => {

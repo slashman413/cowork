@@ -15,8 +15,6 @@ import { createMcpServer } from './mcp/server.js';
 import { createApiRouter } from './api/router.js';
 import { createWorkflowRouter } from './api/workflows.js';
 import { createGoalRouter } from './api/goals.js';
-import { createVoiceRouter } from './api/voice.js';
-import { VoiceAssistant } from './core/voice-assistant.js';
 import { createSSEHandler } from './api/sse.js';
 import { Workflows } from './core/workflows.js';
 import { Goals } from './core/goals.js';
@@ -278,12 +276,6 @@ async function main() {
   // drives orchestrated workflow runs (decides each next step via the router brain).
   const dispatcher = new Dispatcher(config, store, eventBus, workflows, goals);
   dispatcher.start();
-
-  // Voice assistant (Chat page): idea → grill-me → plan → (user-approved) Goal.
-  // Turns are conversational tasks pinned to the best non-rate-limited brain;
-  // kick() dispatches them without waiting a full poll interval.
-  const voice = new VoiceAssistant(config, store, goals, () => dispatcher.kick());
-  app.use('/api', createVoiceRouter(voice));
 
   app.get('/api/dispatcher', (_req, res) => {
     res.json({

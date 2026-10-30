@@ -12,7 +12,6 @@ Nav sections, page order, labels and the Overview's widgets come from **`layout.
 |------|-------|--------------------------|
 | [Overview](#overview) | Overview | `GET /api/status`, `GET /api/system`, `GET /api/system/details/:kind` |
 | [Portal](#portal) | Portal | `GET /api/portal` (portal.json) + `GET /api/services` |
-| [Chat](#chat) | Chat | `POST /api/inbox`, `GET /api/inbox/:id` |
 | [Inbox](#inbox) | Task Inbox | `GET/POST /api/inbox`, `PATCH /api/inbox/:id` |
 | [Calendar](#calendar) | Calendar | `GET /api/calendar`, `POST /api/inbox/:id/edit`, `POST /api/inbox/:id/run-now` |
 | [Workflows](#workflows) | Workflows | `GET /api/workflows*`, `POST /api/workflows/:id/run`, `GET /api/workflow-runs*` |
@@ -51,7 +50,7 @@ keeps serving the last good layout.
   "defaultPage": "home",                        // landing page for an empty #hash
   "sections": [                                 // sidebar groups, in order
     { "label": "Host", "pages": ["home", "models", "portal"] },
-    { "label": "Work", "pages": ["chat", "tasks", "workflows", "goals"] }
+    { "label": "Work", "pages": ["tasks", "workflows", "goals"] }
   ],
   "pages": {
     "home": { "type": "dashboard", "label": "Home", "icon": "house", "rows": [
@@ -76,7 +75,7 @@ keeps serving the last good layout.
   `{ "minWidth": px, "widgets": [...] }` (auto-fit grid, wraps below `minWidth`).
 - `portal` — any id, any number. Shows `portal.json` cards, optionally narrowed by
   `categories` and/or `keys`; `intro` (markdown) replaces the default blurb.
-- App pages — `chat`, `tasks`, `calendar`, `workflows`, `goals`, `routing`, `brains`,
+- App pages — `tasks`, `calendar`, `workflows`, `goals`, `routing`, `brains`,
   `personas`, `workers`, `config`. Fixed ids, each matching its nav label (other code
   deep-links to `#tasks/<id>`). The pre-2026-10-16 ids `inbox`, `team`, `roster` and
   `connections` are still accepted in a layout file and as URLs (old bookmarks
@@ -174,27 +173,6 @@ other machines. Status dots come from `GET /api/services`, probed server-side ev
 3s. Lifecycle buttons additionally need `serviceControl.enabled` and
 `server.apiKey` in `config.json` (that security switch stays there on purpose).
 The `obsidian` key is special: its status is "vault exists on disk", not an HTTP probe.
-
----
-
-## Chat
-
-A direct line to the company. A chat message is **the same `POST /api/inbox`
-contract as any task** — you're really creating a task and streaming its result
-back into the transcript. The composer lets you:
-
-- pick a **brain**, a **division**, or a specific **agent** (a two-stage picker;
-  an empty division = auto-route), or leave it all on auto;
-- attach files (staged as task **inputs**);
-- keep a per-session transcript (persisted across nav within a session).
-
-The composer **locks per brain** (not globally) while a message is in flight, so
-you can hold several conversations at once. Recent sessions appear as chips you can
-reopen or delete. Chat never auto-re-renders mid-typing — it updates only the
-transcript.
-
-Think of Chat as "dispatch one task and watch it," versus the Inbox's "manage all
-tasks."
 
 ---
 

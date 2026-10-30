@@ -15,35 +15,71 @@ default.
 | Is anything stuck? | Amber **overdue** banner + ⚠ chips: a scheduled task past its launch time |
 | How noisy is a cadence? | Dense series collapse to one `×N` chip (week: in the **dense** band) |
 
-## Visual grammar
+## Visual grammar — "calm by default, loud on exceptions"
+
+Most entries on this calendar are healthy recurring runs. If every one of them is a
+boxed, coloured chip, the page turns into a wall of green and the one failure or
+overdue fire gets lost. So the default look is quiet, and only states that need a
+human get filled colour.
 
 | Signal | Meaning |
 |--------|---------|
+| **Dot + text** (no box) | a finished run that needs nothing (done / closed without running / cancelled). The dot colour = status |
 | **Dashed outline** | projected: a future fire that hasn't happened yet |
-| **Solid tint** | a real run (queued / running / done / failed …) |
-| Left bar colour | status: indigo scheduled · amber overdue · yellow queued · sky running · purple waiting for input · green done · red failed · grey closed without running / cancelled |
-| 🔁 icon | entry belongs to a recurring series |
-| `×N` | N fires of one series that day, collapsed (more than 6 in a day) |
-| ⚠ | overdue — the dispatcher should already have released it |
-| Red line | now (week view) |
+| **Thicker dashed outline**, grab cursor | the schedule's **next** fire, the only one you can drag |
+| **Tinted fill + 3 px status bar** | needs eyes: queued · running · waiting for input · failed · overdue |
+| Week blocks | always a soft tinted body with a status bar, so a run's duration reads as a shape. Projected = dashed body |
+| Status colours | indigo scheduled · amber overdue · yellow queued · sky running · purple waiting for input · green done · red failed · grey closed without running / cancelled |
+| Repeat icon | recurring series (agenda meta, schedules rail, detail sheet; left off chips to cut noise) |
+| `×N` | N fires of one series that day, collapsed (more than 6 in a day; in week view they sit in the **Frequent** band) |
+| ⚠ | overdue: the dispatcher should already have released it |
+| Red line + time pill | now (week view; the pill sits in the hour gutter) |
+| Accent-filled date circle + faint accent tint | today (month cell, week column + header, agenda date) |
 
-The status colours match the Tasks page (`STATUS_COLORS` in `app.js`).
+The status colours match the Tasks page (`STATUS_COLORS` in `app.js`). The **Show**
+toggles double as the legend: each swatch draws what it filters (dashed box =
+Upcoming, dot = Scheduled runs / Ad-hoc).
+
+## Layout
+
+- **Toolbar** (one row on desktop): `Today` `‹` `›` **title** … segmented `Month | Week | Agenda` · `+ Schedule task`.
+  The title is formatted per view: `October 2026`, `Oct 25 – 31, 2026`, `Oct 25 – Nov 1, 2026`, `Dec 28, 2026 – Jan 3, 2027`.
+- **Sub-bar**: Show toggles (legend) on the left, time zone on the right.
+- **Main card** + **Schedules rail** (288 px, sticky). Below 1100 px the rail drops under the
+  calendar as a multi-column list.
+- **Footer**: the drag hint and keyboard shortcuts as `kbd` keys (desktop only).
+- **Phone (< 720 px)**: the title row has `Today` `‹` `›` on the right. The switcher fills the width next to a square `+` button.
+  The legend scrolls sideways and the time zone is hidden.
 
 ## Views
 
-- **Month**: 6×7 grid, up to 4 chips a day, then `+N more`. Clicking the date or `+N more` opens that week.
-- **Week**: 24-hour grid with 44 px per hour. Runs are drawn from start to finish (at least 30 min tall). It scrolls to about two hours before now.
-- **Agenda**: the next 30 days as a list grouped by day. This is the default on screens narrower than 720 px.
+- **Month**: 6×7 grid, up to 4 entries a day, then `N more`. The 1st of each month shows its short month name.
+  Days outside the month are dimmed. Clicking the date or `N more` opens that day (week view on desktop).
+  **Phone**: entries become up to 4 status dots per day (loud statuses sorted first so a failure is never hidden, `+N` for the rest).
+  Tapping a day opens **agenda from that day**.
+- **Week**: 24-hour grid, 48 px per hour, with faint half-hour lines. Runs are drawn from start to finish (at least 30 min tall).
+  Blocks shorter than 40 px are one line (time + title). With 3 or more overlapping lanes, a block shows only its title, never wrapped per character.
+  On load it scrolls to about two hours before now. **Phone**: columns keep 108 px and the grid scrolls sideways (opens on today), with a sticky hour gutter and day header.
+- **Agenda**: the next 30 days, grouped by day. Each day has a date column (weekday · big date · month, or "Today").
+  Each row has the time, a status bar (dashed = projected), the title (up to 2 lines) and a meta line: status · cadence · duration.
+  Rows that need attention get a faint tint. This is the default on screens narrower than 720 px. When it is empty, it shows a "clear 30 days" message with a Schedule button.
+- **Empty week/month**: a slim note at the top of the card says nothing is in the period and how to add something.
+- **Schedules rail**: each item shows the relative next fire (`in 10 min`) + its absolute time, the title (up to 2 lines), and cadence · last-run dot.
+  Run-now and edit icon buttons are dimmed until hover (always shown on phones). The brain is in the tooltip and the detail sheet.
 
-The view and the three **Show** toggles (*Upcoming*, *Scheduled runs*, *Ad-hoc tasks*)
+**Motion**: changing view or period fades and slides the grid in (220 ms). The 60-second auto-refresh
+does **not** animate. While a fetch is in flight, the old frame dims rather than blanking.
+`prefers-reduced-motion` turns off all calendar transitions and animations.
+
+The view and the three **Show** toggles (*Upcoming*, *Scheduled runs*, *Ad-hoc*)
 persist in `localStorage['cowork-calendar']`.
 
 ## Interactions
 
 | Action | Result |
 |--------|--------|
-| Click an entry | Detail sheet: status, time (absolute + relative), cadence, brain, next 5 fires, recent runs, and the actions *Open in Tasks*, *Open schedule*, *Edit schedule*, *Run now* |
-| Click empty day (month) / slot (week) | New task with **Run at** pre-filled to that time (the slot is snapped to 15 min; a month day uses 09:00) |
+| Click an entry | Detail sheet: status, time (absolute + relative), cadence, brain, next 5 fires, recent runs, and the actions *Open in Tasks*, *Open schedule*, *Edit schedule*, *Run now* (primary). Close with the × or the backdrop |
+| Click empty day (month) / slot (week) | New task with **Run at** pre-filled to that time (the slot is snapped to 15 min; a month day uses 09:00). On a phone, tapping a month day opens it in agenda instead |
 | Drag an upcoming entry (draggable = the task's **next** fire) | Confirm, then `POST /inbox/:id/edit {scheduledAt}`. In month view it keeps the time of day; in week view it snaps to 15 min. |
 | Detail sheet → *Reschedule* | Same as dragging, with a datetime field |
 | *Run now* (rail or sheet) | Confirm, then `POST /inbox/:id/run-now`. A recurring task runs this cycle and re-arms. |
@@ -100,7 +136,7 @@ The default window is 7 days back to 35 days ahead, capped at 100 days. Logic li
 | `server/src/api/router.ts` | `GET /api/calendar` |
 | `server/src/core/layout-config.ts`, `layout.json` | `calendar` app page (nav: Operations, after Tasks) |
 | `server/public/js/calendar.js` | the page (extends `App.prototype`; loaded after `app.js`) |
-| `server/public/css/style.css` | `.cal-*` styles (theme tokens only, light + dark) |
+| `server/public/css/calendar.css` | all `.cal-*` styles: theme tokens from `style.css` plus a few `--cal-*` aliases, light + dark |
 | `server/public/js/app.js` | route case; `createTaskModal({ scheduledAt })` pre-fill |
 
 ## Not in v1 (candidates)

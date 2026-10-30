@@ -20,7 +20,7 @@ test('repo default layout.json is valid and reproduces the built-in nav', () => 
   assert.equal(v.defaultPage, 'overview');
   assert.deepEqual(v.sections.map((s) => s.label), ['Operations', 'AI Fleet', 'System']);
   assert.deepEqual(v.sections.flatMap((s) => s.pages),
-    ['overview', 'portal', 'chat', 'tasks', 'calendar', 'workflows', 'goals', 'routing', 'brains', 'personas', 'workers', 'config']);
+    ['overview', 'portal', 'tasks', 'calendar', 'workflows', 'goals', 'routing', 'brains', 'personas', 'workers', 'config']);
   assert.equal(v.pages.overview.type, 'dashboard');
   assert.deepEqual(v.pages.overview.rows!.map((r) => r.widgets.map((w) => w.type)),
     [['sysbar'], ['stats'], ['quality'], ['rulings'], ['dispatcher', 'activity'], ['platforms']]);
@@ -83,14 +83,25 @@ test('omitted app pages land in "More"; hidden ones stay routable but off the na
 
 test('sections may name app pages without declaring them under "pages"', () => {
   const v = normalizeLayout({
-    sections: [{ label: 'Work', pages: ['chat', 'tasks'] }],
+    sections: [{ label: 'Work', pages: ['goals', 'tasks'] }],
     pages: { home: { type: 'dashboard', rows: [] } },
   }, 'mem');
   assert.deepEqual(v.errors, []);
-  assert.deepEqual(v.sections[0], { label: 'Work', pages: ['chat', 'tasks'] });
-  assert.equal(v.pages.chat.label, 'Chat');
+  assert.deepEqual(v.sections[0], { label: 'Work', pages: ['goals', 'tasks'] });
+  assert.equal(v.pages.goals.label, 'Goals');
   const more = v.sections.find((s) => s.label === 'More')!;
-  assert.ok(more.pages.includes('home') && !more.pages.includes('chat'));
+  assert.ok(more.pages.includes('home') && !more.pages.includes('goals'));
+});
+
+test('the retired Chat page is skipped silently in old layouts', () => {
+  const v = normalizeLayout({
+    sections: [{ label: 'Work', pages: ['chat', 'tasks'] }],
+    pages: { chat: { label: 'Chat', icon: 'message-square' } },
+  }, 'mem');
+  assert.deepEqual(v.errors, []);
+  assert.equal(v.pages.chat, undefined);
+  assert.deepEqual(v.sections[0], { label: 'Work', pages: ['tasks'] });
+  assert.ok(!v.sections.some((s) => s.pages.includes('chat')));
 });
 
 test('pre-rename app-page ids (inbox/team/roster/connections) migrate to the new ones', () => {

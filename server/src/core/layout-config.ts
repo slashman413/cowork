@@ -36,7 +36,7 @@ export function activeLayoutPath(): string {
 }
 
 /** Singleton app pages: id === type, at most one each, rendered by app.js. */
-export const APP_PAGES = ['chat', 'tasks', 'calendar', 'workflows', 'goals', 'routing', 'brains', 'personas', 'workers', 'config'] as const;
+export const APP_PAGES = ['tasks', 'calendar', 'workflows', 'goals', 'routing', 'brains', 'personas', 'workers', 'config'] as const;
 /**
  * Pre-2026-10-16 app-page ids, renamed so each URL matches its nav label
  * (#inbox showed "Tasks", …). Old ids in a user's layout.json are rewritten
@@ -45,6 +45,11 @@ export const APP_PAGES = ['chat', 'tasks', 'calendar', 'workflows', 'goals', 'ro
 export const LEGACY_PAGE_IDS: Record<string, string> = {
   inbox: 'tasks', team: 'routing', roster: 'personas', connections: 'workers',
 };
+/**
+ * Retired app pages (Chat + voice assistant, removed 2026-10-30): a user's
+ * layout.json that still names one is silently skipped, not reported as an error.
+ */
+export const REMOVED_PAGE_IDS = new Set<string>(['chat']);
 const renamed = (id: string) => (Object.hasOwn(LEGACY_PAGE_IDS, id) ? LEGACY_PAGE_IDS[id] : id);
 /** Composable page types: any number, any id. */
 export const COMPOSABLE_PAGES = ['dashboard', 'portal'] as const;
@@ -52,7 +57,6 @@ const PAGE_TYPES = new Set<string>([...APP_PAGES, ...COMPOSABLE_PAGES]);
 
 /** Fallback label/icon for an app page the layout doesn't describe. */
 const APP_PAGE_DEFAULTS: Record<string, { label: string; icon: string }> = {
-  chat: { label: 'Chat', icon: 'message-square' },
   tasks: { label: 'Tasks', icon: 'inbox' },
   calendar: { label: 'Calendar', icon: 'calendar-days' },
   workflows: { label: 'Workflows', icon: 'workflow' },
@@ -201,6 +205,7 @@ export function normalizeLayout(raw: unknown, file: string, source: LayoutView['
 
   const pages: Record<string, LayoutPage> = {};
   for (const [rawId, p] of Object.entries(doc.pages && typeof doc.pages === 'object' ? doc.pages : {}) as [string, any][]) {
+    if (REMOVED_PAGE_IDS.has(rawId) || REMOVED_PAGE_IDS.has(str(p?.type, 40) || '')) continue;
     if (!ID_RE.test(rawId)) { errors.push(`page id "${rawId}" must match ${ID_RE}`); continue; }
     if (!p || typeof p !== 'object') { errors.push(`page ${rawId}: must be an object`); continue; }
     const rawType = str(p.type, 40);
@@ -259,6 +264,7 @@ export function normalizeLayout(raw: unknown, file: string, source: LayoutView['
     if (!s || typeof s !== 'object' || !Array.isArray(s.pages)) { errors.push(`section ${si + 1}: needs a "pages" list`); return; }
     const ids: string[] = [];
     for (const raw of s.pages) {
+      if (typeof raw === 'string' && !pages[raw] && REMOVED_PAGE_IDS.has(raw)) continue;
       const pid = typeof raw === 'string' && !pages[raw] ? renamed(raw) : raw;
       if (typeof pid !== 'string' || !pages[pid]) { errors.push(`section ${si + 1}: unknown page "${String(pid)}"`); continue; }
       if (placed.has(pid)) { errors.push(`section ${si + 1}: page "${pid}" is already in another section`); continue; }

@@ -1,9 +1,9 @@
 {
-  "$comment": "Dashboard layout — nav sections, pages and Overview widgets. Live copy: ~/.cowork/layout.json (override with COWORK_LAYOUT); when absent THIS file is served, so copy it there to customise. Hot-reloaded on save (refresh the page). Page types: dashboard (rows of widgets) and portal (cards from portal.json, optionally filtered by categories/keys) can be added under any id; app pages (chat, tasks, calendar, workflows, goals, routing, brains, personas, workers, config) keep their fixed id — omit one and it lands in a 'More' section, set hidden:true to drop it from the nav. Widgets: sysbar {tiles: cpu|gpu|memory|thermal, hideUnavailable}, stats {items: workers|openTasks|personas|failedTasks|waitingInput|scheduled|uptime}, dispatcher, activity {limit}, platforms, services {keys|categories, compact}, note {text (markdown)}, quality {days (1-365)}, rulings {days (1-365), limit (1-100)}; every widget also takes title and span (1-4). A row is a widget list or {minWidth, widgets}. See docs/dashboard.md#layout.",
+  "$comment": "Dashboard layout — nav sections, pages and Overview widgets. Live copy: ~/.cowork/layout.json (override with COWORK_LAYOUT); when absent THIS file is served, so copy it there to customise. Hot-reloaded on save (refresh the page). Page types: dashboard (rows of widgets) and portal (cards from portal.json, optionally filtered by categories/keys) can be added under any id; app pages (tasks, calendar, workflows, goals, routing, brains, personas, workers, config) keep their fixed id — omit one and it lands in a 'More' section, set hidden:true to drop it from the nav. Widgets: sysbar {tiles: cpu|gpu|memory|thermal, hideUnavailable}, stats {items: workers|openTasks|personas|failedTasks|waitingInput|scheduled|uptime}, dispatcher, activity {limit}, platforms, services {keys|categories, compact}, note {text (markdown)}, quality {days (1-365)}, rulings {days (1-365), limit (1-100)}; every widget also takes title and span (1-4). A row is a widget list or {minWidth, widgets}. See docs/dashboard.md#layout.",
   "brand": { "title": "Cowork", "icon": "zap", "footer": "Cowork Server v1.0.0" },
   "defaultPage": "overview",
   "sections": [
-    { "label": "Operations", "pages": ["overview", "portal", "chat", "tasks", "calendar", "workflows", "goals"] },
+    { "label": "Operations", "pages": ["overview", "portal", "tasks", "calendar", "workflows", "goals"] },
     { "label": "AI Fleet", "pages": ["routing", "brains", "personas"] },
     { "label": "System", "pages": ["workers", "config"] }
   ],
@@ -26,7 +26,6 @@
       "label": "Portal",
       "icon": "layout-grid"
     },
-    "chat": { "label": "Chat", "icon": "message-square" },
     "tasks": { "label": "Tasks", "icon": "inbox" },
     "calendar": { "label": "Calendar", "icon": "calendar-days" },
     "workflows": { "label": "Workflows", "icon": "workflow" },
