@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from 'child_process';
 import { join } from 'node:path';
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, statSync, createWriteStream, type WriteStream } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, readdirSync, readFileSync, writeFileSync, statSync, createWriteStream, type WriteStream } from 'node:fs';
+import { tmpdir } from 'node:os';
 import type { Config, RoleConfig, Task, AchieverDecision } from '../types.js';
 import type { EventBus } from './events.js';
 import type { Store, CompletionDecision } from './store.js';
@@ -1624,16 +1625,23 @@ export class Dispatcher {
     try {
       let outputs: string[] = [];
       try { outputs = readdirSync(join(this.artifactsDir(task.id), OUTPUTS_SUBDIR)); } catch { /* none */ }
-      const argv = this.buildArgv({ exec: (cfg.llm.exec || 'hermes') as RoleConfig['exec'], model: cfg.llm.model || '' },
-        buildVerifierPrompt(task, text, outputs));
+      const exec = (cfg.llm.exec || 'hermes') as RoleConfig['exec'];
+      const prompt = buildVerifierPrompt(task, text, outputs);
+      // The RESULT is untrusted text, so a claude verifier is a pure judge: no
+      // tools, no MCP servers, no permission bypass, in an empty scratch cwd.
+      const argv = exec === 'claude'
+        ? ['claude', '-p', prompt, ...(cfg.llm.model ? ['--model', cfg.llm.model] : []), '--tools', '', '--strict-mcp-config']
+        : this.buildArgv({ exec, model: cfg.llm.model || '' }, prompt);
+      const scratch = mkdtempSync(join(tmpdir(), 'cowork-verifier-'));
       const reply = await new Promise<string>((resolve) => {
-        const child = spawn(argv[0], argv.slice(1), { env: { ...process.env }, stdio: ['ignore', 'pipe', 'pipe'] });
+        const child = spawn(argv[0], argv.slice(1), { cwd: scratch, env: { ...process.env }, stdio: ['ignore', 'pipe', 'pipe'] });
         let out = '';
         const timer = setTimeout(() => { child.kill('SIGTERM'); resolve(out); }, cfg.llm!.timeoutMs || 120000);
         child.stdout.on('data', d => { out += d.toString(); });
         child.on('error', () => resolve(''));
         child.on('close', () => { clearTimeout(timer); resolve(stripAnsi(out)); });
       });
+      try { rmSync(scratch, { recursive: true, force: true }); } catch { /* best-effort */ }
       return parseLlmVerdict(reply);
     } catch (e) {
       console.error(`Dispatcher: LLM verifier errored (failing open):`, e);
