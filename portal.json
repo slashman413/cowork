@@ -128,7 +128,7 @@
     "deeptutor": {
       "url": "http://localhost:3782",
       "label": "DeepTutor",
-      "description": "AI tutoring platform — quizzes, RAG over uploaded docs, immersive reading, Audio Overview, layered memory. Needs an LLM provider configured in Settings.",
+      "description": "AI tutoring platform — quizzes, RAG over uploaded docs, immersive reading, Audio Overview, layered memory. Pre-wired to the same local SGLang qwen3.8-27b (:8001) as the dsh brain; embeddings via Ollama nomic-embed-text.",
       "icon": "graduation-cap",
       "category": "Knowledge",
       "enabled": true,
