@@ -1294,47 +1294,79 @@ class App {
     content.innerHTML = `
       <h3 style="margin:0 0 8px; font-size:1.05rem">New task</h3>
       <p style="font-size:0.85rem; color:var(--text-secondary); margin:0 0 16px; line-height:1.5">The task is queued as pending and dispatched by the next tick — or parked as <em>scheduled</em> until its run time if you set one.</p>
-      <label style="${labelStyle}">Title</label>
-      <input id="nt-title" style="${fieldStyle}; margin-bottom:12px" placeholder="Short imperative title…">
-      <label style="${labelStyle}">Brief (markdown)</label>
+      <label style="${labelStyle}" for="nt-title">Title <span style="color:#EF4444">*</span></label>
+      <input id="nt-title" style="${fieldStyle}; margin-bottom:12px" placeholder="Short imperative title…" autocomplete="off">
+      <label style="${labelStyle}" for="nt-desc">Brief (markdown) <span style="color:#EF4444">*</span></label>
       <textarea id="nt-desc" rows="6" style="${fieldStyle}; margin-bottom:12px; resize:vertical" placeholder="What should the agent do? Include acceptance criteria."></textarea>
       <label style="${labelStyle}">Agent <span style="text-transform:none; letter-spacing:0">(optional — pick a division, then the agent that studies the files & does the work)</span></label>
-      <div style="display:flex; gap:8px; margin-bottom:12px">
-        <select id="nt-div" style="${fieldStyle}; flex:1">${divOpts}</select>
-        <select id="nt-agent" style="${fieldStyle}; flex:1" disabled><option value="">— none —</option></select>
+      <div class="modal-row" style="margin-bottom:12px">
+        <div><select id="nt-div" style="${fieldStyle}">${divOpts}</select></div>
+        <div><select id="nt-agent" style="${fieldStyle}" disabled><option value="">— none —</option></select></div>
       </div>
-      <label style="${labelStyle}">Priority</label>
-      <select id="nt-priority" style="${fieldStyle}; margin-bottom:12px">
-        <option value="normal" selected>normal</option><option value="low">low</option>
-        <option value="high">high</option><option value="urgent">urgent</option>
-      </select>
-      <label style="${labelStyle}">Run at <span style="text-transform:none; letter-spacing:0">(optional — leave empty to run now)</span></label>
-      <input id="nt-when" type="datetime-local" style="${fieldStyle}; margin-bottom:12px">
+      <div class="modal-row" style="margin-bottom:12px">
+        <div>
+          <label style="${labelStyle}" for="nt-priority">Priority</label>
+          <select id="nt-priority" style="${fieldStyle}">
+            <option value="normal" selected>normal</option><option value="low">low</option>
+            <option value="high">high</option><option value="urgent">urgent</option>
+          </select>
+        </div>
+        <div>
+          <label style="${labelStyle}" for="nt-when">Run at <span style="text-transform:none; letter-spacing:0">(empty = now)</span></label>
+          <input id="nt-when" type="datetime-local" style="${fieldStyle}">
+        </div>
+      </div>
       ${recurrenceEditorHTML('nt-rec', fieldStyle, labelStyle, null)}
-      <label style="${labelStyle}">Brain to claim this task</label>
+      <label style="${labelStyle}" for="nt-brain">Brain to claim this task</label>
       <select id="nt-brain" style="${fieldStyle}; margin-bottom:12px">${opts}</select>
       <label style="${labelStyle}">Input files <span style="text-transform:none; letter-spacing:0">(optional — attached for the agent/brain to study)</span></label>
       <div id="nt-attachments" style="display:none; flex-wrap:wrap; gap:6px; margin-bottom:8px"></div>
       <input type="file" id="nt-files" multiple style="display:none">
-      <button class="btn" id="nt-attach" type="button" style="font-size:0.8rem; margin:0 0 20px; display:inline-flex; align-items:center; gap:6px"><i data-lucide="paperclip" style="width:14px;height:14px"></i> Attach files</button>
-      <div style="display:flex; gap:8px; justify-content:flex-end">
-        <button class="btn" id="nt-cancel" style="font-size:0.85rem">Cancel</button>
-        <button class="btn" id="nt-ok" style="font-size:0.85rem; color:#22C55E; border-color:#22C55E66">＋ Create task</button>
+      <button class="btn" id="nt-attach" type="button" style="font-size:0.8rem; display:inline-flex; align-items:center; gap:6px"><i data-lucide="paperclip" style="width:14px;height:14px"></i> Attach files</button>
+      <div class="modal-actions">
+        <div class="modal-error" id="nt-error" role="alert"></div>
+        <span class="modal-hint">Ctrl/⌘ + Enter to create</span>
+        <button class="btn" id="nt-cancel" type="button" style="font-size:0.85rem">Cancel</button>
+        <button class="btn" id="nt-ok" type="button" style="font-size:0.85rem; color:#22C55E; border-color:#22C55E66">＋ Create task</button>
       </div>`;
     container.classList.remove('hidden');
     createIcons();
     recurrenceEditorBind(content, 'nt-rec');
     if (prefill.scheduledAt) content.querySelector('#nt-when').value = isoToLocalInput(prefill.scheduledAt);
     content.querySelector('#nt-title').focus();
+    let submitting = false;
     const close = () => {
       container.classList.add('hidden');
       content.innerHTML = '';
       document.removeEventListener('keydown', onKey);
     };
-    const onKey = (ev) => { if (ev.key === 'Escape') close(); };
+    // A stray backdrop click or Esc while the create request is in flight would
+    // hide the modal and leave the user unsure whether the task was made.
+    const dismiss = () => { if (!submitting) close(); };
+    const onKey = (ev) => {
+      if (ev.key === 'Escape') dismiss();
+      else if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); submit(); }
+    };
     document.addEventListener('keydown', onKey);
-    content.querySelector('#nt-cancel').onclick = close;
-    container.querySelector('.modal-backdrop').onclick = close;
+    content.querySelector('#nt-cancel').onclick = dismiss;
+    container.querySelector('.modal-backdrop').onclick = dismiss;
+
+    // Inline error in the pinned action row. The Title/Brief fields sit at the
+    // top of a scrolling modal, so a red border alone is usually off-screen and
+    // the Create click looks like it did nothing.
+    const errEl = content.querySelector('#nt-error');
+    const showError = (msg, field) => {
+      errEl.textContent = msg;
+      if (field) {
+        field.style.borderColor = '#EF4444';
+        field.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        field.focus({ preventScroll: true });
+      }
+    };
+    ['#nt-title', '#nt-desc'].forEach(sel => content.querySelector(sel).addEventListener('input', (ev) => {
+      ev.target.style.borderColor = '';
+      errEl.textContent = '';
+    }));
 
     // Division → agent: the agent list is scoped to the chosen division, matching
     // the two-stage roster picker in Chat. Empty division = auto-route.
@@ -1372,11 +1404,14 @@ class App {
     content.querySelector('#nt-attach').onclick = () => fileEl.click();
     fileEl.onchange = () => { staged.push(...Array.from(fileEl.files || [])); fileEl.value = ''; renderStaged(); };
 
-    content.querySelector('#nt-ok').onclick = async () => {
-      const title = content.querySelector('#nt-title').value.trim();
-      const description = content.querySelector('#nt-desc').value.trim();
-      if (!title) { content.querySelector('#nt-title').style.borderColor = '#EF4444'; return; }
-      if (!description) { content.querySelector('#nt-desc').style.borderColor = '#EF4444'; return; }
+    const submit = async () => {
+      if (submitting) return;
+      const titleEl = content.querySelector('#nt-title');
+      const descEl = content.querySelector('#nt-desc');
+      const title = titleEl.value.trim();
+      const description = descEl.value.trim();
+      if (!title) { showError('Title is required.', titleEl); return; }
+      if (!description) { showError('Brief is required — tell the agent what to do.', descEl); return; }
       const brain = content.querySelector('#nt-brain').value;
       const division = divEl.value;
       const agent = agentEl.value;
@@ -1390,10 +1425,14 @@ class App {
       if (brain) context.brain = brain;
       if (agent) context.agent = agent; else if (division) context.division = division;
       const okBtn = content.querySelector('#nt-ok');
+      submitting = true;
       okBtn.disabled = true;
+      errEl.textContent = '';
+      okBtn.textContent = staged.length ? 'Uploading files…' : 'Creating…';
       try {
         // Upload staged files first so the created task carries them as inputs.
         const inputs = staged.length ? await this.uploadInputFiles(staged) : [];
+        okBtn.textContent = 'Creating…';
         const body = {
           title, description,
           from: { platform: 'dashboard', agent: 'operator' },
@@ -1404,6 +1443,7 @@ class App {
           ...(recurrence ? { recurrence } : {})
         };
         await this.api.post('/inbox', body);
+        submitting = false;
         close();
         const target = agent ? `agent ${agent}` : division ? `${divisions[division]?.label || division} division` : null;
         const routeNote = brain ? `pinned to ${brain}` : target ? `routed to ${target}` : 'auto-routed via the brain chain';
@@ -1412,10 +1452,13 @@ class App {
         if (this.currentView === 'tasks') this.renderInbox();
         if (this.currentView === 'calendar') this.renderCalendar();
       } catch (err) {
+        submitting = false;
         okBtn.disabled = false;
-        this.toast('error', err.message);
+        okBtn.textContent = '＋ Create task';
+        showError(`Could not create the task: ${err.message}`);
       }
     };
+    content.querySelector('#nt-ok').onclick = submit;
   }
 
   /**
