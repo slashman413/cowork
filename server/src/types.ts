@@ -572,6 +572,18 @@ export interface TaskInteraction {
   submittedBy?: string;
 }
 
+/** Isolated git worktree a code task's brain ran in (see core/worktree.ts). */
+export interface TaskWorktree {
+  path: string;
+  branch: string;
+  /** Commit the worktree branched from. */
+  base: string;
+  merged?: boolean;
+  discarded?: boolean;
+  /** Worktree dir removed by the 7-day auto-prune (branch kept). */
+  pruned?: boolean;
+}
+
 export interface Task {
   id: string;
   title: string;
@@ -627,6 +639,8 @@ export interface Task {
    *  ($COWORK_OUTPUTS_DIR) — listed in their own OUTPUTS section, apart from the
    *  working ARTIFACTS. */
   outputs?: string[];
+  /** Set when the task ran in its own git worktree (code tasks). */
+  worktree?: TaskWorktree;
   /**
    * True when the task FINISHED by exhausting its whole fallback chain — every
    * brain failed verification (result is a "FAILED after N attempt(s) (chain

@@ -13,6 +13,7 @@ import { STREAMING_EXECS, streamArgs, createStreamRenderer } from './progress-st
 import { briefPersona } from './persona-brief.js';
 import { ClaudeProfile } from './claude-profile.js';
 import { killProcessTree } from './proc-tree.js';
+import { codeTaskRepo, ensureWorktree, writeWorktreeDiff, pruneStaleWorktrees } from './worktree.js';
 import { lintArtifacts, lintReason, resolveSloplint, OUTPUTS_SUBDIR } from './artifact-lint.js';
 import { isAgyModelRejection, diagnoseAgyModelFailure, listAgyModels } from './agy-models.js';
 
@@ -386,6 +387,8 @@ export class Dispatcher {
     return !!ix && Array.isArray(ix.fields) && ix.fields.length > 0 && ix.status !== 'submitted';
   }
 
+  private lastWorktreePrune = 0;
+
   private tick(): void {
     if (this.stopped || !this.agentId) return;
     const orch = this.config.orchestration;
@@ -431,6 +434,16 @@ export class Dispatcher {
 
     // Advance any active Goals: for each goal whose work has finished (quiescent),
     // the Achiever brain takes one evaluate/plan/emit turn toward the criterion.
+    // Auto-prune worktrees of tasks finished > 7 days ago that were never merged
+    // (branch kept). Throttled to hourly.
+    try {
+      if (Date.now() - this.lastWorktreePrune > 3600_000) {
+        this.lastWorktreePrune = Date.now();
+        const n = pruneStaleWorktrees(this.store.listTasks(), t => this.store.saveTask(t));
+        if (n.length) console.log(`Dispatcher: pruned ${n.length} stale worktree(s): ${n.join(', ')}`);
+      }
+    } catch (e) { console.error('Dispatcher: worktree prune failed this tick:', e); }
+
     try { this.driveGoals(); }
     catch (e) { console.error('Dispatcher: driveGoals failed this tick:', e); }
 
@@ -1429,6 +1442,11 @@ export class Dispatcher {
         ``
       );
     }
+    if (task.worktree) {
+      lines.push(`# Isolated git worktree`,
+        `You are working in an ISOLATED git worktree (${task.worktree.path}) on branch \`${task.worktree.branch}\`. Make your code changes and COMMIT them there. Do NOT touch the main checkout or any other branch — the requester will review and merge your branch.`,
+        ``);
+    }
     // Files the requester attached for this task. They live in a persistent dir;
     // point the agent at the absolute paths so it can read them regardless of cwd.
     const inputFiles = Array.isArray(task.context?.inputFiles) ? task.context!.inputFiles as string[] : [];
@@ -1916,6 +1934,26 @@ export class Dispatcher {
     // written during THIS attempt, so an earlier brain's leftovers can't fail it.
     const attemptStartedMs = Date.now() - 2000;
 
+    // CODE tasks (see core/worktree.ts) run in their own git worktree so concurrent
+    // agents don't clobber each other. Any failure falls back to the shared checkout.
+    let brainCwd = artDir;
+    let wtNote = '';
+    if (plan.exec !== 'script') {
+      try {
+        const repo = codeTaskRepo(task);
+        if (repo) {
+          const wt = ensureWorktree(repo, task.id);
+          task.worktree = { ...task.worktree, ...wt, pruned: false };
+          const fresh = this.store.getTask(task.id);
+          if (fresh) { fresh.worktree = task.worktree; this.store.saveTask(fresh); }
+          brainCwd = wt.path;
+        }
+      } catch (e: any) {
+        task.worktree = undefined;
+        wtNote = `worktree creation failed (${String(e?.message || e).split('\n')[0]}) — falling back to the shared checkout\n`;
+        console.warn(`Dispatcher: worktree creation failed for task ${task.id}; using shared checkout:`, e?.message || e);
+      }
+    }
     const prompt = this.buildPrompt(task, plan);
     // claude/agy run in stream-json mode here (and only here — probes and the
     // verifier keep plain text) so progress.log shows each tool call and message
@@ -1938,6 +1976,8 @@ export class Dispatcher {
     plog?.on('error', () => { plog = null; });
     const logProgress = (s: string) => { try { plog?.write(s); } catch { /* best-effort */ } };
     logProgress(`[${new Date().toISOString()}] ▶ ${plan.label} (${plan.exec}:${plan.model || 'default'}) started\n   task: ${task.title}\n\n`);
+    if (wtNote) logProgress(wtNote);
+    else if (task.worktree) logProgress(`worktree: ${task.worktree.path} (branch ${task.worktree.branch})\n\n`);
 
     const output = await new Promise<{ ok: boolean; text: string; stderr?: string }>((resolve) => {
       const child = spawn(argv[0], argv.slice(1), {
@@ -1947,7 +1987,7 @@ export class Dispatcher {
         // server/ and dirtied the working tree. Rooted here, those files become
         // the task's artifacts instead. exec:script keeps the server cwd because
         // its configured command is a repo-relative path (./deploy/…).
-        ...(plan.exec === 'script' ? {} : { cwd: artDir }),
+        ...(plan.exec === 'script' ? {} : { cwd: brainCwd }),
         // Own process group (pgid = child pid) so cancel/timeout can kill the
         // brain's whole tree (tool shells, scripts) — not just the top process.
         // Not unref'd: the server still waits on it and reaps it.
@@ -2009,6 +2049,14 @@ export class Dispatcher {
 
     logProgress(`\n[${new Date().toISOString()}] ■ finished — ${output.ok ? 'ok' : 'failed/empty'} (verifying result…)\n`);
     try { plog?.end(); } catch { /* best-effort */ }
+    if (task.worktree) {
+      try {
+        writeWorktreeDiff(task.worktree, join(artDir, 'worktree.diff'));
+        const fresh = this.store.getTask(task.id);
+        if (fresh) { fresh.worktree = task.worktree; this.store.saveTask(fresh); }
+      }
+      catch (e) { console.warn(`Dispatcher: worktree.diff failed for task ${task.id}:`, e); }
+    }
 
     this.running.delete(task.id);
     this.children.delete(task.id);
