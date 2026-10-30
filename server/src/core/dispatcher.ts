@@ -640,7 +640,10 @@ export class Dispatcher {
   /** Pending-card note for a task held on a rate-limited brain. The dashboard keys
    *  its "Reassign" call-to-action off `context.pendingReason`, so keep the prefix. */
   private coolingReason(brainId: string, until: string): string {
-    return `Rate-limited — brain \`${brainId}\` is cooling down until ${until}. It runs then, or use ⇄ Reassign to move it to another brain now.`;
+    // until is a UTC ISO-8601 string; render it in the viewer's local time so the
+    // pending card matches the dashboard's other rate-limit timestamps (toLocaleString).
+    const localUntil = new Date(until).toLocaleString();
+    return `Rate-limited — brain \`${brainId}\` is cooling down until ${localUntil}. It runs then, or use ⇄ Reassign to move it to another brain now.`;
   }
 
   /** A remote brain in a chain is left pending for that machine's client to
