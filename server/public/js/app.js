@@ -1651,7 +1651,7 @@ class App {
     const has = (t) => widgets.some(w => w.type === t);
     const qw = widgets.find(w => w.type === 'quality');
     const rw = widgets.find(w => w.type === 'rulings');
-    const [status, dispatcher, portal, quality, rulings] = await Promise.all([
+    const [status, dispatcher, portal, , quality, rulings] = await Promise.all([
       (has('stats') || has('platforms')) ? this.api.get('/status') : null,
       has('dispatcher') ? this.api.get('/dispatcher').catch(() => null) : null,
       has('services') ? this.api.get('/portal').catch(() => null) : null,
