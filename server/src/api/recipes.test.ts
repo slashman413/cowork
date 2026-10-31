@@ -102,3 +102,115 @@ test('recipe API: capture a done task, run it, rate it', async () => {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('recipe independence: runs successfully even after origin task is deleted with all its files', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cowork-recipes-deleted-task-'));
+  const paths: any = {};
+  for (const k of ['inbox', 'artifacts', 'inputs', 'status', 'decisions', 'workflows', 'agencyAgents']) {
+    paths[k] = path.join(root, k);
+    fs.mkdirSync(paths[k], { recursive: true });
+  }
+  const store = new Store({ paths, platforms: {}, orchestration: { brains: {} } } as unknown as Config, new EventBus());
+  const recipes = new Recipes(path.join(root, 'recipes'), paths.inputs);
+  const app = express();
+  app.use(express.json());
+  app.use('/api', createRecipeRouter(recipes, store));
+  const server = app.listen(0);
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`;
+  const call = async (method: string, url: string, body?: any) => {
+    const r = await fetch(base + url, { method, headers: { 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+    return { status: r.status, json: await r.json() as any };
+  };
+
+  try {
+    // 1. Create a task with inputs and output artifacts
+    const slot = path.join(paths.inputs, '_staging', 'tok-ind');
+    fs.mkdirSync(slot, { recursive: true });
+    fs.writeFileSync(path.join(slot, 'dataset.csv'), 'id,name\n1,Alpha\n');
+    const origin = store.createTask({
+      title: 'Generate monthly brief', description: 'Analyze {{dataset}} and output report',
+      from: { platform: 'dashboard', agent: 'ceo' }, to: { agent: 'analyst' }, priority: 'normal',
+      context: { acceptance: ['summary generated'] },
+    }, { inputs: [{ token: 'tok-ind', name: 'dataset.csv' }] });
+    origin.status = 'done';
+    origin.result = 'Report ready in artifacts.\nSTATUS: DONE';
+    store.saveTask(origin);
+
+    // Create task artifacts (including intermediates)
+    const taskArtDir = path.join(paths.artifacts, origin.id);
+    fs.mkdirSync(path.join(taskArtDir, 'outputs'), { recursive: true });
+    fs.writeFileSync(path.join(taskArtDir, 'progress.log'), 'streaming runtime logs...');
+    fs.writeFileSync(path.join(taskArtDir, 'progress.md'), '- [x] step 1');
+    fs.writeFileSync(path.join(taskArtDir, 'result.md'), '# Full result markdown');
+    fs.writeFileSync(path.join(taskArtDir, 'changes.patch'), 'diff --git a/b');
+    fs.writeFileSync(path.join(taskArtDir, 'analysis.py'), 'print("analyzing")');
+    fs.writeFileSync(path.join(taskArtDir, 'outputs', 'brief.pdf'), 'binary-brief-content');
+
+    // 2. Draft recipe from task
+    const draft = await call('POST', `/recipes/draft-from-task/${origin.id}`);
+    assert.equal(draft.status, 200);
+    const draftInputs = draft.json.carry.inputs.sort();
+    assert.ok(draftInputs.includes('dataset.csv'));
+    assert.ok(draftInputs.includes('analysis.py'));
+    assert.ok(draftInputs.includes('brief.pdf'));
+    assert.ok(!draftInputs.includes('progress.log'));
+    assert.ok(!draftInputs.includes('progress.md'));
+    assert.ok(!draftInputs.includes('result.md'));
+
+    // 3. Save recipe
+    const saved = await call('POST', '/recipes', {
+      ...draft.json,
+      name: 'Monthly brief generator',
+      title: 'Monthly brief — {{month}}',
+      brief: 'Run analysis on {{month}} data.',
+      fields: [{ key: 'month', label: 'Month', type: 'text', default: 'January' }],
+    });
+    assert.equal(saved.status, 201);
+    const recipeId = saved.json.id;
+
+    // Verify non-intermediate artifacts were copied into recipe path
+    assert.ok(fs.existsSync(path.join(root, 'recipes', recipeId, 'artifacts', 'analysis.py')));
+    assert.ok(fs.existsSync(path.join(root, 'recipes', recipeId, 'artifacts', 'outputs', 'brief.pdf')));
+    assert.ok(!fs.existsSync(path.join(root, 'recipes', recipeId, 'artifacts', 'progress.log')));
+    assert.ok(!fs.existsSync(path.join(root, 'recipes', recipeId, 'artifacts', 'result.md')));
+
+    // Verify inputs were copied into recipes/<id>/inputs/
+    assert.ok(fs.existsSync(path.join(root, 'recipes', recipeId, 'inputs', 'dataset.csv')));
+    assert.ok(fs.existsSync(path.join(root, 'recipes', recipeId, 'inputs', 'analysis.py')));
+    assert.ok(fs.existsSync(path.join(root, 'recipes', recipeId, 'inputs', 'brief.pdf')));
+
+    // 4. DELETE origin task from system
+    const delRes = store.deleteTask(origin.id);
+    assert.equal(delRes.deleted, true);
+    assert.equal(store.getTask(origin.id), null);
+    assert.ok(!fs.existsSync(taskArtDir), 'origin task artifacts dir must be deleted');
+    assert.ok(!fs.existsSync(path.join(paths.inputs, origin.id)), 'origin task inputs dir must be deleted');
+
+    // 5. Recipe detail still works and reflects that origin task is gone
+    const detail = await call('GET', `/recipes/${recipeId}`);
+    assert.equal(detail.status, 200);
+    assert.equal(detail.json.originTaskExists, false);
+    assert.equal(detail.json.origin.taskId, origin.id);
+    assert.match(detail.json.origin.resultExcerpt, /Report ready in artifacts/);
+
+    // 6. Run the recipe without any files from origin task
+    const runRes = await call('POST', `/recipes/${recipeId}/run`, { values: { month: 'February' } });
+    assert.equal(runRes.status, 201);
+    const newTaskId = runRes.json.id;
+    const newTask = store.getTask(newTaskId)!;
+    assert.equal(newTask.status, 'pending');
+    assert.equal(newTask.title, 'Monthly brief — February');
+
+    // Verify the new task received all input files staged from recipe path
+    const newTaskInputsDir = store.inputsPath(newTaskId)!;
+    assert.ok(newTaskInputsDir && fs.existsSync(newTaskInputsDir));
+    const stagedFiles = fs.readdirSync(newTaskInputsDir).sort();
+    assert.ok(stagedFiles.includes('analysis.py'));
+    assert.ok(stagedFiles.includes('brief.pdf'));
+    assert.ok(stagedFiles.includes('dataset.csv'));
+    assert.deepEqual(newTask.context?.inputFiles?.sort(), stagedFiles);
+  } finally {
+    server.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

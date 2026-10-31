@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   Recipes, draftFromTask, instantiate, normalizeRecipe, recipePitfalls, recipeStats, renderTemplate, resolveValues,
+  isIntermediateArtifact, collectTaskArtifacts,
 } from './recipes.js';
 import type { Task } from '../types.js';
 
@@ -129,5 +130,86 @@ test('Recipes store: create copies inputs, edit bumps version, run stages inputs
   lib.archive(r.id);
   assert.equal(lib.list().length, 0);
   assert.equal(lib.list({ includeArchived: true }).length, 1);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('isIntermediateArtifact flags runner noise and keeps deliverables', () => {
+  assert.equal(isIntermediateArtifact('progress.log'), true);
+  assert.equal(isIntermediateArtifact('progress.md'), true);
+  assert.equal(isIntermediateArtifact('result.md'), true);
+  assert.equal(isIntermediateArtifact('changes.patch'), true);
+  assert.equal(isIntermediateArtifact('.git'), true);
+  assert.equal(isIntermediateArtifact('.DS_Store'), true);
+  assert.equal(isIntermediateArtifact('temp.tmp'), true);
+  assert.equal(isIntermediateArtifact('__pycache__'), true);
+
+  assert.equal(isIntermediateArtifact('report.md'), false);
+  assert.equal(isIntermediateArtifact('outputs/deck.pdf'), false);
+  assert.equal(isIntermediateArtifact('data.csv'), false);
+  assert.equal(isIntermediateArtifact('script.py'), false);
+});
+
+test('collectTaskArtifacts skips intermediates and collects nested artifacts', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'artifacts-test-'));
+  fs.mkdirSync(path.join(root, 'outputs'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'progress.log'), 'log data');
+  fs.writeFileSync(path.join(root, 'progress.md'), 'ledger');
+  fs.writeFileSync(path.join(root, 'result.md'), 'result markdown');
+  fs.writeFileSync(path.join(root, 'changes.patch'), 'patch');
+  fs.writeFileSync(path.join(root, 'temp.tmp'), 'temp');
+  fs.writeFileSync(path.join(root, 'report.md'), 'my report');
+  fs.writeFileSync(path.join(root, 'outputs', 'deck.pdf'), 'binary data');
+
+  const collected = collectTaskArtifacts(root);
+  assert.deepEqual(collected, ['outputs/deck.pdf', 'report.md']);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('draftFromTask and Recipes.create copy task artifacts into recipe path and carry inputs', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'recipes-art-'));
+  const originArt = path.join(root, 'task-artifacts');
+  const originIn = path.join(root, 'task-inputs');
+  fs.mkdirSync(path.join(originArt, 'outputs'), { recursive: true });
+  fs.mkdirSync(originIn, { recursive: true });
+
+  fs.writeFileSync(path.join(originIn, 'seed.csv'), 'sku,price\n1,10\n');
+  fs.writeFileSync(path.join(originArt, 'progress.log'), 'streamed log');
+  fs.writeFileSync(path.join(originArt, 'result.md'), 'done');
+  fs.writeFileSync(path.join(originArt, 'summary.json'), '{"ok":true}');
+  fs.writeFileSync(path.join(originArt, 'outputs', 'chart.png'), 'png-bytes');
+
+  const d = draftFromTask(task({
+    id: 't-123',
+    title: 'Process data',
+    description: 'Process {{dataset}} for report',
+    context: { inputFiles: ['seed.csv'] },
+  }), originArt);
+
+  assert.ok(d.carry.inputs.includes('seed.csv'));
+  assert.ok(d.carry.inputs.includes('summary.json'));
+  assert.ok(d.carry.inputs.includes('chart.png'));
+  assert.ok(!d.carry.inputs.includes('progress.log'));
+  assert.ok(!d.carry.inputs.includes('result.md'));
+
+  const lib = new Recipes(path.join(root, 'recipes'), path.join(root, 'inputs'));
+  const r = lib.create(d, originIn, originArt);
+
+  // Check artifacts copied to recipes/<id>/artifacts/
+  assert.ok(fs.existsSync(path.join(root, 'recipes', r.id, 'artifacts', 'summary.json')));
+  assert.ok(fs.existsSync(path.join(root, 'recipes', r.id, 'artifacts', 'outputs', 'chart.png')));
+  assert.ok(!fs.existsSync(path.join(root, 'recipes', r.id, 'artifacts', 'progress.log')));
+  assert.ok(!fs.existsSync(path.join(root, 'recipes', r.id, 'artifacts', 'result.md')));
+
+  // Check inputs copied to recipes/<id>/inputs/ for re-running
+  assert.ok(fs.existsSync(path.join(root, 'recipes', r.id, 'inputs', 'seed.csv')));
+  assert.ok(fs.existsSync(path.join(root, 'recipes', r.id, 'inputs', 'summary.json')));
+  assert.ok(fs.existsSync(path.join(root, 'recipes', r.id, 'inputs', 'chart.png')));
+
+  // Stage inputs checks
+  const staged = lib.stageInputs(r);
+  assert.equal(staged.length, 3);
+  const stagedNames = staged.map(s => s.name).sort();
+  assert.deepEqual(stagedNames, ['chart.png', 'seed.csv', 'summary.json']);
+
   fs.rmSync(root, { recursive: true, force: true });
 });

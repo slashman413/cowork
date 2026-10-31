@@ -222,7 +222,7 @@
           <dl class="rcp-dl">${facts.map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join('')}</dl>
         </section>
         <section class="rcp-pane" data-pane="Origin" hidden>${r.origin ? `
-          <p class="rcp-note">This is what good looked like: the run this recipe was saved from (<a href="#tasks/${esc(r.origin.taskId)}">open task</a>).</p>
+          <p class="rcp-note">This is what good looked like: the run this recipe was saved from (${r.originTaskExists !== false ? `<a href="#tasks/${esc(r.origin.taskId)}">open task</a>` : '<span class="rcp-muted">task deleted</span>'}).</p>
           <pre class="rcp-pre">${esc(r.origin.resultExcerpt || '(no result text)')}</pre>` : '<p class="rcp-note">Written by hand.</p>'}</section>
         <section class="rcp-pane" data-pane="History" hidden>${r.versions.length ? r.versions.map((v) => `
           <details class="rcp-adv"><summary>v${v.version} · ${timeAgo(v.updatedAt)}</summary><pre class="rcp-pre">${esc(v.brief)}</pre></details>`).join('')

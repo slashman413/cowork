@@ -32,13 +32,23 @@ export function createRecipeRouter(recipes: Recipes, store: Store): Router {
       version: t.context?.recipe?.version, brain: t.context?.ranBrain || t.context?.brain,
       rating: t.context?.rating || null, failed: (t as any).failed === true || /^FAILED\b/i.test(String(t.result || '').trim()),
     }));
-    res.json({ ...r, stats: recipeStats(r, tasks), versions: recipes.versions(r.id), runs });
+    const originTask = r.origin?.taskId ? store.getTask(r.origin.taskId) : null;
+    res.json({
+      ...r,
+      originTaskExists: originTask !== null,
+      stats: recipeStats(r, tasks),
+      versions: recipes.versions(r.id),
+      runs
+    });
   });
 
   router.post('/recipes/draft-from-task/:taskId', (req, res) => {
     const task = store.getTask(req.params.taskId);
     if (!task) return res.status(404).json({ error: 'task not found' });
-    try { res.json(draftFromTask(task)); }
+    try {
+      const originArtifacts = store.artifactsPath(task.id);
+      res.json(draftFromTask(task, originArtifacts));
+    }
     catch (e: any) { res.status(400).json({ error: e.message }); }
   });
 
@@ -47,7 +57,8 @@ export function createRecipeRouter(recipes: Recipes, store: Store): Router {
       const body = req.body || {};
       const originId = body.origin?.taskId;
       const originInputs = originId ? store.inputsPath(String(originId)) : null;
-      const r = recipes.create(body, originInputs);
+      const originArtifacts = originId ? store.artifactsPath(String(originId)) : null;
+      const r = recipes.create(body, originInputs, originArtifacts);
       res.status(201).json(r);
     } catch (e: any) { res.status(400).json({ error: e.message }); }
   });
