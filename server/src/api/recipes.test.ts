@@ -168,16 +168,17 @@ test('recipe independence: runs successfully even after origin task is deleted w
     assert.equal(saved.status, 201);
     const recipeId = saved.json.id;
 
-    // Verify non-intermediate artifacts were copied into recipe path
-    assert.ok(fs.existsSync(path.join(root, 'recipes', recipeId, 'artifacts', 'analysis.py')));
-    assert.ok(fs.existsSync(path.join(root, 'recipes', recipeId, 'artifacts', 'outputs', 'brief.pdf')));
-    assert.ok(!fs.existsSync(path.join(root, 'recipes', recipeId, 'artifacts', 'progress.log')));
-    assert.ok(!fs.existsSync(path.join(root, 'recipes', recipeId, 'artifacts', 'result.md')));
-
     // Verify inputs were copied into recipes/<id>/inputs/
     assert.ok(fs.existsSync(path.join(root, 'recipes', recipeId, 'inputs', 'dataset.csv')));
     assert.ok(fs.existsSync(path.join(root, 'recipes', recipeId, 'inputs', 'analysis.py')));
     assert.ok(fs.existsSync(path.join(root, 'recipes', recipeId, 'inputs', 'brief.pdf')));
+
+    assert.ok(!fs.existsSync(path.join(root, 'recipes', recipeId, 'inputs', 'progress.log')));
+
+    // A forged origin ("..") must not turn the repo root into a copy source.
+    const forged = await call('POST', '/recipes', { ...draft.json, name: 'Forged', origin: { taskId: '..' } });
+    assert.equal(forged.status, 201);
+    assert.deepEqual(forged.json.carry.inputs, []);
 
     // 4. DELETE origin task from system
     const delRes = store.deleteTask(origin.id);

@@ -1,13 +1,14 @@
 import { Router } from 'express';
 import type { Store } from '../core/store.js';
-import { Recipes, draftFromTask, instantiate, recipeStats, recipePitfalls, type RecipeRating } from '../core/recipes.js';
+import type { Task } from '../types.js';
+import { Recipes, carryInputNames, draftFromTask, instantiate, recipeStats, recipePitfalls, type RecipeRating } from '../core/recipes.js';
 
 /**
  * REST surface for reusable tasks ("Recipes", see core/recipes.ts).
  *   GET    /recipes                     — library, each with derived stats
  *   GET    /recipes/:id                 — one recipe + stats, versions, runs
  *   POST   /recipes/draft-from-task/:id — editable draft from a finished task (saves nothing)
- *   POST   /recipes                     — save a draft as a recipe (copies the origin task's inputs)
+ *   POST   /recipes                     — save a draft as a recipe (copies the origin task's inputs + artifacts)
  *   PUT    /recipes/:id                 — edit; brief/fields/carry changes bump the version
  *   DELETE /recipes/:id                 — archive (soft)
  *   POST   /recipes/:id/run             — { values, extra?, brain?, scheduledAt?, recurrence? } → task
@@ -16,6 +17,12 @@ import { Recipes, draftFromTask, instantiate, recipeStats, recipePitfalls, type 
 export function createRecipeRouter(recipes: Recipes, store: Store): Router {
   const router = Router();
   const allTasks = () => store.listTasks();
+  // Where a recipe saved from `task` copies its carried files from.
+  const carryOrigin = (task: Task) => ({
+    inputNames: carryInputNames(task),
+    inputsDir: store.inputsPath(task.id),
+    artifactsDir: store.artifactsPath(task.id),
+  });
 
   router.get('/recipes', (req, res) => {
     const tasks = allTasks();
@@ -45,20 +52,17 @@ export function createRecipeRouter(recipes: Recipes, store: Store): Router {
   router.post('/recipes/draft-from-task/:taskId', (req, res) => {
     const task = store.getTask(req.params.taskId);
     if (!task) return res.status(404).json({ error: 'task not found' });
-    try {
-      const originArtifacts = store.artifactsPath(task.id);
-      res.json(draftFromTask(task, originArtifacts));
-    }
+    try { res.json(draftFromTask(task, carryOrigin(task))); }
     catch (e: any) { res.status(400).json({ error: e.message }); }
   });
 
   router.post('/recipes', (req, res) => {
     try {
       const body = req.body || {};
-      const originId = body.origin?.taskId;
-      const originInputs = originId ? store.inputsPath(String(originId)) : null;
-      const originArtifacts = originId ? store.artifactsPath(String(originId)) : null;
-      const r = recipes.create(body, originInputs, originArtifacts);
+      // Only a real task may be the copy source: origin.taskId is client-supplied
+      // and a raw "..", unresolved, would point the copy at the repo root.
+      const originTask = body.origin?.taskId ? store.getTask(String(body.origin.taskId)) : null;
+      const r = recipes.create(body, originTask ? carryOrigin(originTask) : {});
       res.status(201).json(r);
     } catch (e: any) { res.status(400).json({ error: e.message }); }
   });

@@ -593,10 +593,11 @@ export class Store {
     return fs.existsSync(dir) ? dir : null;
   }
 
-  /** Absolute path of a task's artifacts DIR, or null when the task has no artifacts dir. */
+  /** Absolute path of a task's artifacts DIR, or null when the task or its dir is gone. */
   public artifactsPath(taskId: string): string | null {
     const task = this.getTask(taskId);
-    const dir = this.artifactsDir(task?.id || taskId);
+    if (!task) return null;
+    const dir = this.artifactsDir(task.id);
     return fs.existsSync(dir) ? dir : null;
   }
 

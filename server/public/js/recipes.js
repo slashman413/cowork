@@ -265,7 +265,8 @@
         ['agent', 'Agent', d.carry.agent], ['brain', 'Brain', d.carry.brain], ['tier', 'Tier', d.carry.tier],
         ['acceptance', 'Acceptance checks', d.carry.acceptance?.length ? `${d.carry.acceptance.length} check${d.carry.acceptance.length === 1 ? '' : 's'}` : ''],
         ['timeboxMin', 'Timebox', d.carry.timeboxMin ? `${d.carry.timeboxMin} min` : ''],
-        ['inputs', 'Input files', (d.carry.inputs || []).join(', ')],
+        ['inputs', 'Input files', (d.carry.inputs || []).join(', ')
+          + (d.carryOmitted?.length ? ` (+${d.carryOmitted.length} more artifact${d.carryOmitted.length === 1 ? '' : 's'} not carried: over the size/count limit)` : '')],
       ].filter(([, , v]) => v);
       const { content, close } = this._rcpModal(`
         <h3>${edit ? `Edit recipe <span class="rcp-ver">v${d.version}</span>` : '★ Save as recipe'}</h3>
