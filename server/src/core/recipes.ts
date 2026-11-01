@@ -46,7 +46,7 @@ export interface RecipeCarry {
   timeboxMin?: number;
   priority?: Task['priority'];
   tags?: string[];
-  /** Filenames copied into recipes/<id>/inputs/. */
+  /** Relative paths (folders kept) copied into recipes/<id>/inputs/. */
   inputs: string[];
 }
 
@@ -89,6 +89,27 @@ const MAX_PITFALLS = 5;
 
 /** Directories that hold tooling state, never deliverables — not descended into. */
 const SKIP_DIRS = new Set(['__pycache__', 'node_modules', 'venv', 'site-packages']);
+/** Scratch dirs a run renders into (work/, tmp/, temp_pipeline/, cache/…) — never carried. */
+const SCRATCH_DIR_RE = /^(work|scratch|cache|tmp|temp)([_-].*|\d*)$/i;
+
+/** Code and config: what a recipe needs to RUN again. Everything else an origin
+ *  task left (its report, uploads log, data pulls, renders) is that run's RESULT —
+ *  carrying it makes the next run reuse stale data or think the work is done. */
+const CODE_EXT_RE = /\.(py|js|mjs|cjs|ts|tsx|jsx|sh|bash|zsh|ps1|rb|go|rs|java|kt|swift|c|h|cc|cpp|hpp|lua|php|pl|r|sql|html|css|scss|vue|svelte|gd|tscn|tres|ipynb|ya?ml|toml|ini|cfg|conf)$/i;
+const CONFIG_NAME_RE = /^(requirements[\w.-]*\.txt|package\.json|tsconfig[\w.-]*\.json|pyproject\.toml|Makefile|Dockerfile|Procfile|\.env\.example|README(\.\w+)?|AGENTS\.md|CLAUDE\.md|SKILL\.md|[\w.-]*(config|settings|schema|manifest|template|prompt)[\w.-]*\.(json|md|txt))$/i;
+/** Whether an artifact is code/config (carried by default) rather than a run's result. */
+export function isCarryableCode(rel: string): boolean {
+  if (/^data\//.test(rel)) return false;
+  const base = path.basename(rel);
+  return CODE_EXT_RE.test(base) || CONFIG_NAME_RE.test(base);
+}
+
+/** A safe relative path ("src/a.py"), or null when empty / absolute / escaping via "..". */
+export function safeRelPath(p: unknown): string | null {
+  const parts = String(p ?? '').replace(/\\/g, '/').split('/').filter(s => s && s !== '.');
+  if (!parts.length || parts.some(s => s === '..')) return null;
+  return parts.join('/');
+}
 
 /** Upper bounds on what a recipe carries from its origin task. Task artifact dirs
  *  can hold multi-GB renders and work trees with tens of thousands of files; the
@@ -113,7 +134,7 @@ export function collectTaskArtifacts(dir: string | null | undefined): string[] {
     for (const e of entries) {
       if (isIntermediateArtifact(e.name)) continue;
       const rel = base ? `${base}/${e.name}` : e.name;
-      if (e.isDirectory()) scan(path.join(cur, e.name), rel);
+      if (e.isDirectory()) { if (!SCRATCH_DIR_RE.test(e.name)) scan(path.join(cur, e.name), rel); }
       else if (e.isFile()) out.push(rel);
     }
   };
@@ -141,28 +162,36 @@ export function carryInputNames(task: Task): string[] {
 }
 
 /**
- * The files a recipe saved from a task carries, flattened to unique names (a
- * clash gets a -n suffix, like continuation inputs): the task's input files
- * first, then its non-intermediate artifacts — outputs/ first, then shallow
- * before deep — until CARRY_LIMITS is hit. Deterministic for the same disk
+ * The files a recipe saved from a task carries, under their relative paths so
+ * multi-file code keeps its layout (src/pipeline.py stays src/pipeline.py; a clash
+ * gets a -n suffix in the same folder): the task's input files first, then the
+ * code and config among its non-intermediate artifacts — shallow before deep —
+ * until CARRY_LIMITS is hit. The rest (the run's results, data and media) is
+ * returned as `skipped`; an artifact byte-identical to one already carried (an
+ * outputs/ copy of a root file) is dropped. Deterministic for the same disk
  * state, so the draft's names match what create() copies.
  */
 export function carryFiles(
   opts: { inputNames?: string[]; inputsDir?: string | null; artifactsDir?: string | null },
   limits = CARRY_LIMITS,
-): { files: CarryFile[]; omitted: string[] } {
-  const files: CarryFile[] = [], omitted: string[] = [];
+): { files: CarryFile[]; omitted: string[]; skipped: string[] } {
+  const files: CarryFile[] = [], omitted: string[] = [], skipped: string[] = [];
   const used = new Set<string>();
   const unique = (name: string) => {
     let out = name;
-    for (let n = 1; used.has(out); n++) {
-      const ext = path.extname(name);
-      out = `${path.basename(name, ext)}-${n}${ext}`;
-    }
+    const dir = path.posix.dirname(name), ext = path.extname(name), stem = path.basename(name, ext);
+    for (let n = 1; used.has(out); n++) out = path.posix.join(dir, `${stem}-${n}${ext}`);
     used.add(out);
     return out;
   };
   const size = (f: string) => { try { return fs.statSync(f).size; } catch { return 0; } };
+  const isFile = (f: string) => { try { return fs.statSync(f).isFile(); } catch { return false; } };
+  // Same size + same bytes as a file already carried → a duplicate copy.
+  const seen: Array<{ size: number; src: string }> = [];
+  const isDuplicate = (src: string, n: number) => seen.some(s => {
+    if (s.size !== n) return false;
+    try { return fs.readFileSync(s.src).equals(fs.readFileSync(src)); } catch { return false; }
+  });
   let bytes = 0;
 
   let inputNames = opts.inputNames;
@@ -170,26 +199,28 @@ export function carryFiles(
     try { inputNames = opts.inputsDir ? fs.readdirSync(opts.inputsDir).sort() : []; } catch { inputNames = []; }
   }
   for (const raw of inputNames) {
-    const name = path.basename(String(raw));
+    const name = safeRelPath(raw);
     if (!name || used.has(name)) continue;
     const src = opts.inputsDir ? path.join(opts.inputsDir, name) : null;
-    if (src && !(() => { try { return fs.statSync(src).isFile(); } catch { return false; } })()) continue;
+    if (src && !isFile(src)) continue;
     used.add(name);
-    if (src) bytes += size(src);
+    if (src) { const n = size(src); bytes += n; seen.push({ size: n, src }); }
     files.push({ name, src });
   }
 
-  const rank = (rel: string) => (rel.startsWith('outputs/') ? 0 : 1 + rel.split('/').length);
   const arts = collectTaskArtifacts(opts.artifactsDir)
-    .sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+    .sort((a, b) => a.split('/').length - b.split('/').length || a.localeCompare(b));
   for (const rel of arts) {
+    if (!isCarryableCode(rel)) { skipped.push(rel); continue; }
     const src = path.join(opts.artifactsDir!, rel);
     const n = size(src);
+    if (isDuplicate(src, n)) continue;
     if (files.length >= limits.maxFiles || bytes + n > limits.maxBytes) { omitted.push(rel); continue; }
     bytes += n;
-    files.push({ name: unique(path.basename(rel)), src });
+    seen.push({ size: n, src });
+    files.push({ name: unique(rel), src });
   }
-  return { files, omitted };
+  return { files, omitted, skipped };
 }
 
 /** Placeholder keys used in a template, in order of first use. */
@@ -249,7 +280,7 @@ export function normalizeRecipe(input: any, now = new Date().toISOString()): Rec
     timeboxMin: Number.isFinite(Number(c.timeboxMin)) && Number(c.timeboxMin) > 0 ? Math.round(Number(c.timeboxMin)) : undefined,
     priority: ['low', 'normal', 'high', 'urgent'].includes(c.priority) ? c.priority : undefined,
     tags: Array.isArray(c.tags) ? c.tags.map((s: any) => String(s).trim()).filter(Boolean) : undefined,
-    inputs: Array.isArray(c.inputs) ? c.inputs.map((s: any) => path.basename(String(s))).filter(Boolean) : [],
+    inputs: Array.isArray(c.inputs) ? c.inputs.map(safeRelPath).filter((s: string | null): s is string => !!s) : [],
   };
   for (const k of Object.keys(carry) as Array<keyof RecipeCarry>) if (carry[k] === undefined) delete carry[k];
   if (carry.acceptance && !carry.acceptance.length) delete carry.acceptance;
@@ -339,7 +370,7 @@ export function instantiate(recipe: Recipe, opts: InstantiateOptions = {}): Omit
 export function draftFromTask(
   task: Task,
   origin: { inputsDir?: string | null; artifactsDir?: string | null } = {},
-): Recipe & { carryOmitted?: string[] } {
+): Recipe & { carryOmitted?: string[]; carrySkipped?: string[] } {
   const ctx = task.context || {};
   // A continued/recipe task embeds scaffolding after the user's brief — keep only the brief.
   const brief = String(task.description || '')
@@ -347,12 +378,12 @@ export function draftFromTask(
     .split(/\n\n## Known pitfalls \(from earlier runs/)[0]
     .trim() || task.title;
   const fromRecipe = ctx.recipe && typeof ctx.recipe === 'object' ? ctx.recipe : null;
-  const { files, omitted } = carryFiles({
+  const { files, omitted, skipped } = carryFiles({
     inputNames: carryInputNames(task),
     inputsDir: origin.inputsDir, artifactsDir: origin.artifactsDir,
   });
 
-  const draft: Recipe & { carryOmitted?: string[] } = normalizeRecipe({
+  const draft: Recipe & { carryOmitted?: string[]; carrySkipped?: string[] } = normalizeRecipe({
     name: String(fromRecipe?.name || task.title || 'Untitled recipe').slice(0, 80),
     purpose: '',
     title: String(task.title || '').replace(VAR_RE, '').slice(0, 200) || 'Recipe run',
@@ -373,6 +404,7 @@ export function draftFromTask(
     },
   });
   if (omitted.length) draft.carryOmitted = omitted;
+  if (skipped.length) draft.carrySkipped = skipped;
   return draft;
 }
 
@@ -480,8 +512,9 @@ export class Recipes {
       for (const f of carryFiles(origin).files) {
         if (!f.src || !wanted.has(f.name)) continue;
         try {
-          fs.mkdirSync(this.inputsDir(r.id), { recursive: true });
-          fs.copyFileSync(f.src, path.join(this.inputsDir(r.id), f.name));
+          const dest = path.join(this.inputsDir(r.id), f.name);
+          fs.mkdirSync(path.dirname(dest), { recursive: true });
+          fs.copyFileSync(f.src, dest);
           kept.push(f.name);
         } catch { /* gone */ }
       }
@@ -522,7 +555,8 @@ export class Recipes {
       const token = `rcp${uuidv4().replace(/-/g, '')}`;
       const slot = path.join(this.inputsRoot, '_staging', token);
       fs.mkdirSync(slot, { recursive: true });
-      fs.copyFileSync(src, path.join(slot, name));
+      // The slot holds the bare file; the relative name restores its folder on materialize.
+      fs.copyFileSync(src, path.join(slot, path.basename(name)));
       out.push({ token, name });
     }
     return out;

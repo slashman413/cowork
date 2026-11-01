@@ -7,7 +7,7 @@ import express from 'express';
 import type { AddressInfo } from 'net';
 import { Store } from '../core/store.js';
 import { EventBus } from '../core/events.js';
-import { Recipes } from '../core/recipes.js';
+import { Recipes, instantiate } from '../core/recipes.js';
 import { createRecipeRouter } from './recipes.js';
 import type { Config } from '../types.js';
 
@@ -143,7 +143,9 @@ test('recipe independence: runs successfully even after origin task is deleted w
     fs.writeFileSync(path.join(taskArtDir, 'progress.md'), '- [x] step 1');
     fs.writeFileSync(path.join(taskArtDir, 'result.md'), '# Full result markdown');
     fs.writeFileSync(path.join(taskArtDir, 'changes.patch'), 'diff --git a/b');
-    fs.writeFileSync(path.join(taskArtDir, 'analysis.py'), 'print("analyzing")');
+    fs.writeFileSync(path.join(taskArtDir, 'analysis.py'), 'from lib import util\nprint("analyzing")');
+    fs.mkdirSync(path.join(taskArtDir, 'lib'));
+    fs.writeFileSync(path.join(taskArtDir, 'lib', 'util.py'), 'X = 1');
     fs.writeFileSync(path.join(taskArtDir, 'outputs', 'brief.pdf'), 'binary-brief-content');
 
     // 2. Draft recipe from task
@@ -152,7 +154,9 @@ test('recipe independence: runs successfully even after origin task is deleted w
     const draftInputs = draft.json.carry.inputs.sort();
     assert.ok(draftInputs.includes('dataset.csv'));
     assert.ok(draftInputs.includes('analysis.py'));
-    assert.ok(draftInputs.includes('brief.pdf'));
+    assert.ok(draftInputs.includes('lib/util.py'), 'folders are kept');
+    assert.ok(!draftInputs.includes('brief.pdf'), "the origin run's result is not carried");
+    assert.deepEqual(draft.json.carrySkipped, ['outputs/brief.pdf']);
     assert.ok(!draftInputs.includes('progress.log'));
     assert.ok(!draftInputs.includes('progress.md'));
     assert.ok(!draftInputs.includes('result.md'));
@@ -171,7 +175,7 @@ test('recipe independence: runs successfully even after origin task is deleted w
     // Verify inputs were copied into recipes/<id>/inputs/
     assert.ok(fs.existsSync(path.join(root, 'recipes', recipeId, 'inputs', 'dataset.csv')));
     assert.ok(fs.existsSync(path.join(root, 'recipes', recipeId, 'inputs', 'analysis.py')));
-    assert.ok(fs.existsSync(path.join(root, 'recipes', recipeId, 'inputs', 'brief.pdf')));
+    assert.ok(fs.existsSync(path.join(root, 'recipes', recipeId, 'inputs', 'lib', 'util.py')));
 
     assert.ok(!fs.existsSync(path.join(root, 'recipes', recipeId, 'inputs', 'progress.log')));
 
@@ -205,13 +209,48 @@ test('recipe independence: runs successfully even after origin task is deleted w
     // Verify the new task received all input files staged from recipe path
     const newTaskInputsDir = store.inputsPath(newTaskId)!;
     assert.ok(newTaskInputsDir && fs.existsSync(newTaskInputsDir));
-    const stagedFiles = fs.readdirSync(newTaskInputsDir).sort();
-    assert.ok(stagedFiles.includes('analysis.py'));
-    assert.ok(stagedFiles.includes('brief.pdf'));
-    assert.ok(stagedFiles.includes('dataset.csv'));
+    const stagedFiles = store.listInputs(newTaskId);
+    assert.deepEqual(stagedFiles, ['analysis.py', 'dataset.csv', 'lib/util.py']);
     assert.deepEqual(newTask.context?.inputFiles?.sort(), stagedFiles);
   } finally {
     server.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('recurring recipe run: every scheduled run gets the recipe files, folders kept', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cowork-recipes-recurring-'));
+  const paths: any = {};
+  for (const k of ['inbox', 'artifacts', 'inputs', 'status', 'decisions', 'workflows', 'agencyAgents']) {
+    paths[k] = path.join(root, k);
+    fs.mkdirSync(paths[k], { recursive: true });
+  }
+  const store = new Store({ paths, platforms: {}, orchestration: { brains: {} } } as unknown as Config, new EventBus());
+  const recipes = new Recipes(path.join(root, 'recipes'), paths.inputs);
+  try {
+    const art = path.join(paths.artifacts, 'origin');
+    fs.mkdirSync(path.join(art, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(art, 'runner.py'), 'from src.pipeline import run\nrun()\n');
+    fs.writeFileSync(path.join(art, 'src', 'pipeline.py'), 'def run(): pass\n');
+    const r = recipes.create({ name: 'R', brief: 'python3 runner.py', carry: { inputs: ['runner.py', 'src/pipeline.py'] } },
+      { inputNames: [], inputsDir: null, artifactsDir: art });
+    assert.deepEqual(r.carry.inputs, ['runner.py', 'src/pipeline.py']);
+
+    const params = instantiate(r, { recurrence: { type: 'daily', interval: 1, atTime: '17:00' }, scheduledAt: new Date(Date.now() - 60_000).toISOString() });
+    const parent = store.createTask(params, { inputs: recipes.stageInputs(r) });
+    assert.equal(parent.status, 'scheduled');
+    assert.deepEqual(parent.context?.inputFiles, ['runner.py', 'src/pipeline.py']);
+
+    const [first] = store.releaseDueScheduled();
+    assert.deepEqual(first.context?.inputFiles, ['runner.py', 'src/pipeline.py']);
+    assert.deepEqual(store.listInputs(first.id), ['runner.py', 'src/pipeline.py']);
+    // the next cycle too, and the parent keeps its own copy
+    const p = store.getTask(parent.id)!; p.scheduledAt = new Date(Date.now() - 1000).toISOString(); store.saveTask(p);
+    const [second] = store.releaseDueScheduled();
+    assert.notEqual(second.id, first.id);
+    assert.deepEqual(store.listInputs(second.id), ['runner.py', 'src/pipeline.py']);
+    assert.deepEqual(store.listInputs(parent.id), ['runner.py', 'src/pipeline.py']);
+  } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });

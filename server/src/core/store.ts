@@ -14,6 +14,7 @@ import { normalizeContextBrief } from './brief.js';
 import { assertTier } from './tiers.js';
 import { buildLesson, appendLesson } from './lessons.js';
 import { appendRulings } from './rulings.js';
+import { safeRelPath } from './recipes.js';
 
 /**
  * A veto the Dispatcher registers on the store so EXTERNAL task completions
@@ -524,20 +525,31 @@ export class Store {
       let src: string | undefined;
       try { src = fs.readdirSync(slot).find(f => { try { return fs.statSync(path.join(slot, f)).isFile(); } catch { return false; } }); } catch { continue; }
       if (!src) continue;
-      fs.mkdirSync(dir, { recursive: true });
-      const original = path.basename(it?.name || src);
+      // A name may carry a relative folder (a recipe's src/pipeline.py) so
+      // multi-file code keeps its layout; anything escaping the dir is flattened.
+      const original = safeRelPath(it?.name) || path.basename(src);
+      const sub = path.dirname(original) === '.' ? '' : path.dirname(original);
+      const base = path.basename(original), ext = path.extname(base);
       let name = original, dest = path.join(dir, name);
       for (let n = 1; fs.existsSync(dest); n++) {
-        const ext = path.extname(original);
-        name = `${path.basename(original, ext)}-${n}${ext}`;
+        name = path.posix.join(sub, `${path.basename(base, ext)}-${n}${ext}`);
         dest = path.join(dir, name);
       }
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
       try { fs.renameSync(path.join(slot, src), dest); }
       catch { try { fs.copyFileSync(path.join(slot, src), dest); } catch { continue; } }
       try { fs.rmSync(slot, { recursive: true, force: true }); } catch { /* ignore */ }
       stored.push(name);
     }
     return stored;
+  }
+
+  /** Copy inputs/<fromId>/ into inputs/<toId>/ (layout kept); returns the copied relative paths. */
+  private copyInputsDir(fromId: string, toId: string): string[] {
+    const src = this.inputsDir(fromId);
+    if (!fs.existsSync(src)) return [];
+    try { fs.cpSync(src, this.inputsDir(toId), { recursive: true }); } catch { return []; }
+    return this.listInputs(toId);
   }
 
   /** Attach more input files to an existing task (union onto context.inputFiles). */
@@ -601,7 +613,7 @@ export class Store {
     return fs.existsSync(dir) ? dir : null;
   }
 
-  public createTask(params: Omit<Task, 'id' | 'status' | 'createdAt'>, opts?: { inputs?: Array<{ token?: string; name?: string }> }): Task {
+  public createTask(params: Omit<Task, 'id' | 'status' | 'createdAt'>, opts?: { inputs?: Array<{ token?: string; name?: string }>; copyInputsFrom?: string }): Task {
     const id = uuidv4();
     const task: Task = {
       ...params,
@@ -635,6 +647,12 @@ export class Store {
     // Materialize any staged input uploads into inputs/<id>/ and record the stored
     // filenames on context.inputFiles BEFORE the task is written/emitted, so it is
     // never visible as `pending` (claimable) without its inputs already present.
+    // A recurring parent's run-child copies the parent's whole inputs dir (layout
+    // kept), so every cycle — not only the first — sees the files it was given.
+    if (opts?.copyInputsFrom) {
+      const names = this.copyInputsDir(opts.copyInputsFrom, id);
+      if (names.length) task.context = { ...(task.context || {}), inputFiles: names };
+    }
     if (opts?.inputs && opts.inputs.length) {
       const names = this.materializeInputs(id, opts.inputs);
       if (names.length) {
@@ -928,7 +946,7 @@ export class Store {
       tags: parent.tags,
       interaction: parent.interaction,
       // no recurrence, no scheduledAt → a one-shot that runs now (pending)
-    });
+    }, { copyInputsFrom: parent.id });
   }
 
   /**

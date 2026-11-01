@@ -168,17 +168,20 @@ test('collectTaskArtifacts skips intermediates and collects nested artifacts', (
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-test('draftFromTask and Recipes.create copy task artifacts into recipe path and carry inputs', () => {
+test('draftFromTask and Recipes.create copy task code (folders kept) and inputs, not results', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'recipes-art-'));
   const originArt = path.join(root, 'task-artifacts');
   const originIn = path.join(root, 'task-inputs');
   fs.mkdirSync(path.join(originArt, 'outputs'), { recursive: true });
+  fs.mkdirSync(path.join(originArt, 'src'), { recursive: true });
   fs.mkdirSync(originIn, { recursive: true });
 
   fs.writeFileSync(path.join(originIn, 'seed.csv'), 'sku,price\n1,10\n');
   fs.writeFileSync(path.join(originArt, 'progress.log'), 'streamed log');
   fs.writeFileSync(path.join(originArt, 'result.md'), 'done');
   fs.writeFileSync(path.join(originArt, 'summary.json'), '{"ok":true}');
+  fs.writeFileSync(path.join(originArt, 'config.yaml'), 'k: v');
+  fs.writeFileSync(path.join(originArt, 'src', 'lib.py'), 'X = 1');
   fs.writeFileSync(path.join(originArt, 'outputs', 'chart.png'), 'png-bytes');
 
   const d = draftFromTask(task({
@@ -188,27 +191,22 @@ test('draftFromTask and Recipes.create copy task artifacts into recipe path and 
     context: { inputFiles: ['seed.csv'] },
   }), { inputsDir: originIn, artifactsDir: originArt });
 
-  assert.ok(d.carry.inputs.includes('seed.csv'));
-  assert.ok(d.carry.inputs.includes('summary.json'));
-  assert.ok(d.carry.inputs.includes('chart.png'));
-  assert.ok(!d.carry.inputs.includes('progress.log'));
-  assert.ok(!d.carry.inputs.includes('result.md'));
+  assert.deepEqual(d.carry.inputs, ['seed.csv', 'config.yaml', 'src/lib.py']);
+  assert.deepEqual(d.carrySkipped, ['summary.json', 'outputs/chart.png']);
 
   const lib = new Recipes(path.join(root, 'recipes'), path.join(root, 'inputs'));
   const r = lib.create(d, { inputNames: ['seed.csv'], inputsDir: originIn, artifactsDir: originArt });
 
-  // Carried files are copied once, into recipes/<id>/inputs/
+  // Carried files are copied once, into recipes/<id>/inputs/, layout kept
   assert.ok(fs.existsSync(path.join(root, 'recipes', r.id, 'inputs', 'seed.csv')));
-  assert.ok(fs.existsSync(path.join(root, 'recipes', r.id, 'inputs', 'summary.json')));
-  assert.ok(fs.existsSync(path.join(root, 'recipes', r.id, 'inputs', 'chart.png')));
+  assert.ok(fs.existsSync(path.join(root, 'recipes', r.id, 'inputs', 'config.yaml')));
+  assert.ok(fs.existsSync(path.join(root, 'recipes', r.id, 'inputs', 'src', 'lib.py')));
+  assert.ok(!fs.existsSync(path.join(root, 'recipes', r.id, 'inputs', 'summary.json')));
   assert.ok(!fs.existsSync(path.join(root, 'recipes', r.id, 'inputs', 'progress.log')));
   assert.ok(!fs.existsSync(path.join(root, 'recipes', r.id, 'artifacts')), 'no second copy');
 
-  // Stage inputs checks
   const staged = lib.stageInputs(r);
-  assert.equal(staged.length, 3);
-  const stagedNames = staged.map(s => s.name).sort();
-  assert.deepEqual(stagedNames, ['chart.png', 'seed.csv', 'summary.json']);
+  assert.deepEqual(staged.map(s => s.name).sort(), ['config.yaml', 'seed.csv', 'src/lib.py']);
 
   fs.rmSync(root, { recursive: true, force: true });
 });
@@ -225,38 +223,44 @@ test('Recipes.create respects a cleared input list — artifacts are not re-adde
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-test('carryFiles: clashing names get suffixes, outputs/ first, limits omit the rest', () => {
+test('carryFiles: keeps folders, suffixes clashes in place, drops copies, scratch and results, limits omit the rest', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'carry-'));
   const inp = path.join(root, 'in'), art = path.join(root, 'art');
   fs.mkdirSync(inp);
   fs.mkdirSync(path.join(art, 'outputs'), { recursive: true });
+  fs.mkdirSync(path.join(art, 'src'), { recursive: true });
   fs.mkdirSync(path.join(art, 'work', 'node_modules', 'x'), { recursive: true });
-  fs.writeFileSync(path.join(inp, 'report.md'), 'input');
-  fs.writeFileSync(path.join(art, 'report.md'), 'root');
-  fs.writeFileSync(path.join(art, 'outputs', 'report.md'), 'deliverable');
-  fs.writeFileSync(path.join(art, 'work', 'big.bin'), 'x'.repeat(50));
+  fs.mkdirSync(path.join(art, 'temp_pipeline'), { recursive: true });
+  fs.writeFileSync(path.join(inp, 'run.py'), 'input');
+  fs.writeFileSync(path.join(art, 'run.py'), 'root');                  // clashes with the input
+  fs.writeFileSync(path.join(art, 'outputs', 'run.py'), 'root');       // byte copy of art/run.py
+  fs.writeFileSync(path.join(art, 'src', 'pipeline.py'), 'x'.repeat(50));
+  fs.writeFileSync(path.join(art, 'upload_summary.json'), '{"done":true}');
+  fs.writeFileSync(path.join(art, 'outputs', 'video.mp4'), 'mp4');
+  fs.writeFileSync(path.join(art, 'work', 'step.py'), 'scratch');
+  fs.writeFileSync(path.join(art, 'temp_pipeline', 'a.py'), 'scratch');
   fs.writeFileSync(path.join(art, 'work', 'node_modules', 'x', 'index.js'), '');
 
-  const all = carryFiles({ inputNames: ['report.md'], inputsDir: inp, artifactsDir: art });
+  const all = carryFiles({ inputNames: ['run.py'], inputsDir: inp, artifactsDir: art });
   assert.deepEqual(all.files.map(f => [f.name, path.relative(root, f.src!)]), [
-    ['report.md', 'in/report.md'],
-    ['report-1.md', 'art/outputs/report.md'],
-    ['report-2.md', 'art/report.md'],
-    ['big.bin', 'art/work/big.bin'],
+    ['run.py', 'in/run.py'],
+    ['run-1.py', 'art/run.py'],
+    ['src/pipeline.py', 'art/src/pipeline.py'],
   ]);
   assert.deepEqual(all.omitted, []);
+  assert.deepEqual(all.skipped, ['upload_summary.json', 'outputs/video.mp4']);
 
-  const capped = carryFiles({ inputNames: ['report.md'], inputsDir: inp, artifactsDir: art }, { maxFiles: 10, maxBytes: 40 });
-  assert.deepEqual(capped.files.map(f => f.name), ['report.md', 'report-1.md', 'report-2.md']);
-  assert.deepEqual(capped.omitted, ['work/big.bin']);
-  assert.deepEqual(carryFiles({ artifactsDir: art }, { maxFiles: 1, maxBytes: 1e9 }).omitted, ['report.md', 'work/big.bin']);
+  const capped = carryFiles({ inputNames: ['run.py'], inputsDir: inp, artifactsDir: art }, { maxFiles: 10, maxBytes: 40 });
+  assert.deepEqual(capped.files.map(f => f.name), ['run.py', 'run-1.py']);
+  assert.deepEqual(capped.omitted, ['src/pipeline.py']);
+  assert.deepEqual(carryFiles({ artifactsDir: art }, { maxFiles: 1, maxBytes: 1e9 }).omitted, ['src/pipeline.py']);
 
-  // create() copies under the same names the draft showed
+  // create() copies under the same names the draft showed; a ".." name never escapes
   const lib = new Recipes(path.join(root, 'recipes'), path.join(root, 'inputs'));
-  const r = lib.create({ ...base, carry: { ...base.carry, inputs: ['report-1.md', 'report.md'] } },
-    { inputNames: ['report.md'], inputsDir: inp, artifactsDir: art });
-  assert.deepEqual(r.carry.inputs, ['report.md', 'report-1.md']);
-  assert.equal(fs.readFileSync(path.join(lib.inputsDir(r.id), 'report-1.md'), 'utf8'), 'deliverable');
+  const r = lib.create({ ...base, carry: { ...base.carry, inputs: ['src/pipeline.py', 'run.py', '../run-1.py'] } },
+    { inputNames: ['run.py'], inputsDir: inp, artifactsDir: art });
+  assert.deepEqual(r.carry.inputs, ['run.py', 'src/pipeline.py']);
+  assert.equal(fs.readFileSync(path.join(lib.inputsDir(r.id), 'src', 'pipeline.py'), 'utf8'), 'x'.repeat(50));
   fs.rmSync(root, { recursive: true, force: true });
 });
 
