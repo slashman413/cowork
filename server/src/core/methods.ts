@@ -13,7 +13,23 @@ export const VENDORED_SKILL_MAP: Record<string, string> = {
   'research-report': 'vendor/pstack/skills/principle-explain-the-number/SKILL.md',
   'content': 'vendor/pstack/skills/unslop/SKILL.md',
   'ops-change': 'vendor/pstack/skills/blast-radius/SKILL.md',
+  'technical-writing': 'vendor/pstack/skills/technical-writing/SKILL.md',
+  'perf-issue': 'vendor/pstack/skills/poteto-mode/playbooks/perf-issue.md',
+  'refactoring': 'vendor/pstack/skills/poteto-mode/playbooks/refactoring.md',
+  'prototype': 'vendor/pstack/skills/poteto-mode/playbooks/prototype.md',
+  'runtime-forensics': 'vendor/pstack/skills/poteto-mode/playbooks/runtime-forensics.md',
+  'eval': 'vendor/pstack/skills/poteto-mode/playbooks/eval.md',
+  'opening-a-pr': 'vendor/pstack/skills/poteto-mode/playbooks/opening-a-pr.md',
+  'babysit': 'vendor/pstack/skills/poteto-mode/playbooks/babysit.md',
 };
+
+/** Known playbook keys — the single source for the sharpener vocabulary and UI selects. */
+export const METHOD_PLAYBOOKS: readonly string[] = Object.freeze(Object.keys(VENDORED_SKILL_MAP));
+
+/** True when `key` is a known playbook (a card in methods/ + a vendored skill). */
+export function isKnownPlaybook(key: unknown): key is string {
+  return typeof key === 'string' && METHOD_PLAYBOOKS.includes(key);
+}
 
 /**
  * Check whether a method card should be injected.

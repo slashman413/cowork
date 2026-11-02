@@ -95,7 +95,8 @@
             "local-agy-claude-opus-5-5-medium",
             "local-cc-opus-5-5"
           ]
-        }
+        },
+        "minDecisiveVerdicts": 30
       },
       "panel": {
         "_comment": "PS-2 multi-family review panel. enabled=false forces every gate back to one reviewer. Gates opt in with gate.panel (build-and-ship build + final-review use 2). judgmentTier=true also runs the panel+lead in the spec verifier for tier:judgment tasks (off until the eval gate passes).",
@@ -117,7 +118,15 @@
         "feature": "shadow",
         "research-report": "on",
         "content": "shadow",
-        "ops-change": "shadow"
+        "ops-change": "shadow",
+        "technical-writing": "shadow",
+        "perf-issue": "shadow",
+        "refactoring": "shadow",
+        "prototype": "shadow",
+        "runtime-forensics": "shadow",
+        "eval": "shadow",
+        "opening-a-pr": "shadow",
+        "babysit": "shadow"
       }
     },
     "staleClaimMs": 600000,

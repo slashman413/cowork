@@ -28,6 +28,7 @@
 import { spawn } from 'node:child_process';
 import type { BrainConfig, Config, RoleConfig, Task } from '../types.js';
 import { buildLesson, appendLesson } from './lessons.js';
+import { METHOD_PLAYBOOKS, isKnownPlaybook } from './methods.js';
 
 export const SHARPEN_CORE_PARAGRAPH =
   `Before starting, ask how a top expert would approach this task (their raw sources, their real methods, an outside check that the result is right), what the user is really after, and whether the task is over- or underspecified. Loosen constraints that don't serve the goal as readily as you add ones that do, and leave choices that are the user's to make open instead of deciding them. Fold in only what makes the work better, not bigger, but always keep one outside check that the result is right, without narrating the framing, then do the work.`;
@@ -112,7 +113,7 @@ export function buildSharpenerPrompt(task: { title: string; description?: string
     `  "verify": ["1-3 commands or checks that prove them"],`,
     `  "outsideCheck": "exactly one outside check that the result is right",`,
     `  "deliverable": "expected file names or shape",`,
-    `  "playbook": "suggested playbook key, e.g. bug-fix, feature, research-report, content, ops-change",`,
+    `  "playbook": "one of: ${METHOD_PLAYBOOKS.join(', ')} (omit if none fits)",`,
     `  "openChoices": ["unresolved choices that belong to the user"]`,
     `}`,
   ].join('\n');
@@ -159,7 +160,10 @@ export function parseSharpenOutput(rawText: string): SharpenResult | null {
   if (!outsideCheck) return null;
 
   const deliverable = typeof obj.deliverable === 'string' && obj.deliverable.trim() ? obj.deliverable.trim() : undefined;
-  const playbook = typeof obj.playbook === 'string' && obj.playbook.trim() ? obj.playbook.trim() : undefined;
+  // Unknown playbook keys are rejected (dropped): only keys with a method card
+  // in methods/ and a vendored pstack skill are allowed (METHOD_PLAYBOOKS).
+  const rawPlaybook = typeof obj.playbook === 'string' ? obj.playbook.trim() : '';
+  const playbook = isKnownPlaybook(rawPlaybook) ? rawPlaybook : undefined;
   const openChoices = Array.isArray(obj.openChoices)
     ? obj.openChoices.map((x: any) => String(x || '').trim()).filter(Boolean)
     : [];

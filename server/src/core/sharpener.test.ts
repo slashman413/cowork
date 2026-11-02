@@ -311,3 +311,24 @@ test('sharpenInBackground: never overwrites a claim made while the brain runs (d
   assert.equal(after.context?.acceptanceSource, 'sharpened');
   assert.deepEqual(after.context?.acceptance, ['a ok', 'b ok']);
 });
+
+test('G4: parseSharpenOutput rejects unknown playbook keys and accepts the new ones', () => {
+  const base = {
+    acceptance: ['a exists', 'b passes'],
+    verify: ['ls a'],
+    outsideCheck: 'curl -s https://example.com',
+  };
+  const unknown = parseSharpenOutput(JSON.stringify({ ...base, playbook: 'yolo-mode' }));
+  assert.ok(unknown, 'an unknown playbook drops the key, not the whole result (fail-open)');
+  assert.equal(unknown!.playbook, undefined);
+  for (const key of ['technical-writing', 'perf-issue', 'refactoring', 'prototype', 'runtime-forensics', 'eval', 'opening-a-pr', 'babysit']) {
+    assert.equal(parseSharpenOutput(JSON.stringify({ ...base, playbook: key }))!.playbook, key);
+  }
+});
+
+test('G4: sharpener prompt lists every known playbook key', () => {
+  const prompt = buildSharpenerPrompt(mkTask({ title: 't', description: 'd' }));
+  for (const key of ['bug-fix', 'technical-writing', 'perf-issue', 'opening-a-pr', 'babysit']) {
+    assert.ok(prompt.includes(key), `prompt must list ${key}`);
+  }
+});
