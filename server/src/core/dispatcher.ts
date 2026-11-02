@@ -15,6 +15,8 @@ import { buildPanelReviewerPrompt, buildLeadJudgmentPrompt, parseLeadJudgment } 
 import { describeAutoAnswer, logAutoAnswer } from './rulings.js';
 import { BRIEF_KEYS, parseBrief, renderBriefSections } from './brief.js';
 import { renderMethodPrompt } from './methods.js';
+import { sharpenPending, renderSkillPrompt, reviewMode, panelFallbackAcceptance, parseArena, pickArenaBrains, arenaPlan } from './pstack-gates.js';
+import { extractPrUrls, prInScope, prWatchTaskSpec } from './pr-automation.js';
 import { shouldSharpenTask, sharpenTask, mergeSharpenedContext } from './sharpener.js';
 import { taskTier, mergeTierChain, reviewChain, brainFamily, type TierName } from './tiers.js';
 import { canonicalBrainId } from '../config.js';
@@ -597,6 +599,17 @@ export class Dispatcher {
             this.markPending(task, 'Routing — an agent/division is being auto-assigned; it dispatches on the next tick.');
             continue;
           case 'execute':
+            // G6: context.arena fans out into N runner tasks + a judge; this task
+            // becomes the synthesis step that waits on them.
+            if (this.spawnArena(task)) {
+              this.markPending(task, 'Arena: waiting on the runner and judge tasks it spawned.');
+              continue;
+            }
+            // G2: an intake sharpen is still running — defer so the executor sees it.
+            if (sharpenPending(task)) {
+              this.markPending(task, 'Waiting (≤60 s) for the brief sharpener to add acceptance criteria.');
+              continue;
+            }
             if (!this.depsSatisfied(task)) {
               this.markPending(task, 'Waiting on an upstream task it depends on to finish first.');
               continue;
@@ -1307,6 +1320,47 @@ export class Dispatcher {
     return this.routerModel();
   }
 
+  /** G6: expand `context.arena` into runner + judge child tasks once. Returns
+   *  true when this task now waits on spawned children. */
+  private spawnArena(task: Task): boolean {
+    const spec = parseArena(task.context?.arena);
+    if (!spec || task.context?.arenaChildren) return false;
+    const brains = this.config.orchestration.brains || {};
+    const runnerBrains = pickArenaBrains(spec.runners, this.config.orchestration.tiers, brains, id => brainFamily(brains[id], id));
+    if (runnerBrains.length < 2) return false;     // not enough brains: run as a normal task
+    const plan = arenaPlan(task, spec, runnerBrains);
+    const from = task.from;
+    const runners = plan.runners.map(r => this.store.createTask({ ...r, from, priority: task.priority } as any));
+    const judge = this.store.createTask({ ...plan.judge, from, priority: task.priority, context: { ...plan.judge.context, dependsOn: runners.map(r => r.id) } } as any);
+    const fresh = this.store.getTask(task.id) || task;
+    const prevDeps = Array.isArray(fresh.context?.dependsOn) ? fresh.context!.dependsOn as string[] : [];
+    fresh.context = { ...(fresh.context || {}), arenaChildren: { runners: runners.map(r => r.id), judge: judge.id }, arenaRole: 'synthesis',
+      dependsOn: [...prevDeps, ...runners.map(r => r.id), judge.id] };
+    fresh.description = `${fresh.description || fresh.title}\n\n[arena synthesis] Combine the best of the runner results using the judge's scores (dependency results below). Name the winner and every runner by id.`;
+    this.store.saveTask(fresh);
+    task.context = fresh.context; task.description = fresh.description;
+    console.log(`Dispatcher: arena for ${task.id} → runners ${runners.map(r => r.id).join(',')} judge ${judge.id}`);
+    return true;
+  }
+
+  /** PR automation hook: a result that opened a PR sets context.prUrl and, when
+   *  orchestration.prAutomation covers the repo, spawns one recurring pr-watch task. */
+  private notePrUrls(task: Task, text: string): void {
+    if (task.context?.prWatch) return;              // the watcher itself mentions the PR
+    const refs = extractPrUrls(text);
+    if (!refs.length) return;
+    task.context = { ...(task.context || {}), prUrl: refs[0].url, ...(refs.length > 1 ? { prUrls: refs.map(r => r.url) } : {}) };
+    const cfg = this.config.orchestration.prAutomation;
+    for (const ref of refs) {
+      if (!prInScope(ref, cfg)) continue;
+      const exists = this.store.listTasks({}).some(t => t.context?.prWatch && t.context?.prUrl === ref.url && t.status !== 'done');
+      if (exists) continue;
+      const spec = prWatchTaskSpec(ref, task, cfg);
+      try { this.store.createTask({ ...spec, from: task.from, priority: 'normal' } as any); }
+      catch (e) { console.error(`Dispatcher: could not create pr-watch for ${ref.url}:`, e); }
+    }
+  }
+
   /**
    * `context.dependsOn: ["<task-id>", …]` gates dispatch until every listed
    * task is done. For gated steps (P1-2), downstream steps also wait
@@ -1396,6 +1450,8 @@ export class Dispatcher {
       methodsCfg: this.config.orchestration?.methods,
     });
     if (methodLines.length) lines.push(...methodLines);
+    // G10: context.skill — any vendored pstack skill, by name.
+    lines.push(...renderSkillPrompt({ repoRoot, skill: task.context?.skill, isLocal }));
 
     if (Object.keys(shownCtx).length > 0) {
       lines.push(`# Context`, '```json', JSON.stringify(shownCtx, null, 2), '```', '');
@@ -1763,9 +1819,14 @@ export class Dispatcher {
    *   - Legacy tasks (no `acceptance`) keep today's behaviour (`llmVerdict`).
    */
   private async qualityGateVerdict(task: Task, text: string, executorBrainId: string, attemptNumber: number): Promise<VerifyVerdict> {
-    const acceptance = this.taskAcceptance(task);
+    let acceptance = this.taskAcceptance(task);
     const specCfg = this.config.orchestration.verifier?.spec;
-    if (acceptance.length > 0 && specCfg?.enabled) {
+    // G5: task-level review gate (context.review = none | llm | panel).
+    const review = reviewMode(task, this.config.orchestration.verifier?.panel);
+    if (review === 'none') return { ok: true };
+    if (review === 'llm') return this.llmVerdict(task, text);
+    if (review === 'panel' && acceptance.length === 0) acceptance = panelFallbackAcceptance(task);
+    if (acceptance.length > 0 && (specCfg?.enabled || review === 'panel')) {
       return this.specVerdict(task, text, executorBrainId, attemptNumber, acceptance);
     }
     return this.llmVerdict(task, text);
@@ -1792,6 +1853,8 @@ export class Dispatcher {
     if (isSharpened) {
       mode = sharpenerCfg?.mode === 'enforce' ? 'enforce' : 'shadow';
     }
+    // G5: an explicitly requested panel review (context.review = "panel") enforces.
+    if (task.context?.review === 'panel') mode = 'enforce';
     const agent = this.resolveAgent(task)
       || (typeof task.context?.agentName === 'string' ? task.context.agentName : '')
       || executorBrainId;
@@ -1839,13 +1902,13 @@ export class Dispatcher {
 
     // PS-2: judgment-tier tasks get a multi-family panel + lead when the flag is on.
     const panelCfg = this.config.orchestration.verifier?.panel;
-    if (panelCfg?.enabled !== false && panelCfg?.judgmentTier && taskTier(task.context) === 'judgment') {
+    if (reviewMode(task, panelCfg) === 'panel' || (panelCfg?.enabled !== false && panelCfg?.judgmentTier && taskTier(task.context) === 'judgment')) {
       const tiers = this.config.orchestration.tiers || {};
       const panelJudges = selectSpecJudges(executorBrainId, {
         brains: this.config.orchestration.brains,
         judges: specCfg.judges,
         isCooling: id => !!this.store.brainCooldownUntil(id),
-        panel: panelCfg.size ?? 2,
+        panel: panelCfg?.size ?? 2,
         panelPool: [...(tiers.judgment || []), ...(tiers.standard || []), ...(tiers.mechanical || [])],
       });
       if (panelJudges.length >= 2) {
@@ -2051,7 +2114,7 @@ export class Dispatcher {
     const mode = this.config.orchestration.verifier?.artifactLint ?? 'enforce';
     if (mode === 'off' || this.config.orchestration.verifier?.enabled === false) return { ok: true };
     try {
-      const report = lintArtifacts(artDir, { sinceMs, brief: `${task.title}\n${task.description || ''}`, sloplint: resolveSloplint() });
+      const report = lintArtifacts(artDir, { sinceMs, brief: `${task.title}\n${task.description || ''}`, sloplint: resolveSloplint(), playbook: typeof task.context?.playbook === 'string' ? task.context.playbook : undefined });
       if (!report.files.length) return { ok: true };
       const reject = mode === 'enforce' && report.critical.length > 0 && !lastAttempt;
       const t = this.store.getTask(task.id);
@@ -2447,6 +2510,9 @@ export class Dispatcher {
         console.warn(`Dispatcher: worktree creation failed for task ${task.id}; using shared checkout:`, e?.message || e);
       }
     }
+    // G2: re-read right before building the prompt so a background intake
+    // sharpen that landed after the claim is not missed.
+    { const latest = this.store.getTask(task.id); if (latest?.context) task.context = { ...latest.context, ...(task.context?.dispatched ? { dispatched: true } : {}) }; }
     const prompt = this.buildPrompt(task, plan);
     // claude/agy run in stream-json mode here (and only here — probes and the
     // verifier keep plain text) so progress.log shows each tool call and message
@@ -2752,6 +2818,7 @@ export class Dispatcher {
       done.context = { ...(done.context || {}), ...(verdict.ok && footer ? this.footerContext(footer, task, output.text) : {}), ranAgent: plan.agent, ranDivision: plan.division, ranBrain: plan.brainId, isRoster: plan.isRoster };
       if (verdict.ok) this.store.clearBrainRateLimited(plan.brainId);   // it works again
       stampLists(done);
+      if (verdict.ok && !blocked) this.notePrUrls(done, output.text);
       this.store.saveTask(done);
     }
     // internal: the dispatcher already verified this run — skip the completion guard.
