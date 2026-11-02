@@ -249,6 +249,28 @@ function agyGroupedBody(u) {
 // A task is "failed" when its whole fallback chain was exhausted. Prefer the
 // explicit flag set by the server; fall back to the result text / rejected status
 // so tasks that finished before the flag existed still categorize correctly.
+// Filter-pill text: "done 12" etc. Counts come from /status's inboxSummary;
+// the "done" pill excludes failed tasks, mirroring the server's done filter.
+function inboxPillLabel(f, status) {
+  const s = status?.inboxSummary;
+  const counts = s ? {
+    done: Math.max(0, (s.completed || 0) - (s.failed || 0)),
+    'in-progress': s.inProgress || 0, pending: s.pending || 0,
+    scheduled: s.scheduled || 0,
+    'wait-input': s.waitingInput || 0, failed: s.failed || 0
+  } : null;
+  const n = counts && f ? counts[f] : null;
+  return (f === '' ? 'All' : f) + (n !== null && n !== undefined ? ` ${n}` : '');
+}
+
+// Does task t belong under the Tasks status filter f? Mirrors store.listTasks.
+function inboxFilterMatches(t, f) {
+  if (!f) return true;
+  if (f === 'failed') return isTaskFailed(t);
+  if (f === 'done') return t.status === 'done' && !isTaskFailed(t);
+  return t.status === f;
+}
+
 function isTaskFailed(t) {
   return t.failed === true
     || t.status === 'rejected'
@@ -442,8 +464,8 @@ function badge(text, color) {
   return `<span class="badge" style="background:${color}18; color:${color}; border:1px solid ${color}40">${esc(text)}</span>`;
 }
 
-function createIcons() {
-  if (window.lucide) lucide.createIcons();
+function createIcons(root) {
+  if (window.lucide) lucide.createIcons(root ? { root } : undefined);
 }
 
 // Sanitized markdown render (agent output is untrusted → DOMPurify).
@@ -850,8 +872,19 @@ class App {
       // user is mid-way through typing (search box, form field) along with the caret.
       // Debounce so a burst of events causes one refresh, and re-check the
       // typing guard when the timer fires (not when the event arrived).
+      // On the Tasks view only the named task's card is redrawn (patchInboxTasks);
+      // events that name no task (agent joined, …) don't touch the task list.
+      const taskId = data.payload?.task?.id || data.payload?.taskId;
+      if (taskId) (this._inboxDirty ||= new Set()).add(taskId);
       clearTimeout(this._rerenderTimer);
       this._rerenderTimer = setTimeout(() => {
+        if (this.currentPage?.type === 'tasks' && this.contentEl.querySelector('#inbox-sticky')) {
+          const ids = [...(this._inboxDirty || [])];
+          this._inboxDirty = new Set();
+          if (ids.length) this.patchInboxTasks(ids).catch(() => this.renderInbox());
+          return;
+        }
+        this._inboxDirty = new Set();
         const el = document.activeElement;
         const typing = !!el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || el.isContentEditable);
         if (!typing) this.renderCurrentView();
@@ -2286,6 +2319,447 @@ class App {
     </div>`;
   }
 
+  // One task card's HTML. Shared by renderInbox (whole list) and patchInboxTasks
+  // (SSE: redraw just the card an event names).
+  taskCardHTML(t) {
+    const c = t.context || {};
+    // Which agent + brain ran it (item 5), or the requested assignment.
+    const agentLabel = c.ranAgent ? (c.ranDivision ? `${c.ranDivision} / ${c.ranAgent}` : c.ranAgent)
+      : (c.division ? `${c.division} / ${c.agent || '?'}` : (c.agent || c.role || ''));
+    const brainLabel = c.ranBrain || c.brain || '';
+    // Fallback trail: brains that failed verification and were handed over.
+    const failedBrains = Array.isArray(c.failedBrains) ? c.failedBrains : [];
+    const failed = isTaskFailed(t);
+    // done, but closed administratively without ever running (superseded copy,
+    // pre-empted cancel) — badged distinctly so its empty artifacts list is not
+    // mistaken for a silent failure.
+    const closedNoRun = isTaskClosedNoRun(t);
+    // The card no longer expands to show RESULT / DESCRIPTION inline. Instead the
+    // run's RESULT is a first-class `result.md` chip in its own RESULT section
+    // (first, above ARTIFACTS / INPUTS) and the brief is a `description.md` chip
+    // under INPUTS — both open in the markdown viewer modal. The dispatcher writes
+    // the real result.md for local runs; the server also serves both names
+    // synthetically from task.result / task.description, so the chips work even
+    // when no file is on disk (remote / older tasks).
+    const artsRaw = Array.isArray(t.artifacts) ? t.artifacts : [];
+    // result.md gets its own RESULT section — keep it out of the plain
+    // ARTIFACTS list so the run's result is not buried in the artifacts.
+    const resultOnDisk = artsRaw.includes('result.md');
+    const hasResult = !closedNoRun && (!!t.result || resultOnDisk);
+    const arts = artsRaw.filter(f => f !== 'result.md');
+    // OUTPUTS: the final deliverables the run placed in artifacts/<id>/outputs/
+    // ($COWORK_OUTPUTS_DIR) — their own section, right after RESULT.
+    const outs = Array.isArray(t.outputs) ? t.outputs : [];
+    const inputsRaw = Array.isArray(c.inputFiles) ? c.inputFiles : [];
+    const inputs = (t.description && !inputsRaw.includes('description.md'))
+      ? ['description.md', ...inputsRaw] : inputsRaw;
+    // A recurring task is a persistent SCHEDULER: it stays `scheduled` and spawns a
+    // one-shot run-child each cycle. Each run-child is its OWN `done` card holding
+    // that cycle's artifacts/result, linked back to the scheduler via
+    // context.scheduledParentId. We surface that ONE stable parent reference (no
+    // run-to-run "previous/next" chain that made the list scroll up and down).
+    const parentLink = c.scheduledParentId
+      ? `<a href="#tasks/${encodeURIComponent(c.scheduledParentId)}" title="This run was produced by a recurring scheduled task — open it" style="display:inline-flex; align-items:center; gap:3px; color:#6366F1; text-decoration:none; font-family:inherit"><i data-lucide="repeat" style="width:11px;height:11px;vertical-align:-1px"></i>scheduled task</a>`
+      : '';
+    // Files can be attached while a task is still schedulable, or to a failed one
+    // (attach context, then re-run).
+    const canAttach = ['pending', 'wait-input', 'scheduled'].includes(t.status) || failed;
+    // Vertical brain fallback chain — brains in the order they were tried, the
+    // last one at the bottom. Failed rungs are red with their reason; the final
+    // (running / successful) brain sits at the end.
+    const chain = failedBrains.map(f => ({
+      brain: f.brain, reason: f.reason || 'failed', ok: false
+    }));
+    const lastFailed = failedBrains.length ? failedBrains[failedBrains.length - 1].brain : null;
+    if (brainLabel && brainLabel !== lastFailed) chain.push({ brain: brainLabel, ok: !failed, final: true });
+    const chainHtml = chain.length ? `<div class="task-brain-chain" style="display:flex; flex-direction:column; gap:3px; padding:2px 0 6px">
+      ${chain.map((r, i) => {
+        const col = r.ok ? '#22C55E' : (r.final ? BRAIN_COLOR : '#EF4444');
+        const icon = r.ok ? '✓' : (r.final ? '●' : '✗');
+        return `<div style="display:flex; align-items:center; gap:6px; font-size:0.8rem">
+          <span style="width:14px; text-align:right; color:var(--text-muted); font-size:0.7rem">${i + 1}</span>
+          <span class="badge" style="background:${col}18; color:${col}; border:1px solid ${col}40">${icon} ${esc(r.brain)}</span>
+          ${r.reason ? `<span style="color:var(--text-muted); font-size:0.74rem">${esc(r.reason)}</span>` : ''}
+        </div>`;
+      }).join('')}
+    </div>` : '';
+
+    // (2) PENDING — why is this task still waiting? The dispatcher annotates each
+    // pending task with context.pendingReason (free slot / brain at capacity /
+    // routing / remote-unclaimed / deps / held-manual). Shown only while pending.
+    const pendingReason = (t.status === 'pending' && c.pendingReason) ? String(c.pendingReason) : '';
+    const pendingHtml = pendingReason ? `<div class="task-pending-why" style="display:flex; align-items:flex-start; gap:6px; margin:2px 0 6px; padding:6px 9px; border-radius:8px; background:#EAB30814; border:1px solid #EAB30833; color:var(--text-secondary); font-size:0.8rem">
+      <i data-lucide="hourglass" style="width:13px;height:13px;margin-top:1px;color:#EAB308;flex-shrink:0"></i>
+      <span>${esc(pendingReason)}${c.pendingReasonAt ? ` <span style="color:var(--text-muted)">· ${esc(timeAgo(c.pendingReasonAt))}</span>` : ''}</span>
+    </div>` : '';
+
+    // (1) IN-PROGRESS — a live progress-log window streaming what the brain is
+    // doing right now. Filled + auto-scrolled by pollInboxProgress() polling
+    // GET /inbox/:id/progress (the tail of artifacts/<id>/progress.log).
+    const isRunning = t.status === 'in-progress' || t.status === 'claimed';
+    const progressHtml = isRunning ? `<div class="task-progress" style="margin:4px 0 8px; border:1px solid var(--border-hover); border-radius:10px; overflow:hidden; background:var(--bg-tertiary)">
+      <div style="display:flex; align-items:center; gap:7px; padding:6px 10px; font-size:0.74rem; text-transform:uppercase; letter-spacing:.03em; color:#0EA5E9; border-bottom:1px solid var(--border-hover)">
+        <span class="progress-pulse" data-progress-pulse="${esc(t.id)}" style="width:8px;height:8px;border-radius:50%;background:#0EA5E9;display:inline-block;animation:progressPulse 1.4s ease-in-out infinite"></span>
+        <span data-progress-label="${esc(t.id)}">Live progress — what it's doing right now</span>
+        <span data-progress-age="${esc(t.id)}" style="margin-left:auto; text-transform:none; letter-spacing:0; color:var(--text-muted)"></span>
+      </div>
+      <pre data-progress="${esc(t.id)}" style="margin:0; padding:9px 11px; max-height:320px; overflow:auto; white-space:pre-wrap; word-break:break-word; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:0.74rem; line-height:1.45; color:var(--text-secondary)">Loading live output…</pre>
+    </div>` : '';
+
+    // (3) FAILED on a RATE LIMIT — a toggle to auto re-run once the window resets.
+    // Shown only when the server classified the failure as rate-limited.
+    const rlReset = c.rateLimitResetsAt ? new Date(c.rateLimitResetsAt) : null;
+    const rlResetOk = rlReset && !isNaN(rlReset.getTime());
+    const autoRerunHtml = (failed && c.rateLimited) ? `<div class="task-autorerun" style="margin:6px 0 2px; padding:8px 10px; border-radius:9px; background:#F9731614; border:1px solid #F9731633">
+      <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:0.82rem; color:var(--text-primary)">
+        <input type="checkbox" data-autorerun="${esc(t.id)}" ${c.autoRerunOnReset !== false ? 'checked' : ''} style="width:15px;height:15px;cursor:pointer;accent-color:#F97316">
+        <span><i data-lucide="refresh-cw" style="width:12px;height:12px;vertical-align:-1px;margin-right:3px"></i>Auto re-run when the rate limit resets${rlResetOk ? ` <span style="color:var(--text-muted)">(≈ ${esc(rlReset.toLocaleString())})</span>` : ''}</span>
+      </label>
+      <button class="btn" data-rerun-task="${esc(t.id)}" data-brain="" title="Don't wait for the cooldown — re-run now on another brain"
+        style="font-size:0.72rem;margin:6px 0 0 23px;padding:2px 7px;color:#F97316;border-color:#F9731666">⇄ Assign to another brain now</button>
+      <div style="font-size:0.72rem; color:var(--text-muted); margin-top:3px; padding-left:23px">Failed on a rate limit. On by default — Cowork re-queues this task automatically once the usage window resets${rlResetOk ? '' : ' (re-checked hourly until a reset time is known)'}. Untick to leave it failed.${c.autoRerunCount ? ` Auto re-runs so far: ${esc(String(c.autoRerunCount))}.` : ''}</div>
+    </div>` : '';
+
+    return `
+    <div class="card task-card" style="margin-bottom: var(--space-md)${failed ? ';border-left:3px solid #EF4444' : ''}" data-task="${esc(t.id)}" data-created="${esc(t.createdAt || '')}" data-title="${esc((t.title || '').toLowerCase())}">
+      <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap">
+        ${failed ? badge('failed', '#EF4444')
+          : closedNoRun ? `<span class="badge" title="Done, but closed administratively without ever running a brain — so it has no artifacts and no result.md. The full explanation is in this task's result field below." style="background:#94A3B818; color:#94A3B8; border:1px solid #94A3B840">done · closed (never ran)</span>`
+          : badge(t.status, STATUS_COLORS[t.status] || '#94A3B8')}
+        ${!failed && c.qualityFlag === 'concerns' ? `<span class="badge" title="${esc('Done with concerns: ' + (c.concerns || '(no CONCERNS text)'))}" style="background:#F59E0B18; color:#F59E0B; border:1px solid #F59E0B40">⚠ concerns</span>` : ''}
+        ${c.specVerdict && c.specVerdict.verdict ? (() => {
+          const sv = c.specVerdict;
+          const v = String(sv.verdict).toUpperCase();
+          const col = v === 'APPROVED' ? '#22C55E' : v === 'CHANGES_REQUESTED' ? '#EF4444' : '#94A3B8';
+          const icon = v === 'APPROVED' ? '✓' : v === 'CHANGES_REQUESTED' ? '✗' : '?';
+          const lbl = v === 'APPROVED' ? 'spec: approved' : v === 'CHANGES_REQUESTED' ? 'spec: changes' : 'spec: unverifiable';
+          const tip = `Spec verifier (${sv.mode || 'shadow'}, judge: ${sv.judgeBrain || 'none'}): ${sv.summary || v}`;
+          return `<span class="badge" title="${esc(tip)}" style="background:${col}18; color:${col}; border:1px solid ${col}40">${icon} ${lbl}</span>`;
+        })() : ''}
+        ${t.status === 'scheduled' && t.scheduledAt ? badge(`⏰ ${new Date(t.scheduledAt).toLocaleString()}`, '#6366F1') : ''}
+        ${t.recurrence ? badge(`🔁 ${describeRecurrence(t.recurrence)}`, '#3B82F6')
+          : t.loopIntervalHours ? badge(`🔁 every ${t.loopIntervalHours}h`, '#3B82F6') : ''}
+        ${agentLabel ? badge(agentLabel, '#7C3AED') : ''}
+        ${t.interaction && t.interaction.status !== 'submitted' ? badge('⌛ awaiting input', '#EAB308') : ''}
+        ${t.interaction && t.interaction.status === 'submitted' ? badge('✓ input received', '#22C55E') : ''}
+        ${inputsRaw.length ? badge(`📎 ${inputsRaw.length}`, '#0EA5E9') : ''}
+        ${t.priority && t.priority !== 'normal' ? badge(t.priority, t.priority === 'urgent' ? '#EF4444' : (t.priority === 'high' ? '#EAB308' : '#94A3B8')) : ''}
+        ${(Array.isArray(t.tags) ? t.tags : []).filter(tag => tag !== 'chat').map(tag => badge('#' + tag, '#64748B')).join('')}
+        <button class="btn-icon task-del" data-del-task="${esc(t.id)}" title="Delete this task, its reports and artifacts"
+          style="margin-left:auto; padding:4px; background:none; border:none; cursor:pointer; line-height:0"><i data-lucide="trash-2" style="width:14px;height:14px;color:var(--text-muted)"></i></button>
+      </div>
+      <div style="margin:7px 0 3px"><strong style="font-size:1.02rem">${esc(t.title)}</strong></div>
+      ${chainHtml}
+      ${pendingHtml}
+      ${progressHtml}
+      ${autoRerunHtml}
+      <div class="task-meta" style="display:block; margin:2px 0 4px">${esc(t.from?.platform || '?')}/${esc(t.from?.agent || '?')} · <span title="${esc(t.createdAt || '')}">${timeAgo(t.createdAt)}</span>
+        ${failed ? `<button class="btn" data-rerun-task="${esc(t.id)}" data-brain="${esc(c.brainAuto ? '' : (c.brain || ''))}" title="Re-run this task — pick which brain claims it"
+          style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#EF4444;border-color:#EF444466">↻ Re-run</button>` : ''}
+        ${t.status === 'pending' || t.status === 'scheduled' ? (() => {
+          const cooling = /^Rate-limited\b/.test(pendingReason);
+          const col = cooling ? '#F97316' : '#64748B';
+          return `<button class="btn" data-reassign-task="${esc(t.id)}" data-brain="${esc(c.brainAuto ? '' : (c.brain || ''))}" title="Reassign — move this not-yet-started task to another brain"
+          style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:${col};border-color:${col}66">⇄ Reassign${cooling ? ' brain' : ''}</button>`;
+        })() : ''}
+        ${t.status === 'scheduled' ? `<button class="btn" data-run-now-task="${esc(t.id)}" title="Run now — release this scheduled task immediately instead of waiting for its run time"
+          style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#6366F1;border-color:#6366F166">▶ Run now</button>` : ''}
+        ${t.status === 'done' && !failed ? (t.context?.continuedInto
+          ? `<button class="btn" disabled title="Already continued — a follow-up task was spawned from this run"
+          style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#22C55E99;border-color:#22C55E33;opacity:.6;cursor:default">✓ Continued</button>`
+          : `<button class="btn" data-continue-task="${esc(t.id)}" data-brain="${esc(brainLabel)}" title="Continue this task — spawn a follow-up seeded with this run's outputs; pick which brain claims it"
+          style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#22C55E;border-color:#22C55E66">▸ Continue</button>`) : ''}
+        ${(t.worktree && !t.worktree.merged && !t.worktree.discarded) ? `<button class="btn" data-worktree-merge="${esc(t.id)}" title="Merge branch ${esc(t.worktree.branch)} into the main checkout's current branch (refused on conflicts or a dirty main checkout)"
+          style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#22C55E;border-color:#22C55E66">⑂ Merge</button>
+        <button class="btn" data-worktree-discard="${esc(t.id)}" title="Discard this task's worktree and delete branch ${esc(t.worktree.branch)}"
+          style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#EF4444;border-color:#EF444466">🗑 Discard</button>` : ''}
+        ${isTaskEditable(t) ? `<button class="btn" data-edit-task="${esc(t.id)}" title="Edit this task — change its title, brief, agent/brain, schedule and loop interval, then save"
+          style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#0EA5E9;border-color:#0EA5E966">✎ Edit</button>` : ''}</div>
+      ${this.recipeTaskCardHTML ? this.recipeTaskCardHTML(t, failed) : ''}
+      ${parentLink ? `<div style="padding:4px 0 2px; font-size:0.72rem">${parentLink}</div>` : ''}
+      ${(() => {
+        // RESULT / OUTPUTS / ARTIFACTS / INPUTS live in one collapsible block, HIDDEN by
+        // default — long file lists used to bury the card. Tapping anywhere on
+        // the card toggles it (delegated .task-card handler in the constructor);
+        // per-card open state is kept in this.taskFilesOpen so in-place
+        // re-renders restore the user's choice instead of collapsing everything.
+        // The human-in-the-loop interaction form rides in the SAME block, in the
+        // LAST position (after INPUTS), so it is hidden by default with the same
+        // tap-to-toggle behaviour; the card's "⌛ awaiting input" / "✓ input
+        // received" badge above keeps it discoverable while collapsed.
+        // The task ID / artifacts-folder row and the acceptance criteria ride at
+        // the TOP of the same block — hidden by default, revealed on tap.
+        const idsHtml = `<div class="task-ids" style="display:flex; flex-wrap:wrap; align-items:center; gap:12px; padding:4px 0 2px; font-size:0.72rem; color:var(--text-muted)">
+          <span class="copyable" data-copy="${esc(t.id)}" title="Task ID — click to copy" style="cursor:pointer; font-family:ui-monospace,SFMono-Regular,Menlo,monospace">
+            <i data-lucide="hash" style="width:11px;height:11px;vertical-align:-1px"></i>${esc(t.id)}</span>
+          <span class="copyable" data-copy="artifacts/${esc(t.id)}/" title="Artifacts directory — click to copy" style="cursor:pointer; font-family:ui-monospace,SFMono-Regular,Menlo,monospace">
+            <i data-lucide="folder" style="width:11px;height:11px;vertical-align:-1px"></i>artifacts/${esc(t.id)}/</span>
+        </div>`;
+        const hasAcceptance = Array.isArray(c.acceptance) && c.acceptance.length > 0;
+        const acceptanceHtml = hasAcceptance ? `<div class="task-acceptance" style="margin:6px 0; padding:6px 10px; background:var(--bg-tertiary); border:1px solid var(--border-color); border-radius:8px; font-size:0.8rem">
+          <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px">
+            <span style="font-weight:600; text-transform:uppercase; letter-spacing:.03em; color:var(--text-muted); font-size:0.72rem">Acceptance criteria</span>
+            ${c.acceptanceSource === 'sharpened' ? `<span class="badge" title="Generated by brief sharpener" style="background:#0EA5E918; color:#0EA5E9; border:1px solid #0EA5E940; font-size:0.68rem">sharpened</span>` : ''}
+          </div>
+          <ul style="margin:0; padding-left:16px; color:var(--text-secondary); line-height:1.4">
+            ${c.acceptance.map(a => `<li>${esc(a)}</li>`).join('')}
+          </ul>
+        </div>` : '';
+        const sectionStyle = 'display:flex; flex-wrap:wrap; align-items:center; gap:4px; padding:4px 0 2px';
+        const sectionLabel = (text, size) => `<span style="font-size:${size}; color:var(--text-muted); margin-right:2px; text-transform:uppercase; letter-spacing:.03em">${text}</span>`;
+        const resultHtml = hasResult ? `<div class="task-result" style="${sectionStyle}">${sectionLabel('Result', '0.85rem')}${artifactChip(t.id, 'result.md', '0.9rem')}</div>` : '';
+        const outsHtml = outs.length ? `<div class="task-outputs" style="${sectionStyle}">${sectionLabel('Outputs', '0.85rem')}${artifactChips(t.id, outs, '0.9rem', 'outputs')}</div>` : '';
+        const artsHtml = arts.length ? `<div class="task-artifacts" style="${sectionStyle}">${sectionLabel('Artifacts', '0.85rem')}${artifactChips(t.id, arts, '0.9rem', 'artifacts', t.artifactsTotal)}</div>` : '';
+        const inputsHtml = (inputs.length || canAttach) ? `<div class="task-inputs" style="${sectionStyle}">${sectionLabel('Inputs', '0.72rem')}${inputs.map(f => artifactChip(t.id, f, '0.78rem', 'inputs')).join('')}${canAttach ? `<input type="file" data-attach-files="${esc(t.id)}" multiple style="display:none">
+        <button class="btn" data-attach-input="${esc(t.id)}" title="Attach files for the brain to read" style="font-size:0.75rem;margin:0">＋ Attach files</button>` : ''}</div>` : '';
+        // The interaction form (if any) is the LAST section inside the block.
+        const interactionHtml = this.interactionBlock(t);
+        const filesOpen = this.taskFilesOpen ? this.taskFilesOpen.has(t.id) : false;
+        const nFiles = (hasResult ? 1 : 0) + outs.length + Math.max(arts.length, t.artifactsTotal || 0) + inputs.length;
+        const headParts = [];
+        if (nFiles) headParts.push(`${nFiles} file${nFiles === 1 ? '' : 's'}`);
+        else if (!interactionHtml) headParts.push('Details');
+        if (hasAcceptance) headParts.push('acceptance');
+        if (canAttach) headParts.push('＋ attach');
+        if (interactionHtml) headParts.push('input');
+        return `<div class="task-files" data-task-files="${esc(t.id)}"${filesOpen ? '' : ' hidden'} style="margin-top:2px">
+          <div class="task-files-head" role="button" tabindex="0" aria-expanded="${filesOpen}" title="Tap the card to show / hide the task ID, acceptance criteria, files & input form" style="display:flex; align-items:center; gap:5px; padding:4px 0; cursor:pointer; user-select:none">
+            <span class="task-files-caret" style="font-size:0.72rem; color:var(--text-muted)">${filesOpen ? '▾' : '▸'}</span>
+            <span style="font-size:0.72rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:.03em">${headParts.join(' · ')}</span>
+          </div>
+          ${idsHtml}
+          ${acceptanceHtml}
+          ${resultHtml}
+          ${outsHtml}
+          ${artsHtml}
+          ${inputsHtml}
+          ${interactionHtml}
+        </div>`;
+      })()}
+      ${t.claimedBy ? `<p style="font-size:0.8rem; color:var(--text-muted); margin-top:8px">Claimed by ${esc(this.agentLabel(t.claimedBy))}${t.completedAt ? ` · completed <span title="${esc(t.completedAt)}">${timeAgo(t.completedAt)}</span>` : ''}</p>` : ''}
+    </div>`;
+  }
+
+  // Wire one task card's buttons (or every card, with root = the list). Called
+  // on the full list by renderInbox and on a single fresh card by patchInboxTasks.
+  bindTaskCards(root) {
+    // Delete one task (+ its reports and artifacts).
+    root.querySelectorAll('[data-del-task]').forEach(b =>
+      b.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const id = b.dataset.delTask;
+        const title = b.closest('[data-task]')?.dataset.title || id.slice(0, 8);
+        if (!confirm(`Delete this task and its reports/artifacts?\n\n${title}`)) return;
+        try {
+          const r = await this.api.del(`/inbox/${encodeURIComponent(id)}`);
+          this.toast('task deleted', `${r.reports} report(s)${r.artifacts ? ' + artifacts' : ''} removed`);
+          this.renderInbox();
+        } catch (err) { this.toast('error', err.message); }
+      }));
+
+    // Re-run a failed task — pick which brain claims it, then reset to pending.
+    root.querySelectorAll('[data-rerun-task]').forEach(b =>
+      b.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const id = b.dataset.rerunTask;
+        const title = b.closest('[data-task]')?.dataset.title || id.slice(0, 8);
+        const choice = await this.pickBrain({
+          title: 'Re-run this failed task',
+          body: `<strong>${esc(title)}</strong> is reset to pending and dispatched again. Choose which brain should claim it — pick <em>Auto</em> to route from the top of the agent's brain chain.`,
+          defaultBrain: b.dataset.brain || '',
+          confirmLabel: '↻ Re-run',
+          confirmColor: '#EF4444'
+        });
+        if (!choice) return;
+        b.disabled = true;
+        try {
+          const body = { brain: choice.brain };
+          if (choice.scheduledAt) body.scheduledAt = choice.scheduledAt;
+          await this.api.post(`/inbox/${encodeURIComponent(id)}/rerun`, body);
+          const routeNote = choice.brain ? `pinned to ${choice.brain}` : 'auto-routed via the brain chain';
+          this.toast('re-running', choice.scheduledAt ? `Scheduled for ${new Date(choice.scheduledAt).toLocaleString()} — ${routeNote}.` : `Reset to pending — ${routeNote}.`);
+          this.renderInbox();
+        } catch (err) { this.toast('error', err.message); b.disabled = false; }
+      }));
+
+    // Reassign a pending/scheduled task (e.g. held on a rate-limited brain) to another brain.
+    root.querySelectorAll('[data-reassign-task]').forEach(b =>
+      b.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const id = b.dataset.reassignTask;
+        const title = b.closest('[data-task]')?.dataset.title || id.slice(0, 8);
+        const choice = await this.pickBrain({
+          title: 'Reassign to another brain',
+          body: `<strong>${esc(title)}</strong> hasn't started yet. Choose which brain should claim it instead — pick <em>Auto</em> to route from the top of the agent's brain chain. Brains cooling down on a rate limit are marked ⏳.`,
+          defaultBrain: '',
+          confirmLabel: '⇄ Reassign',
+          confirmColor: '#F97316',
+          withSchedule: false
+        });
+        if (!choice) return;
+        b.disabled = true;
+        try {
+          await this.api.post(`/inbox/${encodeURIComponent(id)}/reassign`, { brain: choice.brain });
+          this.toast('reassigned', choice.brain ? `Pinned to ${choice.brain} — dispatched by the next tick.` : 'Auto-routed via the brain chain — dispatched by the next tick.');
+          this.renderInbox();
+        } catch (err) { this.toast('error', err.message); b.disabled = false; }
+      }));
+
+    // Run now — release a scheduled task immediately instead of at its run time.
+    root.querySelectorAll('[data-run-now-task]').forEach(b =>
+      b.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const id = b.dataset.runNowTask;
+        const title = b.closest('[data-task]')?.dataset.title || id.slice(0, 8);
+        if (!confirm(`Run this scheduled task now?\n\n${title}`)) return;
+        b.disabled = true;
+        try {
+          const t = await this.api.post(`/inbox/${encodeURIComponent(id)}/run-now`, {});
+          this.toast('running now', t.status === 'wait-input'
+            ? 'Released — parked for input; it dispatches once its questions are answered.'
+            : 'Released to pending — dispatched by the next tick.');
+          this.renderInbox();
+        } catch (err) { this.toast('error', err.message); b.disabled = false; }
+      }));
+
+    // Edit a task (not running / not pending) — load its params into a modal and save.
+    root.querySelectorAll('[data-edit-task]').forEach(b =>
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.editTaskModal(b.dataset.editTask);
+      }));
+
+    // Recipes: "★ Save as recipe" + 👍/👎 on recipe-made tasks (public/js/recipes.js).
+    this.bindRecipeTaskCards?.(root);
+
+    // Continue a done task — pick which brain claims the follow-up.
+    root.querySelectorAll('[data-continue-task]').forEach(b =>
+      b.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const id = b.dataset.continueTask;
+        const title = b.closest('[data-task]')?.dataset.title || id.slice(0, 8);
+        const choice = await this.pickBrain({
+          title: 'Continue this task',
+          body: `A follow-up to <strong>${esc(title)}</strong> is created with this run's output files and result attached as inputs. Add an optional prompt or extra files to steer it, then choose which brain claims it — <em>Auto</em> routes via the agent's brain chain.`,
+          defaultBrain: b.dataset.brain || '',
+          confirmLabel: '▸ Continue',
+          confirmColor: '#22C55E',
+          withInputs: true
+        });
+        if (!choice) return;
+        b.disabled = true;
+        try {
+          // Upload the staged extras first so the follow-up carries them as inputs.
+          const inputs = choice.files?.length ? await this.uploadInputFiles(choice.files) : [];
+          const body = { brain: choice.brain };
+          if (choice.prompt) body.prompt = choice.prompt;
+          if (inputs.length) body.inputs = inputs;
+          if (choice.scheduledAt) body.scheduledAt = choice.scheduledAt;
+          await this.api.post(`/inbox/${encodeURIComponent(id)}/continue`, body);
+          const extras = [choice.prompt ? 'prompt' : null, inputs.length ? `${inputs.length} file(s)` : null].filter(Boolean).join(' + ');
+          const routeNote = choice.brain ? `pinned to ${choice.brain}` : 'auto-routed via the brain chain';
+          const timingNote = choice.scheduledAt ? `Scheduled for ${new Date(choice.scheduledAt).toLocaleString()}` : 'Follow-up queued';
+          this.toast('continuing', `${timingNote} — ${routeNote}${extras ? ` · added ${extras}` : ''}.`);
+          this.renderInbox();
+        } catch (err) { this.toast('error', err.message); b.disabled = false; }
+      }));
+
+    // Code-task worktree: merge its branch into main, or discard it.
+    for (const [attr, key, verb, confirmMsg] of [
+      ['[data-worktree-merge]', 'worktreeMerge', 'merge', 'Merge this task\'s branch into the main checkout\'s current branch?'],
+      ['[data-worktree-discard]', 'worktreeDiscard', 'discard', 'Discard this task\'s worktree and DELETE its branch? Unmerged work is lost.']
+    ]) {
+      root.querySelectorAll(attr).forEach(b =>
+        b.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          if (!confirm(confirmMsg)) return;
+          b.disabled = true;
+          try {
+            const out = await this.api.post(`/inbox/${encodeURIComponent(b.dataset[key])}/worktree/${verb}`, {});
+            this.toast(verb === 'merge' ? 'merged' : 'discarded', out?.message || 'done');
+            this.renderInbox();
+          } catch (err) { this.toast('error', err.message); b.disabled = false; }
+        }));
+    }
+
+    // Attach input files to an existing task (upload → append to context.inputFiles).
+    root.querySelectorAll('[data-attach-input]').forEach(b =>
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const inp = this.contentEl.querySelector(`[data-attach-files="${CSS.escape(b.dataset.attachInput)}"]`);
+        if (inp) inp.click();
+      }));
+    root.querySelectorAll('[data-attach-files]').forEach(inp =>
+      inp.addEventListener('change', async (e) => {
+        e.stopPropagation();
+        const id = inp.dataset.attachFiles;
+        const files = Array.from(inp.files || []);
+        if (!files.length) return;
+        try {
+          const attached = await this.uploadInputFiles(files);
+          await this.api.post(`/inbox/${encodeURIComponent(id)}/inputs`, { inputs: attached });
+          this.toast('files attached', `${attached.length} file(s) added — the brain will read them.`);
+          this.renderInbox();
+        } catch (err) { this.toast('error', err.message); }
+      }));
+
+    // Submit human interaction (questions/checklist) from a task card.
+    root.querySelectorAll('.interaction-submit').forEach(btn =>
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const id = btn.dataset.ixTask;
+        const box = btn.closest('.task-interaction');
+        if (!box) return;
+        const responses = {};
+        box.querySelectorAll('[data-field]').forEach(el => {
+          responses[el.dataset.field] = el.dataset.ftype === 'checkbox' ? el.checked : el.value;
+        });
+        // Catch blank required answers here so the user gets an inline pointer at
+        // the offending field instead of an opaque server 400. Checkboxes are
+        // never "required-empty" (mirrors the rule in store.submitInteraction).
+        const missing = [...box.querySelectorAll('[data-field][data-required="1"]:not([data-ftype="checkbox"])')]
+          .find(el => !String(el.value ?? '').trim());
+        if (missing) {
+          missing.focus();
+          missing.style.borderColor = '#EF4444';
+          this.toast('answer required', 'Please fill in the required field before submitting.');
+          return;
+        }
+        const submittedBy = box.querySelector('[data-ix-by]')?.value.trim() || undefined;
+        btn.disabled = true;
+        try {
+          await this.api.post(`/inbox/${encodeURIComponent(id)}/interaction`, { responses, submittedBy });
+          this.toast('input submitted', 'The task now has your answers.');
+          this.renderInbox();
+        } catch (err) { this.toast('error', err.message); btn.disabled = false; }
+      }));
+
+    // Click a task ID or artifacts path to copy it to the clipboard.
+    root.querySelectorAll('[data-copy]').forEach(el =>
+      el.addEventListener('click', async (e) => {
+        e.stopPropagation();   // don't toggle the card
+        const text = el.dataset.copy;
+        if (await this.copyText(text)) this.toast('copied', text);
+        else this.toast('copy failed', text);
+      }));
+
+    // Auto-rerun-on-reset toggle on a rate-limited failed task: persist the choice.
+    root.querySelectorAll('[data-autorerun]').forEach(cb =>
+      cb.addEventListener('change', async (e) => {
+        e.stopPropagation();
+        const id = cb.dataset.autorerun;
+        const enabled = cb.checked;
+        cb.disabled = true;
+        try {
+          await this.api.post(`/inbox/${encodeURIComponent(id)}/auto-rerun`, { enabled });
+          this.toast('auto re-run', enabled
+            ? 'On — Cowork will re-run this task automatically once the rate limit resets.'
+            : 'Off — this task will not re-run automatically.');
+        } catch (err) { this.toast('error', err.message); cb.checked = !enabled; }
+        finally { cb.disabled = false; }
+      }));
+  }
+
   async renderInbox() {
     this.inboxLimit = this.inboxLimit || 50;
     // Filters + Purge collapse into a single toggle (the "+" New-task button
@@ -2310,16 +2784,8 @@ class App {
 
     // Per-status counts on the filter pills (from the dashboard summary; the
     // "done" pill excludes failed tasks, mirroring the server's done filter).
-    const s = status?.inboxSummary;
-    const counts = s ? {
-      done: Math.max(0, (s.completed || 0) - (s.failed || 0)),
-      'in-progress': s.inProgress || 0, pending: s.pending || 0,
-      scheduled: s.scheduled || 0,
-      'wait-input': s.waitingInput || 0, failed: s.failed || 0
-    } : null;
     const pills = ['', 'done', 'in-progress', 'pending', 'scheduled', 'wait-input', 'failed'].map(f => {
-      const n = counts && f ? counts[f] : null;
-      const label = (f === '' ? 'All' : f) + (n !== null && n !== undefined ? ` ${n}` : '');
+      const label = inboxPillLabel(f, status);
       const active = this.inboxFilter === f;
       const color = f === 'failed' ? '#EF4444' : (STATUS_COLORS[f] || '#94A3B8');
       let style = '';
@@ -2335,224 +2801,8 @@ class App {
       return `<button class="btn pill" data-filter="${f}" style="${style}">${esc(label)}</button>`;
     }).join(' ');
 
-    const rows = tasks.length ? tasks.map(t => {
-      const c = t.context || {};
-      // Which agent + brain ran it (item 5), or the requested assignment.
-      const agentLabel = c.ranAgent ? (c.ranDivision ? `${c.ranDivision} / ${c.ranAgent}` : c.ranAgent)
-        : (c.division ? `${c.division} / ${c.agent || '?'}` : (c.agent || c.role || ''));
-      const brainLabel = c.ranBrain || c.brain || '';
-      // Fallback trail: brains that failed verification and were handed over.
-      const failedBrains = Array.isArray(c.failedBrains) ? c.failedBrains : [];
-      const failed = isTaskFailed(t);
-      // done, but closed administratively without ever running (superseded copy,
-      // pre-empted cancel) — badged distinctly so its empty artifacts list is not
-      // mistaken for a silent failure.
-      const closedNoRun = isTaskClosedNoRun(t);
-      // The card no longer expands to show RESULT / DESCRIPTION inline. Instead the
-      // run's RESULT is a first-class `result.md` chip in its own RESULT section
-      // (first, above ARTIFACTS / INPUTS) and the brief is a `description.md` chip
-      // under INPUTS — both open in the markdown viewer modal. The dispatcher writes
-      // the real result.md for local runs; the server also serves both names
-      // synthetically from task.result / task.description, so the chips work even
-      // when no file is on disk (remote / older tasks).
-      const artsRaw = Array.isArray(t.artifacts) ? t.artifacts : [];
-      // result.md gets its own RESULT section — keep it out of the plain
-      // ARTIFACTS list so the run's result is not buried in the artifacts.
-      const resultOnDisk = artsRaw.includes('result.md');
-      const hasResult = !closedNoRun && (!!t.result || resultOnDisk);
-      const arts = artsRaw.filter(f => f !== 'result.md');
-      // OUTPUTS: the final deliverables the run placed in artifacts/<id>/outputs/
-      // ($COWORK_OUTPUTS_DIR) — their own section, right after RESULT.
-      const outs = Array.isArray(t.outputs) ? t.outputs : [];
-      const inputsRaw = Array.isArray(c.inputFiles) ? c.inputFiles : [];
-      const inputs = (t.description && !inputsRaw.includes('description.md'))
-        ? ['description.md', ...inputsRaw] : inputsRaw;
-      // A recurring task is a persistent SCHEDULER: it stays `scheduled` and spawns a
-      // one-shot run-child each cycle. Each run-child is its OWN `done` card holding
-      // that cycle's artifacts/result, linked back to the scheduler via
-      // context.scheduledParentId. We surface that ONE stable parent reference (no
-      // run-to-run "previous/next" chain that made the list scroll up and down).
-      const parentLink = c.scheduledParentId
-        ? `<a href="#tasks/${encodeURIComponent(c.scheduledParentId)}" title="This run was produced by a recurring scheduled task — open it" style="display:inline-flex; align-items:center; gap:3px; color:#6366F1; text-decoration:none; font-family:inherit"><i data-lucide="repeat" style="width:11px;height:11px;vertical-align:-1px"></i>scheduled task</a>`
-        : '';
-      // Files can be attached while a task is still schedulable, or to a failed one
-      // (attach context, then re-run).
-      const canAttach = ['pending', 'wait-input', 'scheduled'].includes(t.status) || failed;
-      // Vertical brain fallback chain — brains in the order they were tried, the
-      // last one at the bottom. Failed rungs are red with their reason; the final
-      // (running / successful) brain sits at the end.
-      const chain = failedBrains.map(f => ({
-        brain: f.brain, reason: f.reason || 'failed', ok: false
-      }));
-      const lastFailed = failedBrains.length ? failedBrains[failedBrains.length - 1].brain : null;
-      if (brainLabel && brainLabel !== lastFailed) chain.push({ brain: brainLabel, ok: !failed, final: true });
-      const chainHtml = chain.length ? `<div class="task-brain-chain" style="display:flex; flex-direction:column; gap:3px; padding:2px 0 6px">
-        ${chain.map((r, i) => {
-          const col = r.ok ? '#22C55E' : (r.final ? BRAIN_COLOR : '#EF4444');
-          const icon = r.ok ? '✓' : (r.final ? '●' : '✗');
-          return `<div style="display:flex; align-items:center; gap:6px; font-size:0.8rem">
-            <span style="width:14px; text-align:right; color:var(--text-muted); font-size:0.7rem">${i + 1}</span>
-            <span class="badge" style="background:${col}18; color:${col}; border:1px solid ${col}40">${icon} ${esc(r.brain)}</span>
-            ${r.reason ? `<span style="color:var(--text-muted); font-size:0.74rem">${esc(r.reason)}</span>` : ''}
-          </div>`;
-        }).join('')}
-      </div>` : '';
-
-      // (2) PENDING — why is this task still waiting? The dispatcher annotates each
-      // pending task with context.pendingReason (free slot / brain at capacity /
-      // routing / remote-unclaimed / deps / held-manual). Shown only while pending.
-      const pendingReason = (t.status === 'pending' && c.pendingReason) ? String(c.pendingReason) : '';
-      const pendingHtml = pendingReason ? `<div class="task-pending-why" style="display:flex; align-items:flex-start; gap:6px; margin:2px 0 6px; padding:6px 9px; border-radius:8px; background:#EAB30814; border:1px solid #EAB30833; color:var(--text-secondary); font-size:0.8rem">
-        <i data-lucide="hourglass" style="width:13px;height:13px;margin-top:1px;color:#EAB308;flex-shrink:0"></i>
-        <span>${esc(pendingReason)}${c.pendingReasonAt ? ` <span style="color:var(--text-muted)">· ${esc(timeAgo(c.pendingReasonAt))}</span>` : ''}</span>
-      </div>` : '';
-
-      // (1) IN-PROGRESS — a live progress-log window streaming what the brain is
-      // doing right now. Filled + auto-scrolled by pollInboxProgress() polling
-      // GET /inbox/:id/progress (the tail of artifacts/<id>/progress.log).
-      const isRunning = t.status === 'in-progress' || t.status === 'claimed';
-      const progressHtml = isRunning ? `<div class="task-progress" style="margin:4px 0 8px; border:1px solid var(--border-hover); border-radius:10px; overflow:hidden; background:var(--bg-tertiary)">
-        <div style="display:flex; align-items:center; gap:7px; padding:6px 10px; font-size:0.74rem; text-transform:uppercase; letter-spacing:.03em; color:#0EA5E9; border-bottom:1px solid var(--border-hover)">
-          <span class="progress-pulse" data-progress-pulse="${esc(t.id)}" style="width:8px;height:8px;border-radius:50%;background:#0EA5E9;display:inline-block;animation:progressPulse 1.4s ease-in-out infinite"></span>
-          <span data-progress-label="${esc(t.id)}">Live progress — what it's doing right now</span>
-          <span data-progress-age="${esc(t.id)}" style="margin-left:auto; text-transform:none; letter-spacing:0; color:var(--text-muted)"></span>
-        </div>
-        <pre data-progress="${esc(t.id)}" style="margin:0; padding:9px 11px; max-height:320px; overflow:auto; white-space:pre-wrap; word-break:break-word; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:0.74rem; line-height:1.45; color:var(--text-secondary)">Loading live output…</pre>
-      </div>` : '';
-
-      // (3) FAILED on a RATE LIMIT — a toggle to auto re-run once the window resets.
-      // Shown only when the server classified the failure as rate-limited.
-      const rlReset = c.rateLimitResetsAt ? new Date(c.rateLimitResetsAt) : null;
-      const rlResetOk = rlReset && !isNaN(rlReset.getTime());
-      const autoRerunHtml = (failed && c.rateLimited) ? `<div class="task-autorerun" style="margin:6px 0 2px; padding:8px 10px; border-radius:9px; background:#F9731614; border:1px solid #F9731633">
-        <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:0.82rem; color:var(--text-primary)">
-          <input type="checkbox" data-autorerun="${esc(t.id)}" ${c.autoRerunOnReset !== false ? 'checked' : ''} style="width:15px;height:15px;cursor:pointer;accent-color:#F97316">
-          <span><i data-lucide="refresh-cw" style="width:12px;height:12px;vertical-align:-1px;margin-right:3px"></i>Auto re-run when the rate limit resets${rlResetOk ? ` <span style="color:var(--text-muted)">(≈ ${esc(rlReset.toLocaleString())})</span>` : ''}</span>
-        </label>
-        <button class="btn" data-rerun-task="${esc(t.id)}" data-brain="" title="Don't wait for the cooldown — re-run now on another brain"
-          style="font-size:0.72rem;margin:6px 0 0 23px;padding:2px 7px;color:#F97316;border-color:#F9731666">⇄ Assign to another brain now</button>
-        <div style="font-size:0.72rem; color:var(--text-muted); margin-top:3px; padding-left:23px">Failed on a rate limit. On by default — Cowork re-queues this task automatically once the usage window resets${rlResetOk ? '' : ' (re-checked hourly until a reset time is known)'}. Untick to leave it failed.${c.autoRerunCount ? ` Auto re-runs so far: ${esc(String(c.autoRerunCount))}.` : ''}</div>
-      </div>` : '';
-
-      return `
-      <div class="card task-card" style="margin-bottom: var(--space-md)${failed ? ';border-left:3px solid #EF4444' : ''}" data-task="${esc(t.id)}" data-title="${esc((t.title || '').toLowerCase())}">
-        <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap">
-          ${failed ? badge('failed', '#EF4444')
-            : closedNoRun ? `<span class="badge" title="Done, but closed administratively without ever running a brain — so it has no artifacts and no result.md. The full explanation is in this task's result field below." style="background:#94A3B818; color:#94A3B8; border:1px solid #94A3B840">done · closed (never ran)</span>`
-            : badge(t.status, STATUS_COLORS[t.status] || '#94A3B8')}
-          ${!failed && c.qualityFlag === 'concerns' ? `<span class="badge" title="${esc('Done with concerns: ' + (c.concerns || '(no CONCERNS text)'))}" style="background:#F59E0B18; color:#F59E0B; border:1px solid #F59E0B40">⚠ concerns</span>` : ''}
-          ${c.specVerdict && c.specVerdict.verdict ? (() => {
-            const sv = c.specVerdict;
-            const v = String(sv.verdict).toUpperCase();
-            const col = v === 'APPROVED' ? '#22C55E' : v === 'CHANGES_REQUESTED' ? '#EF4444' : '#94A3B8';
-            const icon = v === 'APPROVED' ? '✓' : v === 'CHANGES_REQUESTED' ? '✗' : '?';
-            const lbl = v === 'APPROVED' ? 'spec: approved' : v === 'CHANGES_REQUESTED' ? 'spec: changes' : 'spec: unverifiable';
-            const tip = `Spec verifier (${sv.mode || 'shadow'}, judge: ${sv.judgeBrain || 'none'}): ${sv.summary || v}`;
-            return `<span class="badge" title="${esc(tip)}" style="background:${col}18; color:${col}; border:1px solid ${col}40">${icon} ${lbl}</span>`;
-          })() : ''}
-          ${t.status === 'scheduled' && t.scheduledAt ? badge(`⏰ ${new Date(t.scheduledAt).toLocaleString()}`, '#6366F1') : ''}
-          ${t.recurrence ? badge(`🔁 ${describeRecurrence(t.recurrence)}`, '#3B82F6')
-            : t.loopIntervalHours ? badge(`🔁 every ${t.loopIntervalHours}h`, '#3B82F6') : ''}
-          ${agentLabel ? badge(agentLabel, '#7C3AED') : ''}
-          ${t.interaction && t.interaction.status !== 'submitted' ? badge('⌛ awaiting input', '#EAB308') : ''}
-          ${t.interaction && t.interaction.status === 'submitted' ? badge('✓ input received', '#22C55E') : ''}
-          ${inputsRaw.length ? badge(`📎 ${inputsRaw.length}`, '#0EA5E9') : ''}
-          ${t.priority && t.priority !== 'normal' ? badge(t.priority, t.priority === 'urgent' ? '#EF4444' : (t.priority === 'high' ? '#EAB308' : '#94A3B8')) : ''}
-          ${(Array.isArray(t.tags) ? t.tags : []).filter(tag => tag !== 'chat').map(tag => badge('#' + tag, '#64748B')).join('')}
-          <button class="btn-icon task-del" data-del-task="${esc(t.id)}" title="Delete this task, its reports and artifacts"
-            style="margin-left:auto; padding:4px; background:none; border:none; cursor:pointer; line-height:0"><i data-lucide="trash-2" style="width:14px;height:14px;color:var(--text-muted)"></i></button>
-        </div>
-        <div style="margin:7px 0 3px"><strong style="font-size:1.02rem">${esc(t.title)}</strong></div>
-        ${chainHtml}
-        ${pendingHtml}
-        ${progressHtml}
-        ${autoRerunHtml}
-        <div class="task-meta" style="display:block; margin:2px 0 4px">${esc(t.from?.platform || '?')}/${esc(t.from?.agent || '?')} · <span title="${esc(t.createdAt || '')}">${timeAgo(t.createdAt)}</span>
-          ${failed ? `<button class="btn" data-rerun-task="${esc(t.id)}" data-brain="${esc(c.brainAuto ? '' : (c.brain || ''))}" title="Re-run this task — pick which brain claims it"
-            style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#EF4444;border-color:#EF444466">↻ Re-run</button>` : ''}
-          ${t.status === 'pending' || t.status === 'scheduled' ? (() => {
-            const cooling = /^Rate-limited\b/.test(pendingReason);
-            const col = cooling ? '#F97316' : '#64748B';
-            return `<button class="btn" data-reassign-task="${esc(t.id)}" data-brain="${esc(c.brainAuto ? '' : (c.brain || ''))}" title="Reassign — move this not-yet-started task to another brain"
-            style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:${col};border-color:${col}66">⇄ Reassign${cooling ? ' brain' : ''}</button>`;
-          })() : ''}
-          ${t.status === 'scheduled' ? `<button class="btn" data-run-now-task="${esc(t.id)}" title="Run now — release this scheduled task immediately instead of waiting for its run time"
-            style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#6366F1;border-color:#6366F166">▶ Run now</button>` : ''}
-          ${t.status === 'done' && !failed ? (t.context?.continuedInto
-            ? `<button class="btn" disabled title="Already continued — a follow-up task was spawned from this run"
-            style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#22C55E99;border-color:#22C55E33;opacity:.6;cursor:default">✓ Continued</button>`
-            : `<button class="btn" data-continue-task="${esc(t.id)}" data-brain="${esc(brainLabel)}" title="Continue this task — spawn a follow-up seeded with this run's outputs; pick which brain claims it"
-            style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#22C55E;border-color:#22C55E66">▸ Continue</button>`) : ''}
-          ${(t.worktree && !t.worktree.merged && !t.worktree.discarded) ? `<button class="btn" data-worktree-merge="${esc(t.id)}" title="Merge branch ${esc(t.worktree.branch)} into the main checkout's current branch (refused on conflicts or a dirty main checkout)"
-            style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#22C55E;border-color:#22C55E66">⑂ Merge</button>
-          <button class="btn" data-worktree-discard="${esc(t.id)}" title="Discard this task's worktree and delete branch ${esc(t.worktree.branch)}"
-            style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#EF4444;border-color:#EF444466">🗑 Discard</button>` : ''}
-          ${isTaskEditable(t) ? `<button class="btn" data-edit-task="${esc(t.id)}" title="Edit this task — change its title, brief, agent/brain, schedule and loop interval, then save"
-            style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#0EA5E9;border-color:#0EA5E966">✎ Edit</button>` : ''}</div>
-        ${this.recipeTaskCardHTML ? this.recipeTaskCardHTML(t, failed) : ''}
-        ${parentLink ? `<div style="padding:4px 0 2px; font-size:0.72rem">${parentLink}</div>` : ''}
-        ${(() => {
-          // RESULT / OUTPUTS / ARTIFACTS / INPUTS live in one collapsible block, HIDDEN by
-          // default — long file lists used to bury the card. Tapping anywhere on
-          // the card toggles it (delegated .task-card handler in the constructor);
-          // per-card open state is kept in this.taskFilesOpen so in-place
-          // re-renders restore the user's choice instead of collapsing everything.
-          // The human-in-the-loop interaction form rides in the SAME block, in the
-          // LAST position (after INPUTS), so it is hidden by default with the same
-          // tap-to-toggle behaviour; the card's "⌛ awaiting input" / "✓ input
-          // received" badge above keeps it discoverable while collapsed.
-          // The task ID / artifacts-folder row and the acceptance criteria ride at
-          // the TOP of the same block — hidden by default, revealed on tap.
-          const idsHtml = `<div class="task-ids" style="display:flex; flex-wrap:wrap; align-items:center; gap:12px; padding:4px 0 2px; font-size:0.72rem; color:var(--text-muted)">
-            <span class="copyable" data-copy="${esc(t.id)}" title="Task ID — click to copy" style="cursor:pointer; font-family:ui-monospace,SFMono-Regular,Menlo,monospace">
-              <i data-lucide="hash" style="width:11px;height:11px;vertical-align:-1px"></i>${esc(t.id)}</span>
-            <span class="copyable" data-copy="artifacts/${esc(t.id)}/" title="Artifacts directory — click to copy" style="cursor:pointer; font-family:ui-monospace,SFMono-Regular,Menlo,monospace">
-              <i data-lucide="folder" style="width:11px;height:11px;vertical-align:-1px"></i>artifacts/${esc(t.id)}/</span>
-          </div>`;
-          const hasAcceptance = Array.isArray(c.acceptance) && c.acceptance.length > 0;
-          const acceptanceHtml = hasAcceptance ? `<div class="task-acceptance" style="margin:6px 0; padding:6px 10px; background:var(--bg-tertiary); border:1px solid var(--border-color); border-radius:8px; font-size:0.8rem">
-            <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px">
-              <span style="font-weight:600; text-transform:uppercase; letter-spacing:.03em; color:var(--text-muted); font-size:0.72rem">Acceptance criteria</span>
-              ${c.acceptanceSource === 'sharpened' ? `<span class="badge" title="Generated by brief sharpener" style="background:#0EA5E918; color:#0EA5E9; border:1px solid #0EA5E940; font-size:0.68rem">sharpened</span>` : ''}
-            </div>
-            <ul style="margin:0; padding-left:16px; color:var(--text-secondary); line-height:1.4">
-              ${c.acceptance.map(a => `<li>${esc(a)}</li>`).join('')}
-            </ul>
-          </div>` : '';
-          const sectionStyle = 'display:flex; flex-wrap:wrap; align-items:center; gap:4px; padding:4px 0 2px';
-          const sectionLabel = (text, size) => `<span style="font-size:${size}; color:var(--text-muted); margin-right:2px; text-transform:uppercase; letter-spacing:.03em">${text}</span>`;
-          const resultHtml = hasResult ? `<div class="task-result" style="${sectionStyle}">${sectionLabel('Result', '0.85rem')}${artifactChip(t.id, 'result.md', '0.9rem')}</div>` : '';
-          const outsHtml = outs.length ? `<div class="task-outputs" style="${sectionStyle}">${sectionLabel('Outputs', '0.85rem')}${artifactChips(t.id, outs, '0.9rem', 'outputs')}</div>` : '';
-          const artsHtml = arts.length ? `<div class="task-artifacts" style="${sectionStyle}">${sectionLabel('Artifacts', '0.85rem')}${artifactChips(t.id, arts, '0.9rem', 'artifacts', t.artifactsTotal)}</div>` : '';
-          const inputsHtml = (inputs.length || canAttach) ? `<div class="task-inputs" style="${sectionStyle}">${sectionLabel('Inputs', '0.72rem')}${inputs.map(f => artifactChip(t.id, f, '0.78rem', 'inputs')).join('')}${canAttach ? `<input type="file" data-attach-files="${esc(t.id)}" multiple style="display:none">
-          <button class="btn" data-attach-input="${esc(t.id)}" title="Attach files for the brain to read" style="font-size:0.75rem;margin:0">＋ Attach files</button>` : ''}</div>` : '';
-          // The interaction form (if any) is the LAST section inside the block.
-          const interactionHtml = this.interactionBlock(t);
-          const filesOpen = this.taskFilesOpen ? this.taskFilesOpen.has(t.id) : false;
-          const nFiles = (hasResult ? 1 : 0) + outs.length + Math.max(arts.length, t.artifactsTotal || 0) + inputs.length;
-          const headParts = [];
-          if (nFiles) headParts.push(`${nFiles} file${nFiles === 1 ? '' : 's'}`);
-          else if (!interactionHtml) headParts.push('Details');
-          if (hasAcceptance) headParts.push('acceptance');
-          if (canAttach) headParts.push('＋ attach');
-          if (interactionHtml) headParts.push('input');
-          return `<div class="task-files" data-task-files="${esc(t.id)}"${filesOpen ? '' : ' hidden'} style="margin-top:2px">
-            <div class="task-files-head" role="button" tabindex="0" aria-expanded="${filesOpen}" title="Tap the card to show / hide the task ID, acceptance criteria, files & input form" style="display:flex; align-items:center; gap:5px; padding:4px 0; cursor:pointer; user-select:none">
-              <span class="task-files-caret" style="font-size:0.72rem; color:var(--text-muted)">${filesOpen ? '▾' : '▸'}</span>
-              <span style="font-size:0.72rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:.03em">${headParts.join(' · ')}</span>
-            </div>
-            ${idsHtml}
-            ${acceptanceHtml}
-            ${resultHtml}
-            ${outsHtml}
-            ${artsHtml}
-            ${inputsHtml}
-            ${interactionHtml}
-          </div>`;
-        })()}
-        ${t.claimedBy ? `<p style="font-size:0.8rem; color:var(--text-muted); margin-top:8px">Claimed by ${esc(this.agentLabel(t.claimedBy))}${t.completedAt ? ` · completed <span title="${esc(t.completedAt)}">${timeAgo(t.completedAt)}</span>` : ''}</p>` : ''}
-      </div>`;
-    }).join('') : `<div class="empty-state"><p>No tasks${this.inboxFilter ? ` with status "${esc(this.inboxFilter)}"` : ''}.</p></div>`;
+    const rows = tasks.length ? tasks.map(t => this.taskCardHTML(t)).join('')
+      : `<div class="empty-state"><p>No tasks${this.inboxFilter ? ` with status "${esc(this.inboxFilter)}"` : ''}.</p></div>`;
 
     // #content is the scroll container — preserve the reading position across
     // SSE-driven re-renders instead of snapping back to the top.
@@ -2621,196 +2871,7 @@ class App {
     const searchEl = this.contentEl.querySelector('#inbox-search');
     searchEl.addEventListener('input', () => { this.inboxSearch = searchEl.value; this.applyInboxSearch(); });
 
-    // Delete one task (+ its reports and artifacts).
-    this.contentEl.querySelectorAll('[data-del-task]').forEach(b =>
-      b.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        const id = b.dataset.delTask;
-        const title = b.closest('[data-task]')?.dataset.title || id.slice(0, 8);
-        if (!confirm(`Delete this task and its reports/artifacts?\n\n${title}`)) return;
-        try {
-          const r = await this.api.del(`/inbox/${encodeURIComponent(id)}`);
-          this.toast('task deleted', `${r.reports} report(s)${r.artifacts ? ' + artifacts' : ''} removed`);
-          this.renderInbox();
-        } catch (err) { this.toast('error', err.message); }
-      }));
-
-    // Re-run a failed task — pick which brain claims it, then reset to pending.
-    this.contentEl.querySelectorAll('[data-rerun-task]').forEach(b =>
-      b.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        const id = b.dataset.rerunTask;
-        const title = b.closest('[data-task]')?.dataset.title || id.slice(0, 8);
-        const choice = await this.pickBrain({
-          title: 'Re-run this failed task',
-          body: `<strong>${esc(title)}</strong> is reset to pending and dispatched again. Choose which brain should claim it — pick <em>Auto</em> to route from the top of the agent's brain chain.`,
-          defaultBrain: b.dataset.brain || '',
-          confirmLabel: '↻ Re-run',
-          confirmColor: '#EF4444'
-        });
-        if (!choice) return;
-        b.disabled = true;
-        try {
-          const body = { brain: choice.brain };
-          if (choice.scheduledAt) body.scheduledAt = choice.scheduledAt;
-          await this.api.post(`/inbox/${encodeURIComponent(id)}/rerun`, body);
-          const routeNote = choice.brain ? `pinned to ${choice.brain}` : 'auto-routed via the brain chain';
-          this.toast('re-running', choice.scheduledAt ? `Scheduled for ${new Date(choice.scheduledAt).toLocaleString()} — ${routeNote}.` : `Reset to pending — ${routeNote}.`);
-          this.renderInbox();
-        } catch (err) { this.toast('error', err.message); b.disabled = false; }
-      }));
-
-    // Reassign a pending/scheduled task (e.g. held on a rate-limited brain) to another brain.
-    this.contentEl.querySelectorAll('[data-reassign-task]').forEach(b =>
-      b.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        const id = b.dataset.reassignTask;
-        const title = b.closest('[data-task]')?.dataset.title || id.slice(0, 8);
-        const choice = await this.pickBrain({
-          title: 'Reassign to another brain',
-          body: `<strong>${esc(title)}</strong> hasn't started yet. Choose which brain should claim it instead — pick <em>Auto</em> to route from the top of the agent's brain chain. Brains cooling down on a rate limit are marked ⏳.`,
-          defaultBrain: '',
-          confirmLabel: '⇄ Reassign',
-          confirmColor: '#F97316',
-          withSchedule: false
-        });
-        if (!choice) return;
-        b.disabled = true;
-        try {
-          await this.api.post(`/inbox/${encodeURIComponent(id)}/reassign`, { brain: choice.brain });
-          this.toast('reassigned', choice.brain ? `Pinned to ${choice.brain} — dispatched by the next tick.` : 'Auto-routed via the brain chain — dispatched by the next tick.');
-          this.renderInbox();
-        } catch (err) { this.toast('error', err.message); b.disabled = false; }
-      }));
-
-    // Run now — release a scheduled task immediately instead of at its run time.
-    this.contentEl.querySelectorAll('[data-run-now-task]').forEach(b =>
-      b.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        const id = b.dataset.runNowTask;
-        const title = b.closest('[data-task]')?.dataset.title || id.slice(0, 8);
-        if (!confirm(`Run this scheduled task now?\n\n${title}`)) return;
-        b.disabled = true;
-        try {
-          const t = await this.api.post(`/inbox/${encodeURIComponent(id)}/run-now`, {});
-          this.toast('running now', t.status === 'wait-input'
-            ? 'Released — parked for input; it dispatches once its questions are answered.'
-            : 'Released to pending — dispatched by the next tick.');
-          this.renderInbox();
-        } catch (err) { this.toast('error', err.message); b.disabled = false; }
-      }));
-
-    // Edit a task (not running / not pending) — load its params into a modal and save.
-    this.contentEl.querySelectorAll('[data-edit-task]').forEach(b =>
-      b.addEventListener('click', (e) => {
-        e.stopPropagation();
-        this.editTaskModal(b.dataset.editTask);
-      }));
-
-    // Recipes: "★ Save as recipe" + 👍/👎 on recipe-made tasks (public/js/recipes.js).
-    this.bindRecipeTaskCards?.(this.contentEl);
-
-    // Continue a done task — pick which brain claims the follow-up.
-    this.contentEl.querySelectorAll('[data-continue-task]').forEach(b =>
-      b.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        const id = b.dataset.continueTask;
-        const title = b.closest('[data-task]')?.dataset.title || id.slice(0, 8);
-        const choice = await this.pickBrain({
-          title: 'Continue this task',
-          body: `A follow-up to <strong>${esc(title)}</strong> is created with this run's output files and result attached as inputs. Add an optional prompt or extra files to steer it, then choose which brain claims it — <em>Auto</em> routes via the agent's brain chain.`,
-          defaultBrain: b.dataset.brain || '',
-          confirmLabel: '▸ Continue',
-          confirmColor: '#22C55E',
-          withInputs: true
-        });
-        if (!choice) return;
-        b.disabled = true;
-        try {
-          // Upload the staged extras first so the follow-up carries them as inputs.
-          const inputs = choice.files?.length ? await this.uploadInputFiles(choice.files) : [];
-          const body = { brain: choice.brain };
-          if (choice.prompt) body.prompt = choice.prompt;
-          if (inputs.length) body.inputs = inputs;
-          if (choice.scheduledAt) body.scheduledAt = choice.scheduledAt;
-          await this.api.post(`/inbox/${encodeURIComponent(id)}/continue`, body);
-          const extras = [choice.prompt ? 'prompt' : null, inputs.length ? `${inputs.length} file(s)` : null].filter(Boolean).join(' + ');
-          const routeNote = choice.brain ? `pinned to ${choice.brain}` : 'auto-routed via the brain chain';
-          const timingNote = choice.scheduledAt ? `Scheduled for ${new Date(choice.scheduledAt).toLocaleString()}` : 'Follow-up queued';
-          this.toast('continuing', `${timingNote} — ${routeNote}${extras ? ` · added ${extras}` : ''}.`);
-          this.renderInbox();
-        } catch (err) { this.toast('error', err.message); b.disabled = false; }
-      }));
-
-    // Code-task worktree: merge its branch into main, or discard it.
-    for (const [attr, key, verb, confirmMsg] of [
-      ['[data-worktree-merge]', 'worktreeMerge', 'merge', 'Merge this task\'s branch into the main checkout\'s current branch?'],
-      ['[data-worktree-discard]', 'worktreeDiscard', 'discard', 'Discard this task\'s worktree and DELETE its branch? Unmerged work is lost.']
-    ]) {
-      this.contentEl.querySelectorAll(attr).forEach(b =>
-        b.addEventListener('click', async (e) => {
-          e.stopPropagation();
-          if (!confirm(confirmMsg)) return;
-          b.disabled = true;
-          try {
-            const out = await this.api.post(`/inbox/${encodeURIComponent(b.dataset[key])}/worktree/${verb}`, {});
-            this.toast(verb === 'merge' ? 'merged' : 'discarded', out?.message || 'done');
-            this.renderInbox();
-          } catch (err) { this.toast('error', err.message); b.disabled = false; }
-        }));
-    }
-
-    // Attach input files to an existing task (upload → append to context.inputFiles).
-    this.contentEl.querySelectorAll('[data-attach-input]').forEach(b =>
-      b.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const inp = this.contentEl.querySelector(`[data-attach-files="${CSS.escape(b.dataset.attachInput)}"]`);
-        if (inp) inp.click();
-      }));
-    this.contentEl.querySelectorAll('[data-attach-files]').forEach(inp =>
-      inp.addEventListener('change', async (e) => {
-        e.stopPropagation();
-        const id = inp.dataset.attachFiles;
-        const files = Array.from(inp.files || []);
-        if (!files.length) return;
-        try {
-          const attached = await this.uploadInputFiles(files);
-          await this.api.post(`/inbox/${encodeURIComponent(id)}/inputs`, { inputs: attached });
-          this.toast('files attached', `${attached.length} file(s) added — the brain will read them.`);
-          this.renderInbox();
-        } catch (err) { this.toast('error', err.message); }
-      }));
-
-    // Submit human interaction (questions/checklist) from a task card.
-    this.contentEl.querySelectorAll('.interaction-submit').forEach(btn =>
-      btn.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        const id = btn.dataset.ixTask;
-        const box = btn.closest('.task-interaction');
-        if (!box) return;
-        const responses = {};
-        box.querySelectorAll('[data-field]').forEach(el => {
-          responses[el.dataset.field] = el.dataset.ftype === 'checkbox' ? el.checked : el.value;
-        });
-        // Catch blank required answers here so the user gets an inline pointer at
-        // the offending field instead of an opaque server 400. Checkboxes are
-        // never "required-empty" (mirrors the rule in store.submitInteraction).
-        const missing = [...box.querySelectorAll('[data-field][data-required="1"]:not([data-ftype="checkbox"])')]
-          .find(el => !String(el.value ?? '').trim());
-        if (missing) {
-          missing.focus();
-          missing.style.borderColor = '#EF4444';
-          this.toast('answer required', 'Please fill in the required field before submitting.');
-          return;
-        }
-        const submittedBy = box.querySelector('[data-ix-by]')?.value.trim() || undefined;
-        btn.disabled = true;
-        try {
-          await this.api.post(`/inbox/${encodeURIComponent(id)}/interaction`, { responses, submittedBy });
-          this.toast('input submitted', 'The task now has your answers.');
-          this.renderInbox();
-        } catch (err) { this.toast('error', err.message); btn.disabled = false; }
-      }));
+    this.bindTaskCards(this.contentEl);
 
     // Create + dispatch a new task straight from the Inbox (no Chat detour).
     this.contentEl.querySelector('#new-task-btn')?.addEventListener('click', () => this.createTaskModal());
@@ -2830,40 +2891,12 @@ class App {
       } catch (err) { this.toast('error', err.message); }
     });
 
-    // Click a task ID or artifacts path to copy it to the clipboard.
-    this.contentEl.querySelectorAll('[data-copy]').forEach(el =>
-      el.addEventListener('click', async (e) => {
-        e.stopPropagation();   // don't toggle the card
-        const text = el.dataset.copy;
-        if (await this.copyText(text)) this.toast('copied', text);
-        else this.toast('copy failed', text);
-      }));
-
-    // Auto-rerun-on-reset toggle on a rate-limited failed task: persist the choice.
-    this.contentEl.querySelectorAll('[data-autorerun]').forEach(cb =>
-      cb.addEventListener('change', async (e) => {
-        e.stopPropagation();
-        const id = cb.dataset.autorerun;
-        const enabled = cb.checked;
-        cb.disabled = true;
-        try {
-          await this.api.post(`/inbox/${encodeURIComponent(id)}/auto-rerun`, { enabled });
-          this.toast('auto re-run', enabled
-            ? 'On — Cowork will re-run this task automatically once the rate limit resets.'
-            : 'Off — this task will not re-run automatically.');
-        } catch (err) { this.toast('error', err.message); cb.checked = !enabled; }
-        finally { cb.disabled = false; }
-      }));
-
     // Live progress log for in-progress cards: poll GET /inbox/:id/progress and
     // stream the tail into each card's <pre data-progress>. One shared interval,
     // cleared on re-render and on leaving the view (clearViewTimers).
     clearInterval(this._progressPoll);
     this._progressPoll = null;
-    if (this.contentEl.querySelector('[data-progress]')) {
-      this.pollInboxProgress();
-      this._progressPoll = setInterval(() => this.pollInboxProgress(), 2500);
-    }
+    this.ensureInboxProgressPoll();
 
     // Task cards no longer expand on click — RESULT and DESCRIPTION now live as
     // result.md / description.md chips (opened in the markdown viewer), so there is
@@ -2878,6 +2911,68 @@ class App {
     // `<i data-lucide>` placeholders, so we must re-hydrate the Lucide glyphs here
     // or every icon vanishes on filter click until a full page refresh.
     createIcons();
+  }
+
+  ensureInboxProgressPoll() {
+    if (this._progressPoll || !this.contentEl.querySelector('[data-progress]')) return;
+    this.pollInboxProgress();
+    this._progressPoll = setInterval(() => this.pollInboxProgress(), 2500);
+  }
+
+  /**
+   * SSE path for the Tasks view: redraw only the cards whose tasks changed
+   * instead of re-fetching /inbox and rebuilding all ~50 cards (each with its
+   * listeners and icons) on every event. Per id: GET /inbox/:id, then replace the
+   * card in place, drop it (deleted / no longer matches the filter) or slot a new
+   * one in by createdAt. Anything it can't place falls back to a full render.
+   */
+  async patchInboxTasks(ids) {
+    const onInbox = () => this.currentPage?.type === 'tasks' && !!this.contentEl.querySelector('#inbox-sticky');
+    const statusP = this.api.get('/status').catch(() => null);
+    const fetched = await Promise.all(ids.map(id => this.api.get(`/inbox/${encodeURIComponent(id)}`)
+      .then(t => ({ id, t }), err => ({ id, t: null, gone: /not found|404/i.test(err.message || '') }))));
+    if (fetched.some(f => f.t?.claimedBy && !this.agents.has(f.t.claimedBy))) await this.refreshAgents();
+    if (!onInbox()) return;   // navigated away while fetching
+    let full = false;
+    for (const { id, t, gone } of fetched) {
+      const card = this.contentEl.querySelector(`.task-card[data-task="${CSS.escape(id)}"]`);
+      if (!t && !gone) { full = true; continue; }           // fetch error — let a full render sort it out
+      if (!t || !inboxFilterMatches(t, this.inboxFilter)) { card?.remove(); continue; }
+      // Don't wipe a half-typed answer in this card's input form; retry on the next event.
+      const el = document.activeElement;
+      if (card && card.contains(el) && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || el.isContentEditable)) {
+        (this._inboxDirty ||= new Set()).add(id);
+        continue;
+      }
+      const tpl = document.createElement('template');
+      tpl.innerHTML = this.taskCardHTML(t).trim();
+      const fresh = tpl.content.firstElementChild;
+      this.bindTaskCards(fresh);
+      createIcons(fresh);
+      if (card) {
+        // Carry the live log over so it doesn't blink back to "Loading live output…".
+        const oldPre = card.querySelector('[data-progress]'), newPre = fresh.querySelector('[data-progress]');
+        if (oldPre && newPre) newPre.textContent = oldPre.textContent;
+        card.replaceWith(fresh);
+        if (oldPre && newPre) newPre.scrollTop = oldPre.scrollTop;
+        continue;
+      }
+      // New to this list: slot it in newest-first. Older than every card on the
+      // page while more pages exist → it belongs to a later page, skip it.
+      const ms = Date.parse(t.createdAt);
+      const cards = [...this.contentEl.querySelectorAll('.task-card[data-task]')];
+      if (!cards.length || Number.isNaN(ms)) { full = true; continue; }
+      const next = cards.find(c => !(Date.parse(c.dataset.created) >= ms));
+      if (next) next.before(fresh);
+      else if (!this.contentEl.querySelector('#inbox-load-more')) cards[cards.length - 1].after(fresh);
+    }
+    if (full || !this.contentEl.querySelector('.task-card')) { await this.renderInbox(); return; }
+    const status = await statusP;
+    if (status && onInbox()) {
+      this.contentEl.querySelectorAll('#inbox-controls [data-filter]').forEach(b => { b.textContent = inboxPillLabel(b.dataset.filter, status); });
+    }
+    this.applyInboxSearch();
+    this.ensureInboxProgressPoll();
   }
 
   // Fetch the live progress tail for every in-progress card currently on screen and

@@ -4,6 +4,7 @@ import fs from 'fs';
 import http from 'http';
 import https from 'https';
 import { createMultiplexedServer } from './core/server-listener.js';
+import { createCompression } from './core/compression.js';
 import { activeConfigPath, loadConfig, persistRegistries, removeBrainCascade, restoreClientBrains } from './config.js';
 import { EventBus } from './core/events.js';
 import { Store } from './core/store.js';
@@ -70,6 +71,8 @@ async function main() {
   usagePoller.start();
 
   const app = express();
+  // gzip JSON + static assets; SSE (/api/events) and /mcp stay unbuffered. See core/compression.ts.
+  app.use(createCompression());
   app.use(express.json());
 
   // Host allowlist (anti DNS-rebinding): a page on any site can re-point its own
