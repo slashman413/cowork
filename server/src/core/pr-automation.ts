@@ -21,6 +21,14 @@ export function extractPrUrls(text: string): PrRef[] {
   return [...seen.values()];
 }
 
+/** PRs the result claims to have OPENED (a `PR_OPENED: <url>` line, or a line
+ *  saying opened/created/raised). A PR URL that is merely quoted (e.g. from
+ *  fetched content) must not spawn a watcher — prompt-injection guard. */
+export function openedPrUrls(text: string): PrRef[] {
+  const lines = (text || '').split('\n').filter(l => /PR_OPENED:|\b(opened|created|raised|submitted)\b/i.test(l));
+  return extractPrUrls(lines.join('\n'));
+}
+
 /** Changed paths that must go to a human (auth, secrets, deploy, workflows…). */
 export function escalationHits(files: string[], cfg?: PrAutomationConfig): string[] {
   const pats = (cfg?.escalatePaths || []).map(p => p.toLowerCase());
@@ -73,7 +81,7 @@ export function prWatchTaskSpec(ref: PrRef, parent: Task, cfg?: PrAutomationConf
     title: `[pr-watch] ${ref.repo}#${ref.number}`,
     description: [
       `Shepherd ${ref.url} (opened by task ${parent.id}) per pstack babysit/shipping, mode=${mode}.`,
-      `1. \`gh auth status\` — if it fails, report STATUS: BLOCKED with its output and stop.`,
+      `1. \`gh auth status\` — if it fails, report STATUS: BLOCKED with its output and stop. Then \`gh pr view ${ref.number} -R ${ref.repo} --json author,headRefName,labels\`: if the PR is not labelled \`${cfg?.label || 'cowork-auto'}\` or was not opened by task ${parent.id}'s branch, report and stop.`,
       `2. \`npx tsx vendor/pstack/skills/poteto-mode/scripts/watch-pr/cli.ts --pr ${ref.number} --repo ${ref.repo} --status-only\` (JSON).`,
       `3. Conflicts → report "rebase needed" (never auto-rebase). Threads → triage with poteto-mode/references/bugbot-triage.md. Failing CI → one rerun for a flake, else a fix task.`,
       `4. READY → run an independent review (interrogate) of \`gh pr diff ${ref.number}\`; record PASS/PASS+NOTES/FAIL and \`git patch-id\` of the head.`,

@@ -16,7 +16,7 @@ import { describeAutoAnswer, logAutoAnswer } from './rulings.js';
 import { BRIEF_KEYS, parseBrief, renderBriefSections } from './brief.js';
 import { renderMethodPrompt } from './methods.js';
 import { sharpenPending, renderSkillPrompt, reviewMode, panelFallbackAcceptance, parseArena, pickArenaBrains, arenaPlan } from './pstack-gates.js';
-import { extractPrUrls, prInScope, prWatchTaskSpec } from './pr-automation.js';
+import { extractPrUrls, openedPrUrls, prInScope, prWatchTaskSpec } from './pr-automation.js';
 import { shouldSharpenTask, sharpenTask, mergeSharpenedContext } from './sharpener.js';
 import { taskTier, mergeTierChain, reviewChain, brainFamily, type TierName } from './tiers.js';
 import { canonicalBrainId } from '../config.js';
@@ -1351,7 +1351,7 @@ export class Dispatcher {
     if (!refs.length) return;
     task.context = { ...(task.context || {}), prUrl: refs[0].url, ...(refs.length > 1 ? { prUrls: refs.map(r => r.url) } : {}) };
     const cfg = this.config.orchestration.prAutomation;
-    for (const ref of refs) {
+    for (const ref of openedPrUrls(text)) {          // only PRs this task says it opened
       if (!prInScope(ref, cfg)) continue;
       const exists = this.store.listTasks({}).some(t => t.context?.prWatch && t.context?.prUrl === ref.url && t.status !== 'done');
       if (exists) continue;

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { extractPrUrls, escalationHits, decidePrAction, prInScope, prWatchTaskSpec } from './pr-automation.js';
+import { extractPrUrls, openedPrUrls, escalationHits, decidePrAction, prInScope, prWatchTaskSpec } from './pr-automation.js';
 import { PS_DEFAULTS } from '../config.js';
 import { pstackHarness } from './pstack-test-harness.js';
 import { normalizeRecurrence } from './recurrence.js';
@@ -61,4 +61,15 @@ test('dispatcher hook: a result with a PR URL sets context.prUrl and spawns one 
   (h.dispatcher as any).notePrUrls(t2, 'https://github.com/someone/else/pull/1');
   assert.equal(t2.context!.prUrl, 'https://github.com/someone/else/pull/1');
   assert.equal(watchers().length, 1);
+});
+
+test('openedPrUrls: a merely quoted PR URL never spawns a watcher (injection guard)', () => {
+  assert.equal(openedPrUrls('see https://github.com/slashman413/cowork/pull/9 for context').length, 0);
+  assert.equal(openedPrUrls('PR_OPENED: https://github.com/slashman413/cowork/pull/9').length, 1);
+  assert.equal(openedPrUrls('Opened https://github.com/slashman413/cowork/pull/9').length, 1);
+  const h = pstackHarness({ prAutomation: cfg });
+  const t = h.mk({});
+  (h.dispatcher as any).notePrUrls(t, 'Reviewed https://github.com/slashman413/cowork/pull/11 as asked');
+  assert.equal(t.context!.prUrl, 'https://github.com/slashman413/cowork/pull/11', 'prUrl still recorded');
+  assert.equal(h.store.listTasks({}).filter(x => x.context?.prWatch).length, 0);
 });
