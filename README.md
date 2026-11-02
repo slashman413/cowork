@@ -26,7 +26,7 @@ role → model chains, and a real-time activity feed.
 
 The [Workflows](#workflows--declarative-pipelines-two-execution-modes),
 [Task Inbox](#task-execution--the-dispatcher), [Brains](#brains--named-execution-identities-model--platform--location),
-[Connections](#wiring-a-remote-brain-machine), and [Chat](#connecting-ai-agents) views are
+and [Connections](#wiring-a-remote-brain-machine) views are
 shown in context throughout this README.
 
 ## Supported Platforms
@@ -165,11 +165,12 @@ npm start
 You should see:
 
 ```
-🤝 Cowork MCP Server running at http://0.0.0.0:6868
-   MCP endpoint: http://0.0.0.0:6868/mcp
-   Web Dashboard: http://0.0.0.0:6868/
-   REST API: http://0.0.0.0:6868/api/
-   Agencies loaded: 285 agents across 19 divisions
+=========================================
+ Multi-Agent Cowork MCP Server Started
+ HTTP API: http://0.0.0.0:6868/api
+ MCP Endpoint: http://0.0.0.0:6868/mcp
+ SSE Stream: http://0.0.0.0:6868/api/events
+=========================================
 ```
 
 ### 4. Open the Dashboard
@@ -179,35 +180,6 @@ Open **http://localhost:6868** in your browser.
 ---
 
 ## Connecting AI Agents
-
-The fastest way to talk to any connected model is the dashboard's **Chat** view: pick a
-brain, optionally scope it to a division and a specific agent, and your message is
-dispatched as a task — the reply is the task result.
-
-| Pick a division | …then an agent persona |
-|---|---|
-| ![Chat — choose a division](docs/images/cowork-chat.png) | ![Chat — choose an agent within the division](docs/images/cowork-chat-agents.png) |
-
-### 🎙 Voice assistant (Chat → **Voice**)
-
-Talk a new idea through, hands-free if you like. Each turn runs on the best brain that is
-enabled and **not cooling down on a rate limit** (claude › codex › agy › hermes/dsh ›
-ollama; pin an order with `orchestration.voice.brains`). If that brain gets rate-limited, the
-turn moves to the next one.
-
-1. **Grill:** it uses the **grill-me** skill (`/grilling`): one question at a time, each with a
-   recommended answer, until nothing is ambiguous. Open questions are listed as it goes.
-2. **Plan:** it proposes a plan: a yes/no success criterion and a few ordered phases.
-3. **Execute (only with your permission):** tap **Approve & execute**, or say "go ahead"
-   while the plan is on screen. The plan becomes an active **Goal** that the Achiever/Judger
-   loop drives through tasks until the success criterion is met. Phase progress is read
-   aloud as it happens.
-
-Speech-to-text and text-to-speech run in the browser (Web Speech API: Chrome, Edge or
-Safari). The mic needs HTTPS or localhost. You can always type instead. Turns are tasks
-tagged `voice` with `context.conversational`, so a question back to you counts as a
-finished reply and is never parked on `wait-input`. REST: `/api/voice/brains` and
-`/api/voice/sessions[/:id[/turn|/execute]]`. Sessions are stored in `voice-sessions/`.
 
 For programmatic access, wire the MCP connection into your agent clients:
 
@@ -394,7 +366,7 @@ Inbox. **Outputs** (the task's final deliverables) go in the `outputs/` subfolde
 and get their own OUTPUTS section on the card, after RESULT and before ARTIFACTS.
 
 **Input files** flow the other way — a person attaches files for the brain to
-**read**. Attach them in the Chat composer (📎) or on any Inbox card ("＋ Attach
+**read**. Attach them on any Inbox card ("＋ Attach
 files"); they are stored under `inputs/<task-id>/` and mirrored onto
 `context.inputFiles`. The dispatcher points a **local** brain at their absolute
 paths in the prompt; a **remote** brain client downloads them (`GET /api/inputs/:taskId`)
@@ -485,7 +457,7 @@ brain chain. Tag a task `manual` to skip both routing and dispatch.
 
 ### Stale-claim reclaim
 
-`orchestration.staleClaimMs` (default 30 min) reclaims any in-progress task
+`orchestration.staleClaimMs` (code default `0` = off; the template `config.json` sets 10 min) reclaims any in-progress task
 whose claiming agent has disappeared — a crashed/exited live agent or a
 dispatcher killed mid-run — back to `pending` so the work is retried. A task
 still owned by a heartbeating agent is never touched.
@@ -630,6 +602,9 @@ Once connected, agents have access to these tools:
 | `complete_task` | Mark a task as done with results |
 | `list_inbox` | List inbox tasks with status/platform filters |
 | `get_dashboard` | Get full dashboard data (active agents, inbox stats, etc.) |
+| `create_goal` / `list_goals` / `get_goal` / `update_goal_progress` | Long-lived, phase-tracked Goals driven toward a yes/no success criterion |
+| `obsidian_info` / `obsidian_search` / `obsidian_read` / `obsidian_list` | Shared Obsidian knowledge base (when a vault is configured) |
+| `integrations` | Integrate a GitHub / open-source repository (list, add, install, …) |
 
 ### Example: Cross-Platform Task Dispatch
 

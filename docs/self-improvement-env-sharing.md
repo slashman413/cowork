@@ -42,7 +42,9 @@ handshake, the store, or an artifact.
 - **WF-4** — env-store (`env-store/*.json`) merged per task at claim, delivered via
   `cowork-env.json` + process env. Secret-shaped keys refused.
 - **WF-2** — recurrence detector → human-gated `wait-input` proposal task, and
-  application to `routing-rules.json` / `playbooks/<agent>.md`.
+  application to `routing-rules.json` / `playbooks/<agent>.md`. (The read-only half exists:
+  `server/src/core/correct-loop.ts` + `GET /api/lessons/classes` group lessons into classes and
+  draft a remedy menu; no proposal task or apply step is built.)
 - **A4** — optional `LESSON:` line from the LLM verifier (recall boost).
 
 Runtime data files (`decisions/*.jsonl`, `routing-rules.json`, `playbooks/`) are

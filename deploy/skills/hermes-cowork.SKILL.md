@@ -70,6 +70,9 @@ capabilities AND brains (model specs), dispatch cross-platform tasks, heartbeat,
 | `complete_task` | Mark a task as done — `task_id` + `result` only |
 | `list_inbox` | List inbox tasks with status/platform filters |
 | `get_dashboard` | Get full dashboard data (agents, inbox, services) |
+| `create_goal`, `list_goals`, `get_goal`, `update_goal_progress` | Goals (long-lived objectives) |
+| `obsidian_info`, `obsidian_search`, `obsidian_read`, `obsidian_list` | Shared Obsidian vault (when configured) |
+| `integrations` | Integrate a GitHub repo as a cowork skill / portal plugin |
 | `list_resources` | List available resources from MCP server |
 | `read_resource` | Read a resource by URI |
 
@@ -103,8 +106,8 @@ SSE event types are camelCase: `agentRegistered`, `taskCreated`, `taskClaimed`,
 
 ### Web Dashboard
 
-- `https://localhost:6868/` — Web UI (dashboard, Connections, inbox, Agents, Brains,
-  agencies, workflows, Calendar, chat) with a raw/rendered markdown viewer and artifact downloads
+- `https://localhost:6868/` — Web UI (Overview, Portal, Tasks, Recipes, Calendar, Workflows,
+  Goals, Routing, Brains, Personas, Workers, Configuration) with a raw/rendered markdown viewer and artifact downloads
 
 ### MCP Inspector (debugging)
 
@@ -128,7 +131,7 @@ register_agent(
 )
 ```
 
-Available exec types: `hermes`, `claude`, `agy`, `codex`, `ollama`.
+Available exec types: `hermes`, `claude`, `agy`, `codex`, `ollama`, `dsh`, `script`.
 Location: `local` (runs on this machine) or `remote` (runs on another machine).
 
 Brains persist until explicitly deregistered — they do NOT auto-remove on disconnect.
@@ -201,7 +204,7 @@ their own chains; everything else routes through the Agencies:
   gemini-4-argon/gpt-oss-120b-medium, `local-dsh-qwen3-8-27b`, `local-hermes-qwen3.8-27b`;
   remote cc-opus-4-8/cc-fable-5/cc-sonnet-5/codex-default/gpt-5.6-terra/gpt-5.6-luna).
   Retired ids resolve via `BRAIN_ID_ALIASES` (old qwen3.8 ids → `local-hermes-qwen3.8-27b`).
-- Chains run top→bottom with failure handover; `remoteGraceMs` (60s) auto-advances past
+- Chains run top→bottom with failure handover; `remoteGraceMs` (20s in the template config; 60s code default) auto-advances past
   an unclaimed remote rung. Pin a single task with `context.brain: "<id>"`.
 - Workflows (dashboard **workflows** view) are capped by config `maxWorkflowSteps` (live: 12).
 
@@ -461,7 +464,8 @@ systemctl --user enable cowork-mcp      # Enable at boot
 ```
 
 The service runs from the repo's `server/` directory
-(`WorkingDirectory`), loading `../config.json`. The old `agents-coworking` path is
+(`WorkingDirectory`), loading `~/.cowork/config.json` (override: `COWORK_CONFIG`; the repo's
+`config.json` is only a template). The old `agents-coworking` path is
 retired.
 
 ## Auth (hub API key, 2026-10-18)

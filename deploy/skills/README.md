@@ -7,7 +7,6 @@ runtime copies live in each client's dotfile dir; these are the tracked source o
 |------|-------------------|--------|
 | `claude-cowork.SKILL.md` | `~/.claude/skills/cowork/SKILL.md` | Claude Code |
 | `hermes-cowork.SKILL.md` | `~/.hermes/skills/cowork/SKILL.md` | Hermes agent |
-
 | `agy-cowork.SKILL.md` | `~/.gemini/config/skills/cowork/SKILL.md` | Antigravity (Gemini CLI) |
 
 ## Installing

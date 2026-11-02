@@ -12,14 +12,14 @@ Nav sections, page order, labels and the Overview's widgets come from **`layout.
 |------|-------|--------------------------|
 | [Overview](#overview) | Overview | `GET /api/status`, `GET /api/system`, `GET /api/system/details/:kind` |
 | [Portal](#portal) | Portal | `GET /api/portal` (portal.json) + `GET /api/services` |
-| [Inbox](#inbox) | Task Inbox | `GET/POST /api/inbox`, `PATCH /api/inbox/:id` |
+| [Inbox](#inbox) | Tasks | `GET/POST /api/inbox`, `PATCH /api/inbox/:id` |
 | [Recipes](#recipes) | Recipes | `GET/POST/PUT/DELETE /api/recipes*`, `POST /api/recipes/:id/run`, `POST /api/inbox/:id/rating` |
 | [Calendar](#calendar) | Calendar | `GET /api/calendar`, `POST /api/inbox/:id/edit`, `POST /api/inbox/:id/run-now` |
 | [Workflows](#workflows) | Workflows | `GET /api/workflows*`, `POST /api/workflows/:id/run`, `GET /api/workflow-runs*` |
-| [Agents](#agents) | Agents | `GET/PUT /api/agents-config`, `/api/chains*` |
+| [Agents](#agents) | Routing | `GET/PUT /api/agents-config`, `/api/chains*` |
 | [Brains](#brains) | Brains | `GET/PUT/DELETE /api/brains*` |
-| [Agencies](#agencies) | Agencies | `GET /api/roster`, `/api/roster-divisions` |
-| [Connections](#connections) | Connections | `GET /api/connections` |
+| [Agencies](#agencies) | Personas | `GET /api/roster`, `/api/roster-divisions` |
+| [Connections](#connections) | Workers | `GET /api/connections` |
 | [Configuration](#configuration) | Configuration | `GET /api/config` |
 
 All pages consume the live SSE event stream (`GET /api/events`) so cards update in
@@ -76,7 +76,7 @@ keeps serving the last good layout.
   `{ "minWidth": px, "widgets": [...] }` (auto-fit grid, wraps below `minWidth`).
 - `portal` — any id, any number. Shows `portal.json` cards, optionally narrowed by
   `categories` and/or `keys`; `intro` (markdown) replaces the default blurb.
-- App pages — `tasks`, `calendar`, `workflows`, `goals`, `routing`, `brains`,
+- App pages — `tasks`, `recipes`, `calendar`, `workflows`, `goals`, `routing`, `brains`,
   `personas`, `workers`, `config`. Fixed ids, each matching its nav label (other code
   deep-links to `#tasks/<id>`). The pre-2026-10-16 ids `inbox`, `team`, `roster` and
   `connections` are still accepted in a layout file and as URLs (old bookmarks
@@ -96,6 +96,8 @@ keeps serving the last good layout.
 | `platforms` | — | per-platform up/down |
 | `services` | `categories`, `keys`, `compact` | portal.json cards (or a compact list) with live status dots |
 | `note` | `text` (markdown, required) | a runbook / pinned note |
+| `quality` | `days` 1–365 | task quality metrics |
+| `rulings` | `days` 1–365, `limit` 1–100 | recent review-panel rulings |
 
 A page only fetches and polls what its widgets need (no `sysbar` → no
 `/api/system` polling). If `/api/layout` is unreachable the UI falls back to a

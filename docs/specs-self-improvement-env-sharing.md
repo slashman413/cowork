@@ -1,7 +1,7 @@
 # Cowork Self-Improvement + Env-Sharing — Build-Ready Workflow Specs
 
 **Version**: 0.1 · **Date**: 2026-08-04 · **Author**: Workflow Architect
-**Continues**: task 824ee0cd (design report `self-improvement-and-env-sharing-design.md`)
+**Continues**: task 824ee0cd (design report `design-self-improvement-env-sharing.md`)
 **Verified against**: `~/workspace/github/slashman413/cowork` @ `c080a38` (unchanged since the design audit — all line references re-checked live this run)
 
 This document turns the approved design into implementable workflow specifications: four workflows, each with a full tree (happy path + every failure branch), handoff contracts, cleanup inventory, observable states, and test cases derived per branch. A Backend Architect should be able to implement each without guessing failure behavior.

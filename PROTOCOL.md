@@ -130,7 +130,7 @@ A task can say how it will be judged. All four fields are optional and live
 ```json
 "context": {
   "acceptance": ["report.md lists every failing test", "npm test exits 0"],
-  "verify": ["cd server && npm test", "curl -s localhost:6868/api/health"],
+  "verify": ["cd server && npm test", "curl -s localhost:6868/api/status"],
   "timeboxMin": 30,
   "scope": { "write": ["server/src/core/"], "forbid": ["~/.cowork/config.json"] }
 }
@@ -180,6 +180,9 @@ The Cowork MCP Server exposes these tools via Streamable HTTP at `/mcp`:
 | `complete_task` | Mark task as done |
 | `list_inbox` | List tasks with filters |
 | `get_dashboard` | Get aggregated dashboard data |
+| `create_goal`, `list_goals`, `get_goal`, `update_goal_progress` | Goals (registered when goals are enabled) |
+| `obsidian_info`, `obsidian_search`, `obsidian_read`, `obsidian_list` | Read access to the Obsidian vault (when configured) |
+| `integrations` | Fetch, audit, rescan and install external integrations (unless `config.integrations.enabled` is false) |
 
 **Routing context** — the dispatcher reads these `task.context` fields:
 `agent` (an agent slug or special-executor name → skip the classifier),
@@ -208,6 +211,8 @@ type names are **camelCase** and each frame is `{ type, payload, timestamp }`
 | `taskCreated` | `{ task }` |
 | `taskClaimed` | `{ task, agentId }` |
 | `taskCompleted` | `{ task }` |
+| `taskDeleted` | `{ taskId, status? }` |
+| `brainExecuted` | `{ brainId, exec, taskId }` |
 
 Subscribe with `curl -N http://localhost:6868/api/events` (no buffering). There is
 no `agent_disconnected` event — a client that stops heartbeating is pruned silently

@@ -8,7 +8,7 @@ config — you don't modify any code.
 ## TL;DR — zero config, one command
 
 You only need Node 18+ and this repo. The client **auto-detects** the model CLIs
-installed on your machine (`claude`, `hermes`, `agy`) and declares the matching
+installed on your machine (`claude`, `hermes`, `agy`, `codex`, `ollama`) and declares the matching
 brains for you — no brain settings needed:
 
 ```bash
@@ -36,8 +36,8 @@ you get one brain per model of each CLI found:
 
 | if you have… | brains declared |
 |--------------|-----------------|
-| **`claude`** (Claude Code) | `remote-aicodegen-cc-opus` (claude-opus-5-5), `-cc-sonnet` (claude-sonnet-5-5), `-cc-fable` (claude-fable-5-1), `-cc-default` (account default) |
-| **`hermes`** | `remote-aicodegen-ha-qwen3-8-27b` |
+| **`claude`** (Claude Code) | `remote-aicodegen-cc-opus` (claude-opus-4-8), `-cc-sonnet` (claude-sonnet-5), `-cc-fable` (claude-fable-5), `-cc-default` (account default) |
+| **`hermes`** | `remote-aicodegen-hermes-qwen3.8-27b` |
 | **`agy`** (Antigravity) | `remote-aicodegen-agy-default` |
 | **`codex`** (OpenAI Codex CLI) | `remote-aicodegen-codex-default` (`codex exec`) |
 | **`ollama`** | one brain per pulled CHAT model (embedding-only models like nomic are skipped), e.g. `remote-aicodegen-ollama-llama3.2` |
@@ -48,7 +48,7 @@ into any agent's fallback chain or targeted directly with `context.brain`.
 Ollama brains appear only if you have pulled a chat model (`ollama pull llama3.2`); an
 embedding-only Ollama install contributes nothing. Codex uses `codex exec` non-interactively.
 
-Want just one platform's set (e.g. skip the others)? Add `PRESET=claude` (or `hermes`/`agy`).
+Want just one platform's set (e.g. skip the others)? Add `PRESET=claude` (or `hermes`/`agy`/`codex`).
 
 ## No client script? Register straight over MCP
 
@@ -70,8 +70,8 @@ Declare exactly the models you can run — the `{HOST}` token is substituted:
 
 ```bash
 NODE_EXTRA_CA_CERTS=cowork-cert.pem COWORK_URL=https://<cowork-host>:6868 EXEC=claude HOST=<your-hostname> \
-  BRAINS='[{"id":"remote-{HOST}-cc-sonnet","model":"claude-sonnet-5-5"},
-           {"id":"remote-{HOST}-cc-opus","model":"claude-opus-5-5"}]' \
+  BRAINS='[{"id":"remote-{HOST}-cc-sonnet","model":"claude-sonnet-5"},
+           {"id":"remote-{HOST}-cc-opus","model":"claude-opus-4-8"}]' \
   node cowork/deploy/remote-brain-client.mjs
 ```
 

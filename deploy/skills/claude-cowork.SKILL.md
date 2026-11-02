@@ -17,19 +17,23 @@ live copy, no restart needed.
 > `file_report`, `complete_task(report_path:)`, or `/api/reports` — those endpoints and
 > tools do not exist.
 
-## The tool surface (all 9 tools, exact)
+## The tool surface (the 9 core tools)
 
 | Tool | Args that matter |
 |------|------------------|
 | `register_agent` | `platform`, `agent_name`, `session_id?`, `capabilities?[]`, `current_task?`, `brains?[]` → returns `id` + `registered_brains` |
 | `deregister_agent` | `agent_id` — **cascades out every brain this agent registered** |
 | `heartbeat` | `agent_id`, `status?` (`idle`\|`working`\|`blocked`), `current_task?`, `usage?` |
-| `create_task` | `title`, `description`, `from_platform`, `from_agent`, `to_platform?`, `to_agent?`, `priority?`, `skill?`, `context?`, `tags?`, `scheduled_at?`, `interaction?` |
+| `create_task` | `title`, `description`, `from_platform`, `from_agent`, `to_platform?`, `to_agent?`, `priority?`, `skill?`, `context?`, `tags?`, `scheduled_at?`, `loop_interval_hours?`, `recurrence?`, `interaction?` |
 | `claim_task` | `task_id`, `agent_id` |
 | `complete_task` | `task_id`, `result?` — **no `report_path`** |
 | `list_inbox` | `status?` (`wait-input`\|`scheduled`\|`pending`\|`claimed`\|`in-progress`\|`done`\|`rejected`), `platform?`, `agent?`, `limit?` (default 20) |
 | `get_roster` | `platform?`, `category?` (= division), `search?`, `active_only?` |
 | `get_dashboard` | — |
+
+Also registered when enabled: `create_goal`, `list_goals`, `get_goal`, `update_goal_progress`
+(Goals), `obsidian_info`, `obsidian_search`, `obsidian_read`, `obsidian_list` (shared vault),
+and `integrations`.
 
 Resources: `cowork://status`, `cowork://roster`.
 
@@ -133,7 +137,7 @@ When *you* are the brain running a dispatched task:
 
 ## Brains, chains, and the verifier
 
-**Brain = model × exec × location.** `exec` ∈ `claude | hermes | agy | codex | ollama | script`.
+**Brain = model × exec × location.** `exec` ∈ `claude | hermes | agy | codex | ollama | script | dsh`.
 On this box today: `local-hermes-qwen3.8-27b` (Hermes), `local-dsh-*` (DeepSeek Harness),
 `local-agy-*` (Antigravity: gemini-3.x, claude-opus-4-6-thinking, gpt-oss-120b),
 `local-cc-*` (Claude Code), `remote-codex-*` (Codex, claimed by the local codex client), `local-comfy-ltx` (LTX video — never
@@ -147,8 +151,8 @@ don't trust any hardcoded list, including this one.
 - Per-division override: `orchestration.divisionChains[<division>]`
   (`PUT /api/chains/division/:division`; empty body reverts to default).
 - Special executors carry their own chain (`PUT /api/agents-config/:name`).
-- `remoteGraceMs` (60s here) auto-advances past a **remote** rung no client claimed, so a
-  cold remote brain never stalls a chain. `staleClaimMs` (30 min) reclaims tasks orphaned
+- `remoteGraceMs` (20s in the template config; 60s code default) auto-advances past a **remote** rung no client claimed, so a
+  cold remote brain never stalls a chain. `staleClaimMs` (10 min in the template config; code default 0 = off) reclaims tasks orphaned
   by a dead agent.
 
 **Env manifests** — a declared brain may carry `env: {paths, tools, secrets, net, traits}`:
@@ -164,7 +168,7 @@ and human-gated by design: there is no autonomous improver agent.
 
 - **Out**: `artifacts/<task-id>/` — persistent, downloadable from the Inbox card or
   `GET /api/artifacts/:taskId[/:file]`. Remote brains upload via `POST` to the same path.
-- **In**: `inputs/<task-id>/` — files a person attached (Chat 📎 or an Inbox card),
+- **In**: `inputs/<task-id>/` — files a person attached (on a task card),
   mirrored onto `context.inputFiles`; survive a re-run. Stage with
   `POST /api/uploads?name=<file>` → `{token}`, then attach via
   `POST /api/inbox/:id/inputs {inputs:[{token,name}]}`.
@@ -178,7 +182,8 @@ brain picks the next one (or `DONE`) from the `goal` + results so far, logging e
 decision to `workflow-runs/<runId>.json`. Shipped: `idea-to-launch` (flagship),
 `build-and-ship`, `product-spec`, `feedback-to-roadmap`, `gtm-campaign`, `finance-close`,
 `expand-perspectives`, `content-pipeline`, `product-brief`, `adaptive-research`,
-`plan-execution`.
+`plan-execution`, `daily-fantasy-vlog`, `eval-prompt-change`, `gentle-soul-storybook`,
+`gumroad-implementation`, `workflow-builder`.
 
 ```bash
 curl -sk -X POST https://localhost:6868/api/workflows/<id>/run \

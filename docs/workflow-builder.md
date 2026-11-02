@@ -432,7 +432,7 @@ Each step can pin **where** it runs, or leave it to the router:
 
 **House rule for shipped templates:** pin a `division` or `agent`, **never a
 `brain`.** That keeps the *brain fallback chain* for every role editable live from
-the dashboard's **Agents** view (`orchestration.agents[*].brains` for special
+the dashboard's **Routing** page (`orchestration.agents[*].brains` for special
 agents; `divisionChains[*]` / `defaultChain` for agents) — so you can
 change *who* runs a step without touching the template. Pin a `brain` only for a
 deliberately hardware- or credential-specific step (e.g. a local media pipeline or
@@ -522,7 +522,7 @@ Workflows read a small amount of config (`config.json` → `orchestration` and
 | `orchestration.maxWorkflowSteps` | `12` | Hard cap on steps an **orchestrated** run may dispatch before it is force-finished (runaway guard). |
 | `orchestration.classifier.timeoutMs` | `300000` | Per-decision wall-clock budget for the orchestrator brain in an adaptive run. |
 | `orchestration.classifier` | — | Defines the router/orchestrator brain (exec + model). If absent, the first local runnable brain in the orchestrator/default chain decides. |
-| `orchestration.agents[*].brains`, `defaultChain`, `divisionChains[*]`, `agentChains[*]` | — | The brain fallback chains that actually execute each step, resolved by the step's `agent`/`division` pin (or the router). Editable live from the **Agents** view. |
+| `orchestration.agents[*].brains`, `defaultChain`, `divisionChains[*]`, `agentChains[*]` | — | The brain fallback chains that actually execute each step, resolved by the step's `agent`/`division` pin (or the router). Editable live from the **Routing** page. |
 
 There is **no** separate on/off switch for the workflow layer — it is always
 available via the REST API. The orchestrated decision loop only runs when
@@ -544,6 +544,8 @@ available via the REST API. The orchestrated decision loop only runs when
 | `POST` | `/api/workflows/:id/run` | Start a run. Body `{ params, dryRun }`. DAG → 201 with expanded `tasks` (or 200 for a dry run); orchestrated → 201 with the run record shape. |
 | `GET` | `/api/workflow-runs` | Every run, newest first (DAG grouped from task context; orchestrated from records + decision log). |
 | `GET` | `/api/workflow-runs/:runId` | One run's tasks + status (+ goal & decision log for orchestrated). |
+| `DELETE` | `/api/workflow-runs/:runId` | Delete one run. |
+| `DELETE` | `/api/workflow-runs` | Delete all runs. |
 
 ---
 
@@ -622,6 +624,9 @@ resolved plan and catch a missing param or a mis-wired dependency for free.
 | `adaptive-research` | orchestrated | Adaptive deep research — the orchestrator drills only where the goal needs it. `params: question` |
 | `plan-execution` | orchestrated | Turns a plan into dispatched jobs and drives them to verified completion. `params: plan` |
 | `workflow-builder` | dag | Meta: design → author → register a **new** workflow from a goal. `params: goal, workflow_id` |
+| `eval-prompt-change` | dag | Measures a change to CONVENTIONS.md, the verifier prompt or a persona: replays historical tasks under variants A and B, then one blinded judge scores both. `params: family, variantA, variantB` |
+| `daily-fantasy-vlog` | dag | Generates a Moving Storybook fantasy ambient music video with a fixed local pipeline and uploads it to YouTube. |
+| `gentle-soul-storybook` | dag | End-to-end 3-Act Moving Storybook production (music, visuals, multi-language upload, then Shorts extraction). |
 
 ```bash
 # Run the flagship end-to-end company workflow:

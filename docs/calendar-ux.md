@@ -134,7 +134,7 @@ The default window is 7 days back to 35 days ahead, capped at 100 days. Logic li
 |------|------|
 | `server/src/core/calendar.ts` (+ `.test.ts`) | projection: tasks → events + series |
 | `server/src/api/router.ts` | `GET /api/calendar` |
-| `server/src/core/layout-config.ts`, `layout.json` | `calendar` app page (nav: Operations, after Tasks) |
+| `server/src/core/layout-config.ts`, `layout.json` | `calendar` app page (nav: Operations, after Recipes) |
 | `server/public/js/calendar.js` | the page (extends `App.prototype`; loaded after `app.js`) |
 | `server/public/css/calendar.css` | all `.cal-*` styles: theme tokens from `style.css` plus a few `--cal-*` aliases, light + dark |
 | `server/public/js/app.js` | route case; `createTaskModal({ scheduledAt })` pre-fill |

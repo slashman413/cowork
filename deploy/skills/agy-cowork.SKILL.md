@@ -112,7 +112,7 @@ replies arrive on `context.humanInput`.
 
 | Tool | Purpose | Key Arguments |
 |------|---------|---------------|
-| `get_roster` | Search the Agencies (~285 agents) | `division`, `search`, `limit` |
+| `get_roster` | Search the Agencies (~288 agents) | `platform`, `category` (= division), `search`, `active_only` |
 | `get_dashboard` | Full dashboard snapshot | _(none)_ |
 
 ---
@@ -166,7 +166,7 @@ ids for the same models.
 > ⚠️ The background brain client (`cowork-local-brain@agy.service`) already handles
 > brain registration and task polling automatically. Interactive Antigravity sessions
 > typically only need to **create tasks**, **check the inbox/dashboard**, and
-> **file reports** — you do NOT need to re-register brains that the systemd service
+> **read results** — you do NOT need to re-register brains that the systemd service
 > already declared.
 
 > ⚠️ Do **not** call `deregister_agent` for these local brains on exit — it cascades
@@ -175,7 +175,7 @@ ids for the same models.
 
 ### Brain Environment Manifests (`env`)
 
-When declaring brains in `register_agent`, each brain object supports an optional `env` capability manifest (`BrainEnv: { paths[], tools[], secrets[], traits[] }`):
+When declaring brains in `register_agent`, each brain object supports an optional `env` capability manifest (`BrainEnv: { paths[], tools[], secrets[], net[], traits[] }`):
 - **Purpose**: Enables the router to avoid dispatching tasks to hosts lacking required CLI tools, directory paths, or credentials.
 - **Secrets Rule (Zero Leakage)**: The `secrets` array must declare credential **names only** (e.g., file basenames under `~/.priv/`), **never** secret values or file contents.
 - **Auto-Detection**: `deploy/remote-brain-client.mjs` automatically calls `detectEnv()` to probe installed binaries (`$ENV_TOOLS` or standard list), directories (`$ENV_PATHS`), and secret file basenames. The Cowork server defensively caps each list to ≤200 items of ≤300 characters (`capEnv`).
@@ -186,8 +186,8 @@ When declaring brains in `register_agent`, each brain object supports an optiona
 
 The always-on coordinator (shown in **Connections** as `cowork/orchestrator`) polls the
 inbox and executes any task that resolves to an executor. Routing is **two-stage**:
-an orchestrator/classifier brain (default Qwen3.6-35B-A3B) first picks a **division**
-(1 of 19), then picks an **agent** (1 of 285) inside it. The chosen agent's full
+an orchestrator/classifier brain (default Qwen3.8-27B via Hermes) first picks a **division**
+(1 of 19), then picks an **agent** (1 of 288) inside it. The chosen agent's full
 `.md` persona (from the `agency-agents` repo) becomes the system prompt, run on the
 division's brain chain. You can also target directly: `context.agent: "<agent-slug>"`
 or a special-executor name skips classification.
@@ -198,7 +198,7 @@ or a special-executor name skips classification.
   `orchestrator`, `generalist`, `video`) — each is `{description, brains: [...]}` with
   its own chain. Edit in the dashboard **Agents** view → *Special executors*
   (or `PUT /api/agents-config/:name`).
-- **Agencies agents** are the 285 personas in `agency-agents`, grouped into 19 divisions
+- **Agencies agents** are the 288 personas in `agency-agents`, grouped into 19 divisions
   (`GET /api/roster-divisions`). They don't carry their own chain — they run on the
   **division chain** if one is set, else the **global default chain**.
 
@@ -211,8 +211,8 @@ or a special-executor name skips classification.
   the **Agents** view per division (`PUT /api/chains/division/:division`; empty body
   reverts to the default).
 - A chain runs top → bottom: task runs on `chain[0]`; on failure the dispatcher **hands
-  over to `chain[1]`, then `[2]`…**, filing a report each attempt, until success or the
-  chain is exhausted. `remoteGraceMs` (default 60s) auto-advances past a **remote** rung
+  over to `chain[1]`, then `[2]`…**, until success or the
+  chain is exhausted. `remoteGraceMs` (20s in the template config; 60s code default) auto-advances past a **remote** rung
   whose owning client hasn't claimed it, so a cold remote brain never stalls the chain.
 - Pin one task to a specific brain with `context.brain: "<id>"` (overrides the chain).
 
@@ -357,7 +357,7 @@ task to the next brain in the chain.
 ### 7. Query Agencies
 
 ```
-get_roster(division="engineering", search="keyword")
+get_roster(category="engineering", search="keyword")
 ```
 
 ---
@@ -499,8 +499,9 @@ way; copy that shape rather than writing a bare metric.
 | `GET` | `/api/roster` | Agencies (filterable by division/search) |
 | `GET` | `/api/roster-divisions` | Agencies grouped by division |
 | `GET` | `/api/dispatcher` | Special agents + brains + defaultChain + divisionChains + running |
-| `GET/PUT` | `/api/chains/default` | Global default chain |
-| `GET/PUT` | `/api/chains/division/:div` | Per-division chain |
+| `GET` | `/api/chains` | Default + per-division (+ per-agent) chains |
+| `PUT` | `/api/chains/default` | Global default chain |
+| `PUT` | `/api/chains/division/:div` | Per-division chain |
 | `GET/PUT/DELETE` | `/api/brains`, `/api/brains/:id` | Brain registry (cascades on delete) |
 | `GET/PUT/DELETE` | `/api/agents-config`, `/api/agents-config/:name` | Special-executor chains |
 | `GET` | `/api/artifacts/:taskId`, `/api/artifacts/:taskId/:file` | List / download task artifacts |
@@ -523,9 +524,9 @@ way; copy that shape rather than writing a bare metric.
 
 ### Web Dashboard
 
-- `https://localhost:6868/` — Web UI (dashboard, Connections, inbox, reports, Agents,
-  Brains, Agencies) with raw/rendered markdown viewer and artifact downloads
-- **Inbox UX**: Real-time SSE updates preserve card expansion and scroll position; status pills display live counts; and a **+ New task** toolbar button lets you create and dispatch tasks with title, brief, priority, and target brain directly from the Inbox without routing through Chat.
+- `https://localhost:6868/` — Web UI (Overview, Portal, Tasks, Recipes, Calendar,
+  Workflows, Goals, Routing, Brains, Personas, Workers, Configuration) with raw/rendered markdown viewer and artifact downloads
+- **Inbox UX**: Real-time SSE updates preserve card expansion and scroll position; status pills display live counts; and a **+ New task** toolbar button lets you create and dispatch tasks with title, brief, priority, and target brain directly from the Tasks page.
 
 ---
 
