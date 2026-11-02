@@ -53,6 +53,47 @@ export interface LintOptions {
   /** Path to Hallmark's sloplint.mjs. When set, outputs/*.html deliverables are
    *  also run through it and summarised as ONE warning per page (never critical). */
   sloplint?: string;
+  /** The task's method playbook (context.playbook). For prose playbooks
+   *  (UNSLOP_PLAYBOOKS) outputs/*.md also get the `unslop` rule (G7). */
+  playbook?: string;
+}
+
+/** Playbooks whose markdown deliverables are checked by the `unslop` rule. */
+export const UNSLOP_PLAYBOOKS = new Set(['content', 'technical-writing']);
+
+/** AI-tell patterns distilled from vendor/pstack/skills/unslop/SKILL.md (rule ids in comments). */
+const UNSLOP_PATTERNS: Array<{ id: string; re: RegExp }> = [
+  { id: 'ai-vocabulary(7)', re: /\b(?:delve[sd]?|delving|tapestry|testament to|underscores?|pivotal|intricate|interplay|garner(?:s|ed)?|vibrant|showcas(?:e|es|ed|ing)|fostering)\b/gi },
+  { id: 'fancy-is(8)', re: /\b(?:serves as|stands as|boasts)\b/gi },
+  { id: 'not-just-but(9)', re: /\bnot (?:just|only|merely)\b[^.\n]{1,80}?,?\s*but(?: also)?\b/gi },
+  { id: 'chatbot-phrase(20)', re: /\b(?:I hope this helps|Let me know if|Certainly!|Of course!|Great question)\b/gi },
+  { id: 'filler(23)', re: /\b(?:it is (?:important|worth) (?:to note|noting) that|it'?s worth noting|in order to|due to the fact that)\b/gi },
+  { id: 'generic-conclusion(25)', re: /\bthe future (?:looks|is) bright\b|\bin today'?s fast-paced\b/gi },
+  { id: 'jargon(26)', re: /\b(?:game[- ]changer|north star|flywheel|paradigm shift|seamless(?:ly)?)\b/gi },
+  { id: 'plain-word(31)', re: /\b(?:utiliz(?:e|es|ed|ing)|leverag(?:e|es|ed|ing)|facilitat(?:e|es|ed|ing))\b/gi },
+];
+
+/** Count unslop tells in prose (code stripped). Returns per-rule hit counts. */
+export function unslopHits(text: string): Record<string, number> {
+  const prose = stripCode(text);
+  const hits: Record<string, number> = {};
+  for (const { id, re } of UNSLOP_PATTERNS) {
+    const n = (prose.match(re) || []).length;
+    if (n) hits[id] = n;
+  }
+  const dashes = (prose.match(/\u2014/g) || []).length;
+  if (dashes > 3) hits['em-dash(13)'] = dashes;
+  return hits;
+}
+
+/** The `unslop` lint rule — one warning per file listing the tells found (never critical). */
+export function unslopIssue(file: string, text: string): LintIssue | null {
+  const hits = unslopHits(text);
+  const keys = Object.keys(hits);
+  if (!keys.length) return null;
+  const total = keys.reduce((a, k) => a + hits[k], 0);
+  const list = keys.map(k => `${k}×${hits[k]}`).join(', ');
+  return { file, severity: 'warning', rule: 'unslop', message: `unslop: ${total} AI tell(s) — ${list}`.slice(0, 400) };
 }
 
 const TEXT_DELIVERABLE = new Set(['.md', '.markdown', '.txt', '.html', '.htm', '.json', '.csv', '.yaml', '.yml']);
@@ -155,6 +196,10 @@ export function lintArtifacts(dir: string, opts: LintOptions = {}): LintReport {
     for (const issue of lintContent(name, text, rel => fs.existsSync(path.resolve(base, rel)))) {
       if (issue.severity === 'critical' && tolerated.has(issue.rule)) issue.severity = 'warning';
       (issue.severity === 'critical' ? report.critical : report.warnings).push(issue);
+    }
+    if (opts.playbook && UNSLOP_PLAYBOOKS.has(opts.playbook) && name.startsWith(`${OUTPUTS_SUBDIR}/`) && /\.(?:md|markdown)$/i.test(name)) {
+      const issue = unslopIssue(name, text);
+      if (issue) report.warnings.push(issue);
     }
     if (opts.sloplint && name.startsWith(`${OUTPUTS_SUBDIR}/`) && /\.html?$/i.test(name)) {
       const issue = sloplintFile(opts.sloplint, abs, name);

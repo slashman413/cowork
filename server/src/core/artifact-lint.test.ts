@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { stripCode, lintContent, lintArtifacts, lintReason, summariseSloplint, resolveSloplint } from './artifact-lint.js';
+import { stripCode, lintContent, lintArtifacts, lintReason, summariseSloplint, resolveSloplint, unslopHits } from './artifact-lint.js';
 
 test('artifact-lint: stripCode strips code blocks, inline code and comments', () => {
   const input = [
@@ -150,4 +150,36 @@ test('artifact-lint: resolveSloplint only trusts a hallmark skill installed from
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
+});
+
+test('artifact-lint: unslop rule flags AI tells in outputs/*.md for content/technical-writing playbooks only', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lint-unslop-'));
+  try {
+    fs.mkdirSync(path.join(dir, 'outputs'));
+    const slop = 'We delve into the rich tapestry of tools. It serves as a game-changer, not just fast but seamless. In order to leverage it, read on.\n';
+    fs.writeFileSync(path.join(dir, 'outputs', 'post.md'), slop);
+    fs.writeFileSync(path.join(dir, 'notes.md'), slop);          // working file, not a deliverable
+    for (const playbook of ['content', 'technical-writing']) {
+      const r = lintArtifacts(dir, { playbook });
+      const w = r.warnings.filter(i => i.rule === 'unslop');
+      assert.deepEqual(w.map(i => i.file), ['outputs/post.md'], playbook);
+      assert.match(w[0].message, /ai-vocabulary\(7\)/);
+      assert.match(w[0].message, /not-just-but\(9\)/);
+      assert.match(w[0].message, /plain-word\(31\)/);
+      assert.equal(r.critical.length, 0);                        // never blocks
+    }
+    for (const playbook of [undefined, 'bug-fix', 'research-report']) {
+      const r = lintArtifacts(dir, { playbook });
+      assert.equal(r.warnings.filter(i => i.rule === 'unslop').length, 0, String(playbook));
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('artifact-lint: unslopHits ignores code and clean prose, counts em-dash overuse', () => {
+  assert.deepEqual(unslopHits('The parser rejects a bad date and exits with code 2.\n'), {});
+  assert.deepEqual(unslopHits('Run `leverage --delve` now.\n```\ntapestry\n```\n'), {});
+  assert.equal(unslopHits('a — b — c — d — e')['em-dash(13)'], 4);
+  assert.equal(unslopHits('a — b')['em-dash(13)'], undefined);
 });
