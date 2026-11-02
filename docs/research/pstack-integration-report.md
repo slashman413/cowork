@@ -1,6 +1,6 @@
 # pstack integration report: update of 2026-11-03 (continuation run)
 
-**Status: integration is complete for every item that runs without a GitHub token.** All of G1–G14 are DONE. The PR-automation steps that need `gh` (P0 auth, branch protection, approve, merge) are BLOCKED because the gh token is invalid; the error output is in §B. These defaults were applied: staged rollout P1→P3, squash merge, repo scope `slashman413/cowork` only, ALL skills exposed to Claude (the user overrode G8's 8-skill core), and shadow→enforce promotion gated on metrics.
+**Status: G1–G14 are all DONE. PR automation (auth, branch protection, bot approval, squash merge, read-back) is DONE and verified live on the local Forgejo.** Only the GitHub-side steps remain BLOCKED, because the user chose not to use `gh` for GitHub (§B). These defaults were applied: staged rollout P1→P3, squash merge, repo scope `slashman413/cowork` only, ALL skills exposed to Claude (the user overrode G8's 8-skill core), and shadow→enforce promotion gated on metrics.
 
 The original investigation (sections 0–6) follows unchanged after this update.
 
@@ -27,17 +27,31 @@ Security follow-up: `88b9b13`. A PR URL that is merely quoted in a result (for e
 
 ## B. PR automation: implemented vs blocked
 
+**Update (second continuation, 2026-11-03):** for security reasons the user chose not to use `gh` with GitHub, and allowed testing on the local Forgejo instead (`http://localhost:3001`, Forgejo 17.0.1). The full approve-and-merge loop now runs, and has been verified, on Forgejo. Only the GitHub-specific steps are still BLOCKED.
+
 | Step | Status | Evidence |
 |---|---|---|
 | `orchestration.prAutomation` config block (default `mode: "shadow"`, repos, label, escalatePaths, mergeMethod squash, maxFixRounds 2, watchIntervalMin 10) | DONE (`6f63b55`) | `config.test.ts`; present in the live config |
-| Dispatcher hook: a PR URL in a done result sets `context.prUrl`; an opened PR in scope spawns one recurring `[pr-watch]` task (`recurrence: minutes/10`), deduplicated | DONE (`9e47379`, `88b9b13`) | `pr-automation.test.ts` "dispatcher hook…", "openedPrUrls…" |
-| Escalation-path filter (auth, secret, .priv, deploy/, .github/workflows/, config.json, migration, billing, .env) and merge policy (`decidePrAction`: shadow → comment only; drifted patch-id → wait; FAIL → fix, then escalate after 2 rounds) | DONE | `pr-automation.test.ts` |
-| P0 `gh` auth | **BLOCKED** | `gh auth status` → `X Failed to log in to github.com account ckw19810413 … The token in /home/maxchang/.config/gh/hosts.yml is invalid.`; `gh pr list -R slashman413/cowork` → `HTTP 401: Bad credentials (https://api.github.com/graphql)` |
-| Branch protection on `main` (require `CI Pipeline / test`, enable auto-merge) | **BLOCKED** | needs `gh api`; same 401 (`gh api repos/slashman413/cowork` → `"message": "Bad credentials"`) |
-| watch-pr status query, bot approve, squash merge, read-back | **BLOCKED, not verified** | all need `gh`; same 401. Not claimed as working |
-| Second identity for approvals (GitHub does not let an author approve their own PR) | **BLOCKED (decision)** | needs a bot account or GitHub App |
+| Dispatcher hook: a PR URL in a done result sets `context.prUrl`; an opened PR in scope spawns one recurring `[pr-watch]` task (`recurrence: minutes/10`), deduplicated | DONE (`9e47379`, `88b9b13`; Forgejo URLs in this run) | `pr-automation.test.ts`, `forgejo-shepherd.test.ts` "dispatcher hook: an opened Forgejo PR…" |
+| Escalation-path filter and merge policy (`decidePrAction`) | DONE | `pr-automation.test.ts`; live: PR #2 (touches `deploy/`) → `NEEDS_HUMAN`, comment only, left open |
+| **Server-side executor (the P2 prerequisite):** `core/forgejo-shepherd.ts` plus the CLI `server/src/cli/pr-shepherd.ts`. The pr-watch brain only reviews. Every forge write goes through this code, which checks the opt-in label, that the author is not the bot, CI status, `decidePrAction`, and that the verified head SHA matches the current head. After a merge it reads the PR back | DONE, **verified live** | `forgejo-shepherd.test.ts` (9 tests); live log `artifacts/df75cf56-…/forgejo-e2e.log` |
+| P0 auth (Forgejo) | DONE | Users `cowork-author` (opens PRs) and `cowork-bot` (approves and merges); tokens in `~/.priv/forgejo-cowork-{author,bot}-token` (mode 600). The live config names the file, never the token |
+| Branch protection on `main` | DONE on Forgejo | `pr-shepherd.ts --protect cowork/pr-sandbox` → `required_approvals:1`, `merge_whitelist:[cowork-bot]`, `dismiss_stale_approvals:true`. The author's direct merge → `HTTP 405 "User not allowed to merge PR"`; self-approval → `HTTP 422 "approve your own pull is not allowed"` |
+| Bot identity (second approver) | DONE on Forgejo | `cowork-bot` is a separate user and owns the `cowork` org |
+| Approve + squash merge + read-back | DONE, **verified live** | PR #4: FAIL verdict → fix comment only. PASS on head `d9dffba4e37e` → `performed: [approve, merge:squash, read-back:merged]`; the forge shows `merged:true, merged_by:cowork-bot, merge_commit_sha:45dad03a`. A PASS on a stale SHA → `wait: patch-id drift`, no writes |
+| GitHub (`slashman413/cowork`): `gh` auth, branch protection, approve/merge | **BLOCKED (by choice)** | `gh auth status` → `The token in /home/maxchang/.config/gh/hosts.yml is invalid`; `gh pr list -R slashman413/cowork` → `HTTP 401: Bad credentials`. The user declined to use `gh` for GitHub, so this repo stays in `mode: shadow` and its watcher still describes the `gh` steps. Porting the shepherd to GitHub means adding a GitHub client next to `ForgejoClient`; `decidePrAction` and the CLI contract stay the same |
 
-Before moving `mode` to `approve` or `merge`, the approve/merge commands should run in server code that calls `decidePrAction` and checks the author, not only in the watcher brain's prompt. That code is the P2 prerequisite. In `shadow` mode the watcher only reports or comments.
+**Live config** (`~/.cowork/config.json`; backup `~/.cowork/backups/config.json.pre-forgejo-20261103`; every other key unchanged): `repos += cowork/pr-sandbox`, `repoModes: {"cowork/pr-sandbox": "merge"}`, `forges: [{kind: forgejo, baseUrl: http://localhost:3001, tokenFile: ~/.priv/forgejo-cowork-bot-token, botUser: cowork-bot}]`. The global `mode` stays `shadow`, so only the sandbox auto-merges. To promote another Forgejo repo, add it to `repos` and set its `repoModes` entry to `approve`, then later `merge`.
+
+**Bugs found by the live run and fixed in this commit** (recorded in the e2e log):
+1. The first PR (#1) was opened before protection existed, and the author's direct merge succeeded (HTTP 200). Lesson: run `--protect` before enabling a repo.
+2. With an approvals whitelist, Forgejo dropped the org-owner bot from the list. Every approval was then non-official, and merges failed with "Does not have enough approvals". The rule now uses `enable_approvals_whitelist:false`; the merge whitelist plus Forgejo's ban on self-approval keep the guarantee.
+3. A bot approval made under the old rule stayed `official:false`. The shepherd now re-approves unless the head has an official approval.
+
+**Forgejo use:** a brain that opens a PR prints `PR_OPENED: http://localhost:3001/<owner>/<repo>/pulls/<n>`. The dispatcher spawns `[pr-watch]`, which runs:
+`npx tsx server/src/cli/pr-shepherd.ts --pr <url> --status`, reviews `<url>.diff`, then runs
+`npx tsx server/src/cli/pr-shepherd.ts --pr <url> --verdict PASS|PASS+NOTES|FAIL --verified-sha <head>`.
+Exit codes: 0 = OK or done, 2 = needs a human (escalation), 3 = blocked, 1 = error.
 
 ## C. How to trigger pstack now
 
