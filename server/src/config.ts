@@ -94,6 +94,70 @@ const defaultConfig: Config = {
   }
 };
 
+/**
+ * G1: pstack (PS-*) feature defaults. A live config written before PS-1..PS-8
+ * landed lacks these keys; loadConfig deep-merges them so the features run
+ * without anyone hand-editing ~/.cowork/config.json. Live keys always win.
+ */
+export const PS_DEFAULTS = {
+  methods: {
+    enabled: true,
+    cards: {
+      'investigation': 'shadow', 'bug-fix': 'shadow', 'feature': 'shadow',
+      'research-report': 'on', 'content': 'shadow', 'ops-change': 'shadow',
+      'technical-writing': 'shadow', 'perf-issue': 'shadow', 'refactoring': 'shadow',
+      'prototype': 'shadow', 'runtime-forensics': 'shadow', 'eval': 'shadow',
+      'opening-a-pr': 'shadow', 'babysit': 'shadow'
+    } as Record<string, 'shadow' | 'on'>
+  },
+  tiers: {
+    mechanical: ['local-dsh-qwen3-8-27b', 'local-agy-gemini-3.8-flash-high', 'local-agy-gemini-3.8-flash-medium'],
+    standard: ['local-agy-gemini-4-argon-medium', 'local-agy-claude-opus-5-5-medium'],
+    judgment: ['local-cc-opus-5-5', 'remote-ai-code-gen-cc-opus-5-5']
+  } as Record<string, string[]>,
+  spec: {
+    enabled: true,
+    mode: 'shadow' as const,
+    maxFalseRejectRate: 0.1,
+    minDecisiveVerdicts: 30,
+    timeoutMs: 300000,
+    judges: {
+      claude: ['local-agy-gemini-4-argon-medium', 'local-agy-gemini-3.8-flash-high'],
+      gemini: ['local-agy-claude-opus-5-5-medium', 'local-cc-opus-5-5'],
+      qwen: ['local-agy-claude-opus-5-5-medium', 'local-cc-opus-5-5'],
+      default: ['local-agy-claude-opus-5-5-medium', 'local-cc-opus-5-5']
+    }
+  },
+  panel: { enabled: true, size: 2, judgmentTier: false },
+  prAutomation: {
+    enabled: true,
+    mode: 'shadow' as const,
+    repos: ['slashman413/cowork'],
+    label: 'cowork-auto',
+    escalatePaths: [
+      'auth', 'secret', '.priv', 'deploy/', '.github/workflows/', 'config.json',
+      'migration', 'billing', '.env'
+    ],
+    mergeMethod: 'squash' as const,
+    maxFixRounds: 2,
+    watchIntervalMin: 10
+  }
+};
+
+/** Deep-merge the PS_DEFAULTS into an orchestration block (live values win). */
+export function applyPsDefaults(orch: Config['orchestration']): string[] {
+  const filled: string[] = [];
+  if (!orch.methods) { orch.methods = structuredClone(PS_DEFAULTS.methods); filled.push('methods'); }
+  else orch.methods = { ...PS_DEFAULTS.methods, ...orch.methods, cards: { ...PS_DEFAULTS.methods.cards, ...(orch.methods.cards || {}) } };
+  if (!orch.tiers || !Object.keys(orch.tiers).length) { orch.tiers = structuredClone(PS_DEFAULTS.tiers); filled.push('tiers'); }
+  orch.verifier = orch.verifier || { enabled: true };
+  if (!orch.verifier.spec) { orch.verifier.spec = structuredClone(PS_DEFAULTS.spec); filled.push('verifier.spec'); }
+  if (!orch.verifier.panel) { orch.verifier.panel = { ...PS_DEFAULTS.panel }; filled.push('verifier.panel'); }
+  if (!orch.prAutomation) { orch.prAutomation = structuredClone(PS_DEFAULTS.prAutomation); filled.push('prAutomation'); }
+  else orch.prAutomation = { ...structuredClone(PS_DEFAULTS.prAutomation), ...orch.prAutomation };
+  return filled;
+}
+
 export function loadConfig(): Config {
   const configPath = activeConfigPath();
 
@@ -165,6 +229,10 @@ export function loadConfig(): Config {
   // retired, or by an older server that lacked the denylist. Doing it at load
   // time guarantees a retired brain can never come back across a restart, not
   // just be blocked from new registration.
+  const psFilled = applyPsDefaults(config.orchestration);
+  const om = config.orchestration;
+  console.log(`[pstack] sharpener=${om.sharpener?.enabled ? om.sharpener.mode : 'off'} methods=${om.methods?.enabled ? 'on' : 'off'} spec=${om.verifier?.spec?.enabled ? om.verifier.spec.mode : 'off'} panel=${om.verifier?.panel?.enabled ? 'on' : 'off'} prAutomation=${om.prAutomation?.enabled ? om.prAutomation.mode : 'off'}` + (psFilled.length ? ` (defaults filled: ${psFilled.join(', ')})` : ''));
+
   scrubDenylistedBrains(config);
 
   // Rename brains that still carry a retired id (BRAIN_ID_ALIASES) — registry

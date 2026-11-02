@@ -411,6 +411,24 @@ export interface OrchestrationConfig {
   goalAttention?: boolean;
   /** Per-task method cards from pinned pstack playbooks (PS-4). */
   methods?: MethodsConfig;
+  /** PR shepherd (pstack opening-a-pr / babysit / shipping). See core/pr-automation.ts. */
+  prAutomation?: PrAutomationConfig;
+}
+
+/** Config for {@link OrchestrationConfig.prAutomation}. */
+export interface PrAutomationConfig {
+  enabled?: boolean;
+  /** shadow: watch + verify + comment only. approve: bot approves on PASS. merge: bot merges. */
+  mode?: 'shadow' | 'approve' | 'merge';
+  /** owner/repo slugs eligible for automation. */
+  repos?: string[];
+  /** PR label that opts a PR in. */
+  label?: string;
+  /** Path substrings that always escalate to a human. */
+  escalatePaths?: string[];
+  mergeMethod?: 'squash' | 'merge' | 'rebase';
+  maxFixRounds?: number;
+  watchIntervalMin?: number;
 }
 
 /** Config for {@link OrchestrationConfig.methods} (PS-4). */
