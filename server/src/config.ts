@@ -134,6 +134,7 @@ export function loadConfig(): Config {
       ? { ...defaultConfig.obsidian!, ...loadedConfig.obsidian }
       : defaultConfig.obsidian,
     inbox: { ...defaultConfig.inbox, ...(loadedConfig.inbox || {}) },
+    integrations: loadedConfig.integrations,
     orchestration: {
       ...defaultConfig.orchestration,
       ...(loadedConfig.orchestration || {}),
