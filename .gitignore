@@ -54,3 +54,8 @@ decisions/rulings.tsv
 # Recipes (recipes/<id>.json, reusable tasks) — per-server runtime state carrying
 # private briefs, same class as goals/. Never commit them.
 recipes/
+
+# dsh progress overlay — regenerated per host by ensureDshPatch() (dispatcher.ts and
+# remote-brain-client.mjs) with this machine's absolute plugin path, so a tracked copy
+# always carries one server's home dir. Never commit it.
+deploy/dsh/dsh-progress-patch.yml

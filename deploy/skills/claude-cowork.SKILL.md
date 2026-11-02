@@ -131,7 +131,7 @@ When *you* are the brain running a dispatched task:
 5. **Stay inside the task.** One task, one deliverable; no side quests, no new cowork
    tasks unless the brief asks you to decompose.
 6. **Credential/local-filesystem tasks must run on a local brain.** Anything touching
-   `~/.priv/` or `/home/wayne/...` — pin `context: {"brain": "local-hermes-qwen3.8-27b"}`
+   `~/.priv/` or other `$HOME/...` paths — pin `context: {"brain": "local-hermes-qwen3.8-27b"}`
    (or another `local-*`). `remote-*` brains on other machines cannot see this filesystem;
    if you are one and the task needs it, report the routing error and stop.
 
