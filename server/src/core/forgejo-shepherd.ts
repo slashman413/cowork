@@ -42,7 +42,7 @@ export class ForgejoClient {
     for (let page = 1; page <= maxPages; page++) {
       const batch = await this.api<Array<{ filename: string; previous_filename?: string }>>('GET', `/repos/${repo}/pulls/${n}/files?limit=${pageSize}&page=${page}`);
       for (const f of batch || []) { paths.push(f.filename); if (f.previous_filename) paths.push(f.previous_filename); }
-      if (!batch || batch.length < pageSize) return { paths, complete: true };
+      if (!batch || batch.length === 0) return { paths, complete: true };   // stop only on an empty page: the server may cap page size below `limit`
     }
     return { paths, complete: false };
   }
