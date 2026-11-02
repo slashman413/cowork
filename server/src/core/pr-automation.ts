@@ -135,8 +135,8 @@ function forgejoWatchSpec(ref: PrRef, parent: Task, cfg: PrAutomationConfig | un
     description: [
       `Shepherd ${ref.url} (Forgejo; opened by task ${parent.id}) per pstack babysit/shipping, mode=${mode}.`,
       `1. \`${cli} --status\` (JSON). If it reports BLOCKED (auth, label, author) or the PR is merged/closed, report it and stop the recurrence.`,
-      `2. Review the diff it prints the URL for (\`.diff\`) independently with pstack interrogate; decide PASS / PASS+NOTES / FAIL.`,
-      `3. \`${cli} --verdict <PASS|PASS+NOTES|FAIL> --verified-sha <head sha from step 1>\`. The CLI enforces the policy: escalation paths, head-sha drift, author ≠ bot, mode (${mode}).`,
+      `2. \`${cli} --diff\` prints \`HEAD <sha>\` then the diff at exactly that head. Review it independently with pstack interrogate; decide PASS / PASS+NOTES / FAIL.`,
+      `3. \`${cli} --verdict <PASS|PASS+NOTES|FAIL> --verified-sha <the HEAD sha printed by --diff>\`. The CLI enforces the policy: escalation paths, head-sha drift, author ≠ bot, mode (${mode}).`,
       `Never call the Forgejo API directly to approve or merge. FAIL → report the findings as a fix task for the author.`,
     ].join('\n'),
     recurrence: { type: 'minutes' as const, interval: Math.max(5, cfg?.watchIntervalMin ?? 10) },

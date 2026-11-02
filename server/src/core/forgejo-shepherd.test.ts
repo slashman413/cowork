@@ -25,7 +25,11 @@ function fakeForge(pr: Record<string, any>, opts: { files?: string[]; ci?: { sta
     const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status });
     if (m !== 'GET') writes.push(`${m} ${p}`);
     if (m === 'GET' && p === '/repos/cowork/pr-sandbox/pulls/3') return json({ state: 'open', mergeable: true, labels: [{ name: 'cowork-auto' }], user: { login: 'cowork-author' }, head: { sha: 'abc123' }, ...state });
-    if (p.endsWith('/files')) return json((opts.files || ['README.md']).map(filename => ({ filename })));
+    if (p.endsWith('/files')) {
+      const page = Number(new URL(url).searchParams.get('page') || 1), lim = Number(new URL(url).searchParams.get('limit') || 50);
+      const all = (opts.files || ['README.md']).map(f => f.includes('<-') ? { filename: f.split('<-')[0], previous_filename: f.split('<-')[1] } : { filename: f });
+      return json(all.slice((page - 1) * lim, page * lim));
+    }
     if (p.includes('/commits/')) return json(opts.ci || { state: '', total_count: 0 });
     if (m === 'GET' && p.endsWith('/reviews')) return json(opts.reviews || []);
     if (m === 'POST' && p.endsWith('/merge')) { state.merged = true; state.state = 'closed'; return new Response('', { status: 200 }); }
@@ -133,4 +137,16 @@ test('dispatcher hook: an opened Forgejo PR spawns one shepherd pr-watch; unknow
   const t2 = h.mk({});
   (h.dispatcher as any).notePrUrls(t2, 'PR_OPENED: http://evil.example/cowork/pr-sandbox/pulls/1');
   assert.equal(watchers().length, 1);
+});
+
+test('escalation sees every page of files and the old path of renames; a capped list fails closed', async () => {
+  const many = Array.from({ length: 120 }, (_, i) => `src/f${i}.ts`).concat(['deploy/late.sh']);
+  let f = fakeForge({}, { files: many });
+  let r = await shepherdForgejoPr({ ref, cfg, client: f.client, verdict: 'PASS', verifiedSha: 'abc123' });
+  assert.equal(r.status, 'NEEDS_HUMAN', 'file on page 3 must be seen');
+  f = fakeForge({}, { files: ['docs/innocent.md<-deploy/run.sh'] });
+  r = await shepherdForgejoPr({ ref, cfg, client: f.client, verdict: 'PASS', verifiedSha: 'abc123' });
+  assert.equal(r.status, 'NEEDS_HUMAN', 'rename away from an escalation path');
+  const listed = await fakeForge({}, { files: many }).client.files('cowork/pr-sandbox', 3, 50, 2);
+  assert.equal(listed.complete, false);
 });

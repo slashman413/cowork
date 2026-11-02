@@ -35,7 +35,22 @@ export class ForgejoClient {
 
   whoami() { return this.api<{ login: string }>('GET', '/user'); }
   pr(repo: string, n: number) { return this.api<any>('GET', `/repos/${repo}/pulls/${n}`); }
-  files(repo: string, n: number) { return this.api<Array<{ filename: string }>>('GET', `/repos/${repo}/pulls/${n}/files?limit=200`); }
+  /** Every changed path (all pages; renames contribute their old path too).
+   *  `complete:false` when the page cap is hit — callers must fail closed. */
+  async files(repo: string, n: number, pageSize = 50, maxPages = 20): Promise<{ paths: string[]; complete: boolean }> {
+    const paths: string[] = [];
+    for (let page = 1; page <= maxPages; page++) {
+      const batch = await this.api<Array<{ filename: string; previous_filename?: string }>>('GET', `/repos/${repo}/pulls/${n}/files?limit=${pageSize}&page=${page}`);
+      for (const f of batch || []) { paths.push(f.filename); if (f.previous_filename) paths.push(f.previous_filename); }
+      if (!batch || batch.length < pageSize) return { paths, complete: true };
+    }
+    return { paths, complete: false };
+  }
+  async diff(repo: string, n: number): Promise<string> {
+    const res = await this.fetchImpl(`${this.baseUrl}/api/v1/repos/${repo}/pulls/${n}.diff`, { headers: { Authorization: `token ${this.token}` } });
+    if (!res.ok) throw new Error(`Forgejo GET pulls/${n}.diff → HTTP ${res.status}`);
+    return res.text();
+  }
   status(repo: string, sha: string) { return this.api<{ state: string; total_count: number }>('GET', `/repos/${repo}/commits/${sha}/status`); }
   reviews(repo: string, n: number) { return this.api<Array<{ state: string; user: { login: string }; commit_id: string; stale?: boolean; dismissed?: boolean; official?: boolean }>>('GET', `/repos/${repo}/pulls/${n}/reviews`); }
   comment(repo: string, n: number, body: string) { return this.api('POST', `/repos/${repo}/issues/${n}/comments`, { body }); }
@@ -97,14 +112,17 @@ export async function shepherdForgejoPr(opts: {
   if (pr.author.toLowerCase() === forge.botUser.toLowerCase()) {
     return { ...base, status: 'BLOCKED', action: 'none', watch: 'WAITING', why: `PR author is the bot (${forge.botUser}); self-approval is not allowed` };
   }
-  const files = (await client.files(ref.repo, ref.number)).map(f => f.filename);
+  const listed = await client.files(ref.repo, ref.number);
+  const files = listed.complete ? listed.paths : [...listed.paths, '<file list truncated — escalate>'];
   const ci = pr.headSha ? await client.status(ref.repo, pr.headSha) : { state: '', total_count: 0 };
   const watch: ShepherdResult['watch'] = !pr.mergeable ? 'BLOCKER'
     : !ci.total_count ? 'READY'
     : ci.state === 'success' ? 'READY'
     : ci.state === 'pending' ? 'WAITING' : 'BLOCKER';
   const mode = modeFor(ref.repo, cfg);
-  const d = decidePrAction({ cfg, mode, watch, verdict: opts.verdict, verifiedPatchId: opts.verifiedSha, headPatchId: pr.headSha, files, fixRounds: opts.fixRounds });
+  const d0 = decidePrAction({ cfg, mode, watch, verdict: opts.verdict, verifiedPatchId: opts.verifiedSha, headPatchId: pr.headSha, files, fixRounds: opts.fixRounds });
+  // Fail closed: an incomplete file list can hide an escalation path.
+  const d = listed.complete ? d0 : { action: 'escalate' as const, why: 'changed-file list exceeds the page cap; a human must review' };
   const out: ShepherdResult = { ...base, files, watch, action: d.action, why: d.why, status: 'OK' };
   const tag = `<!-- cowork-pr-shepherd sha=${pr.headSha} -->`;
   const verdictLine = opts.verdict ? `**cowork verdict: ${opts.verdict}** on \`${pr.headSha.slice(0, 12)}\` (mode=${mode})${opts.notes ? `\n\n${opts.notes}` : ''}` : '';
@@ -144,4 +162,15 @@ export async function shepherdForgejoPr(opts: {
     }
   }
   return out;
+}
+
+/** The PR diff bound to a head SHA: fetched between two reads of the PR, and
+ *  returned only if the head did not move — so the SHA a reviewer passes to
+ *  `--verified-sha` is the content it actually reviewed. */
+export async function pinnedDiff(client: ForgejoClient, ref: PrRef): Promise<{ headSha: string; diff: string }> {
+  const before = (await client.pr(ref.repo, ref.number)).head?.sha;
+  const diff = await client.diff(ref.repo, ref.number);
+  const after = (await client.pr(ref.repo, ref.number)).head?.sha;
+  if (!before || before !== after) throw new Error(`head moved during diff fetch (${before} → ${after}); retry`);
+  return { headSha: before, diff };
 }
