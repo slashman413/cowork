@@ -11,6 +11,7 @@ import { buildCalendar } from '../core/calendar.js';
 import type { EventBus } from '../core/events.js';
 import { mergeWorktree, removeWorktree } from '../core/worktree.js';
 import { sharpenInBackground } from '../core/sharpener.js';
+import { boundTaskArtifacts } from '../core/artifact-list.js';
 
 export function createApiRouter(store: Store, eventBus: EventBus): Router {
   const router = Router();
@@ -26,6 +27,9 @@ export function createApiRouter(store: Store, eventBus: EventBus): Router {
     }));
   });
 
+  // Over-long artifact lists are capped per task (boundTaskArtifacts) so one task
+  // with tens of thousands of files can't turn every Tasks-page refresh into a
+  // multi-megabyte download + DOM build.
   router.get('/inbox', (req, res) => {
     res.json(store.listTasks({
       status: req.query.status as string,
@@ -33,7 +37,7 @@ export function createApiRouter(store: Store, eventBus: EventBus): Router {
       agent: req.query.agent as string,
       tag: req.query.tag as string,
       limit: req.query.limit ? parseInt(req.query.limit as string, 10) : undefined
-    }));
+    }).map(t => boundTaskArtifacts(t)));
   });
 
   // Calendar projection for the Calendar page: past runs + projected future fires
@@ -57,7 +61,7 @@ export function createApiRouter(store: Store, eventBus: EventBus): Router {
   router.get('/inbox/:id', (req, res) => {
     const task = store.getTask(req.params.id);
     if (!task) return res.status(404).json({ error: 'Task not found' });
-    res.json(task);
+    res.json(boundTaskArtifacts(task));
   });
 
   // Live progress log for a running task — the tail of the brain's stdout/stderr the

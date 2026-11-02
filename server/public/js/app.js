@@ -512,6 +512,18 @@ function artifactChip(taskId, f, fontSize = '0.9rem', kind = 'artifacts') {
   return `<a href="/api/${kind}/${encodeURIComponent(taskId)}/${encodedPath}" download="${esc(downloadName)}" class="btn" style="${base}"><i data-lucide="download" style="width:12px;height:12px"></i>${esc(f)}</a>`;
 }
 
+/** Max file chips rendered per list on a card. Each chip is a button + Lucide
+ *  SVG; a run with thousands of files (cloned repos) used to put ~300k nodes in
+ *  the Tasks view and stall every refresh. The rest collapse into a "+N more" note
+ *  (`total` = the server's real count when it capped the list: task.artifactsTotal). */
+const CARD_CHIP_MAX = 40;
+function artifactChips(taskId, files, fontSize = '0.9rem', kind = 'artifacts', total = 0) {
+  const shown = files.slice(0, CARD_CHIP_MAX);
+  const more = Math.max(files.length, total || 0) - shown.length;
+  return shown.map(f => artifactChip(taskId, f, fontSize, kind)).join('')
+    + (more > 0 ? `<span style="font-size:${fontSize}; color:var(--text-muted); padding:0 4px">+${more.toLocaleString()} more on disk</span>` : '');
+}
+
 /** Brain chip accent (translucent bg / border / text share one hue). */
 const BRAIN_COLOR = '#F97316';        // orange
 const BRAIN_BAD_COLOR = '#EF4444';    // unknown / deregistered brain
@@ -2510,14 +2522,14 @@ class App {
           const sectionStyle = 'display:flex; flex-wrap:wrap; align-items:center; gap:4px; padding:4px 0 2px';
           const sectionLabel = (text, size) => `<span style="font-size:${size}; color:var(--text-muted); margin-right:2px; text-transform:uppercase; letter-spacing:.03em">${text}</span>`;
           const resultHtml = hasResult ? `<div class="task-result" style="${sectionStyle}">${sectionLabel('Result', '0.85rem')}${artifactChip(t.id, 'result.md', '0.9rem')}</div>` : '';
-          const outsHtml = outs.length ? `<div class="task-outputs" style="${sectionStyle}">${sectionLabel('Outputs', '0.85rem')}${outs.map(f => artifactChip(t.id, f, '0.9rem', 'outputs')).join('')}</div>` : '';
-          const artsHtml = arts.length ? `<div class="task-artifacts" style="${sectionStyle}">${sectionLabel('Artifacts', '0.85rem')}${arts.map(f => artifactChip(t.id, f, '0.9rem')).join('')}</div>` : '';
+          const outsHtml = outs.length ? `<div class="task-outputs" style="${sectionStyle}">${sectionLabel('Outputs', '0.85rem')}${artifactChips(t.id, outs, '0.9rem', 'outputs')}</div>` : '';
+          const artsHtml = arts.length ? `<div class="task-artifacts" style="${sectionStyle}">${sectionLabel('Artifacts', '0.85rem')}${artifactChips(t.id, arts, '0.9rem', 'artifacts', t.artifactsTotal)}</div>` : '';
           const inputsHtml = (inputs.length || canAttach) ? `<div class="task-inputs" style="${sectionStyle}">${sectionLabel('Inputs', '0.72rem')}${inputs.map(f => artifactChip(t.id, f, '0.78rem', 'inputs')).join('')}${canAttach ? `<input type="file" data-attach-files="${esc(t.id)}" multiple style="display:none">
           <button class="btn" data-attach-input="${esc(t.id)}" title="Attach files for the brain to read" style="font-size:0.75rem;margin:0">＋ Attach files</button>` : ''}</div>` : '';
           // The interaction form (if any) is the LAST section inside the block.
           const interactionHtml = this.interactionBlock(t);
           const filesOpen = this.taskFilesOpen ? this.taskFilesOpen.has(t.id) : false;
-          const nFiles = (hasResult ? 1 : 0) + outs.length + arts.length + inputs.length;
+          const nFiles = (hasResult ? 1 : 0) + outs.length + Math.max(arts.length, t.artifactsTotal || 0) + inputs.length;
           const headParts = [];
           if (nFiles) headParts.push(`${nFiles} file${nFiles === 1 ? '' : 's'}`);
           else if (!interactionHtml) headParts.push('Details');
@@ -3540,11 +3552,11 @@ class App {
         const taskUrl = `#tasks/${encodeURIComponent(t.id)}`;
         const outHtml = outs.length ? `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin:8px 0 2px">
             <span style="font-size:0.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.03em">Outputs</span>
-            ${outs.map(f => artifactChip(t.id, f, '0.8rem', 'outputs')).join('')}
+            ${artifactChips(t.id, outs, '0.8rem', 'outputs')}
           </div>` : '';
         const artHtml = arts.length ? `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin:8px 0 2px">
             <span style="font-size:0.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.03em">Artifacts</span>
-            ${arts.map(f => artifactChip(t.id, f, '0.8rem')).join('')}
+            ${artifactChips(t.id, arts, '0.8rem', 'artifacts', t.artifactsTotal)}
           </div>` : '';
         detail.innerHTML = `
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">

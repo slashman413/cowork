@@ -25,6 +25,7 @@ import { ClaudeProfile } from './claude-profile.js';
 import { killProcessTree } from './proc-tree.js';
 import { codeTaskRepo, ensureWorktree, writeWorktreeDiff, pruneStaleWorktrees } from './worktree.js';
 import { lintArtifacts, lintReason, resolveSloplint, OUTPUTS_SUBDIR } from './artifact-lint.js';
+import { listArtifactFiles } from './artifact-list.js';
 import { isAgyModelRejection, diagnoseAgyModelFailure, listAgyModels } from './agy-models.js';
 
 /** Remove ANSI CSI/OSC escape sequences and lone carriage returns. */
@@ -2836,23 +2837,18 @@ export class Dispatcher {
     // Persist a markdown copy + collect any artifacts the agent produced.
     try { writeFileSync(join(artDir, 'result.md'), `# ${task.title}\n\n${output.text}\n`); } catch { /* ignore */ }
     // outputs/ (the final deliverables) is listed on its own as task.outputs, so
-    // the artifacts scan skips it rather than showing those files twice.
-    const scanFiles = (cur: string, base: string, into: string[]) => {
-      for (const entry of readdirSync(cur, { withFileTypes: true })) {
-        if (entry.name.startsWith('.') || entry.name === '__pycache__') continue;
-        if (cur === artDir && entry.name === OUTPUTS_SUBDIR) continue;
-        const rel = base ? `${base}/${entry.name}` : entry.name;
-        if (entry.isDirectory()) {
-          scanFiles(join(cur, entry.name), rel, into);
-        } else if (entry.isFile()) {
-          into.push(rel);
-        }
-      }
+    // the artifacts scan skips it rather than showing those files twice. Both lists
+    // are capped (TASK_ARTIFACT_LIST_MAX) and skip dependency dirs: a run that cloned
+    // repos into its artifacts dir once stored 61k paths and froze the Tasks page.
+    const artScan = listArtifactFiles(artDir, { skipTop: OUTPUTS_SUBDIR });
+    const artifacts: string[] = artScan.files;
+    const outScan = listArtifactFiles(outDir);
+    const outputs: string[] = outScan.files;
+    const stampLists = (t: Task) => {
+      if (artifacts.length) (t as any).artifacts = artifacts;
+      if (artScan.total > artifacts.length) t.artifactsTotal = artScan.total; else delete t.artifactsTotal;
+      if (outputs.length) t.outputs = outputs;
     };
-    let artifacts: string[] = [];
-    try { scanFiles(artDir, '', artifacts); artifacts.sort(); } catch { /* ignore */ }
-    let outputs: string[] = [];
-    try { scanFiles(outDir, '', outputs); outputs.sort(); } catch { /* ignore */ }
 
     // The result is a QUESTION back to the user (not a failure — verdict is ok —
     // and not a finished deliverable). Park the task on `wait-input` with the
@@ -2865,8 +2861,7 @@ export class Dispatcher {
         const t = this.store.getTask(task.id);
         if (t) {
           t.context = { ...(t.context || {}), ranAgent: plan.agent, ranDivision: plan.division, ranBrain: plan.brainId, isRoster: plan.isRoster };
-          if (artifacts.length) (t as any).artifacts = artifacts;
-          if (outputs.length) t.outputs = outputs;
+          stampLists(t);
           this.store.saveTask(t);
         }
         this.recordLesson(task.id, { kind: 'wait-input', brain: plan.brainId, agent: plan.agent, attempt: plan.attempt + 1, questions: req.questions, resultText: output.text });
@@ -2885,8 +2880,7 @@ export class Dispatcher {
       const t = this.store.getTask(task.id);
       if (t) {
         t.context = { ...(t.context || {}), ranAgent: plan.agent, ranDivision: plan.division, ranBrain: plan.brainId, isRoster: plan.isRoster };
-        if (artifacts.length) (t as any).artifacts = artifacts;
-        if (outputs.length) t.outputs = outputs;
+        stampLists(t);
         this.store.saveTask(t);
       }
       this.store.deferForBackground({ taskId: task.id, note: bgWait.note, result: output.text.slice(0, 4000), pollMs: this.backgroundPollMs() });
@@ -2916,8 +2910,7 @@ export class Dispatcher {
     if (done) {
       done.context = { ...(done.context || {}), ...(verdict.ok && footer ? this.footerContext(footer, task, output.text) : {}), ranAgent: plan.agent, ranDivision: plan.division, ranBrain: plan.brainId, isRoster: plan.isRoster };
       if (verdict.ok) this.store.clearBrainRateLimited(plan.brainId);   // it works again
-      if (artifacts.length) (done as any).artifacts = artifacts;
-      if (outputs.length) done.outputs = outputs;
+      stampLists(done);
       this.store.saveTask(done);
     }
     // internal: the dispatcher already verified this run — skip the completion guard.
