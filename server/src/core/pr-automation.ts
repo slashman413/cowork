@@ -8,17 +8,40 @@
 import type { PrAutomationConfig, Task } from '../types.js';
 
 const PR_RE = /https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)/g;
+/** Forgejo/Gitea PR URLs use `/pulls/<n>` on any host. */
+const FORGE_PR_RE = /(https?:\/\/[\w.-]+(?::\d+)?)\/([\w.-]+\/[\w.-]+)\/pulls\/(\d+)/g;
 
-export interface PrRef { url: string; repo: string; number: number }
+export interface PrRef {
+  url: string; repo: string; number: number;
+  /** Absent = GitHub. 'forgejo' = a self-hosted Forgejo/Gitea at `baseUrl`. */
+  forge?: 'forgejo'; baseUrl?: string;
+}
 
-/** All distinct GitHub PR URLs in a result text. */
+/** All distinct GitHub and Forgejo PR URLs in a result text. */
 export function extractPrUrls(text: string): PrRef[] {
   const seen = new Map<string, PrRef>();
   for (const m of (text || '').matchAll(PR_RE)) {
     const url = `https://github.com/${m[1]}/pull/${m[2]}`;
     if (!seen.has(url)) seen.set(url, { url, repo: m[1], number: Number(m[2]) });
   }
+  for (const m of (text || '').matchAll(FORGE_PR_RE)) {
+    const url = `${m[1]}/${m[2]}/pulls/${m[3]}`;
+    if (!seen.has(url)) seen.set(url, { url, repo: m[2], number: Number(m[3]), forge: 'forgejo', baseUrl: m[1] });
+  }
   return [...seen.values()];
+}
+
+const normBase = (u: string) => u.replace(/\/+$/, '').toLowerCase();
+
+/** The configured forge for a Forgejo PR ref (undefined if the host is not configured). */
+export function forgeFor(ref: PrRef, cfg?: PrAutomationConfig) {
+  if (ref.forge !== 'forgejo' || !ref.baseUrl) return undefined;
+  return (cfg?.forges || []).find(f => normBase(f.baseUrl) === normBase(ref.baseUrl!));
+}
+
+/** Effective mode for a repo: repoModes override, else the global mode. */
+export function modeFor(repo: string, cfg?: PrAutomationConfig): 'shadow' | 'approve' | 'merge' {
+  return cfg?.repoModes?.[repo] || cfg?.mode || 'shadow';
 }
 
 /** PRs the result claims to have OPENED (a `PR_OPENED: <url>` line, or a line
@@ -47,6 +70,8 @@ export function decidePrAction(input: {
   headPatchId?: string;
   files: string[];
   fixRounds?: number;
+  /** Overrides cfg.mode (per-repo mode from {@link modeFor}). */
+  mode?: 'shadow' | 'approve' | 'merge';
 }): { action: PrAction; why: string } {
   const cfg = input.cfg || {};
   if (cfg.enabled === false) return { action: 'wait', why: 'prAutomation disabled' };
@@ -62,7 +87,7 @@ export function decidePrAction(input: {
   if (!input.verifiedPatchId || input.verifiedPatchId !== input.headPatchId) {
     return { action: 'wait', why: 'patch-id drift — re-verify the current head' };
   }
-  const mode = cfg.mode || 'shadow';
+  const mode = input.mode || cfg.mode || 'shadow';
   if (mode === 'shadow') return { action: 'comment', why: 'shadow mode: post verdict only' };
   if (mode === 'approve') return { action: 'approve', why: 'PASS + READY; human merges' };
   return { action: 'merge', why: `PASS + READY; ${cfg.mergeMethod || 'squash'} merge` };
@@ -71,12 +96,15 @@ export function decidePrAction(input: {
 /** True when the PR's repo is in scope for automation. */
 export function prInScope(ref: PrRef, cfg?: PrAutomationConfig): boolean {
   if (!cfg || cfg.enabled === false) return false;
+  // A Forgejo URL is only in scope on a configured host — never call an arbitrary server.
+  if (ref.forge === 'forgejo' && !forgeFor(ref, cfg)) return false;
   return !cfg.repos?.length || cfg.repos.includes(ref.repo);
 }
 
 /** Spec for the recurring pr-watch task created when a result opens a PR. */
 export function prWatchTaskSpec(ref: PrRef, parent: Task, cfg?: PrAutomationConfig) {
-  const mode = cfg?.mode || 'shadow';
+  const mode = modeFor(ref.repo, cfg);
+  if (ref.forge === 'forgejo') return forgejoWatchSpec(ref, parent, cfg, mode);
   return {
     title: `[pr-watch] ${ref.repo}#${ref.number}`,
     description: [
@@ -95,5 +123,23 @@ export function prWatchTaskSpec(ref: PrRef, parent: Task, cfg?: PrAutomationConf
     ].join('\n'),
     recurrence: { type: 'minutes' as const, interval: Math.max(5, cfg?.watchIntervalMin ?? 10) },
     context: { prUrl: ref.url, prRepo: ref.repo, prNumber: ref.number, prWatch: true, prMode: mode, prParent: parent.id, tier: 'mechanical' },
+  };
+}
+
+/** Forgejo pr-watch: the brain only reviews; every forge write (comment,
+ *  approve, merge) goes through the policy-enforcing pr-shepherd CLI. */
+function forgejoWatchSpec(ref: PrRef, parent: Task, cfg: PrAutomationConfig | undefined, mode: string) {
+  const cli = `npx tsx server/src/cli/pr-shepherd.ts --pr ${ref.url}`;
+  return {
+    title: `[pr-watch] ${ref.repo}#${ref.number}`,
+    description: [
+      `Shepherd ${ref.url} (Forgejo; opened by task ${parent.id}) per pstack babysit/shipping, mode=${mode}.`,
+      `1. \`${cli} --status\` (JSON). If it reports BLOCKED (auth, label, author) or the PR is merged/closed, report it and stop the recurrence.`,
+      `2. Review the diff it prints the URL for (\`.diff\`) independently with pstack interrogate; decide PASS / PASS+NOTES / FAIL.`,
+      `3. \`${cli} --verdict <PASS|PASS+NOTES|FAIL> --verified-sha <head sha from step 1>\`. The CLI enforces the policy: escalation paths, head-sha drift, author ≠ bot, mode (${mode}).`,
+      `Never call the Forgejo API directly to approve or merge. FAIL → report the findings as a fix task for the author.`,
+    ].join('\n'),
+    recurrence: { type: 'minutes' as const, interval: Math.max(5, cfg?.watchIntervalMin ?? 10) },
+    context: { prUrl: ref.url, prRepo: ref.repo, prNumber: ref.number, prForge: 'forgejo', prWatch: true, prMode: mode, prParent: parent.id, tier: 'mechanical' },
   };
 }

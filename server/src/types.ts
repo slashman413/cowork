@@ -429,6 +429,20 @@ export interface PrAutomationConfig {
   mergeMethod?: 'squash' | 'merge' | 'rebase';
   maxFixRounds?: number;
   watchIntervalMin?: number;
+  /** Per-repo mode override (e.g. a sandbox in 'merge' while the rest stays 'shadow'). */
+  repoModes?: Record<string, 'shadow' | 'approve' | 'merge'>;
+  /** Self-hosted forges (Forgejo/Gitea). Only PR URLs on these hosts are acted on. */
+  forges?: ForgeConfig[];
+}
+
+/** A Forgejo/Gitea host the PR shepherd may call. The token belongs to the bot
+ *  identity that comments/approves/merges; it must differ from the PR author. */
+export interface ForgeConfig {
+  kind: 'forgejo';
+  baseUrl: string;
+  /** Path to a file holding the bot's API token (~ expanded). Never inline the token. */
+  tokenFile: string;
+  botUser: string;
 }
 
 /** Config for {@link OrchestrationConfig.methods} (PS-4). */
