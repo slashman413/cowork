@@ -10,6 +10,7 @@ import { getObsidianVault } from '../core/obsidian.js';
 import { sharedIntegrations, defaultAuditTargets } from '../core/integrations.js';
 import { auditPath, mergeReports, formatSummary } from '../core/skill-auditor.js';
 import { sharpenInBackground } from '../core/sharpener.js';
+import { applyPstackCommand } from '../core/playbooks.js';
 
 // Stateless streamable-HTTP pattern: build a fresh McpServer + transport per
 // request. Sharing one McpServer across concurrent transports cross-wires
@@ -306,14 +307,15 @@ function buildServer(config: Config, store: Store, eventBus: EventBus, goals?: G
     },
     async (args) => {
       try {
+        const ps = applyPstackCommand({ title: args.title, description: args.description, context: args.context });
         const task = store.createTask({
-          title: args.title,
-          description: args.description,
+          title: ps.title,
+          description: ps.description,
           from: { platform: args.from_platform, agent: args.from_agent },
           to: { platform: args.to_platform, agent: args.to_agent },
           priority: args.priority as any,
           skill: args.skill,
-          context: args.context,
+          context: ps.context,
           tags: args.tags,
           interaction: args.interaction as any,
           scheduledAt: args.scheduled_at,

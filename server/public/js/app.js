@@ -1264,12 +1264,19 @@ class App {
     let brains = {};
     let divisions = {};
     let usage = {};
+    let pstack = { playbooks: ['investigation', 'bug-fix', 'feature', 'research-report', 'content', 'ops-change',
+      'technical-writing', 'perf-issue', 'refactoring', 'prototype', 'runtime-forensics', 'eval', 'opening-a-pr', 'babysit'], skills: [] };
     // Feeds are optional — missing registry/roster degrades to Auto.
     await Promise.all([
       this.api.get('/brains').then(r => { brains = r || {}; }).catch(() => {}),
       this.api.get('/roster-divisions').then(r => { divisions = r || {}; }).catch(() => {}),
-      this.api.get('/connections').then(r => { usage = r?.usage || {}; }).catch(() => {})
+      this.api.get('/connections').then(r => { usage = r?.usage || {}; }).catch(() => {}),
+      this.api.get('/pstack').then(r => { pstack = r || pstack; }).catch(() => {})
     ]);
+    // G9: Method (context.playbook) + pstack skill (context.skill) pickers.
+    const methodOpts = [`<option value="">none</option>`]
+      .concat((pstack.playbooks || []).map(k => `<option value="${esc(k)}">${esc(k)}</option>`)).join('');
+    const skillOpts = (pstack.skills || []).map(k => `<option value="${esc(k)}"></option>`).join('');
     const opts = [`<option value="">🧠 Auto — route via the agent's brain chain</option>`]
       .concat(selectableBrainIds(brains).map(b => {
         const until = brainCooldownUntil(usage[b], brains[b]?.model || b);
@@ -1306,6 +1313,24 @@ class App {
         </div>
       </div>
       ${recurrenceEditorHTML('nt-rec', fieldStyle, labelStyle, null)}
+      <div class="modal-row" style="margin-bottom:12px">
+        <div>
+          <label style="${labelStyle}" for="nt-method">Method <span style="text-transform:none; letter-spacing:0">(pstack playbook)</span></label>
+          <select id="nt-method" style="${fieldStyle}">${methodOpts}</select>
+        </div>
+        <div>
+          <label style="${labelStyle}" for="nt-review">Review</label>
+          <select id="nt-review" style="${fieldStyle}">
+            <option value="" selected>none (default verifier)</option>
+            <option value="llm">LLM reviewer</option>
+            <option value="panel">panel (multi-family interrogate)</option>
+            <option value="arena">arena (3 runners + judge)</option>
+          </select>
+        </div>
+      </div>
+      <label style="${labelStyle}" for="nt-skill">pstack skill <span style="text-transform:none; letter-spacing:0">(optional — executor reads vendor/pstack/skills/&lt;name&gt;/SKILL.md)</span></label>
+      <input id="nt-skill" list="nt-skill-list" style="${fieldStyle}; margin-bottom:12px" placeholder="e.g. interrogate, blast-radius, why…" autocomplete="off">
+      <datalist id="nt-skill-list">${skillOpts}</datalist>
       <label style="${labelStyle}" for="nt-brain">Brain to claim this task</label>
       <select id="nt-brain" style="${fieldStyle}; margin-bottom:12px">${opts}</select>
       <label style="${labelStyle}">Input files <span style="text-transform:none; letter-spacing:0">(optional — attached for the agent/brain to study)</span></label>
@@ -1413,6 +1438,14 @@ class App {
       const context = {};
       if (brain) context.brain = brain;
       if (agent) context.agent = agent; else if (division) context.division = division;
+      // pstack triggers (G9): playbook card, review gate, explicit skill.
+      const method = content.querySelector('#nt-method').value;
+      const review = content.querySelector('#nt-review').value;
+      const skill = content.querySelector('#nt-skill').value.trim();
+      if (method) context.playbook = method;
+      if (review === 'llm' || review === 'panel') context.review = review;
+      else if (review === 'arena') context.arena = { runners: 3 };
+      if (skill) context.skill = skill;
       const okBtn = content.querySelector('#nt-ok');
       submitting = true;
       okBtn.disabled = true;

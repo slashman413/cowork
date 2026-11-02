@@ -11,6 +11,7 @@ import { buildCalendar } from '../core/calendar.js';
 import type { EventBus } from '../core/events.js';
 import { mergeWorktree, removeWorktree } from '../core/worktree.js';
 import { sharpenInBackground } from '../core/sharpener.js';
+import { applyPstackCommand, PLAYBOOK_KEYS, DEFAULT_PSTACK_SKILLS_DIR } from '../core/playbooks.js';
 import { boundTaskArtifacts } from '../core/artifact-list.js';
 
 export function createApiRouter(store: Store, eventBus: EventBus): Router {
@@ -86,6 +87,17 @@ export function createApiRouter(store: Store, eventBus: EventBus): Router {
     }
   });
 
+  // pstack vocabulary for the Create form (G9): playbook keys + vendored skills.
+  router.get('/pstack', (_req, res) => {
+    let skills: string[] = [];
+    try {
+      skills = fs.readdirSync(DEFAULT_PSTACK_SKILLS_DIR, { withFileTypes: true })
+        .filter(d => d.isDirectory() && fs.existsSync(path.join(DEFAULT_PSTACK_SKILLS_DIR, d.name, 'SKILL.md')))
+        .map(d => d.name).sort();
+    } catch { /* vendor tree absent — playbooks only */ }
+    res.json({ playbooks: PLAYBOOK_KEYS, skills });
+  });
+
   router.post('/inbox', async (req, res) => {
     try {
       const body = req.body || {};
@@ -96,16 +108,19 @@ export function createApiRouter(store: Store, eventBus: EventBus): Router {
       if (!body.from || typeof body.from.platform !== 'string' || typeof body.from.agent !== 'string') {
         throw new Error('from.platform and from.agent (strings) are required');
       }
+      // `/pstack <playbook|skill> <text>` in the brief (or title) sets
+      // context.playbook / context.skill (G9); malformed → 400.
+      const ps = applyPstackCommand({ title: body.title, description: body.description, context: body.context });
       const task = store.createTask({
-        title: body.title,
-        description: body.description,
+        title: ps.title,
+        description: ps.description,
         from: { platform: body.from.platform, agent: body.from.agent },
         to: { platform: body.to?.platform, agent: body.to?.agent },
         priority: ['low', 'normal', 'high', 'urgent'].includes(body.priority) ? body.priority : 'normal',
         skill: body.skill,
         // Brief contract (P0-3) rides inside context: context.acceptance /
         // verify / timeboxMin / scope. Validated in the store (bad shape → 400).
-        context: body.context,
+        context: ps.context,
         tags: Array.isArray(body.tags) ? body.tags : undefined,
         interaction: body.interaction && Array.isArray(body.interaction.fields) ? body.interaction : undefined,
         // Scheduled launch (ISO 8601; default "now"). Accept both key styles —
