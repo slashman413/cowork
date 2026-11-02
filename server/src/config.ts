@@ -52,7 +52,6 @@ const defaultConfig: Config = {
     inputs: './inputs',
     status: './.status',
     decisions: './decisions',
-    workflows: './workflows',
     goals: './goals'
   },
   platforms: {},

@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import type { ShotcraftConfig, WorkflowDef } from '../types.js';
+import type { ShotcraftConfig } from '../types.js';
 
 /**
  * Shotcraft — the server side of /shotcraft.html, a shortcut for the
@@ -14,8 +14,7 @@ import type { ShotcraftConfig, WorkflowDef } from '../types.js';
  *  (a) exposes the card index (gallery/api/library.json) + the bundled BGM so
  *      the page can offer a shot picker and a music picker, and
  *  (b) turns the page's form into ONE brief, then wraps it as whichever cowork
- *      object the requester picked: a task, a recurring task, a goal, or a
- *      saved workflow template.
+ *      object the requester picked: a task, a recurring task, or a goal.
  *
  * READ-ONLY on the skill dir: nothing here writes into it. BGM reads are
  * path-guarded (basename + extension + must be listed) like the artifacts route.
@@ -31,7 +30,7 @@ export const DEFAULT_SHOTCRAFT: Required<ShotcraftConfig> = {
 };
 
 export type ShotcraftMode = 'auto' | 'guided' | 'template' | 'shot' | 'ask';
-export type ShotcraftKind = 'task' | 'recurring' | 'goal' | 'workflow';
+export type ShotcraftKind = 'task' | 'recurring' | 'goal';
 
 export interface ShotcraftBrief {
   mode: ShotcraftMode;
@@ -328,41 +327,4 @@ export class Shotcraft {
     };
   }
 
-  /** Reusable workflow template: this run's settings are frozen into it and
-   *  product / source / message / notes become run params, so the same look can
-   *  be re-run for another product from the Workflows tab. */
-  buildWorkflow(brief: ShotcraftBrief, id: string, artifactsRoot: string): WorkflowDef {
-    if (!NAME_RE.test(id)) throw new Error('workflow id: lowercase letters, digits and dashes only');
-    const mode: ShotcraftMode = brief.mode === 'guided' || brief.mode === 'ask' ? 'auto' : brief.mode;
-    const body = this.briefText({
-      ...brief, mode, product: '{{product}}', message: '{{message}}', source: '{{source}}', notes: '{{notes}}',
-    });
-    return {
-      id,
-      name: `🎬 Shotcraft · ${id.replace(/^shotcraft-/, '')}`,
-      description: `video-shotcraft film, ${mode} mode, ${brief.aspect}${mode === 'template' ? '' : `, ${brief.seconds}s`}, music: ${brief.music}${brief.shots.length ? `, shots: ${brief.shots.join(', ')}` : ''}. Params: product, source (URL/path or "none"), message, notes ("none").`,
-      params: ['product', 'source', 'message', 'notes'],
-      steps: [
-        {
-          key: 'produce',
-          title: '🎬 Shotcraft: {{product}}',
-          description: `# video-shotcraft: {{product}}\n\n${body}`,
-          brain: brief.brain,
-        },
-        {
-          key: 'second-look',
-          title: '🔍 Shotcraft review: {{product}}',
-          description: [
-            'Independent second look at a film made with the video-shotcraft skill. You did not make it; judge it cold.',
-            `The upstream "produce" task's id is in the dependency results in your prompt; its files are in ${artifactsRoot}/<that id>/ (film.mp4, STORYBOARD.md, REVIEW.md, contact.jpg).`,
-            '1. Extract ~1 frame/s with ffmpeg into your artifacts dir and look at them.',
-            '2. Check against the request ({{message}}), the skill\'s references/final-review.md and references/aesthetic-rules.md (in ~/.agents/skills/video-shotcraft): readable text, on-brand colours, holds ≥1 s on key info, no sensitive data, audio present and not clipping (ffmpeg volumedetect).',
-            '3. Write SECOND-LOOK.md: verdict SHIP / FIX, then findings with frame numbers. Do not re-render.',
-          ].join('\n'),
-          brain: brief.brain === 'local-cc-opus-5-5' ? 'local-cc-sonnet-5-5' : brief.brain,
-          dependsOn: ['produce'],
-        },
-      ],
-    };
-  }
 }

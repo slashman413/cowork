@@ -8,7 +8,7 @@ import { appendGoalDecision, goalTrailPath, readGoalTrail, taskTrailRows, trailL
 import { brainFamily, reviewChain } from './tiers.js';
 
 /** The slice of Store that Goals touches. Keeping it structural lets the unit
- *  tests drive Goals with an in-memory fake exactly like workflows.test.ts. */
+ *  tests drive Goals with an in-memory fake. */
 export interface GoalStore {
   createTask(params: Omit<Task, 'id' | 'status' | 'createdAt'>): Task;
   listTasks(filter?: any): Task[];
@@ -49,11 +49,11 @@ export function extractAttention(text: string | undefined): string {
  * Achiever role to evaluate → plan → emit work, and its Judger role to audit each
  * completed phase (reports + meeting minutes). It reuses the platform's task /
  * brain / dispatcher machinery wholesale — the only genuinely new parts are this
- * aggregate + its reasoning-context builders (structurally mirroring workflows.ts)
+ * aggregate + its reasoning-context builders
  * and the dispatcher's driveGoals() tick + taskCompleted subscriber.
  *
  * State is filesystem JSON (goals/<goalId>.json), consistent with inbox/*.json
- * and workflow-runs/*.json (ADR-006). Every generated task carries goal lineage
+ * (ADR-006). Every generated task carries goal lineage
  * on its free-form context (goalId, phaseKey, goalGenerated, completesPhase,
  * role) — zero task-schema change (ADR: §7.2).
  */

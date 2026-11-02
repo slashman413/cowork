@@ -386,10 +386,6 @@ export interface OrchestrationConfig {
    *  heartbeats `working` — a backstop for a client wedged on a hung child.
    *  0/undefined disables the ceiling (only staleClaimMs applies). */
   hardClaimMs?: number;
-  /** Safety bound on an orchestrated workflow run: the max number of steps the
-   *  orchestrator may dispatch before the run is force-finished (prevents a
-   *  runaway decision loop). Default 12. */
-  maxWorkflowSteps?: number;
   /** Autonomous human-input handling. When enabled, the orchestrator answers a
    *  task's `wait-input` questions ON THE CEO's BEHALF (via submitInteraction),
    *  so a paused task resumes without a person filling in the Inbox card. Truly
@@ -415,14 +411,6 @@ export interface OrchestrationConfig {
   goalAttention?: boolean;
   /** Per-task method cards from pinned pstack playbooks (PS-4). */
   methods?: MethodsConfig;
-  /** Arena primitive for one-way-door deliverables (PS-3). */
-  arena?: ArenaConfig;
-}
-
-/** Config for {@link OrchestrationConfig.arena} (PS-3). */
-export interface ArenaConfig {
-  /** Master switch for arena workflow step primitive. Default false. */
-  enabled?: boolean;
 }
 
 /** Config for {@link OrchestrationConfig.methods} (PS-4). */
@@ -502,10 +490,8 @@ export interface Config {
     inputs: string;
     status: string;
     decisions: string;
-    /** Dir of declarative workflow templates (workflows/*.json). */
-    workflows: string;
     /** Dir of Goal aggregates (goals/*.json) — long-lived, phase-tracked
-     *  objectives. Sibling of workflows; see core/goals.ts. */
+     *  objectives. See core/goals.ts. */
     goals: string;
   };
   platforms: Record<string, PlatformConfig>;
@@ -797,219 +783,6 @@ export interface CoworkEventPayloads {
   taskDeleted: { taskId: string; status?: string };
 }
 
-/**
- * One node of a declarative workflow: a task template. `key` is a stable,
- * template-local id used to wire `dependsOn` edges (resolved to real task ids at
- * expansion time). Exactly the fields a task needs, minus the runtime plumbing.
- */
-export interface WorkflowStep {
-  /** Unique-within-the-workflow node id. Referenced by other steps' dependsOn. */
-  key: string;
-  /** Task title. `{{param}}` placeholders are filled from run params. */
-  title?: string;
-  /** Task description (the standalone brief the executing agent sees). */
-  description?: string;
-  /** Pin a specific roster/special agent (context.agent). Omit to let the router pick. */
-  agent?: string;
-  /** Pin a division (context.division) so the router only chooses within it. */
-  division?: string;
-  /** Pin an exact brain (context.brain). */
-  brain?: string;
-  priority?: 'low' | 'normal' | 'high' | 'urgent';
-  /** Step keys (NOT task ids) this step waits for — the DAG edges. */
-  dependsOn?: string[];
-  /** Brain tier (P1-4: mechanical / standard / judgment / review) — copied to context.tier. */
-  tier?: string;
-  /** Review→fix gate (P1-2: superpowers SDD fix rounds). */
-  gate?: WorkflowStepGate;
-  /** Brief contract (P0-3) — copied into the expanded task's context. */
-  acceptance?: TaskBrief['acceptance'];
-  verify?: TaskBrief['verify'];
-  timeboxMin?: TaskBrief['timeboxMin'];
-  scope?: TaskBrief['scope'];
-  /** Method / playbook key (PS-4: bug-fix, feature, investigation, content, ops-change, research-report). */
-  playbook?: string;
-  /** Arena primitive for one-way-door deliverables (PS-3). */
-  arena?: WorkflowStepArena;
-}
-
-/**
- * Arena step option (PS-3, port of pstack arena phases A-F).
- * Spawns N parallel sibling candidates across >=2 model families with identical brief,
- * followed by a cross-judge scoring each candidate, followed by a judgment-tier synthesis
- * that picks a base, grafts 1-2 elements from losers, and writes synthesis.md.
- * If candidates wildly diverge, parks the step on wait-input.
- */
-export interface WorkflowStepArena {
-  /** Runner brains (must span >= 2 distinct model families). */
-  runners: string[];
-  /** 3-6 gradeable criteria for scoring candidates. */
-  rubric: string[];
-}
-
-/**
- * Review→fix gate option on a workflow step (P1-2).
- * After the gated step finishes, a review task runs under `reviewer` (judge
- * family per the P1-1 mapping; brief = the step's acceptance + its result +
- * artifacts). On `CHANGES_REQUESTED` the engine re-queues the gated step with
- * findings attached and a scoped re-review up to `maxRounds`; from round
- * `escalateBrainAt` it escalates to the `judgment` tier (P1-4). At the cap,
- * residual non-blocker findings are recorded as `RULING` lines and the run
- * continues; a finding marked `BLOCKER` parks the run on `wait-input`.
- */
-export interface WorkflowStepGate {
-  /** Agent slug that runs the review task (e.g. "engineering-code-reviewer"). */
-  reviewer: string;
-  /** Maximum review rounds before cap handling applies (default 3). */
-  maxRounds?: number;
-  /** 1-based round number from which the gated step escalates to the judgment tier (default 2). */
-  escalateBrainAt?: number;
-  /** PS-2: reviewers per round, one per distinct model family (never the
-   *  executor's). ≥2 adds a judgment-tier lead pass that buckets findings into
-   *  Act on / Consider / Noted / Dismissed. Default 1 = single reviewer.
-   *  Honoured only while `orchestration.verifier.panel.enabled` is not false. */
-  panel?: number;
-}
-
-export interface WorkflowGateRoundRecord {
-  round: number;
-  taskId: string;
-  reviewTaskId: string;
-  reviewer: string;
-  executorBrain?: string;
-  reviewerBrain?: string;
-  judgeBrain?: string | null;
-  judgeFamily?: string;
-  verdict: import('./core/result-verifier.js').SpecVerdictStatus;
-  criteria: import('./core/result-verifier.js').SpecCriterionVerdict[];
-  failedCriteria: string[];
-  findings?: string[];
-  summary: string;
-  escalated?: boolean;
-  action: 'approved' | 'requeue' | 'rulings' | 'wait-input';
-  /** PS-2 panel round: reviewers (brain/family) and the lead's bucket counts. */
-  panel?: {
-    reviewers: Array<{ taskId: string; brain: string; family: string; verdict?: string }>;
-    leadTaskId?: string;
-    leadParsed?: boolean;
-    buckets?: { actOn: number; consider: number; noted: number; dismissed: number };
-    findings?: Array<{ bucket: string; finding: string; families: string[]; rationale?: string; blocker?: boolean }>;
-  };
-  rulings?: string[];
-  blockerFindings?: string[];
-  at: string;
-}
-
-export interface WorkflowGateRecord {
-  stepKey: string;
-  taskId: string;
-  reviewer: string;
-  maxRounds: number;
-  escalateBrainAt: number;
-  currentRound: number;
-  status: 'pending' | 'reviewing' | 'fixing' | 'approved' | 'ruled' | 'wait-input';
-  verdict?: import('./core/result-verifier.js').SpecVerdictStatus;
-  escalated?: boolean;
-  escalatedAtRound?: number;
-  escalatedBrain?: string;
-  activeReviewTaskId?: string;
-  rounds: WorkflowGateRoundRecord[];
-  rulings?: string[];
-  blockerFindings?: string[];
-}
-
-/** Record of an arena execution on a workflow step (PS-3). */
-export interface WorkflowArenaRecord {
-  stepKey: string;
-  status: 'pending' | 'running' | 'judging' | 'synthesizing' | 'completed' | 'diverged' | 'wait-input';
-  runners: string[];
-  candidateTaskIds: string[];
-  judgeTaskId: string;
-  synthesisTaskId: string;
-  baseCandidate?: string;
-  divergenceSummary?: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-/**
- * A reusable, version-controlled pipeline. Loaded from workflows/<id>.json.
- *
- * Two execution modes:
- *   - `dag` (default): the steps form a static DAG wired by `dependsOn`. The whole
- *     graph is expanded into inbox tasks up front and the dispatcher walks it in
- *     dependency order. Deterministic — same template + params → same shape.
- *   - `orchestrated`: the steps are a LIBRARY of candidate moves. Nothing is
- *     expanded up front; instead, after each step finishes, the orchestrator brain
- *     reads the goal + results so far and DECIDES which step to run next (or that
- *     the goal is met). Adaptive — the path taken depends on what came back.
- */
-export interface WorkflowDef {
-  id: string;
-  /** Human label + one-liner shown in the UI. */
-  name?: string;
-  description?: string;
-  /** `dag` (static, pre-expanded) or `orchestrated` (adaptive). Default `dag`. */
-  mode?: 'dag' | 'orchestrated';
-  /** Orchestrated mode only: the objective the orchestrator drives toward when
-   *  deciding the next step. `{{param}}` placeholders are filled from run params. */
-  goal?: string;
-  /** Named params required at run time; referenced as {{name}} in steps/goal. */
-  params?: string[];
-  steps: WorkflowStep[];
-}
-
-/**
- * One orchestrator decision in an adaptive run: the step it chose to run next
- * (or `null` = the run is complete), the task that decision created, and a short
- * rationale pulled from the orchestrator's reply — the audit trail the UI renders
- * as a decision log so the adaptive path is fully traceable.
- */
-export interface WorkflowDecision {
-  stepKey: string | null;
-  reason?: string;
-  taskId?: string;
-  decidedAt: string;
-}
-
-/**
- * Persistent state for a workflow run in workflow-runs/<runId>.json.
- * Written for orchestrated runs (goal + decision history) and for DAG runs that
- * carry review→fix gates (P1-2: per-step gate rounds, verdicts, and rulings).
- */
-export interface WorkflowRunRecord {
-  runId: string;
-  workflowId: string;
-  mode: 'dag' | 'orchestrated';
-  goal?: string;
-  params: Record<string, string>;
-  status: 'running' | 'done' | 'failed' | 'wait-input';
-  history: WorkflowDecision[];
-  /** Per-step review→fix gate state and round/verdict history (P1-2). */
-  gates?: Record<string, WorkflowGateRecord>;
-  /** Per-step arena state and tasks (PS-3). */
-  arenas?: Record<string, WorkflowArenaRecord>;
-  /** Residual non-blocker findings recorded as RULING lines when a gate hits maxRounds (P1-2). */
-  rulings?: string[];
-  createdAt: string;
-  updatedAt: string;
-}
-
-/** A live/finished run: the tasks one expansion produced, grouped for the UI. */
-export interface WorkflowRun {
-  runId: string;
-  workflowId: string;
-  createdAt: string;
-  tasks: Task[];
-  status: 'running' | 'done' | 'failed' | 'wait-input';
-  /** `orchestrated` runs carry their mode, goal, and decision log; DAG runs omit these. */
-  mode?: 'dag' | 'orchestrated';
-  goal?: string;
-  history?: WorkflowDecision[];
-  gates?: Record<string, WorkflowGateRecord>;
-  arenas?: Record<string, WorkflowArenaRecord>;
-  rulings?: string[];
-}
 
 export type CoworkEventType = keyof CoworkEventPayloads;
 
@@ -1118,8 +891,8 @@ export interface GoalDecision {
   at: string;
 }
 
-/** The Goal aggregate root, persisted as goals/<goalId>.json (ADR-006), shaped
- *  like WorkflowRunRecord so it reuses the same file-based inspection/backup. */
+/** The Goal aggregate root, persisted as goals/<goalId>.json (ADR-006),
+ *  reusing the same file-based inspection/backup as the other aggregates. */
 export interface GoalRecord {
   goalId: string;
   title: string;

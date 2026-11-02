@@ -14,12 +14,10 @@ import { correctLoop } from './core/correct-loop.js';
 import { readRulings } from './core/rulings.js';
 import { createMcpServer } from './mcp/server.js';
 import { createApiRouter } from './api/router.js';
-import { createWorkflowRouter } from './api/workflows.js';
 import { createGoalRouter } from './api/goals.js';
 import { createRecipeRouter } from './api/recipes.js';
 import { Recipes } from './core/recipes.js';
 import { createSSEHandler } from './api/sse.js';
-import { Workflows } from './core/workflows.js';
 import { Goals } from './core/goals.js';
 import { SystemMetrics } from './core/system-metrics.js';
 import { UsagePoller, isMeteredExec } from './core/usage-probe.js';
@@ -178,14 +176,7 @@ async function main() {
   const apiRouter = createApiRouter(store, eventBus);
   app.use('/api', apiRouter);
 
-  // Declarative workflows: templates in paths.workflows compiled into DAG tasks.
-  if (!fs.existsSync(config.paths.workflows)) {
-    try { fs.mkdirSync(config.paths.workflows, { recursive: true }); } catch { /* ignore */ }
-  }
-  const workflows = new Workflows(config, store, eventBus);
-  app.use('/api', createWorkflowRouter(workflows));
-
-  // Goals: long-lived, phase-tracked objectives beneath Workflows. State lives in
+  // Goals: long-lived, phase-tracked objectives. State lives in
   // paths.goals (goals/*.json). The Achiever half is driven by the dispatcher's
   // tick; the Judger half is event-driven — Goals.onTaskCompleted rides the store's
   // existing taskCompleted event (no new transport) to audit each finished phase.
@@ -282,9 +273,8 @@ async function main() {
   }, 300000);
 
 
-  // Dispatcher: executes role-tagged inbox tasks by spawning platform CLIs, and
-  // drives orchestrated workflow runs (decides each next step via the router brain).
-  const dispatcher = new Dispatcher(config, store, eventBus, workflows, goals);
+  // Dispatcher: executes role-tagged inbox tasks by spawning platform CLIs.
+  const dispatcher = new Dispatcher(config, store, eventBus, goals);
   dispatcher.start();
 
   app.get('/api/dispatcher', (_req, res) => {
@@ -593,7 +583,7 @@ async function main() {
     try {
       if (!shotcraft.available()) throw new Error(`video-shotcraft skill not found at ${shotcraft.cfg.skillDir}`);
       const body = req.body || {};
-      const kind = ['task', 'recurring', 'goal', 'workflow'].includes(body.kind) ? body.kind : 'task';
+      const kind = ['task', 'recurring', 'goal'].includes(body.kind) ? body.kind : 'task';
       const brief = shotcraft.parseBrief(body);
       const inputs = Array.isArray(body.inputs) ? body.inputs : undefined;
       const inputNames = (inputs || []).map((i: any) => String(i?.name || '')).filter(Boolean);
@@ -601,7 +591,6 @@ async function main() {
       // Preview: the exact brief the brain will get, nothing created.
       if (body.dryRun === true) {
         const preview = kind === 'goal' ? shotcraft.buildGoal(brief).description
-          : kind === 'workflow' ? shotcraft.buildWorkflow(brief, String(body.workflowId || 'shotcraft-preview').trim().toLowerCase(), config.paths.artifacts).steps[0].description
           : shotcraft.buildTask(brief, inputNames).description;
         return res.json({ kind, brief, preview });
       }
@@ -620,21 +609,10 @@ async function main() {
         }, { inputs });
         return res.status(201).json({ kind, task });
       }
-      if (inputs?.length) throw new Error('attachments only work for a task — use a URL/path source for goals and workflows');
-      if (kind === 'goal') {
-        const goal = goals.create(shotcraft.buildGoal(brief));
-        const active = body.activate === false ? goal : goals.activate(goal.goalId);
-        return res.status(201).json({ kind, goal: active });
-      }
-      const id = String(body.workflowId || '').trim().toLowerCase();
-      const def = workflows.create(shotcraft.buildWorkflow(brief, id, config.paths.artifacts), { overwrite: body.overwrite === true });
-      const run = body.runNow === true
-        ? workflows.run(def.id, {
-            product: brief.product, message: brief.message,
-            source: brief.source || 'none', notes: brief.notes || 'none',
-          })
-        : undefined;
-      res.status(201).json({ kind, workflow: def, run });
+      if (inputs?.length) throw new Error('attachments only work for a task — use a URL/path source for goals');
+      const goal = goals.create(shotcraft.buildGoal(brief));
+      const active = body.activate === false ? goal : goals.activate(goal.goalId);
+      return res.status(201).json({ kind, goal: active });
     } catch (e: any) { res.status(400).json({ error: e.message }); }
   });
 

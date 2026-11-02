@@ -15,7 +15,6 @@ Nav sections, page order, labels and the Overview's widgets come from **`layout.
 | [Inbox](#inbox) | Tasks | `GET/POST /api/inbox`, `PATCH /api/inbox/:id` |
 | [Recipes](#recipes) | Recipes | `GET/POST/PUT/DELETE /api/recipes*`, `POST /api/recipes/:id/run`, `POST /api/inbox/:id/rating` |
 | [Calendar](#calendar) | Calendar | `GET /api/calendar`, `POST /api/inbox/:id/edit`, `POST /api/inbox/:id/run-now` |
-| [Workflows](#workflows) | Workflows | `GET /api/workflows*`, `POST /api/workflows/:id/run`, `GET /api/workflow-runs*` |
 | [Agents](#agents) | Routing | `GET/PUT /api/agents-config`, `/api/chains*` |
 | [Brains](#brains) | Brains | `GET/PUT/DELETE /api/brains*` |
 | [Agencies](#agencies) | Personas | `GET /api/roster`, `/api/roster-divisions` |
@@ -51,7 +50,7 @@ keeps serving the last good layout.
   "defaultPage": "home",                        // landing page for an empty #hash
   "sections": [                                 // sidebar groups, in order
     { "label": "Host", "pages": ["home", "models", "portal"] },
-    { "label": "Work", "pages": ["tasks", "workflows", "goals"] }
+    { "label": "Work", "pages": ["tasks", "goals"] }
   ],
   "pages": {
     "home": { "type": "dashboard", "label": "Home", "icon": "house", "rows": [
@@ -76,7 +75,7 @@ keeps serving the last good layout.
   `{ "minWidth": px, "widgets": [...] }` (auto-fit grid, wraps below `minWidth`).
 - `portal` — any id, any number. Shows `portal.json` cards, optionally narrowed by
   `categories` and/or `keys`; `intro` (markdown) replaces the default blurb.
-- App pages — `tasks`, `recipes`, `calendar`, `workflows`, `goals`, `routing`, `brains`,
+- App pages — `tasks`, `recipes`, `calendar`, `goals`, `routing`, `brains`,
   `personas`, `workers`, `config`. Fixed ids, each matching its nav label (other code
   deep-links to `#tasks/<id>`). The pre-2026-10-16 ids `inbox`, `team`, `roster` and
   `connections` are still accepted in a layout file and as URLs (old bookmarks
@@ -203,9 +202,6 @@ What you can do here:
 - **Attach inputs** to an existing task (`GET/POST /api/inbox/:id/inputs`).
 - **Download artifacts** a task produced (`GET /api/artifacts/:taskId/:file`).
 
-Tasks created by a workflow run carry `context.workflowId` / `workflowRunId` /
-`stepKey`, which is how the Workflows tab groups them (see below).
-
 ---
 
 ## Recipes
@@ -257,23 +253,6 @@ Backed by `GET /api/calendar?from=ISO&to=ISO`. Full UX spec and data contract:
 
 ---
 
-## Workflows
-
-Declarative pipelines — this page renders each template as a **live graph** (fan-
-through pipelines and fan-out/fan-in diamonds), with **Dry run** and **Run**
-controls, and renders each run's live status (a DAG for static runs, a decision
-timeline for adaptive ones).
-
-This page is documented in full in **[workflow-builder.md](workflow-builder.md)** —
-read that for the schema, both execution modes, authoring, configuration, and the
-complete REST surface.
-
-Backing endpoints: `GET /api/workflows`, `/api/workflows/:id`,
-`/api/workflows-invalid`, `POST /api/workflows`, `PUT /api/workflows/:id`,
-`POST /api/workflows/:id/run`, `GET /api/workflow-runs`, `/api/workflow-runs/:runId`.
-
----
-
 ## Agents
 
 Edit **who runs what** without touching code. Two kinds of worker:
@@ -289,7 +268,7 @@ Edit **who runs what** without touching code. Two kinds of worker:
 
 A chain is an **ordered list of brain ids**: `brains[0]` is tried first, and on
 failed verification the dispatcher hands the task to `brains[1]`, then `brains[2]`,
-and so on. Chains are drag-sortable in the UI. This is why shipped workflows pin a
+and so on. Chains are drag-sortable in the UI. This is why shipped agents pin a
 `division`/`agent` and never a `brain` — you retune execution here, live.
 
 ---
@@ -344,7 +323,7 @@ Use this to see who's actually online and how close a metered brain is to its ca
 The current server configuration (`GET /api/config`), including `paths`,
 `platforms`, `services`, `inbox`, and the full `orchestration` block (chains,
 brains, classifier, verifier, `maxConcurrent`, `pollIntervalMs`, `taskTimeoutMs`,
-`maxWorkflowSteps`, stale/hard claim bounds, etc.). This view is the read model for
+stale/hard claim bounds, etc.). This view is the read model for
 the settings the Agents and Brains pages edit.
 
 ---

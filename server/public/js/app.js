@@ -516,7 +516,7 @@ const TEXT_RE = /\.(txt|log)$/i;
 // App.openMarkdownModal / App.openMediaModal via the delegated .md-artifact /
 // .text-artifact / .media-artifact handlers) so they can be read without leaving
 // the dashboard; every other file type stays a plain download link. Shared by the
-// Inbox and the Workflow-run drawer so both file lists stay visually identical.
+// Inbox file lists stay visually identical.
 function artifactChip(taskId, f, fontSize = '0.9rem', kind = 'artifacts') {
   const base = `font-size:${fontSize};margin:0;display:inline-flex;align-items:center;gap:4px`;
   if (/\.(md|markdown)$/i.test(f)) {
@@ -675,7 +675,7 @@ class App {
       btn.textContent = showRaw ? 'Rendered' : 'Raw';
     });
     // Delegated: markdown artifacts open in the in-app popup viewer instead of
-    // downloading. Works for both the Inbox cards and the Workflow-run drawer,
+    // downloading. Works for the Inbox cards,
     // which re-render in place, so a document-level handler avoids stale listeners.
     document.addEventListener('click', (e) => {
       const btn = e.target.closest('.md-artifact');
@@ -696,7 +696,7 @@ class App {
     });
     // Delegated: image / video / audio artifacts (and inputs) open in the in-app
     // media viewer instead of downloading. Same document-level rationale as the
-    // markdown handler above — the Inbox cards and Workflow-run drawer re-render
+    // markdown handler above — the Inbox cards re-render
     // in place, so a delegated handler avoids stale per-node listeners.
     document.addEventListener('click', (e) => {
       const btn = e.target.closest('.media-artifact');
@@ -786,7 +786,7 @@ class App {
     } catch (e) {
       // Mirrors the repo layout.json, so an older server without /api/layout
       // (or a failed fetch) still gets the familiar nav.
-      const app = { tasks: ['Tasks', 'inbox'], recipes: ['Recipes', 'chef-hat'], calendar: ['Calendar', 'calendar-days'], workflows: ['Workflows', 'workflow'],
+      const app = { tasks: ['Tasks', 'inbox'], recipes: ['Recipes', 'chef-hat'], calendar: ['Calendar', 'calendar-days'],
         goals: ['Goals', 'target'], routing: ['Routing', 'bot'], brains: ['Brains', 'cpu'], personas: ['Personas', 'users-round'],
         workers: ['Workers', 'plug'], config: ['Configuration', 'settings'] };
       const pages = {
@@ -797,7 +797,7 @@ class App {
       };
       for (const [id, [label, icon]] of Object.entries(app)) pages[id] = { id, type: id, label, icon };
       this.layout = { brand: { title: 'Cowork', icon: 'zap', footer: 'Cowork Server' }, defaultPage: 'overview', pages,
-        sections: [{ label: 'Operations', pages: ['overview', 'portal', 'tasks', 'recipes', 'calendar', 'workflows', 'goals'] },
+        sections: [{ label: 'Operations', pages: ['overview', 'portal', 'tasks', 'recipes', 'calendar', 'goals'] },
                    { label: 'AI Fleet', pages: ['routing', 'brains', 'personas'] },
                    { label: 'System', pages: ['workers', 'config'] }],
         errors: [], fallback: e.message };
@@ -1597,7 +1597,7 @@ class App {
     const fallback = this.layout?.defaultPage || 'overview';
     const raw = window.location.hash.replace('#', '') || fallback;
     // A hash may carry a sub-path: `#tasks/<taskId>` deep-links to one task so a
-    // workflow run's OUTPUT panel can open the exact task in a new tab.
+    // task detail panel can open the exact task in a new tab.
     const [view, ...rest] = raw.split('/');
     // Old page ids — "#dashboard" (the Overview) and the app pages renamed so
     // each URL matches its label (#inbox → #tasks, …). Keep old bookmarks and
@@ -1653,7 +1653,6 @@ class App {
         case 'tasks': await this.renderInbox(); break;
         case 'recipes': await this.renderRecipes(); break;
         case 'calendar': await this.renderCalendar(); break;
-        case 'workflows': await this.renderWorkflows(); break;
         case 'goals': await this.renderGoals(); break;
         case 'routing': await this.renderTeam(); break;
         case 'brains': await this.renderBrains(); break;
@@ -3051,7 +3050,7 @@ class App {
     }));
   }
 
-  // Deep-link target from a workflow run's OUTPUT panel (#tasks/<taskId>): scroll
+  // Deep-link target from a task's OUTPUT panel (#tasks/<taskId>): scroll
   // that task into view and flash it. If it's not on the current page
   // (older than the loaded window, or hidden by a status filter), widen the net
   // once — clear the filter and raise the limit — then retry.
@@ -3094,155 +3093,8 @@ class App {
     if (note) note.style.display = (q && shown === 0 && cards.length) ? '' : 'none';
   }
 
-  // ── Workflows (declarative DAG templates + live runs) ──────────────────
-
-  // Group nodes into topological layers so the DAG renders top→bottom with each
-  // node below everything it depends on. Nodes: {key, dependsOn:[key,…]}.
-  _dagLayers(nodes) {
-    const byKey = new Map(nodes.map(n => [n.key, n]));
-    const depth = new Map();
-    const visit = (k, stack) => {
-      if (depth.has(k)) return depth.get(k);
-      if (stack.has(k)) return 0;                 // cycle guard (server rejects these)
-      stack.add(k);
-      const deps = (byKey.get(k)?.dependsOn || []).filter(d => byKey.has(d));
-      const v = deps.length ? 1 + Math.max(...deps.map(d => visit(d, stack))) : 0;
-      stack.delete(k);
-      depth.set(k, v);
-      return v;
-    };
-    nodes.forEach(n => visit(n.key, new Set()));
-    const layers = [];
-    nodes.forEach(n => { const l = depth.get(n.key) || 0; (layers[l] ||= []).push(n); });
-    return layers;
-  }
-
-  _dagNode(n) {
-    const color = n.status ? (STATUS_COLORS[n.status] || '#94A3B8') : '#7C3AED';
-    return `<div class="wf-node"${n.taskId ? ` data-wf-task="${esc(n.taskId)}" style="cursor:pointer;border-color:${color}66"` : ` style="border-color:${color}66"`}>
-      <div class="wf-node-top"><span class="wf-dot" style="background:${color}"></span><strong>${esc(n.label)}</strong>${n.status ? badge(n.status, color) : ''}</div>
-      ${n.sub ? `<div class="wf-node-sub">${esc(n.sub)}</div>` : ''}
-    </div>`;
-  }
-
-  _dagHtml(nodes) {
-    return this._dagLayers(nodes).map((layer, i) =>
-      `${i > 0 ? '<div class="wf-arrow"><i data-lucide="chevron-down"></i></div>' : ''}<div class="wf-layer">${layer.map(n => this._dagNode(n)).join('')}</div>`
-    ).join('');
-  }
-
-  // Orchestrated templates have no fixed graph — the steps are a LIBRARY the
-  // orchestrator picks from at runtime. Render them as an unconnected candidate
-  // pool so it's visually clear the path isn't predetermined.
-  _stepLibraryHtml(nodes) {
-    return `<div class="wf-layer" style="justify-content:flex-start">${nodes.map(n => this._dagNode(n)).join('')}</div>`;
-  }
-
-  // An orchestrated run's decision log: the ordered steps the orchestrator chose
-  // (each with its rationale + the task's status), then a terminal node — either
-  // "goal met", or a live "deciding…" pulse while the orchestrator is thinking.
-  _orchestratedRunHtml(r) {
-    const byId = {};
-    r.tasks.forEach(t => { byId[t.id] = t; });
-    const picks = (r.history || []).filter(h => h.stepKey);
-    const doneEntry = (r.history || []).find(h => h.stepKey === null);
-    const openTask = r.tasks.some(t => t.status !== 'done' && t.status !== 'rejected');
-
-    const rows = picks.map((h, i) => {
-      const t = h.taskId ? byId[h.taskId] : null;
-      const status = t?.status || 'pending';
-      const color = STATUS_COLORS[status] || '#94A3B8';
-      return `${i > 0 ? '<div class="wf-arrow"><i data-lucide="chevron-down"></i></div>' : ''}
-        <div class="wf-node"${t ? ` data-wf-task="${esc(t.id)}" style="cursor:pointer;border-color:${color}66"` : ` style="border-color:${color}66"`}>
-          <div class="wf-node-top"><span class="wf-dot" style="background:${color}"></span><strong>${i + 1}. ${esc(h.stepKey)}</strong>${badge(status, color)}</div>
-          ${t?.title ? `<div class="wf-node-sub">${esc(t.title)}</div>` : ''}
-          ${h.reason ? `<div class="wf-node-sub" style="font-style:italic;opacity:.75">🧠 ${esc(h.reason)}</div>` : ''}
-        </div>`;
-    }).join('');
-
-    let terminal = '';
-    if (doneEntry) {
-      const ok = r.status !== 'failed';
-      terminal = `<div class="wf-arrow"><i data-lucide="chevron-down"></i></div>
-        <div class="wf-node" style="border-color:${ok ? '#22C55E' : '#EF4444'}66">
-          <div class="wf-node-top"><span class="wf-dot" style="background:${ok ? '#22C55E' : '#EF4444'}"></span><strong>${ok ? '✓ goal met' : '✕ run failed'}</strong></div>
-          ${doneEntry.reason ? `<div class="wf-node-sub" style="font-style:italic;opacity:.75">🧠 ${esc(doneEntry.reason)}</div>` : ''}
-        </div>`;
-    } else if (r.status === 'running' && !openTask) {
-      terminal = `<div class="wf-arrow"><i data-lucide="chevron-down"></i></div>
-        <div class="wf-node wf-deciding" style="border-color:#0EA5E966">
-          <div class="wf-node-top"><span class="wf-dot" style="background:#0EA5E9"></span><strong>🧠 orchestrator deciding next step…</strong></div>
-        </div>`;
-    }
-    return `<div class="wf-dag">${rows || '<div style="font-size:0.8rem;color:var(--text-muted)">Waiting for the orchestrator to pick the first step…</div>'}${terminal}</div>`;
-  }
-
-  // The authoring explainer for the Workflows view: what the three phases mean,
-  // what a workflow id actually is, a copy-pasteable sample template, and how to
-  // write a goal the orchestrator can actually drive toward. Collapsed by default
-  // (native <details>) so it never gets in the way of the template list.
-  _workflowGuideHtml() {
-    const sample = `{
-  "id": "blog-post-pipeline",          // ← the workflow id (see below)
-  "name": "Blog Post Pipeline",
-  "description": "Research a topic, draft a post, then edit it.",
-  "params": ["topic"],                 // filled per run, used as {{topic}}
-  "steps": [
-    { "key": "research",
-      "title": "Research {{topic}}",
-      "description": "Gather 5 credible sources on {{topic}} and summarise the key points.",
-      "division": "marketing" },
-    { "key": "draft",
-      "title": "Draft the post",
-      "description": "Write an 800-word post on {{topic}} from the research.",
-      "division": "marketing",
-      "dependsOn": ["research"] },      // ← DAG edge: waits for research
-    { "key": "edit",
-      "title": "Edit & polish",
-      "description": "Proofread the draft for clarity, tone and accuracy.",
-      "dependsOn": ["draft"] }
-  ]
-}`;
-    const codeBox = 'white-space:pre;overflow:auto;background:var(--bg-tertiary);padding:10px 12px;border-radius:8px;margin:6px 0;font-size:0.78rem;line-height:1.45;font-family:ui-monospace,SFMono-Regular,Menlo,monospace';
-    const h = 'font-size:0.82rem;font-weight:600;margin:14px 0 4px;color:var(--text-primary)';
-    const p = 'font-size:0.82rem;color:var(--text-secondary);line-height:1.6;margin:4px 0';
-    return `<details class="wf-guide card" style="margin-bottom:var(--space-lg);background:var(--bg-secondary)">
-      <summary style="cursor:pointer;font-weight:600;font-size:0.9rem;display:flex;align-items:center;gap:8px;list-style:none">
-        <i data-lucide="book-open" style="width:16px;height:16px;flex-shrink:0"></i>
-        How to author a workflow — <span style="color:var(--text-muted);font-weight:400">design → author → register</span>
-        <span style="margin-left:auto;color:var(--text-muted);font-size:0.75rem;font-weight:400">click to expand</span>
-      </summary>
-      <div style="margin-top:10px">
-        <p style="${p}">A workflow is a reusable multi-step pipeline stored as one JSON file in <code>workflows/&lt;id&gt;.json</code>. The <strong>Workflow Builder</strong> template (pinned at the top) automates the three phases below, but here is what each one means so you can author one by hand too.</p>
-
-        <div style="${h}">1 · Design</div>
-        <p style="${p}">Break the goal into the smallest set of concrete steps. For each step decide a unique <code>key</code>, a <code>title</code>, a standalone <code>description</code> (the whole brief the executing agent sees — it can't see the others), which earlier steps it <code>dependsOn</code> (the DAG edges), and, when it clearly belongs to one function, a <code>division</code> or a specific <code>agent</code>. Pull anything that changes per run into <code>params</code> and reference them as <code>{{param}}</code>.</p>
-
-        <div style="${h}">2 · Author</div>
-        <p style="${p}">Write the design as one schema-valid JSON object. The validator enforces three rules: every step needs a <strong>unique string <code>key</code></strong>; every <code>dependsOn</code> entry must reference an <strong>existing key</strong>; and the graph must be <strong>acyclic</strong> (no step may transitively depend on itself). Sample <span style="color:#7C3AED">DAG</span> template:</p>
-        <div style="${codeBox}">${esc(sample)}</div>
-
-        <div style="${h}">3 · Register</div>
-        <p style="${p}">Drop the file in <code>workflows/</code>, or register it live over the API so it's runnable immediately — no restart:</p>
-        <div style="${codeBox}">${esc('curl -sS -X POST http://127.0.0.1:6868/api/workflows \\\n  -H \'Content-Type: application/json\' -d @workflow.json\n\n# already exists? re-POST to overwrite:\n#   -d \'{"def": <the json>, "overwrite": true}\'')}</div>
-        <p style="${p}">A <code>201 { ok: true }</code> means it validated and was written. It then appears in <strong>Templates</strong> below. Confirm the resolved graph with <strong>Dry run</strong> (nothing is created) before the first real <strong>Run ▶</strong>.</p>
-
-        <div style="${h}">🔑 What is a <code>workflow-id</code>?</div>
-        <p style="${p}">The <code>id</code> field is the template's <strong>stable, unique handle</strong> — the purple <span class="badge" style="background:#7C3AED18;color:#7C3AED;border:1px solid #7C3AED40">badge</span> on each card. It must be <strong>kebab-case</strong> (<code>^[a-z0-9][a-z0-9-]*$</code> — lowercase letters, digits, hyphens; e.g. <code>blog-post-pipeline</code>). It's what the API uses — <code>POST /api/workflows/&lt;id&gt;/run</code> — and it must be unique across templates (re-registering the same id needs <code>overwrite: true</code>). By convention the file is <code>workflows/&lt;id&gt;.json</code>, but the <code>id</code> inside the file wins. Don't confuse it with two neighbours:</p>
-        <p style="${p}">&nbsp;&nbsp;• a <strong>step <code>key</code></strong> — a node id unique <em>within one template</em> (<code>research</code>, <code>draft</code>).<br>
-        &nbsp;&nbsp;• a <strong>run id</strong> (<code>run-1a2b3c4d</code>) — generated fresh for <em>each execution</em> of a template.</p>
-
-        <div style="${h}">🎯 Writing a great goal (orchestrated mode)</div>
-        <p style="${p}">In <span style="color:#0EA5E9">orchestrated</span> mode the steps are just a <em>library</em>; after every step the orchestrator re-reads the <code>goal</code> to decide the next step — or to answer DONE. So a vague goal never terminates well. A great goal names the <strong>concrete deliverables</strong>, gives enough <strong>scope</strong> to judge coverage, and states an explicit <strong>done-condition</strong>.</p>
-        <p style="${p}"><span style="color:#EF4444">✗ Too vague:</span> <em>"Improve our go-to-market."</em> — no deliverables, no way to know when it's finished.</p>
-        <p style="${p}"><span style="color:#22C55E">✓ Great:</span> <em>"Produce a launch-ready GTM plan for {{product}}: a one-sentence positioning statement, 3 target segments each with its top pain point, a 4-week content calendar, and a one-page press release. Done when all four artifacts exist, are internally consistent, and name {{product}} explicitly."</em></p>
-      </div>
-    </details>`;
-  }
-
   // ── Goals ──────────────────────────────────────────────────────────────
-  // Long-lived, phase-tracked objectives that sit beneath Workflows. Unlike a
-  // workflow run (which ends), a goal PERSISTS until its binary success criterion
+  // Long-lived, phase-tracked objectives. A goal PERSISTS until its binary success criterion
   // flips (→ achieved, the only terminal state) or it hits an obstacle it can't
   // clear itself (→ blocked — RECOVERABLE, carrying the reason + the specific
   // condition that would let it resume). The Achiever generates and the Judger
@@ -3336,7 +3188,7 @@ class App {
     this.contentEl.innerHTML = `
       <div class="card" style="margin-bottom:var(--space-md);background:var(--bg-secondary)">
         <div style="font-size:0.85rem;color:var(--text-secondary);line-height:1.6">
-          <div style="margin-bottom:4px"><strong>Goals</strong> are advanced, long-term objectives — a self-terminating engine that runs beneath Workflows.</div>
+          <div style="margin-bottom:4px"><strong>Goals</strong> are advanced, long-term objectives — a self-terminating objective engine that runs above the task queue.</div>
           <div style="margin:3px 0">🎯 The <strong>Achiever</strong> continuously evaluates progress, plans phases, and generates tasks. ⚖️ The <strong>Judger</strong> wakes when a phase completes, writes a report + meeting minutes, and re-arms the Achiever.</div>
           <div style="margin:3px 0">A goal runs until its <strong>binary (Yes/No) success criterion</strong> flips true (→ <strong>achieved</strong>, the only terminal state). If it hits an obstacle it can't clear — the budget runs out, a credential is missing, a decision needs a human — it goes <strong>blocked</strong>: a recoverable hold that records the reason <em>and the specific condition to resume</em>. A blocked goal is <strong>self-healing</strong> — it <strong>auto-resumes on a backoff</strong> (minutes at first, then hours) and continues the instant the obstacle clears, so recovery never waits on a human. You can <strong>Resume now</strong> to retry immediately after fixing something, or <strong>Delete</strong> it if it's genuinely dead. It is never silently "done" and never silently thrown away.</div>
         </div>
@@ -3495,208 +3347,6 @@ class App {
     // In-place re-renders (after create/activate/pause/etc.) bypass
     // renderCurrentView's trailing createIcons(), so the delete glyph would vanish
     // until a full view switch — re-hydrate the lucide icons here too.
-    createIcons();
-  }
-
-  async renderWorkflows() {
-    const [defs, runs, invalid] = await Promise.all([
-      this.api.get('/workflows'), this.api.get('/workflow-runs'),
-      this.api.get('/workflows-invalid').catch(() => [])
-    ]);
-    const inp = 'padding:6px 8px;background:var(--bg-tertiary);border:1px solid var(--bg-tertiary);border-radius:8px;color:inherit;font-size:0.8rem';
-
-    // Surface templates that failed to load so an author gets the reason instead
-    // of a silently-missing card.
-    const invalidCard = (invalid && invalid.length) ? `<div class="card" style="border-color:#EF444466;margin-bottom:var(--space-lg)">
-      <div style="display:flex;align-items:center;gap:6px;font-size:0.85rem;color:#EF4444"><i data-lucide="alert-triangle" style="width:15px;height:15px"></i><strong>${invalid.length} template${invalid.length > 1 ? 's' : ''} failed to load</strong></div>
-      ${invalid.map(iv => `<div style="font-size:0.78rem;margin-top:6px"><code>${esc(iv.file)}</code><ul style="margin:2px 0 0 16px;color:var(--text-secondary)">${iv.errors.map(e => `<li>${esc(e)}</li>`).join('')}</ul></div>`).join('')}
-    </div>` : '';
-
-    const modeBadge = (m) => m === 'orchestrated'
-      ? badge('adaptive · orchestrator-driven', '#0EA5E9')
-      : badge('DAG · static', '#7C3AED');
-
-    // Pin the workflow-builder to the top — it's the entry point authors reach for
-    // most, so it should lead the list regardless of load order.
-    const orderedDefs = [...defs].sort((a, b) =>
-      (a.id === 'workflow-builder' ? -1 : 0) - (b.id === 'workflow-builder' ? -1 : 0));
-
-    const tplCards = orderedDefs.length ? orderedDefs.map(def => {
-      const orchestrated = def.mode === 'orchestrated';
-      const nodes = def.steps.map(s => ({
-        key: s.key, label: s.title || s.key, dependsOn: s.dependsOn || [],
-        sub: [s.agent && ('@' + s.agent), s.division && ('#' + s.division), s.brain && ('🧠 ' + s.brain)].filter(Boolean).join(' · ')
-      }));
-      const params = (def.params || []).map(p => `<textarea data-param="${esc(p)}" placeholder="${esc(p)}…" style="${inp}; flex: 1 1 100%; width: 100%; box-sizing: border-box; resize: vertical; min-height: 120px; height: 15vh; max-height: 70vh; font-family: inherit; line-height: 1.5;" rows="4"></textarea>`).join('');
-      const graph = orchestrated
-        ? `<div style="font-size:0.72rem;color:var(--text-muted);margin:6px 0 4px">Step library — the orchestrator picks from these at runtime (order not fixed):</div>${this._stepLibraryHtml(nodes)}`
-        : `<div class="wf-dag">${this._dagHtml(nodes)}</div>`;
-      // Collapsed by default: the header is a clickable title row; the details,
-      // graph and param inputs live in .wf-body and reveal on click.
-      return `<div class="card wf-card wf-collapsed" data-wf="${esc(def.id)}" style="margin-bottom:var(--space-lg)">
-        <div class="wf-head" style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;cursor:pointer">
-          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap"><i data-lucide="chevron-right" class="wf-chevron" style="width:16px;height:16px;flex-shrink:0"></i><strong>${esc(def.name || def.id)}</strong> ${badge(def.id, '#7C3AED')} ${modeBadge(def.mode)}</div>
-          <span style="font-size:0.75rem;color:var(--text-muted)">${def.steps.length} steps</span>
-        </div>
-        <div class="wf-body" style="display:none">
-          ${def.description ? `<p style="font-size:0.83rem;color:var(--text-secondary);margin:6px 0">${esc(def.description)}</p>` : ''}
-          ${orchestrated && def.goal ? `<p style="font-size:0.8rem;margin:6px 0"><span style="color:var(--text-muted)">🎯 Goal:</span> ${esc(def.goal)}</p>` : ''}
-          ${graph}
-          <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:12px">
-            ${params || '<span style="font-size:0.78rem;color:var(--text-muted)">no params</span>'}
-            <button class="btn wf-dry" style="font-size:0.78rem;margin-left:auto">Dry run</button>
-            <button class="btn btn-primary wf-run" style="font-size:0.78rem">Run ▶</button>
-          </div>
-          <div class="wf-dry-out" style="display:none;margin-top:10px"></div>
-        </div>
-      </div>`;
-    }).join('') : `<div class="empty-state"><div class="empty-state-icon"><i data-lucide="workflow"></i></div><h3>No workflow templates</h3><p>Drop a <code>workflows/*.json</code> template on the server to see it here.</p></div>`;
-
-    const runCards = runs.length ? runs.map(r => {
-      const orchestrated = r.mode === 'orchestrated';
-      const color = r.status === 'done' ? '#22C55E' : r.status === 'failed' ? '#EF4444' : '#0EA5E9';
-      const done = r.tasks.filter(t => t.status === 'done').length;
-      let body;
-      if (orchestrated) {
-        body = this._orchestratedRunHtml(r);
-      } else {
-        const idToStep = {};
-        r.tasks.forEach(t => { idToStep[t.id] = t.context?.stepKey || t.id.slice(0, 6); });
-        const nodes = r.tasks.map(t => ({
-          key: t.context?.stepKey || t.id, label: t.context?.stepKey || t.title, sub: esc(t.title), status: t.status, taskId: t.id,
-          dependsOn: (t.context?.dependsOn || []).map(id => idToStep[id]).filter(Boolean)
-        }));
-        body = `<div class="wf-dag">${this._dagHtml(nodes)}</div>`;
-      }
-      const count = orchestrated ? `${(r.history || []).filter(h => h.stepKey).length} steps chosen` : `${done}/${r.tasks.length} done`;
-      return `<div class="card" style="margin-bottom:var(--space-md)">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
-          <div>${badge(r.workflowId, '#7C3AED')} ${modeBadge(r.mode)} ${badge(r.status, color)}</div>
-          <div style="display:flex;align-items:center;gap:8px">
-            <span style="font-size:0.75rem;color:var(--text-muted)">${esc(r.runId)} · ${count} · ${timeAgo(r.createdAt)}</span>
-            <button class="btn-icon wf-delete-run" data-run-id="${esc(r.runId)}" title="Delete run and its tasks" style="padding:4px;background:none;border:none;cursor:pointer"><i data-lucide="trash-2" style="width:14px;height:14px;color:var(--text-muted)"></i></button>
-          </div>
-        </div>
-        ${orchestrated && r.goal ? `<p style="font-size:0.8rem;margin:6px 0"><span style="color:var(--text-muted)">🎯 Goal:</span> ${esc(r.goal)}</p>` : ''}
-        ${body}
-        <div class="wf-run-detail" style="display:none;margin-top:10px"></div>
-      </div>`;
-    }).join('') : '<div style="color:var(--text-muted);font-size:0.85rem">No runs yet — run a template above and its nodes will light up as tasks complete.</div>';
-
-    this.contentEl.innerHTML = `
-      <div class="card" style="margin-bottom:var(--space-md);background:var(--bg-secondary)">
-        <div style="font-size:0.85rem;color:var(--text-secondary);line-height:1.6">
-          <div style="margin-bottom:4px">Two ways to run a multi-step pipeline across the agent company:</div>
-          <div style="margin:3px 0">${badge('DAG · static', '#7C3AED')} steps are wired by <code>dependsOn</code> and the whole graph is expanded up front — the dispatcher walks it in dependency order. Deterministic and reusable, no LLM re-planning.</div>
-          <div style="margin:3px 0">${badge('adaptive · orchestrator-driven', '#0EA5E9')} steps are a <em>library</em>; nothing is planned up front. After each step, the <strong>orchestrator decides the next step automatically</strong> from the goal + results so far — or answers DONE. The path adapts to what comes back.</div>
-        </div>
-      </div>
-      ${this._workflowGuideHtml()}
-      ${invalidCard}
-      <h3 style="font-size:0.9rem;margin:var(--space-md) 0 6px">Templates</h3>${tplCards}
-      <div style="display:flex;justify-content:space-between;align-items:flex-end;margin:var(--space-xl) 0 6px">
-        <h3 style="font-size:0.9rem;margin:0">Runs <span style="font-size:0.72rem;color:var(--text-muted);font-weight:400">(click a node → its result, artifacts &amp; a link to open the full task)</span></h3>
-        ${runs.length ? `<button class="btn wf-delete-all-runs" style="font-size:0.75rem;padding:4px 8px;margin-bottom:2px" title="Delete all workflow runs and their tasks"><i data-lucide="trash-2" style="width:12px;height:12px;margin-right:4px"></i>Delete all</button>` : ''}
-      </div>
-      ${runCards}`;
-
-    this.contentEl.querySelectorAll('.wf-card').forEach(card => {
-      const id = card.dataset.wf;
-      // Toggle the collapsed body when the title row is clicked. The chevron
-      // rotation + body visibility are driven by the .wf-collapsed class.
-      card.querySelector('.wf-head')?.addEventListener('click', () => {
-        const collapsed = card.classList.toggle('wf-collapsed');
-        const body = card.querySelector('.wf-body');
-        if (body) body.style.display = collapsed ? 'none' : 'block';
-      });
-      const readParams = () => { const p = {}; card.querySelectorAll('[data-param]').forEach(i => { p[i.dataset.param] = i.value.trim(); }); return p; };
-      card.querySelector('.wf-run')?.addEventListener('click', async () => {
-        try {
-          const r = await this.api.post(`/workflows/${encodeURIComponent(id)}/run`, { params: readParams() });
-          // Only a DAG run returns `tasks` (the whole graph is queued up front).
-          // An ORCHESTRATED run has no fixed plan — the orchestrator picks each
-          // next step as results come in — so report the run, not a task count.
-          this.toast('workflow started', r.mode === 'orchestrated'
-            ? `${id} · orchestrated (${r.runId}) — the orchestrator picks each next step`
-            : `${id} · ${(r.tasks || []).length} tasks queued`);
-          this.renderWorkflows();
-        } catch (e) { this.toast('error', e.message); }
-      });
-      card.querySelector('.wf-dry')?.addEventListener('click', async () => {
-        const out = card.querySelector('.wf-dry-out');
-        try {
-          const r = await this.api.post(`/workflows/${encodeURIComponent(id)}/run`, { params: readParams(), dryRun: true });
-          const nodes = (r.steps || []).map(s => ({ key: s.key, label: s.title || s.key, dependsOn: s.dependsOn || [], sub: [s.agent && ('@' + s.agent), s.division && ('#' + s.division)].filter(Boolean).join(' · ') }));
-          out.innerHTML = `<div style="font-size:0.74rem;color:var(--text-muted);margin-bottom:6px">Dry run — nothing was created. Resolved plan (${nodes.length} steps):</div><div class="wf-dag">${this._dagHtml(nodes)}</div>`;
-          out.style.display = 'block'; createIcons();
-        } catch (e) { out.innerHTML = `<span style="color:#EF4444;font-size:0.8rem">${esc(e.message)}</span>`; out.style.display = 'block'; }
-      });
-    });
-
-    this.contentEl.querySelectorAll('[data-wf-task]').forEach(node => node.addEventListener('click', async () => {
-      const detail = node.closest('.card').querySelector('.wf-run-detail');
-      if (!detail) return;
-      detail.style.display = 'block';
-      detail.innerHTML = '<span style="opacity:.6;font-size:0.82rem">loading…</span>';
-      try {
-        const t = await this.api.get(`/inbox/${encodeURIComponent(node.dataset.wfTask)}`);
-        const arts = Array.isArray(t.artifacts) ? t.artifacts : [];
-        const outs = Array.isArray(t.outputs) ? t.outputs : [];
-        // Deep link into the full task in the Inbox — opens in a new tab so the
-        // run view stays put. `#tasks/<id>` is handled by navigate()/focusInboxTask.
-        const taskUrl = `#tasks/${encodeURIComponent(t.id)}`;
-        const outHtml = outs.length ? `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin:8px 0 2px">
-            <span style="font-size:0.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.03em">Outputs</span>
-            ${artifactChips(t.id, outs, '0.8rem', 'outputs')}
-          </div>` : '';
-        const artHtml = arts.length ? `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin:8px 0 2px">
-            <span style="font-size:0.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.03em">Artifacts</span>
-            ${artifactChips(t.id, arts, '0.8rem', 'artifacts', t.artifactsTotal)}
-          </div>` : '';
-        detail.innerHTML = `
-          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
-            ${badge(t.status, STATUS_COLORS[t.status] || '#94A3B8')}
-            <strong style="font-size:0.86rem">${esc(t.title)}</strong>
-            <a href="${taskUrl}" target="_blank" rel="noopener" class="btn" title="Open this task in Tasks in a new tab — full result, inputs and downloadable artifacts"
-               style="margin-left:auto;font-size:0.74rem;display:inline-flex;align-items:center;gap:4px;color:#0EA5E9;border-color:#0EA5E966"><i data-lucide="external-link" style="width:12px;height:12px"></i>Open task ↗</a>
-          </div>
-          <div style="display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:0 0 2px;font-size:0.72rem;color:var(--text-muted)">
-            <span class="copyable" data-copy="${esc(t.id)}" title="Task ID — click to copy" style="cursor:pointer;font-family:ui-monospace,SFMono-Regular,Menlo,monospace"><i data-lucide="hash" style="width:11px;height:11px;vertical-align:-1px"></i>${esc(t.id)}</span>
-            <span class="copyable" data-copy="artifacts/${esc(t.id)}/" title="Artifacts directory — click to copy" style="cursor:pointer;font-family:ui-monospace,SFMono-Regular,Menlo,monospace"><i data-lucide="folder" style="width:11px;height:11px;vertical-align:-1px"></i>artifacts/${esc(t.id)}/</span>
-          </div>
-          ${outHtml}${artHtml}
-          ${mdViewer(t.result || t.description || '(no output yet)', 'OUTPUT')}`;
-        createIcons();
-        // Local copy handler (the inbox's delegated one isn't bound in this view).
-        detail.querySelectorAll('[data-copy]').forEach(el => el.addEventListener('click', async (e) => {
-          e.stopPropagation();
-          const text = el.dataset.copy;
-          this.toast(await this.copyText(text) ? 'copied' : 'copy failed', text);
-        }));
-      } catch (e) { detail.innerHTML = `<span style="color:#EF4444;font-size:0.8rem">${esc(e.message)}</span>`; }
-    }));
-
-    this.contentEl.querySelectorAll('.wf-delete-run').forEach(btn => btn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      const runId = btn.dataset.runId;
-      if (!confirm(`Delete workflow run ${runId} and all its tasks?`)) return;
-      try {
-        await this.api.del(`/workflow-runs/${encodeURIComponent(runId)}`);
-        this.toast('run deleted', runId);
-        this.renderWorkflows();
-      } catch (err) { this.toast('error', err.message); }
-    }));
-
-    this.contentEl.querySelector('.wf-delete-all-runs')?.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      if (!confirm(`Delete all workflow runs and their tasks?`)) return;
-      try {
-        await this.api.del('/workflow-runs');
-        this.toast('all runs deleted');
-        this.renderWorkflows();
-      } catch (err) { this.toast('error', err.message); }
-    });
-
     createIcons();
   }
 

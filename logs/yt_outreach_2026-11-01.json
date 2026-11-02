@@ -1,0 +1,90 @@
+{
+  "run_ts": "2026-11-01T02:35:07.396464+00:00",
+  "dry_run": false,
+  "channel": "@AI高玩",
+  "hours_window": 48,
+  "candidates_found": 40,
+  "drafts": [
+    {
+      "video_id": "lVYp8rY1avI",
+      "video_url": "https://www.youtube.com/watch?v=lVYp8rY1avI",
+      "channel": "Techie HSR",
+      "channel_id": "UCx3K-joyUZJZ5XDOk8od8Ig",
+      "view_count": 0,
+      "published": "2026-11-01T01:30:12Z",
+      "comment": "第一次见有人把「agent」拆得这么细，有配套的资料或 demo 可以看看吗？ 顺带说下，我在维护一个叫 cowork 的多 agent 协作工具（cowork pro），让多个 agent 共享任务库分工，看到这个话题正好想到它，感兴趣可以搜一下。",
+      "mentions_product": true,
+      "status": "posted",
+      "comment_id": "UgyLQmnaFaq2eLbvGDx4AaABAg"
+    },
+    {
+      "video_id": "aBBc2cRhrlo",
+      "video_url": "https://www.youtube.com/watch?v=aBBc2cRhrlo",
+      "channel": "Cemong",
+      "channel_id": "UCirAZnIpugj60DyzAXZBQaw",
+      "view_count": 0,
+      "published": "2026-11-01T02:09:12Z",
+      "comment": "之前一直关注「coding」这块，有配套的资料或 demo 可以看看吗？",
+      "mentions_product": false,
+      "status": "posted",
+      "comment_id": "Ugyc05U8PPoAHOLLtJl4AaABAg"
+    },
+    {
+      "video_id": "UBL3ezXvgQ8",
+      "video_url": "https://www.youtube.com/watch?v=UBL3ezXvgQ8",
+      "channel": "ToolTrek",
+      "channel_id": "UCxa7FFxiWJuXUxuYktp18Fw",
+      "view_count": 0,
+      "published": "2026-11-01T01:46:37Z",
+      "comment": "看完你这段，方便的话求个踩坑小结，",
+      "mentions_product": false,
+      "status": "posted",
+      "comment_id": "UgziFfzGwTFO5Dci67N4AaABAg"
+    },
+    {
+      "video_id": "dUjiARu4a8U",
+      "video_url": "https://www.youtube.com/watch?v=dUjiARu4a8U",
+      "channel": "Creative Nest Academy",
+      "channel_id": "UC9xh4vBc_-6if9efk5nvV3A",
+      "view_count": 0,
+      "published": "2026-11-01T02:34:31Z",
+      "comment": "第一次见有人把「claude code」拆得这么细，方便的话求个踩坑小结，",
+      "mentions_product": false,
+      "status": "draft"
+    },
+    {
+      "video_id": "yS2Q2UGDyfk",
+      "video_url": "https://www.youtube.com/watch?v=yS2Q2UGDyfk",
+      "channel": "VibePatch",
+      "channel_id": "UCUqww4o8llvCpKFBriiPsBg",
+      "view_count": 0,
+      "published": "2026-11-01T02:28:12Z",
+      "comment": "之前一直关注「AI agent」这块，后续有打算往自动化方向延伸吗？",
+      "mentions_product": false,
+      "status": "draft"
+    },
+    {
+      "video_id": "24MtrPje8ok",
+      "video_url": "https://www.youtube.com/watch?v=24MtrPje8ok",
+      "channel": "Logitwire",
+      "channel_id": "UC60Wbsq_aTnyBqx-r1wDsvA",
+      "view_count": 0,
+      "published": "2026-11-01T02:05:23Z",
+      "comment": "第一次见有人把「agent」拆得这么细，这套东西在团队里推得动吗，还是主要个人在用？",
+      "mentions_product": false,
+      "status": "draft"
+    }
+  ],
+  "posted": 3,
+  "manual_actions": {
+    "note": "Like + subscribe on the drafted videos' channels is human-only (YouTube Data API v3). Checklist: open each video_url in a browser and click like; subscribe to channels worth following.",
+    "videos": [
+      "https://www.youtube.com/watch?v=lVYp8rY1avI",
+      "https://www.youtube.com/watch?v=aBBc2cRhrlo",
+      "https://www.youtube.com/watch?v=UBL3ezXvgQ8",
+      "https://www.youtube.com/watch?v=dUjiARu4a8U",
+      "https://www.youtube.com/watch?v=yS2Q2UGDyfk",
+      "https://www.youtube.com/watch?v=24MtrPje8ok"
+    ]
+  }
+}

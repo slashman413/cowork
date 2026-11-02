@@ -94,20 +94,11 @@ test('buildTask: names the skill, full profile, fixed deliverables; guided parks
   assert.deepEqual(delegated.tags, [SHOTCRAFT_TAG]);
 });
 
-test('buildGoal + buildWorkflow: unattended modes, params, review step depends on produce', () => {
+test('buildGoal: unattended modes, phases, review step', () => {
   const sc = fixture();
   const brief = sc.parseBrief({ ...base, mode: 'guided', shots: ['deck-deal-flyin'] });
   const goal = sc.buildGoal(brief);
   assert.equal(goal.phases.length, 4);
   assert.match(goal.description, /autonomous free creation/);
   assert.deepEqual(goal.achieverBrainChain, ['b-opus']);
-
-  assert.throws(() => sc.buildWorkflow(brief, 'Bad Id', '/art'), /workflow id/);
-  const wf = sc.buildWorkflow(brief, 'shotcraft-acme', '/art');
-  assert.deepEqual(wf.params, ['product', 'source', 'message', 'notes']);
-  assert.match(wf.steps[0].description!, /\{\{product\}\}/);
-  assert.match(wf.steps[0].description!, /deck-deal-flyin/);
-  assert.doesNotMatch(wf.steps[0].description!, /Acme Notes/);
-  assert.deepEqual(wf.steps[1].dependsOn, ['produce']);
-  assert.match(wf.steps[1].description!, /\/art\/<that id>/);
 });

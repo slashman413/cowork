@@ -21,12 +21,12 @@ import { classifyRejection, classifyWaitInput, REPEAT_WINDOW_MS } from './qualit
 
 export type RemedyId =
   | 'router-rule' | 'brain-cooldown' | 'env-requires' | 'verifier-pattern'
-  | 'workflow-gate' | 'acceptance-criterion' | 'conventions-note';
+  | 'acceptance-criterion' | 'conventions-note';
 
 /** The remedy menu, highest level (most mechanical) first. Order is the contract. */
 export const REMEDY_ORDER: readonly RemedyId[] = [
   'router-rule', 'brain-cooldown', 'env-requires', 'verifier-pattern',
-  'workflow-gate', 'acceptance-criterion', 'conventions-note',
+  'acceptance-criterion', 'conventions-note',
 ] as const;
 
 /** Where each remedy is applied (all human-gated; this module never writes). */
@@ -35,8 +35,7 @@ export const REMEDY_LEVER: Record<RemedyId, string> = {
   'brain-cooldown': 'Store brain cooldown (Store.noteBrainRateLimited / brainCooldownUntil, decided from CLI signals) + ~/.cowork/config.json orchestration.autoRerunRateLimited',
   'env-requires': 'brain `env` manifest + task `requires` filter (WF-3; the router-side filter is not wired yet)',
   'verifier-pattern': '~/.cowork/config.json orchestration.verifier.failPatterns',
-  'workflow-gate': 'workflows/*.json step `gate` (P1-2 review→fix gate)',
-  'acceptance-criterion': 'task / workflow-step `acceptance` + `scope` (P0-3 brief contract)',
+  'acceptance-criterion': 'task brief `acceptance` + `scope` (P0-3 brief contract)',
   'conventions-note': 'CONVENTIONS.md prose (prompt-injected; must go through eval-prompt-change, P2-1) — unenforced',
 };
 
@@ -201,11 +200,7 @@ export function remedyMenu(c: LessonClass): RemedyOption[] {
       c.events.filter(e => lateCaught(e) && re.test(e.reason || '')));
   }
 
-  // 5. workflow gate — quality-type failures a review→fix gate catches before ship.
-  add('workflow-gate', 'add a review→fix `gate` on the workflow step that produces this output',
-    c.events.filter(e => e.kind === 'quality-shadow' || (e.kind === 'verify-fail' && classifyRejection(e.reason) === 'quality')));
-
-  // 6. acceptance criterion — missing acceptance, or a permission/choice question
+  // 5. acceptance criterion — missing acceptance, or a permission/choice question
   //    a brief with acceptance + scope would have answered up front.
   add('acceptance-criterion', 'state the decision in the brief\'s `acceptance` / `scope` so the agent never has to ask',
     c.events.filter(e => e.kind === 'brief-missing-acceptance' || (e.kind === 'wait-input' && classifyWaitInput(e.questions, e.reason) === 'permissionChoice')));

@@ -7,7 +7,6 @@ import type { Config, RoleConfig, Task, AchieverDecision } from '../types.js';
 import type { EventBus } from './events.js';
 import type { Store, CompletionDecision } from './store.js';
 import { isFailedTask } from './store.js';
-import type { Workflows } from './workflows.js';
 import type { Goals } from './goals.js';
 import { FIGURE_IT_OUT_RULES } from './goals.js';
 import { verifyOutput, isRateLimitFailure, isCliRateLimitSignal, buildVerifierPrompt, shouldLlmVerify, parseLlmVerdict, parseSpecVerdict, selectSpecJudges, explainSpecJudgeSkips, DEFAULT_SPEC_JUDGES, extractEvidenceBlock, detectInputRequest, detectBackgroundWait, unaccountedFailedDeps, parseStatusFooter, type StatusFooter, type VerifyVerdict, type VerifierArtifact, type SpecVerdictRecord, type InputOptions, type InputRequest, type BackgroundOptions, type BackgroundWait } from './result-verifier.js';
@@ -106,7 +105,6 @@ export class Dispatcher {
   private config: Config;
   private store: Store;
   private eventBus: EventBus;
-  private workflows?: Workflows;
   private goals?: Goals;
   private running = new Map<string, { role: string; startedAt: number; workerAgentId?: string; brainId?: string }>();
   /** Live brain process per running task — killed (whole tree) when the task is deleted. */
@@ -117,15 +115,10 @@ export class Dispatcher {
   private timer: NodeJS.Timeout | null = null;
   private stopped = false;
   private classifying = new Set<string>();
-  private decidingRuns = new Set<string>();   // orchestrated runs mid-decision (re-entrancy guard)
   private decidingGoals = new Set<string>();   // goals mid-Achiever-turn (re-entrancy guard)
   private decidingInput = new Set<string>();   // wait-input tasks mid auto-answer (re-entrancy guard)
-  /** Consecutive unusable router answers per orchestrated run (timeout/garbled). */
-  private decisionFailures = new Map<string, number>();
   /** Consecutive unusable / no-progress Achiever turns per goal. */
   private goalFailures = new Map<string, number>();
-  /** Give up on an orchestrated run after this many consecutive bad decisions. */
-  static readonly MAX_DECISION_FAILURES = 3;
   /** Abandon a goal after this many consecutive Achiever turns that make no
    *  progress (garbled decision, or an evaluate that neither ends nor advances). */
   static readonly MAX_GOAL_FAILURES = 5;
@@ -136,11 +129,10 @@ export class Dispatcher {
   /** Maximum size in bytes of `artifacts/<id>/progress.md` injected into a resumed prompt (P1-3). */
   static readonly PROGRESS_LEDGER_MAX_BYTES = 4096;
 
-  constructor(config: Config, store: Store, eventBus: EventBus, workflows?: Workflows, goals?: Goals) {
+  constructor(config: Config, store: Store, eventBus: EventBus, goals?: Goals) {
     this.config = config;
     this.store = store;
     this.eventBus = eventBus;
-    this.workflows = workflows;
     this.goals = goals;
     // Deleting a task must stop its brain. Store.deleteTask only removes files;
     // without this the brain (e.g. a dsh run on the local SGLang engine) kept
@@ -262,7 +254,7 @@ export class Dispatcher {
     const tier = taskTier(ctx);
     if (this.isSpecial(agent)) {
       raw = orch.agents[agent].brains || [];
-      // P1-2: when a gated workflow step escalates to `judgment` tier at round >= escalateBrainAt,
+      // P1-2: when a gated step escalates to `judgment` tier at round >= escalateBrainAt,
       // prepend the judgment tier brains even for special agents (e.g. orchestrator).
       if (ctx?.escalated && tier === 'judgment') {
         raw = mergeTierChain(this.tierList('judgment', ctx), raw);
@@ -529,11 +521,6 @@ export class Dispatcher {
     // Rescue tasks orphaned by a crashed/exited agent (runs every tick, cheap).
     try { this.reclaimStaleClaims(); }
     catch (e) { console.error('Dispatcher: reclaimStaleClaims failed this tick:', e); }
-
-    // Advance any orchestrated workflow runs: for each run awaiting a decision,
-    // the orchestrator brain picks the next step (or finishes the run).
-    try { this.driveWorkflows(); }
-    catch (e) { console.error('Dispatcher: driveWorkflows failed this tick:', e); }
 
     // Advance any active Goals: for each goal whose work has finished (quiescent),
     // the Achiever brain takes one evaluate/plan/emit turn toward the criterion.
@@ -917,37 +904,6 @@ export class Dispatcher {
     return best;
   }
 
-  /**
-   * Parse the orchestrator's next-step decision. Step keys are lowercase slugs and
-   * match case-insensitively. DONE, however, is accepted ONLY as the explicit
-   * uppercase token standing on its own — the prompt tells the brain to answer
-   * literally "DONE" — so the ordinary English word "done" appearing in the brain's
-   * reasoning prose can never finish the run (the run-99b3d715 regression). The
-   * "last decisive token wins" rule is preserved by position: a DONE only wins when
-   * it appears AFTER the last real step-key mention. Returns null when neither a
-   * step key nor an explicit DONE is present, so the caller retries rather than
-   * silently completing a run that executed nothing.
-   */
-  private parseWorkflowDecision(text: string, keys: string[]): string | null {
-    const src = text || '';
-    // Last mention of any real step key (case-insensitive slug match).
-    let keyPos = -1, keyPick: string | null = null;
-    for (const c of keys) {
-      const re = new RegExp(`\\b${c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'gi');
-      let m: RegExpExecArray | null, last = -1;
-      while ((m = re.exec(src))) last = m.index;
-      if (last > keyPos) { keyPos = last; keyPick = c; }
-    }
-    // Explicit DONE: the uppercase token, case-SENSITIVE, as a standalone word.
-    let donePos = -1;
-    const doneRe = /(?:^|[^A-Za-z0-9_])DONE(?:[^A-Za-z0-9_]|$)/g;
-    let dm: RegExpExecArray | null;
-    while ((dm = doneRe.exec(src))) donePos = dm.index;
-    if (keyPick && keyPos >= donePos) return keyPick;
-    if (donePos >= 0) return 'DONE';
-    return keyPick;
-  }
-
   private assignAgent(task: Task, agent: string, division: string | undefined): void {
     const fresh = this.store.getTask(task.id);
     if (fresh && fresh.status === 'pending') {
@@ -957,129 +913,14 @@ export class Dispatcher {
     }
   }
 
-  /**
-   * Drive orchestrated (adaptive) workflow runs. Unlike a DAG workflow — whose
-   * whole graph is expanded up front — an orchestrated run holds a LIBRARY of
-   * candidate steps and lets the orchestrator brain decide, after each step
-   * finishes, which step to run next (or that the goal is met). This is that
-   * decision loop: every tick, for each run awaiting a decision, we ask the
-   * router brain to choose the next step key (or DONE) given the goal and the
-   * results so far, then materialise that choice as an inbox task the normal
-   * dispatch path executes. A per-run guard prevents overlapping decisions and
-   * orchestration.maxWorkflowSteps caps a runaway loop.
-   */
-  private driveWorkflows(): void {
-    if (!this.workflows) return;
-    const cap = this.config.orchestration.maxWorkflowSteps ?? 12;
-    let pending: ReturnType<Workflows['runsAwaitingDecision']>;
-    try { pending = this.workflows.runsAwaitingDecision(); } catch { return; }
-
-    for (const rec of pending) {
-      if (this.decidingRuns.has(rec.runId)) continue;
-
-      // Safety bound: too many steps dispatched → force-finish so a mis-behaving
-      // orchestrator (never emitting DONE) can't spin forever.
-      const dispatched = rec.history.filter(h => h.stepKey).length;
-      if (dispatched >= cap) {
-        this.workflows.applyDecision(rec.runId, { stepKey: null, reason: `reached step cap (${cap})` });
-        continue;
-      }
-
-      const ctx = this.workflows.decisionContext(rec.runId);
-      if (!ctx) continue;
-      // No candidate steps left → the run has exhausted its library; finish it.
-      if (!ctx.available.length) {
-        this.workflows.applyDecision(rec.runId, { stepKey: null, reason: 'no candidate steps remain' });
-        continue;
-      }
-
-      this.decidingRuns.add(rec.runId);
-      const timeout = this.config.orchestration.classifier?.timeoutMs || 300000;
-      const keys = ctx.available.map(s => s.key);
-      const prompt = this.orchestratorPrompt(ctx);
-
-      (async () => {
-        try {
-          const out = await this.askExecutor(this.config.orchestration.agents?.orchestrator?.brains, prompt, timeout);
-          // The orchestrator answers with a step key or DONE. Parse strictly:
-          // DONE must be the explicit uppercase token, NEVER the ordinary English
-          // word "done" buried in the brain's reasoning prose — that false match
-          // is what latched run-99b3d715 to premature completion (a rambling small
-          // model whose recorded reason literally said "…then dispatch G2", i.e. it
-          // wanted to CONTINUE, yet the run was marked done having executed nothing).
-          const pick = this.parseWorkflowDecision(out, keys);
-          const reason = (out.split('\n').map(l => l.trim()).filter(Boolean).pop() || '').slice(0, 200);
-          if (pick === 'DONE') {
-            this.decisionFailures.delete(rec.runId);
-            this.workflows!.applyDecision(rec.runId, { stepKey: null, reason: reason || 'goal met' });
-          } else if (pick) {
-            this.decisionFailures.delete(rec.runId);
-            this.workflows!.applyDecision(rec.runId, { stepKey: pick, reason });
-          } else {
-            // NO usable answer — the router timed out, crashed, or replied with
-            // something unparseable. That is NOT "goal met": finishing here would
-            // silently mark the run done having executed nothing. Leave the run
-            // awaiting a decision so the next tick retries, and only give up (with
-            // an honest reason) after several consecutive failures.
-            const n = (this.decisionFailures.get(rec.runId) || 0) + 1;
-            this.decisionFailures.set(rec.runId, n);
-            console.error(`Dispatcher: orchestrated run ${rec.runId} — no usable decision from the router ` +
-              `(attempt ${n}/${Dispatcher.MAX_DECISION_FAILURES}; ${out.trim() ? 'unparseable reply' : 'empty reply/timeout'})`);
-            if (n >= Dispatcher.MAX_DECISION_FAILURES) {
-              this.decisionFailures.delete(rec.runId);
-              this.workflows!.applyDecision(rec.runId, {
-                stepKey: null,
-                reason: `orchestrator brain gave no usable answer after ${n} attempts (timeout or unparseable) — run abandoned, NOT completed`
-              });
-            }
-          }
-        } catch (e) {
-          console.error(`Dispatcher: orchestrated run ${rec.runId} decision failed:`, e);
-        } finally {
-          this.decidingRuns.delete(rec.runId);
-        }
-      })();
-    }
-  }
-
-  /** The prompt the orchestrator brain answers to pick the next step of an
-   *  adaptive run: the goal, what's already been done (with results), and the
-   *  remaining candidate steps. It replies with one step key, or DONE. */
-  private orchestratorPrompt(ctx: NonNullable<ReturnType<Workflows['decisionContext']>>): string {
-    const lines: string[] = [];
-    lines.push(`You are the ORCHESTRATOR of an adaptive multi-agent workflow. Decide the single best NEXT step to run to advance the goal — or answer DONE if the goal is already met.`, '');
-    if (ctx.goal) lines.push(`GOAL: ${ctx.goal}`, '');
-    if (ctx.completed.length) {
-      lines.push(`STEPS ALREADY DONE (with their results):`);
-      for (const c of ctx.completed) {
-        const res = (c.result || '').replace(/\s+/g, ' ').slice(0, 400);
-        lines.push(`- ${c.key} [${c.status}]: ${c.title}${res ? `\n    → ${res}` : ''}`);
-      }
-      lines.push('');
-    } else {
-      lines.push(`No steps have run yet — pick the best first step.`, '');
-    }
-    lines.push(`CANDIDATE NEXT STEPS (reply with exactly one key):`);
-    for (const s of ctx.available) lines.push(`- ${s.key}: ${s.title} — ${s.description.replace(/\s+/g, ' ').slice(0, 160)}`);
-    lines.push('');
-    lines.push(
-      `IMPORTANT: producing a PLAN, ANALYSIS, STRATEGY, or SUMMARY is NOT the same as achieving the goal. ` +
-      `When the goal is to build / execute / ship / schedule something, it is met ONLY once that work has actually been carried out AND verified by a later step. ` +
-      `If any execution, integration, verification, or delivery step is still available and has not run, the goal is NOT yet met — pick the next such step instead of answering DONE.`
-    );
-    lines.push('');
-    lines.push(`Reply with ONLY the key of the next step to run, or the single uppercase word DONE if — and only if — the goal is fully achieved and verified. Do not run redundant work.`);
-    return lines.join('\n');
-  }
-
   // ── Goals (the Achiever drive loop) ─────────────────────────────────────────
 
   /**
    * Drive active Goals. For each goal whose generated work has finished
    * (quiescent), the Achiever brain takes ONE structured turn — evaluate the
    * binary success criterion, plan the next phase, or emit a phase's worth of
-   * real work — and we materialise that decision via the Goals aggregate. This is
-   * the sibling of driveWorkflows(): edge-triggered on work completing, a per-goal
+   * real work — and we materialise that decision via the Goals aggregate.
+   * Edge-triggered on work completing, a per-goal
    * re-entrancy guard prevents overlapping turns, and layered runaway guards
    * (self-heal, step budget, consecutive-failure abort) keep an autonomous loop
    * bounded, observable, and interruptible. The Judger half is event-driven
@@ -1468,7 +1309,7 @@ export class Dispatcher {
 
   /**
    * `context.dependsOn: ["<task-id>", …]` gates dispatch until every listed
-   * task is done. For gated workflow steps (P1-2), downstream steps also wait
+   * task is done. For gated steps (P1-2), downstream steps also wait
    * until the step's review→fix gate reaches `approved` or `ruled` (while the
    * gate's own review task `context.gateReviewFor === id` is allowed to run
    * immediately once the step itself finishes).

@@ -34,7 +34,7 @@
     "shotcraft": {
       "url": "/shotcraft.html",
       "label": "Shotcraft 鏡頭工坊",
-      "description": "Cinematic product videos with the video-shotcraft skill: pick shots from 124 recipe cards, then create a task, schedule, goal or workflow.",
+      "description": "Cinematic product videos with the video-shotcraft skill: pick shots from 124 recipe cards, then create a task, schedule or goal.",
       "icon": "film",
       "category": "Marketing",
       "enabled": true,

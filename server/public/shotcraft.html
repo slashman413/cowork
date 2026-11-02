@@ -9,7 +9,7 @@
     GET  /api/shotcraft              skill status, brains, aspects, lengths, BGM list
     GET  /api/shotcraft/shots        the 124 shot cards (Gallery index) + categories
     GET  /api/shotcraft/bgm/:name    bundled BGM preview
-    POST /api/shotcraft/create       brief → task | recurring task | goal | workflow
+    POST /api/shotcraft/create       brief → task | recurring task | goal
                                      ({dryRun:true} returns the brief text only)
     GET  /api/inbox?tag=video-shotcraft   "My films", refreshed from SSE /api/events
   Shot previews stream from the public Gallery (the mp4s are not in git).
@@ -204,7 +204,6 @@
           <div class="kind on" data-v="task"><span class="i">🎬</span>Task</div>
           <div class="kind" data-v="recurring"><span class="i">🔁</span>Recurring</div>
           <div class="kind" data-v="goal"><span class="i">🎯</span>Goal</div>
-          <div class="kind" data-v="workflow"><span class="i">🧩</span>Workflow</div>
         </div>
         <div class="hint" id="kind-hint"></div>
 
@@ -270,16 +269,6 @@
         <div class="box" id="box-goal" hidden>
           <div class="checks"><label><input type="checkbox" id="activate" checked><span>Activate now<small>Phases: capture → storyboard → produce → review. Done when an independent review passes. Guided modes run as Autonomous here.</small></span></label></div>
         </div>
-        <div class="box" id="box-workflow" hidden>
-          <label class="f" for="wfid">Template id</label>
-          <input type="text" id="wfid" placeholder="shotcraft-ink-press-16x9">
-          <div class="checks">
-            <label><input type="checkbox" id="runNow" checked><span>Run it now for this product too</span></label>
-            <label><input type="checkbox" id="overwrite"><span>Overwrite if the id exists</span></label>
-          </div>
-          <div class="hint">Saves these settings (mode, shots, format, music, brain) as a reusable template. Product, source, message and notes become run params, so you can re-run it for another product from the Workflows tab. A Sonnet "second look" review step runs after the film.</div>
-        </div>
-
         <div class="step">7 · Brain &amp; notes</div>
         <div class="row">
           <div><label class="f" for="brain">Brain</label><select id="brain"></select></div>
@@ -308,12 +297,11 @@
     const $$ = (s, r = document) => [...r.querySelectorAll(s)];
     const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     const LS = { theme: 'cowork-theme', last: 'shotcraft-last' };
-    const KIND_LABEL = { task: '🎬 Create task', recurring: '🔁 Schedule', goal: '🎯 Create goal', workflow: '🧩 Save workflow' };
+    const KIND_LABEL = { task: '🎬 Create task', recurring: '🔁 Schedule', goal: '🎯 Create goal' };
     const KIND_HINT = {
       task: 'One film, starting now. Best for most requests.',
       recurring: 'The same brief on a schedule, e.g. a weekly promo of a page that keeps changing.',
       goal: 'The orchestrator drives capture → storyboard → produce → review across several tasks until the film passes review.',
-      workflow: 'Save this setup as a reusable template, then run it per product.',
     };
     const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
     let info = null, cards = [], categories = {}, cat = 'all', energy = 'all', films = [];
@@ -434,7 +422,7 @@
     $$('#modes input').forEach(i => i.onchange = () => { if (!i.closest('.mode').classList.contains('off')) setMode(i.value); });
 
     function syncForm() {
-      // Recurring runs can't stop for a human; goals/workflows coerce guided → autonomous server-side.
+      // Recurring runs can't stop for a human; goals coerce guided → autonomous server-side.
       const noStops = kind === 'recurring';
       $$('.mode').forEach(el => {
         const off = noStops && (el.dataset.v === 'guided' || el.dataset.v === 'ask');
@@ -442,7 +430,7 @@
         el.classList.toggle('on', el.dataset.v === mode);
       });
       if (noStops && (mode === 'guided' || mode === 'ask')) { setMode('auto'); return; }
-      $('#kind-hint').textContent = KIND_HINT[kind] + ((kind === 'goal' || kind === 'workflow') && (mode === 'guided' || mode === 'ask') ? ' Guided modes run as Autonomous here.' : '');
+      $('#kind-hint').textContent = KIND_HINT[kind] + ((kind === 'goal') && (mode === 'guided' || mode === 'ask') ? ' Guided modes run as Autonomous here.' : '');
       const tmpl = mode === 'template', shot = mode === 'shot';
       $$('#aspect button').forEach(b => b.disabled = tmpl);
       $$('#seconds button').forEach(b => b.disabled = tmpl || shot);
@@ -452,23 +440,20 @@
       $('#aa-wrap').hidden = !(mode === 'guided' || mode === 'ask') || kind !== 'task';
       $('#box-recurring').hidden = kind !== 'recurring';
       $('#box-goal').hidden = kind !== 'goal';
-      $('#box-workflow').hidden = kind !== 'workflow';
       $('#files-wrap').style.visibility = (kind === 'task' || kind === 'recurring') ? '' : 'hidden';
       $('#days').hidden = segVal('cadence') !== 'weekly';
       const att = [...$$('#music option')].find(o => o.value === 'attached');
       if (att) att.disabled = !(kind === 'task' || kind === 'recurring');
       if (att?.disabled && $('#music').value === 'attached') $('#music').value = 'auto';
       $('#go').textContent = KIND_LABEL[kind];
-      if (kind === 'workflow' && !$('#wfid').dataset.touched) $('#wfid').value = suggestId();
       validate();
     }
     const slug = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
     const suggestId = () => ['shotcraft', mode === 'template' ? 'ink-press' : mode === 'shot' ? 'shots' : 'auto', segVal('aspect')?.replace(':', 'x'), $('#music').value === 'none' ? 'sfx' : null].filter(Boolean).join('-');
-    $('#wfid').addEventListener('input', () => { $('#wfid').dataset.touched = '1'; validate(); });
 
     function validate() {
       const ok = info?.available && $('#product').value.trim().length >= 2 && $('#message').value.trim().length >= 3 &&
-        (mode !== 'shot' || picked.length) && (kind !== 'workflow' || /^[a-z0-9][a-z0-9-]{0,80}$/.test($('#wfid').value.trim())) &&
+        (mode !== 'shot' || picked.length) &&
         (kind !== 'recurring' || segVal('cadence') !== 'weekly' || weekdays.length);
       $('#go').disabled = !ok; $('#preview-btn').disabled = !ok;
     }
@@ -511,7 +496,6 @@
         jianying: $('#jianying').checked, autoAnswer: $('#autoAnswer').checked, brain: $('#brain').value, notes: $('#notes').value.trim(),
         ...(kind === 'recurring' ? { firstNow: $('#firstNow').checked, recurrence: { type: segVal('cadence'), atTime: $('#at').value || '10:00', ...(segVal('cadence') === 'weekly' ? { weekdays } : {}) } } : {}),
         ...(kind === 'goal' ? { activate: $('#activate').checked } : {}),
-        ...(kind === 'workflow' ? { workflowId: $('#wfid').value.trim(), runNow: $('#runNow').checked, overwrite: $('#overwrite').checked } : {}),
       };
     }
     const post = (body) => api('/shotcraft/create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -535,7 +519,6 @@
         saveLast(body);
         $('#files').value = ''; $('#filelist').textContent = ''; $('#preview').hidden = true;
         if (r.kind === 'goal') setMsg(`Goal created ✓ <a href="/#goals" target="_blank">${esc(r.goal.goalId)} (${esc(r.goal.status)})</a>`, 'ok');
-        else if (r.kind === 'workflow') setMsg(`Workflow <a href="/#workflows" target="_blank">${esc(r.workflow.id)}</a> saved ✓${r.run ? ` · run started (${r.run.tasks?.length || 0} tasks)` : ''}`, 'ok');
         else setMsg(r.kind === 'recurring' ? `Scheduled ✓ First film ${r.task.scheduledAt ? new Date(r.task.scheduledAt).toLocaleString() : 'now'}.` : 'Queued ✓', 'ok');
         await loadFilms();
         if (r.task || r.run) { showTab('films'); r.task && document.getElementById(`film-${r.task.id}`)?.scrollIntoView({ block: 'start' }); }
@@ -598,7 +581,7 @@
       try { films = await api(`/inbox?tag=${encodeURIComponent(info?.tag || 'video-shotcraft')}&limit=50`); }
       catch (e) { $('#films').innerHTML = `<div class="banner">${esc(e.message)}</div>`; return; }
       $('#nfilms').textContent = films.length ? `(${films.length})` : '';
-      if (!films.length) { $('#films').innerHTML = '<div class="empty">No films yet. Fill in the brief and create one.<br><br>Goal and workflow tasks show up on the dashboard.</div>'; return; }
+      if (!films.length) { $('#films').innerHTML = '<div class="empty">No films yet. Fill in the brief and create one.<br><br>Goal tasks show up on the dashboard.</div>'; return; }
       const playing = new Set($$('#films video').filter(v => !v.paused).map(v => v.dataset.task));
       const out = await Promise.all(films.map(async (t) => {
         const [cls, label] = statusOf(t);

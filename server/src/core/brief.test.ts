@@ -3,19 +3,15 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { fileURLToPath } from 'url';
-import { v4 as uuidv4 } from 'uuid';
 import { Dispatcher } from './dispatcher.js';
 import { Store } from './store.js';
 import { EventBus } from './events.js';
-import { Workflows } from './workflows.js';
 import { parseBrief, renderBriefSections } from './brief.js';
-import type { Config, Task, WorkflowDef } from '../types.js';
+import type { Config } from '../types.js';
 
 /**
  * P0-3 brief contract: context.acceptance / verify / timeboxMin / scope survive
- * a store round-trip, render as their own prompt sections, flow through workflow
- * expansion, and the shipped templates still validate.
+ * a store round-trip and render as their own prompt sections.
  */
 
 function harness() {
@@ -23,7 +19,7 @@ function harness() {
   const paths = {
     inbox: path.join(root, 'inbox'), artifacts: path.join(root, 'artifacts'), inputs: path.join(root, 'inputs'),
     status: path.join(root, 'status'), decisions: path.join(root, 'decisions'),
-    workflows: path.join(root, 'workflows'), agencyAgents: path.join(root, 'agency-agents'),
+    agencyAgents: path.join(root, 'agency-agents'),
   };
   for (const p of Object.values(paths)) fs.mkdirSync(p, { recursive: true });
   const config = {
@@ -200,82 +196,3 @@ test('orchestrator-created task without acceptance is logged as a brief-missing-
   assert.equal(lessons[0].task, bare.id);
 });
 
-// ── Workflows ────────────────────────────────────────────────────────────────
-
-class FakeStore {
-  tasks: Task[] = [];
-  createTask(params: Omit<Task, 'id' | 'status' | 'createdAt'>): Task {
-    const task = { ...params, id: uuidv4(), status: 'pending', createdAt: new Date().toISOString() } as Task;
-    this.tasks.push(task);
-    return task;
-  }
-  listTasks(): Task[] { return this.tasks; }
-  getTask(id: string): Task | null { return this.tasks.find(t => t.id === id) || null; }
-}
-
-function makeWorkflows(dir: string) {
-  const store = new FakeStore();
-  return { wf: new Workflows({ paths: { workflows: dir } } as unknown as Config, store as any), store };
-}
-
-function tmpTemplates(templates: Record<string, WorkflowDef>): string {
-  const dir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'wf-brief-')), 'workflows');
-  fs.mkdirSync(dir, { recursive: true });
-  for (const [id, def] of Object.entries(templates)) fs.writeFileSync(path.join(dir, `${id}.json`), JSON.stringify(def));
-  return dir;
-}
-
-test('workflow DAG expansion copies the step brief into each task context (params filled)', () => {
-  const dir = tmpTemplates({
-    w: { id: 'w', params: ['topic'], steps: [
-      { key: 'a', title: 'A', acceptance: ['{{topic}}.md exists'], verify: ['test -s {{topic}}.md'], timeboxMin: 15, scope: { forbid: ['prod'] } },
-      { key: 'b', title: 'B', dependsOn: ['a'] }
-    ] } as WorkflowDef
-  });
-  const { wf } = makeWorkflows(dir);
-  const run = wf.run('w', { topic: 'cats' });
-  const [a, b] = run.tasks!;
-  assert.deepEqual(a.context?.acceptance, ['cats.md exists']);
-  assert.deepEqual(a.context?.verify, ['test -s cats.md']);
-  assert.equal(a.context?.timeboxMin, 15);
-  assert.deepEqual(a.context?.scope, { forbid: ['prod'] });
-  assert.equal(b.context?.acceptance, undefined);
-  // Dry run shows the brief too.
-  const dry = wf.run('w', { topic: 'cats' }, { dryRun: true });
-  assert.deepEqual(dry.steps.find((s: any) => s.key === 'a').acceptance, ['cats.md exists']);
-});
-
-test('orchestrated applyDecision carries the step brief', () => {
-  const dir = tmpTemplates({
-    o: { id: 'o', mode: 'orchestrated', goal: 'g', steps: [{ key: 's', title: 'S', acceptance: ['done.md'], verify: ['test -s done.md'] }] } as WorkflowDef
-  });
-  const { wf } = makeWorkflows(dir);
-  const { runId } = wf.run('o', {});
-  const task = wf.applyDecision(runId, { stepKey: 's' })!;
-  assert.deepEqual(task.context?.acceptance, ['done.md']);
-  assert.deepEqual(task.context?.verify, ['test -s done.md']);
-});
-
-test('workflow validation rejects a malformed step brief', () => {
-  const dir = tmpTemplates({ bad: { id: 'bad', steps: [{ key: 's', acceptance: 'ok', timeboxMin: 'soon' }] } as any });
-  const { wf } = makeWorkflows(dir);
-  const invalid = wf.listInvalid();
-  assert.equal(invalid.length, 1);
-  assert.match(invalid[0].errors.join(';'), /step "s" timeboxMin/);
-  assert.equal(parseBrief({ acceptance: 'ok' }).errors.length, 0);   // a lone string alone is fine
-});
-
-test('shipped templates: all 16 load, none invalid, the 5 backfilled carry acceptance + verify on every step', () => {
-  const dir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../workflows');
-  const { wf } = makeWorkflows(dir);
-  assert.deepEqual(wf.listInvalid(), []);
-  assert.equal(wf.list().length, 16);
-  for (const id of ['build-and-ship', 'content-pipeline', 'plan-execution', 'daily-fantasy-vlog', 'product-spec']) {
-    const def = wf.get(id)!;
-    assert.ok(def, `${id} missing`);
-    for (const s of def.steps) {
-      assert.ok(Array.isArray(s.acceptance) && s.acceptance.length >= 2 && s.acceptance.length <= 5, `${id}/${s.key} acceptance`);
-      assert.ok(Array.isArray(s.verify) && s.verify.length >= 1, `${id}/${s.key} verify`);
-    }
-  }
-});

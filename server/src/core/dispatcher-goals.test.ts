@@ -38,7 +38,7 @@ function harness(decisions: (AchieverDecision | null)[]) {
   } as unknown as Config;
   const store = new FakeStore();
   const goals = new Goals(config, store as any);
-  const dispatcher = new Dispatcher(config, store as any, {} as any, undefined, goals);
+  const dispatcher = new Dispatcher(config, store as any, {} as any, goals);
   // Stub the brain call: return the next scripted decision as a fenced JSON block
   // (so it also exercises parseAchieverDecision), or empty for a "no decision".
   const queue = [...decisions];

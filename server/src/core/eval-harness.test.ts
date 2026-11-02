@@ -9,8 +9,7 @@ import {
   blindPairs, buildJudgePrompt, parseJudgeScores, unblind, summarize, diffSnapshots, normalizeStatus, renderReport,
   firstRunnableBrain, brainArgv, sandboxClean, type JudgedTask, type SandboxCheck,
 } from './eval-harness.js';
-import { Workflows } from './workflows.js';
-import type { Config, Task, BrainConfig } from '../types.js';
+import type { Task, BrainConfig } from '../types.js';
 
 function task(id: string, over: Partial<Task> = {}, ctx: Record<string, any> = {}): Task {
   return {
@@ -197,27 +196,6 @@ test('report carries delta, per-task rows, the n caveat, sandbox verdict and the
   assert.match(md, /Variant B\*\* .*CHANGES OBSERVED/);
   assert.match(md, /BLOCKED by the guard: 1/);
   assert.match(md, /eval-prompt-change run-9 Δ\(A−B\)=\+5 n=1/);
-});
-
-test('workflows/eval-prompt-change.json validates and pins every step to the eval script brain', () => {
-  const repo = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', '..', '..');
-  const cfg = { paths: { workflows: path.join(repo, 'workflows') } } as unknown as Config;
-  const wf = new Workflows(cfg, {} as any);
-  const def = JSON.parse(fs.readFileSync(path.join(repo, 'workflows', 'eval-prompt-change.json'), 'utf-8'));
-  assert.deepEqual(wf.validate(def), []);
-  assert.deepEqual(def.params, ['family', 'variantA', 'variantB']);
-  assert.deepEqual(def.steps.map((s: any) => s.key), ['select', 'replay-a', 'replay-b', 'judge']);
-  for (const s of def.steps) {
-    assert.equal(s.brain, 'local-script-eval-harness', s.key);
-    const m = String(s.description).match(/^EVAL_ARGS:\s*(\{.*\})\s*$/m);
-    assert.ok(m, `${s.key} has an EVAL_ARGS line`);
-    JSON.parse(m![1].replace(/\{\{\w+\}\}/g, 'x'));
-  }
-  for (const k of ['replay-a', 'replay-b']) {
-    const s = def.steps.find((x: any) => x.key === k);
-    assert.ok(s.scope.forbid.length >= 5, `${k} carries a hard scope.forbid`);
-    assert.match(s.description, /SANDBOX REPLAY — do not perform outward actions/);
-  }
 });
 
 test('eval judge prompt + rubric v2 carry the three judging rules', async () => {

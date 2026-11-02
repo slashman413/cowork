@@ -19,7 +19,7 @@
 (function () {
   const SECTION_META = {
     server: ['server', 'Server', 'Port, TLS, auth and CORS for the hub itself.'],
-    paths: ['folder-tree', 'Paths', 'Where tasks, artifacts, inputs, workflows and goals live on disk.'],
+    paths: ['folder-tree', 'Paths', 'Where tasks, artifacts, inputs and goals live on disk.'],
     platforms: ['layers', 'Platforms', 'Agent platforms whose skills/agents are imported into the roster.'],
     services: ['layout-grid', 'Services', 'Self-hosted web services shown on the Portal page.'],
     obsidian: ['notebook', 'Obsidian', 'Vault integration.'],

@@ -21,7 +21,7 @@ const L = (over: Partial<Lesson> & { min?: number }): Lesson => {
 };
 
 test('the remedy menu order is structure first, prose note last', () => {
-  assert.deepEqual([...REMEDY_ORDER], ['router-rule', 'brain-cooldown', 'env-requires', 'verifier-pattern', 'workflow-gate', 'acceptance-criterion', 'conventions-note']);
+  assert.deepEqual([...REMEDY_ORDER], ['router-rule', 'brain-cooldown', 'env-requires', 'verifier-pattern', 'acceptance-criterion', 'conventions-note']);
 });
 
 test('normalizeReason collapses reset times, ids and numbers so recurrences group', () => {
@@ -69,14 +69,14 @@ test('brain-specific failure → router rule first; menu stays in REMEDY_ORDER',
   for (const r of menu.filter(r => r.id !== 'conventions-note')) assert.ok(r.caught.length >= MIN_CITED, `${r.id} cites ≥2 events`);
 });
 
-test('LLM-judged quality failures → verifier failPattern before workflow gate', () => {
+test('LLM-judged quality failures → verifier failPattern before prose note', () => {
   const evs = [
     L({ reason: 'verifier LLM: placeholder output, no code changes', brainFamily: 'a' }),
     L({ reason: 'verifier LLM: placeholder output, no code changes', brainFamily: 'b' }),
     L({ reason: 'verifier LLM: placeholder output, no code changes', brainFamily: 'c' }),
   ];
   const menu = remedyMenu(groupLessons(evs)[0]);
-  assert.deepEqual(menu.map(r => r.id), ['verifier-pattern', 'workflow-gate', 'conventions-note']);
+  assert.deepEqual(menu.map(r => r.id), ['verifier-pattern', 'conventions-note']);
   assert.match(menu[0].check, /placeholder\\W\+output/);
   assert.equal(menu[0].caught.length, 3);
 });

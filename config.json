@@ -13,7 +13,6 @@
     "inbox": "./inbox",
     "status": "./.status",
     "decisions": "./decisions",
-    "workflows": "./workflows",
     "artifacts": "./artifacts",
     "inputs": "./inputs"
   },
@@ -121,18 +120,12 @@
         "ops-change": "shadow"
       }
     },
-    "arena": {
-      "_comment": "PS-3 arena workflow primitive for one-way-door deliverables. Spawns N parallel candidates across distinct model families, cross-judged and synthesized. Default false until blind A/B eval passes.",
-      "enabled": false
-    },
     "staleClaimMs": 600000,
     "hardClaimMs": 5400000,
-    "maxWorkflowSteps": 12,
     "defaultChain": [
       "local-hermes-qwen3.8-27b",
       "local-cc-opus-5-5"
     ],
-    "divisionChains": {},
     "agents": {
       "orchestrator": {
         "description": "Decompose a CEO idea into role-tagged subtasks and dispatch them",
@@ -191,7 +184,7 @@
         ]
       },
       "local-script-eval-harness": {
-        "description": "Eval harness (P2-1) — runs the steps of the eval-prompt-change workflow only. Do not route other tasks here.",
+        "description": "Eval harness (P2-1) — runs the eval-prompt-change procedure only. Do not route other tasks here.",
         "location": "local",
         "exec": "script",
         "command": [

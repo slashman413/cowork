@@ -4,7 +4,6 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { Dispatcher } from './dispatcher.js';
-import { Workflows } from './workflows.js';
 import { assertTier, brainFamily, mergeTierChain, reviewChain, taskTier } from './tiers.js';
 import type { Config, Task } from '../types.js';
 
@@ -116,20 +115,4 @@ test('helpers: taskTier / assertTier / mergeTierChain / brainFamily', () => {
   assert.equal(brainFamily(BRAINS['local-agy-claude-opus-5-5-medium']), 'claude');
   assert.equal(brainFamily(BRAINS['local-dsh-qwen3-8-27b']), 'qwen');
   assert.equal(brainFamily(BRAINS['local-agy-gemini-4-argon-medium']), 'gemini');
-});
-
-test('a workflow step tier is copied into the task context and validated', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cowork-tier-wf-'));
-  const dir = path.join(root, 'workflows');
-  fs.mkdirSync(dir);
-  fs.writeFileSync(path.join(dir, 'tiered.json'), JSON.stringify({
-    id: 'tiered', name: 'tiered', steps: [{ key: 'a', title: 'A', tier: 'mechanical' }, { key: 'b', title: 'B', dependsOn: ['a'] }]
-  }));
-  const created: any[] = [];
-  const store = { createTask: (t: any) => { const task = { ...t, id: `id-${created.length}` }; created.push(task); return task; } };
-  const wf = new Workflows({ paths: { workflows: dir, workflowRuns: path.join(root, 'runs') } } as unknown as Config, store as any);
-  wf.run('tiered');
-  assert.equal(created[0].context.tier, 'mechanical');
-  assert.equal(created[1].context.tier, undefined, 'untagged step stays untagged');
-  assert.ok(wf.validate({ id: 'x', steps: [{ key: 'a', tier: 'fast' }] } as any).some(e => /tier/.test(e)));
 });

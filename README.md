@@ -3,7 +3,7 @@
 **A self-hosted MCP server + web dashboard that lets different AI coding agents share one task
 queue.** Dispatch a task from any of them (or from the UI); a dispatcher routes it to a named
 *brain* (model × CLI × machine), runs it, verifies the result, and falls back to the next brain
-on rate limits. Workflows, artifacts, remote machines and cost/usage meters are built in.
+on rate limits. Artifacts, remote machines and cost/usage meters are built in.
 
 - **Mixed-vendor agents, one inbox:** Claude Code, Codex, Gemini CLI / Antigravity, Hermes, Ollama.
 - **Brain routing with fallback chains:** route by role, pin by task, fail over on quota errors.
@@ -14,7 +14,8 @@ on rate limits. Workflows, artifacts, remote machines and cost/usage meters are 
 
 Jump to: [Quick Start](#quick-start) · [Connecting agents](#connecting-ai-agents) ·
 [Dispatcher](#task-execution--the-dispatcher) · [Brains](#brains--named-execution-identities-model--platform--location) ·
-[Workflows](#workflows--declarative-pipelines-two-execution-modes) · [MCP tools](#mcp-tools-reference)
+[Brains](#brains--named-execution-identities-model--platform--location) ·
+[MCP tools](#mcp-tools-reference)
 
 ## Screenshots
 
@@ -24,8 +25,7 @@ role → model chains, and a real-time activity feed.
 
 ![Cowork dashboard — metrics, counters, dispatcher chains, and live activity](docs/images/cowork-dashboard.png)
 
-The [Workflows](#workflows--declarative-pipelines-two-execution-modes),
-[Task Inbox](#task-execution--the-dispatcher), [Brains](#brains--named-execution-identities-model--platform--location),
+The [Task Inbox](#task-execution--the-dispatcher), [Brains](#brains--named-execution-identities-model--platform--location),
 and [Connections](#wiring-a-remote-brain-machine) views are
 shown in context throughout this README.
 

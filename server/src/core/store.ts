@@ -114,8 +114,7 @@ export class Store {
       this.config.paths.artifacts,
       this.config.paths.inputs,
       this.config.paths.status,
-      this.config.paths.decisions,
-      this.config.paths.workflows
+      this.config.paths.decisions
     ];
 
     // Skip unset paths — a config predating a newer path key would otherwise
