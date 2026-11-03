@@ -244,7 +244,9 @@ test('recurring recipe run: every scheduled run gets the recipe files, folders k
     const [first] = store.releaseDueScheduled();
     assert.deepEqual(first.context?.inputFiles, ['runner.py', 'src/pipeline.py']);
     assert.deepEqual(store.listInputs(first.id), ['runner.py', 'src/pipeline.py']);
-    // the next cycle too, and the parent keeps its own copy
+    // the next cycle too, and the parent keeps its own copy (the first run has
+    // finished: the flood guard never spawns a cycle while one is still queued)
+    const f = store.getTask(first.id)!; f.status = 'done'; store.saveTask(f);
     const p = store.getTask(parent.id)!; p.scheduledAt = new Date(Date.now() - 1000).toISOString(); store.saveTask(p);
     const [second] = store.releaseDueScheduled();
     assert.notEqual(second.id, first.id);

@@ -38,6 +38,12 @@ export type CompletionDecision =
   | { action: 'defer-background'; note?: string; pollMs?: number };
 export type CompletionGuard = (task: Task, result?: string) => Promise<CompletionDecision>;
 
+/** Statuses in which a recurring scheduler's run-child is still in flight
+ *  (queued, running, waiting on a person, or deferred on background work). */
+const OUTSTANDING_RUN_STATUSES = new Set(['pending', 'claimed', 'in-progress', 'wait-input', 'scheduled']);
+/** Default for orchestration.scheduler.maxPendingBacklog (0 disables the hold). */
+const DEFAULT_MAX_PENDING_BACKLOG = 30;
+
 /**
  * Canonical "did this task fail?" predicate — the SINGLE source of truth for the
  * failed/red category, used by both the dashboard counter ({@link Store.getDashboard})
@@ -724,7 +730,19 @@ export class Store {
    */
   public releaseDueScheduled(now: number = Date.now()): Task[] {
     const released: Task[] = [];
-    for (const task of this.listTasks({ status: 'scheduled' })) {
+    // Flood guard state (see schedulerGuard): which schedulers still have a run in
+    // flight, and how deep the runnable backlog is. Built from ONE listTasks pass
+    // (mtime-cached) and kept current as this tick spawns children.
+    const guard = this.schedulerGuardConfig();
+    const all = this.listTasks();
+    const inFlight = new Map<string, Task>();   // scheduler id → its outstanding run-child
+    let backlog = 0;                             // pending tasks waiting for a brain
+    for (const t of all) {
+      if (t.status === 'pending') backlog++;
+      const pid = t.context?.scheduledParentId;
+      if (pid && OUTSTANDING_RUN_STATUSES.has(t.status) && !inFlight.has(pid)) inFlight.set(pid, t);
+    }
+    for (const task of all.filter(t => t.status === 'scheduled')) {
       const at = Date.parse(String(task.scheduledAt ?? ''));
       if (Number.isFinite(at) && at > now) continue;   // not due yet
 
@@ -741,7 +759,46 @@ export class Store {
         const anchor = task.scheduledAt ? new Date(task.scheduledAt) : new Date(now);
         const next = nextRunAt(recurrence, anchor, new Date(now));
         if (next) {
+          // FLOOD GUARD 1 — coalesce. When brains are saturated or rate-limited,
+          // the previous cycle's run-child can still be queued when the next slot
+          // fires. Spawning another just stacks identical pending copies that all
+          // run later, back to back, on the same scarce brains. While a run is
+          // still in flight it stands in for this slot: skip the spawn and re-arm
+          // to the next slot. Opt out per task with context.allowOverlappingRuns.
+          const outstanding = inFlight.get(task.id);
+          if (guard.coalesce && outstanding && task.context?.allowOverlappingRuns !== true) {
+            task.context = {
+              ...(task.context || {}),
+              skippedRuns: (Number(task.context?.skippedRuns) || 0) + 1,
+              lastSkippedAt: new Date(now).toISOString(),
+              lastSkipReason: `previous run ${outstanding.id} still ${outstanding.status}`,
+            };
+            task.scheduledAt = next.toISOString();
+            this.saveTask(task);
+            this.eventBus.emitTaskCreated(task);
+            console.warn(`Store: recurring task ${task.id} skipped this slot: its previous run ${outstanding.id} is still ${outstanding.status}. Next slot is ${task.scheduledAt}. Task: ${task.title}`);
+            continue;
+          }
+          // FLOOD GUARD 2 — backlog pressure. When the runnable queue is already
+          // deep (brains can't keep up), HOLD the scheduler due instead of adding
+          // to the pile: it stays `scheduled` with its past scheduledAt and is
+          // re-checked every tick, spawning ONE run as soon as the backlog drains
+          // (nextRunAt then skips any slots missed meanwhile, so no catch-up burst).
+          if (guard.maxBacklog > 0 && backlog >= guard.maxBacklog) {
+            if (task.context?.heldForBacklog !== true) {
+              task.context = { ...(task.context || {}), heldForBacklog: true, heldSince: new Date(now).toISOString() };
+              this.saveTask(task);
+              console.warn(`Store: recurring task ${task.id} is due but on hold: ${backlog} tasks are already pending (limit ${guard.maxBacklog}). It will start once the queue drains. Task: ${task.title}`);
+            }
+            continue;
+          }
+          if (task.context?.heldForBacklog) {
+            const { heldForBacklog: _h, heldSince: _s, ...rest } = task.context;
+            task.context = rest;
+          }
           const child = this.spawnScheduledRun(task);
+          inFlight.set(task.id, child);
+          backlog++;
           task.scheduledAt = next.toISOString();
           this.saveTask(task);
           this.eventBus.emitTaskCreated(task);   // nudge dashboards: parent re-armed
@@ -768,6 +825,70 @@ export class Store {
       released.push(task);
     }
     return released;
+  }
+
+  /** Resolved `orchestration.scheduler` flood-guard settings (see SchedulerConfig). */
+  private schedulerGuardConfig(): { coalesce: boolean; maxBacklog: number } {
+    const c = this.config.orchestration?.scheduler || {};
+    const max = Number(c.maxPendingBacklog);
+    return {
+      coalesce: c.coalesceRuns !== false,
+      maxBacklog: Number.isFinite(max) && max >= 0 ? Math.floor(max) : DEFAULT_MAX_PENDING_BACKLOG,
+    };
+  }
+
+  /**
+   * Collapse DUPLICATE queued runs of the same recurring scheduler, which pile up
+   * when cycles fire faster than the brains drain them (before the coalesce
+   * guard existed, or via a manual "Run now"/re-run). Per scheduler, only the
+   * `pending` copies that are NOT running are touched: when a sibling is
+   * already in flight (claimed / in-progress / wait-input / deferred) every
+   * pending copy is redundant; otherwise the NEWEST pending copy is kept (the
+   * freshest cycle; date-sensitive briefs want "today"). The rest are closed
+   * `done` with a `SUPERSEDED:` result, which isClosedWithoutRunning badges as
+   * closed-unrun. Tasks with context.allowOverlappingRuns are left alone.
+   * Returns the closed tasks.
+   */
+  public collapseDuplicateScheduledRuns(): Task[] {
+    if (!this.schedulerGuardConfig().coalesce) return [];
+    const groups = new Map<string, Task[]>();
+    for (const t of this.listTasks()) {
+      const pid = t.context?.scheduledParentId;
+      if (!pid || !OUTSTANDING_RUN_STATUSES.has(t.status) || t.context?.allowOverlappingRuns === true) continue;
+      (groups.get(pid) || groups.set(pid, []).get(pid)!).push(t);
+    }
+    const closed: Task[] = [];
+    for (const [pid, runs] of groups) {
+      if (runs.length < 2) continue;
+      const queued = runs.filter(t => t.status === 'pending' && !t.context?.dispatched);
+      const active = runs.filter(t => !queued.includes(t));
+      // listTasks is newest-first, so queued[0] is the newest pending copy.
+      const keeper = active[0] || queued[0];
+      for (const dup of queued) {
+        if (dup === keeper) continue;
+        dup.status = 'done';
+        dup.completedAt = new Date().toISOString();
+        dup.result = `SUPERSEDED: duplicate queued run of recurring task ${pid}. Run ${keeper.id} (${keeper.status}) covers this cycle. Closed without running so the backlog doesn't flood the brains.`;
+        dup.context = { ...(dup.context || {}), supersededBy: keeper.id };
+        this.saveTask(dup);
+        this.eventBus.emitTaskCompleted(dup);
+        closed.push(dup);
+      }
+    }
+    return closed;
+  }
+
+  /**
+   * True when a run-child of a recurring scheduler is stale: a NEWER run of the
+   * same scheduler exists (in flight or finished). Re-running the old cycle
+   * would duplicate work the newer cycle already covers.
+   */
+  public isSupersededScheduledRun(task: Task): boolean {
+    const pid = task.context?.scheduledParentId;
+    if (!pid || task.context?.allowOverlappingRuns === true) return false;
+    const mine = Date.parse(task.createdAt);
+    return this.listTasks().some(t => t.id !== task.id && t.context?.scheduledParentId === pid
+      && Date.parse(t.createdAt) > mine);
   }
 
   /**

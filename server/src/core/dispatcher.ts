@@ -387,6 +387,15 @@ export class Dispatcher {
         ? now >= resetAt + graceMs
         : (t.completedAt ? now >= Date.parse(t.completedAt) + fallbackMs : false);
       if (!due) continue;
+      // A failed run of a recurring task is stale once a NEWER cycle has spawned:
+      // re-running it would duplicate that cycle's work on the same scarce
+      // brains. Disarm it once (so it isn't re-checked every tick) instead.
+      if (this.store.isSupersededScheduledRun(t)) {
+        t.context = { ...ctx, autoRerunOnReset: false, autoRerunSkipped: 'superseded by a newer run of its recurring task' };
+        this.store.saveTask(t);
+        console.log(`Dispatcher: not re-running rate-limited task ${t.id}: a newer run of its recurring task already exists. Task: ${t.title}`);
+        continue;
+      }
       try {
         const re = this.store.rerunTask(t.id, undefined, { auto: true });
         if (re) console.log(`Dispatcher: auto re-ran rate-limited task ${t.id} (#${re.context?.autoRerunCount}/${maxAttempts}) — usage window reset, back to pending — ${t.title}`);
@@ -519,6 +528,14 @@ export class Dispatcher {
         console.log(`Dispatcher: scheduled task ${t.id} is due (${t.scheduledAt}) — released to ${t.status} — ${t.title}`);
       }
     } catch (e) { console.error('Dispatcher: releaseDueScheduled failed this tick:', e); }
+
+    // Flood guard: close duplicate queued runs of the same recurring task (only
+    // the newest queued copy, or the one already in flight, survives).
+    try {
+      for (const t of this.store.collapseDuplicateScheduledRuns()) {
+        console.log(`Dispatcher: closed duplicate scheduled run ${t.id} (superseded by ${t.context?.supersededBy}). Task: ${t.title}`);
+      }
+    } catch (e) { console.error('Dispatcher: collapseDuplicateScheduledRuns failed this tick:', e); }
 
     // Rescue tasks orphaned by a crashed/exited agent (runs every tick, cheap).
     try { this.reclaimStaleClaims(); }

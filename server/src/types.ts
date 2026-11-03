@@ -398,6 +398,9 @@ export interface OrchestrationConfig {
    *  re-queued at the reset without anyone ticking the card's toggle (which now
    *  only opts a task OUT). Set `enabled: false` to restore the old opt-in. */
   autoRerunRateLimited?: AutoRerunRateLimitedConfig;
+  /** Recurring-task flood guard: stops schedulers from piling duplicate runs
+   *  into the queue when brains can't keep up. Both guards default ON. */
+  scheduler?: SchedulerConfig;
   /** Role → brain tiers (P1-4): mechanical / standard / judgment brain lists.
    *  A task with context.tier (and no pinned brain / agentChains override) runs
    *  on the tier list followed by its normal chain. `review` is resolved at
@@ -463,6 +466,20 @@ export interface SharpenerConfig {
   brain?: string;
   /** Timeout in ms. Default 60000. */
   timeoutMs?: number;
+}
+
+/** Config for {@link OrchestrationConfig.scheduler}: the recurring-task flood guard. */
+export interface SchedulerConfig {
+  /** Coalesce: a recurring task never has more than ONE run in flight. When a
+   *  slot fires while the previous run is still pending/running/waiting, the slot
+   *  is skipped (counted on the parent as context.skippedRuns) and duplicates
+   *  already queued are closed as SUPERSEDED. Per-task opt-out:
+   *  context.allowOverlappingRuns = true. Default true. */
+  coalesceRuns?: boolean;
+  /** Backlog pressure: when at least this many tasks are already `pending`, due
+   *  recurring tasks are HELD (not dropped) and spawn one run as soon as the
+   *  queue drains below the limit. 0 disables. Default 30. */
+  maxPendingBacklog?: number;
 }
 
 /** Config for {@link OrchestrationConfig.autoRerunRateLimited}. */
