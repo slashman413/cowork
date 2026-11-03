@@ -35,6 +35,7 @@ import { OUTPUTS_SUBDIR } from './core/artifact-lint.js';
 import { sharedIntegrations, defaultAuditTargets, defaultWrapBrain } from './core/integrations.js';
 import { auditPath, mergeReports } from './core/skill-auditor.js';
 import { AUTH_COOKIE, KeylessLog, keyMatches, readCookie, resolveApiKey } from './core/auth.js';
+import { ClientGuard } from './core/client-guard.js';
 
 async function main() {
   const config = loadConfig();
@@ -69,9 +70,46 @@ async function main() {
   usagePoller.start();
 
   const app = express();
+  // Client denylist pre-check (IP + headers) ahead of body parsing, so a blocked
+  // client gets 403 even for a malformed body. The /mcp body check runs below.
+  const clientGuard = new ClientGuard(config.server.blockedClients, () => store.getActiveAgents());
+  const guardSeen = new Map<string, number>();
+  const logGuardBlock = (reason: string, req: express.Request) => {
+    const key = `${req.ip}|${reason}`;
+    if (Date.now() - (guardSeen.get(key) || 0) < 10 * 60_000) return;   // one line per caller+reason per 10 min
+    if (guardSeen.size > 1000) guardSeen.clear();
+    guardSeen.set(key, Date.now());
+    console.warn(`client-guard: rejected ${req.method} ${req.originalUrl.split('?')[0]} from ${req.ip} (${reason})`);
+  };
+  if (clientGuard.active) {
+    app.use((req, res, next) => {
+      const v = clientGuard.check({ ip: req.ip, socketIp: req.socket?.remoteAddress, headers: req.headers as Record<string, unknown>, path: '' });
+      if (!v.blocked) return next();
+      logGuardBlock(v.reason || 'blocked', req);
+      res.status(403).json({ error: 'forbidden: client blocked by server policy' });
+    });
+  }
   // gzip JSON + static assets; SSE (/api/events) and /mcp stay unbuffered. See core/compression.ts.
   app.use(createCompression());
   app.use(express.json());
+
+  // Client denylist (server.blockedClients): rejects a named client (by source IP
+  // or declared identity) on every path with 403, independent of the API key —
+  // all brain clients share one key, so the key can't single one out. Its brains
+  // are disabled so the dispatcher stops routing tasks there. See core/client-guard.ts.
+  if (clientGuard.active) {
+    const enforceBrains = () => {
+      const brains = config.orchestration.brains || {};
+      const off = clientGuard.disableBlockedBrains(brains);
+      if (off.length) console.warn(`client-guard: disabled blocked brain(s): ${off.join(', ')}`);
+    };
+    enforceBrains();
+    setInterval(enforceBrains, 60_000).unref();
+    app.use(clientGuard.middleware(
+      () => clientGuard.blockedAgentIds(config.orchestration.brains || {}), logGuardBlock));
+    console.log(`Client guard: blocking ips=[${(config.server.blockedClients?.ips || []).join(', ')}] ` +
+      `names=[${(config.server.blockedClients?.names || []).join(', ')}]`);
+  }
 
   // Host allowlist (anti DNS-rebinding): a page on any site can re-point its own
   // hostname at 127.0.0.1 and then talk to us same-origin. Enforced when bound to

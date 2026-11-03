@@ -145,6 +145,7 @@ Edit `~/.cowork/config.json` to match your environment:
 | `server.host` | `0.0.0.0` | Bind address (`127.0.0.1` for local-only) |
 | `server.apiKey` | `null` | API key for /api and /mcp. When null and `host` is not loopback, a key is generated into `api-key` beside the config and printed once |
 | `server.allowUnauthenticated` | `false` | Serve a non-loopback host with no key (also `COWORK_ALLOW_NO_AUTH=1`). Only for a trusted, firewalled network |
+| `server.blockedClients` | — | Client denylist enforced regardless of the API key: `{ips: [...], names: [...]}`. A matching source IP gets 403 on every path; a `names` substring (case-insensitive) in the User-Agent / `X-Cowork-Client` header, MCP `clientInfo.name`, or tool-call identity args (`agent_name`, `agent_id`, `capabilities`, `brains[].id`) gets 403 on `/api`/`/mcp`. Matching brains are disabled so tasks stop routing to them. See `server/src/core/client-guard.ts` |
 | `paths.agencyAgents` | `./agency-agents` | Path to the agency-agents repo |
 | `platforms.*.enabled` | `true` | Enable/disable individual platforms |
 | `platforms.*.agentsDir` | varies | Where platform-specific agents live on disk |

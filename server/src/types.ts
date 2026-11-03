@@ -505,6 +505,10 @@ export interface Config {
     /** Opt out of the generated key when host is not loopback and apiKey is
      *  null: serve /api and /mcp open on the network. Default false. */
     allowUnauthenticated?: boolean;
+    /** Client denylist enforced regardless of the API key (core/client-guard.ts):
+     *  source IPs, and case-insensitive name substrings matched against the
+     *  caller's declared identity (User-Agent, MCP clientInfo, agent/brain ids). */
+    blockedClients?: { ips?: string[]; names?: string[] };
     corsOrigin: string;
     /** Optional TLS. When both files exist the server binds https:// instead of
      *  http://. Browsers only grant clipboard (and other secure-context) access
