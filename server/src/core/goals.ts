@@ -3,7 +3,7 @@ import path from 'path';
 import { globSync } from 'glob';
 import { v4 as uuidv4 } from 'uuid';
 import type { Config, GoalRecord, GoalPhase, AchieverDecision, GoalTemplate, Task } from '../types.js';
-import { GOAL_TEMPLATES } from './goal-templates.js';
+import { GOAL_TEMPLATES, withLoopDriver } from './goal-templates.js';
 import { appendGoalDecision, goalTrailPath, readGoalTrail, taskTrailRows, trailLine, type GoalDecisionRow } from './goal-trail.js';
 import { brainFamily, reviewChain } from './tiers.js';
 
@@ -146,7 +146,7 @@ export class Goals {
    * drift between the UI and the programmatic surfaces the way it did while the
    * list lived only inside `public/js/app.js`.
    */
-  templates(): GoalTemplate[] { return GOAL_TEMPLATES; }
+  templates(): GoalTemplate[] { return GOAL_TEMPLATES.map(withLoopDriver); }
 
   // ── Authoring ────────────────────────────────────────────────────────────
 

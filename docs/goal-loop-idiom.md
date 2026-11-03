@@ -68,18 +68,40 @@ The criterion flips true the moment a concrete artifact **exists**. Short, cheap
 default budget (24) is fine. The loop is event-driven: one phase emitted → audited → next.
 
 > **`/goal`** *Ship a new single-page web tool*
-> **Success (Yes/No):** Is the tool live on GitHub Pages with a working index.html, og.png, and README?
-> **Phases:** Scope & check competitors → Build the tool → Add og.png/README/footer → Deploy & verify it loads
+> **Success (Yes/No):** Is the tool merged on its local Forgejo main and live on GitHub Pages with a working index.html, og.png, and README?
+> **Phases:** Scope & check competitors → Build on a Forgejo branch → Add og.png/README/footer → Land via a verified Forgejo PR + push to every remote → Verify the Pages URL loads
 > **`/loop`** *(event-driven):* "Emit the current phase's real build work, let the Judger audit it, then plan or emit the next phase. Don't stop while any phase is unaudited."
 > **Stops when:** the tool is live with a working index.html, og.png, and README.
 
-> **`/goal`** *Launch the v1 public API* — **Success:** Is the v1 API deployed to production and publicly documented? · **Phases:** Design contract → Implement → Docs & examples → Deploy & smoke-test · **`/loop`:** "Drive from contract to live; declare success only once the deployed endpoints answer a real smoke test." · **Stops when:** deployed to production and publicly documented.
+> **`/goal`** *Launch the v1 public API* — **Success:** Is the v1 API deployed to production and publicly documented? · **Phases:** Design contract → Implement with tests → Docs & examples → Land via a verified Forgejo PR → Deploy & smoke-test · **`/loop`:** "Drive from contract to live; declare success only once the deployed endpoints answer a real smoke test." · **Stops when:** deployed to production and publicly documented.
 
-> **`/goal`** *Automate a recurring task* — **Success:** Does one real scheduled run finish green and produce its expected output file? · **Phases:** Define trigger & output → Write the script → Add workflow YAML & cron → Verify one real run · **`/loop`** *(event-driven, then a scheduled wait):* "Build it, then emit the verification task with a future scheduledAt aligned to the cron so the goal sleeps until the run fires; read the real Actions run." · **Stops when:** one real scheduled run finished green.
+> **`/goal`** *Automate a recurring task* — **Success:** Does one real scheduled run finish green and produce its expected output file? · **Phases:** Define trigger & output → Write the script → Add the schedule (workflow cron or cowork recurrence) → Land via a verified Forgejo PR → Verify one real run · **`/loop`** *(event-driven, then a scheduled wait):* "Build it, then emit the verification task with a future scheduledAt aligned to the cron so the goal sleeps until the run fires; read the real Actions run." · **Stops when:** one real scheduled run finished green.
 
 > **`/goal`** *Publish an article* — **Success:** Is the article published and reachable at its public URL? · **Phases:** Research & outline → Draft → Edit & visuals → Publish & confirm URL · **Stops when:** the live URL actually loads.
 
 > **`/goal`** *Launch a digital product* — **Success:** Is the product live for sale with a sales page and at least one delivery file? · **Phases:** Define product/audience/price → Create deliverable → Sales page & delivery → Publish & confirm it can be bought · **Stops when:** the listing is live and a delivery file is attached.
+
+> **`/goal`** *Drive {repo} to a passing test suite* — **Success:** Does the repo's test command pass on main at a commit landed through a merged local Forgejo PR? · **Phases:** Reproduce & record the failing run → Fix root causes one class at a time, each with a test → Land via a verified Forgejo PR → Re-run on merged main · **`/loop`:** "Smallest fix the failing output justifies, re-run, keep it only if the failing count drops; never skip or weaken a test." · **Stops when:** the suite passes on merged main.
+
+### pstack refinements (2026-11-03)
+
+- **The driver reaches the loop.** The Achiever reads only the goal description
+  (`Goal: …` in its brief). `GET /api/goals/templates` therefore serves each template
+  through `withLoopDriver()`, which appends the `/loop` cadence, prompt, stop condition,
+  and the shared `AUTONOMOUS_RUN` rules (pstack `poteto-mode/playbooks/autonomous-run.md`):
+  smallest verified change per turn, keep-or-discard, one checkpoint row per turn,
+  pivot on a plateau, never relax the criterion, ask the human only for
+  irreversible/credential/product calls and record every other call as a `RULING:`.
+- **Code lands on the local Forgejo, never `gh`.** Code-producing goals carry
+  `FORGE_LANDING` (pstack `opening-a-pr` + `shipping`): repo on Forgejo
+  (`wayne/<repo>`), branch, ready PR with a Conventional Commits title, a PASS verdict
+  on the current head SHA from an agent that did not write the code, squash merge,
+  read-back as merged, then fast-forward main and push to every remote. GitHub stays a
+  push mirror because the user declined `gh` for GitHub (see
+  `docs/research/pstack-integration-report.md` §B).
+- `goal-templates.test.ts` guards both: every served template carries its driver and
+  every pstack rule; every code-producing template carries `FORGE_LANDING` and a
+  Forgejo landing phase; no template tells the loop to use `gh`.
 
 ### Outcome goals — metric-open, long-horizon, checkpoint-driven
 

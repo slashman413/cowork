@@ -1,5 +1,34 @@
 import type { GoalTemplate } from '../types.js';
 
+/** Where code lands. pstack's shipping process (opening-a-pr + shipping playbooks)
+ *  runs on the LOCAL Forgejo, never `gh`: the user declined `gh` for GitHub, and the
+ *  forge-side approve/squash-merge/read-back loop is verified only on Forgejo
+ *  (docs/research/pstack-integration-report.md §B). GitHub stays a push mirror. */
+export const FORGE_LANDING = 'Land code through the local Forgejo (http://localhost:3001), never `gh`: create the repo there if it is missing (wayne/<repo>, add it as the `forgejo` remote), push a branch, open a ready PR titled `type(scope): subject`, get a PASS verdict on the current head SHA from an agent that did not write the code, squash-merge, read the PR back as merged, then fast-forward local main and push it to every remote (`git remote` lists them).';
+
+/** pstack's autonomous-run loop (poteto-mode playbooks/autonomous-run.md), made
+ *  the shared contract every template's driver inherits. */
+export const AUTONOMOUS_RUN = [
+  'Each turn makes the smallest change the evidence justifies and verifies that change before the next; keep what moved the goal toward its criterion and discard what did not. Settle the criterion itself only when its evidence exists, never early.',
+  'Record every turn as one checkpoint row in the phase result: what changed, the evidence, and whether the criterion moved.',
+  'A plateau is not a stop: pivot the approach instead of repeating it. Never relax the criterion to declare victory.',
+  'Ask the human only for irreversible or outward-facing steps, credentials, or a genuine product call no experiment can settle; decide everything else and record it as RULING: <decision> — <why>.'
+];
+
+/** The goal description a template actually activates with: its own doctrine plus
+ *  the paired /loop driver. The Achiever reads only the description (`Goal: …` in
+ *  its brief), so a driver kept beside it would never reach the loop it governs. */
+export function withLoopDriver(t: GoalTemplate): GoalTemplate {
+  const driver = [
+    '/loop driver (pstack autonomous run):',
+    `• Cadence: ${t.loop.cadence}.`,
+    `• Each turn: ${t.loop.prompt}`,
+    ...AUTONOMOUS_RUN.map(l => `• ${l}`),
+    `• Stop only when: ${t.loop.stopWhen}`
+  ].join('\n');
+  return { ...t, description: `${t.description}\n\n${driver}` };
+}
+
 /**
  * The curated goal starter library — the "/goal" half of cowork's goal+loop
  * idiom (ADR-010), and the single source of truth the dashboard, the REST API
@@ -32,37 +61,44 @@ import type { GoalTemplate } from '../types.js';
  * cowork the loop is the dispatcher's autonomous Achiever↔Judger drive, so these
  * prompts document (and make copy-pasteable) exactly what one turn does and the
  * single condition that ends the loop — never a timer, only the criterion.
+ * `withLoopDriver` folds that contract (plus pstack's AUTONOMOUS_RUN rules) into
+ * the description that is served, so the Achiever actually runs it.
+ *
+ * Code-producing shipping goals land through FORGE_LANDING (local Forgejo PR with
+ * an independent verdict), never `gh`.
  */
 export const GOAL_TEMPLATES: GoalTemplate[] = [
   // ── Shipping goals (deliverable-bound, self-terminating) ───────────────────
   {
     key: 'web-tool', label: '🚀 Ship a web tool', family: 'shipping',
     title: 'Ship a new single-page web tool',
-    description: 'Build and deploy a new client-side tool (vanilla HTML/CSS/JS, no build step) live on GitHub Pages, following the workspace static-tool template.',
-    successCriteria: 'Is the tool live on GitHub Pages with a working index.html, og.png, and README?',
-    reportBrief: 'what shipped this phase + the live/preview URL',
+    description: `Build and deploy a new client-side tool (vanilla HTML/CSS/JS, no build step) live on GitHub Pages, following the workspace static-tool template.\n\n${FORGE_LANDING}`,
+    successCriteria: 'Is the tool merged on its local Forgejo main and live on GitHub Pages with a working index.html, og.png, and README?',
+    reportBrief: 'what shipped this phase + the Forgejo PR and live/preview URL',
     phases: [
       'Scope the tool and check competitors',
-      'Build the single-page tool',
+      'Build the single-page tool on a branch of its local Forgejo repo',
       'Add og.png, README, and the branding footer',
-      'Deploy to GitHub Pages and verify it loads'
+      'Land it through a verified Forgejo PR and push main to every remote',
+      'Verify the GitHub Pages URL loads'
     ],
     loop: {
       cadence: 'event-driven — the Achiever takes its next turn the moment the previous phase is audited',
       prompt: 'Drive this goal one move at a time: emit the current phase\'s real build work, let the Judger audit it, then plan or emit the next phase. Do not stop while any phase is unaudited.',
-      stopWhen: 'the tool is live on GitHub Pages with a working index.html, og.png, and README (evaluate → met:true)'
+      stopWhen: 'the tool is merged on Forgejo main and live on GitHub Pages with a working index.html, og.png, and README (evaluate → met:true)'
     }
   },
   {
     key: 'api', label: '🔌 Ship a v1 API', family: 'shipping',
     title: 'Launch the v1 public API',
-    description: 'Design, build, document and deploy a first public version of the API.',
+    description: `Design, build, document and deploy a first public version of the API.\n\n${FORGE_LANDING}`,
     successCriteria: 'Is the v1 API deployed to production and publicly documented?',
     reportBrief: 'endpoints delivered + how they were verified',
     phases: [
       'Design the API contract',
-      'Implement the endpoints',
+      'Implement the endpoints with tests',
       'Write docs and runnable examples',
+      'Land it through a verified Forgejo PR and push main to every remote',
       'Deploy to production and smoke-test the live endpoints'
     ],
     loop: {
@@ -74,18 +110,19 @@ export const GOAL_TEMPLATES: GoalTemplate[] = [
   {
     key: 'automation', label: '⚙️ Automate a recurring task', family: 'shipping',
     title: 'Automate a recurring task on a schedule',
-    description: 'Turn a manual chore into a scheduled GitHub Actions workflow that produces its output unattended.',
+    description: `Turn a manual chore into a scheduled job that produces its output unattended — a GitHub Actions cron for public repos, or a cowork recurring task when it needs local files or credentials.\n\n${FORGE_LANDING}`,
     successCriteria: 'Does one real scheduled run finish green and produce its expected output file?',
-    reportBrief: 'what the run produced + the Actions run link',
+    reportBrief: 'what the run produced + the run link or task id',
     phases: [
       'Define the trigger and the expected output',
       'Write the script that produces it',
-      'Add the workflow YAML and cron schedule',
+      'Add the schedule (workflow cron or cowork recurrence)',
+      'Land it through a verified Forgejo PR and push main to every remote',
       'Verify one real scheduled run succeeds'
     ],
     loop: {
       cadence: 'event-driven, then a scheduled wait for the first real cron run to fire',
-      prompt: 'Build the automation, then emit the verification task with a future scheduledAt aligned to the cron so the goal sleeps until the run actually fires — do not re-evaluate before then. Read the real Actions run, not an assumption.',
+      prompt: 'Build the automation, then emit the verification task with a future scheduledAt aligned to the cron so the goal sleeps until the run actually fires — do not re-evaluate before then. Read the real run (Actions run or cowork task result), not an assumption.',
       stopWhen: 'one real scheduled run finished green and produced its expected output file (evaluate → met:true)'
     }
   },
@@ -125,6 +162,30 @@ export const GOAL_TEMPLATES: GoalTemplate[] = [
       stopWhen: 'the product is live for sale with a sales page and at least one delivery file (evaluate → met:true)'
     }
   },
+  {
+    key: 'fix-until-green', label: '🟢 Drive a repo to green', family: 'shipping',
+    title: 'Drive {repo} to a passing test suite',
+    description: [
+      'Replace {repo} with the real repository before activating.',
+      '',
+      'pstack autonomous run: the exit predicate is the repo\'s own test command passing on main. Reproduce the failure first and save the failing output as a dated artifact. Fix the root cause, not the symptom; one failure class per iteration, each with a test that proves it.',
+      '',
+      FORGE_LANDING
+    ].join('\n'),
+    successCriteria: 'Does the repo\'s test command pass on main at a commit landed through a merged local Forgejo PR?',
+    reportBrief: 'failing → passing test count, the root cause fixed, and the Forgejo PR',
+    phases: [
+      'Reproduce the failures and record the failing run',
+      'Fix the root causes one failure class at a time, each verified by a test',
+      'Land the fixes through a verified Forgejo PR and push main to every remote',
+      'Re-run the test command on merged main and record the green run'
+    ],
+    loop: {
+      cadence: 'event-driven — fix, verify, land, re-run; each phase audited before the next',
+      prompt: 'Run the test command, take the smallest fix the failing output justifies, and re-run before anything else. Keep a fix only if the failing count drops; revert it otherwise. Never skip, delete, or weaken a test to go green.',
+      stopWhen: 'the test command passes on main at a merged Forgejo PR commit (evaluate → met:true)'
+    }
+  },
 
   // ── Outcome goals (long-horizon, checkpoint-driven) ────────────────────────
   {
@@ -138,6 +199,7 @@ export const GOAL_TEMPLATES: GoalTemplate[] = [
       '• Research deeply before shipping. Name the specific lever (pricing, a new offer, a traffic channel, conversion on an existing page), what you expect it to be worth per month, and why — a lever with no number attached is a guess.',
       '• Waiting is a move. Revenue needs weeks to show. Emit the measurement task with a future scheduledAt (typically 30 days) instead of re-evaluating; the goal sleeps and spends nothing until it fires.',
       '• Every revenue snapshot is a real dated file in artifacts, read from the actual source (Gumroad, Stripe, Ko-fi, platform dashboards). Never estimate a number you did not read, and never report a quota/rate-limit notice as the result.',
+      '• Code a lever needs lands through a verified local Forgejo PR, never `gh`, then push main to every remote.',
       '• When a lever underperforms, say so in the phase result and pick a DIFFERENT one next phase. Read the Judger minutes first — repeating a flat lever is the main way this goal wastes budget.'
     ].join('\n'),
     successCriteria: 'Does a dated revenue snapshot in this goal\'s artifacts show at least $10,000 collected in the trailing 30 days?',
@@ -166,6 +228,7 @@ export const GOAL_TEMPLATES: GoalTemplate[] = [
       '• Search compounds on a delay — pages published now show their traffic in 4–8 weeks. Always emit the measurement task with a future scheduledAt rather than re-checking early.',
       '• Every checkpoint reads real numbers from the actual analytics source into a dated file in artifacts. An unsourced number is not evidence.',
       '• Research before writing: name the query, its intent, and who currently ranks. Publishing without that is how this goal burns budget on pages nobody searches for.',
+      '• Site changes land through a verified local Forgejo PR, never `gh`, then push main to every remote.',
       '• Review each checkpoint for which pages actually earned impressions, and double down there instead of starting fresh topics every phase.'
     ].join('\n'),
     successCriteria: 'Does a dated analytics snapshot in this goal\'s artifacts show at least 10,000 organic visits in the trailing 30 days?',
@@ -195,7 +258,8 @@ export const GOAL_TEMPLATES: GoalTemplate[] = [
       '• Talk to the market before rebuilding the product. Rejected offers, pricing objections, and refund reasons are the highest-value research available, and they are cheap.',
       '• Emit the count task on a scheduled checkpoint after each change has had time to convert; do not re-evaluate the same week you shipped.',
       '• Record the customer count from the real billing source into a dated file in artifacts every checkpoint, including when it did not move.',
-      '• A flat checkpoint means change the offer, price, or channel — not ship the same thing harder.'
+      '• A flat checkpoint means change the offer, price, or channel — not ship the same thing harder.',
+      '• Code changes land through a verified local Forgejo PR, never `gh`, then push main to every remote.'
     ].join('\n'),
     successCriteria: 'Does a dated snapshot in this goal\'s artifacts show at least 100 distinct paying customers on the billing platform?',
     reportBrief: 'customer count this checkpoint vs. last, what converted them, and the next acquisition or offer change',

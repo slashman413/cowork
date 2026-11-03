@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { GOAL_TEMPLATES } from './goal-templates.js';
+import { AUTONOMOUS_RUN, FORGE_LANDING, GOAL_TEMPLATES, withLoopDriver } from './goal-templates.js';
 import { Goals } from './goals.js';
 import type { Config, Task } from '../types.js';
 
@@ -71,7 +71,36 @@ test('every template carries a copy-pasteable /loop driver contract that stops o
   }
 });
 
-test('Goals.templates() serves the library (the source the API and UI share)', () => {
+test('Goals.templates() serves the library with each /loop driver folded into the description', () => {
   const goals = makeGoals();
-  assert.deepEqual(goals.templates(), GOAL_TEMPLATES);
+  const served = goals.templates();
+  assert.deepEqual(served, GOAL_TEMPLATES.map(withLoopDriver));
+  assert.deepEqual(served.map(t => t.key), GOAL_TEMPLATES.map(t => t.key));
+  for (const t of served) {
+    // The Achiever reads only the description, so the driver must live there.
+    assert.ok(t.description.includes(t.loop.prompt), `"${t.key}" description lacks its /loop prompt`);
+    assert.ok(t.description.includes(t.loop.stopWhen), `"${t.key}" description lacks its stop condition`);
+    for (const rule of AUTONOMOUS_RUN) assert.ok(t.description.includes(rule), `"${t.key}" lacks pstack rule: ${rule}`);
+  }
+});
+
+test('the library is not mutated by serving it', () => {
+  const before = GOAL_TEMPLATES.map(t => t.description);
+  makeGoals().templates();
+  assert.deepEqual(GOAL_TEMPLATES.map(t => t.description), before);
+});
+
+test('code-producing shipping goals land through a verified local Forgejo PR, never gh', () => {
+  for (const key of ['web-tool', 'api', 'automation', 'fix-until-green']) {
+    const t = GOAL_TEMPLATES.find(x => x.key === key);
+    assert.ok(t, `missing template "${key}"`);
+    assert.ok(t.description.includes(FORGE_LANDING), `"${key}" must carry the Forgejo landing rule`);
+    assert.ok(t.phases.some(p => /Forgejo PR/.test(p)), `"${key}" needs a Forgejo landing phase`);
+  }
+  assert.match(FORGE_LANDING, /PASS verdict on the current head SHA from an agent that did not write the code/);
+  assert.match(FORGE_LANDING, /every remote/);
+  for (const t of GOAL_TEMPLATES) {
+    const text = [t.description, ...t.phases, t.loop.prompt].join('\n');
+    assert.doesNotMatch(text.replace(/never `gh`/g, ''), /\bgh\b/, `"${t.key}" tells the loop to use gh`);
+  }
 });
