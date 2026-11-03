@@ -504,7 +504,8 @@ export class Recipes {
    * task (and its inputs/ + artifacts/ dirs) is deleted. Pass the same origin
    * the draft was built from so the names line up.
    */
-  create(input: any, origin: { inputNames?: string[]; inputsDir?: string | null; artifactsDir?: string | null } = {}): Recipe {
+  create(input: any, origin: { inputNames?: string[]; inputsDir?: string | null; artifactsDir?: string | null } = {},
+    uploads: Array<{ token?: string; name?: string }> = []): Recipe {
     const r = normalizeRecipe({ ...input, id: undefined, version: 1, createdAt: undefined });
     const wanted = new Set(r.carry.inputs);
     const kept: string[] = [];
@@ -520,18 +521,43 @@ export class Recipes {
       }
     }
     r.carry.inputs = kept;
+    this.addUploads(r, uploads);
     this.write(r);
     return r;
   }
 
+  /**
+   * Move freshly uploaded files (POST /api/uploads tokens) into the recipe's
+   * inputs/ dir and list them in carry.inputs. A same-named file replaces the
+   * old one, so re-uploading is how a recipe input gets updated.
+   */
+  private addUploads(r: Recipe, uploads: Array<{ token?: string; name?: string }>): void {
+    for (const u of Array.isArray(uploads) ? uploads : []) {
+      const token = String(u?.token || '');
+      if (!token || /[\\/]/.test(token) || token === '.' || token === '..') continue;
+      const slot = path.join(this.inputsRoot, '_staging', token);
+      let src: string | undefined;
+      try { src = fs.readdirSync(slot).find(f => { try { return fs.statSync(path.join(slot, f)).isFile(); } catch { return false; } }); } catch { continue; }
+      if (!src) continue;
+      const name = path.basename(String(u?.name || src)).trim() || src;
+      if (name === '.' || name === '..') continue;
+      const dest = path.join(this.inputsDir(r.id), name);
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      try { fs.copyFileSync(path.join(slot, src), dest); } catch { continue; }
+      try { fs.rmSync(slot, { recursive: true, force: true }); } catch { /* ignore */ }
+      if (!r.carry.inputs.includes(name)) r.carry.inputs.push(name);
+    }
+  }
+
   /** Edit; bumps the version (and snapshots the old one) when the brief/fields/carry change. */
-  update(id: string, patch: any): Recipe {
+  update(id: string, patch: any, uploads: Array<{ token?: string; name?: string }> = []): Recipe {
     const prev = this.get(id);
     if (!prev) throw new Error('recipe not found');
     const merged = { ...prev, ...patch, id: prev.id, createdAt: prev.createdAt, origin: prev.origin, version: prev.version };
     // Input files can only be dropped here, never invented.
     if (merged.carry) merged.carry = { ...merged.carry, inputs: (merged.carry.inputs || []).filter((n: string) => prev.carry.inputs.includes(n)) };
     const next = normalizeRecipe(merged);
+    this.addUploads(next, uploads);
     if (BRIEF_KEYS.some(k => JSON.stringify(prev[k]) !== JSON.stringify(next[k]))) {
       const vd = path.join(this.extraDir(id), 'versions');
       fs.mkdirSync(vd, { recursive: true });
@@ -539,6 +565,13 @@ export class Recipes {
       next.version = prev.version + 1;
     }
     this.write(next);
+    // Files dropped from carry.inputs leave the recipe's inputs/ dir.
+    for (const name of prev.carry.inputs) {
+      if (next.carry.inputs.includes(name)) continue;
+      const f = path.join(this.inputsDir(id), name);
+      if (path.relative(this.inputsDir(id), f).startsWith('..')) continue;
+      try { fs.rmSync(f, { force: true }); } catch { /* ignore */ }
+    }
     return next;
   }
 
@@ -547,9 +580,10 @@ export class Recipes {
   }
 
   /** Stage the recipe's input files as upload tokens createTask() materializes. */
-  stageInputs(r: Recipe): Array<{ token: string; name: string }> {
+  stageInputs(r: Recipe, skip: string[] = []): Array<{ token: string; name: string }> {
     const out: Array<{ token: string; name: string }> = [];
     for (const name of r.carry.inputs) {
+      if (skip.includes(name)) continue;
       const src = path.join(this.inputsDir(r.id), name);
       if (!fs.existsSync(src)) continue;
       const token = `rcp${uuidv4().replace(/-/g, '')}`;

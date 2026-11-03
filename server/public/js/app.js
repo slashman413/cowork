@@ -1276,7 +1276,10 @@ class App {
     // G9: Method (context.playbook) + pstack skill (context.skill) pickers.
     const methodOpts = [`<option value="">none</option>`]
       .concat((pstack.playbooks || []).map(k => `<option value="${esc(k)}">${esc(k)}</option>`)).join('');
-    const skillOpts = (pstack.skills || []).map(k => `<option value="${esc(k)}"></option>`).join('');
+    // A plain <select> like Method/Review (was a free-text datalist input that
+    // rendered differently from every other picker in this dialog).
+    const skillOpts = [`<option value="">${(pstack.skills || []).length ? 'none' : 'none (no skills under vendor/pstack/skills)'}</option>`]
+      .concat((pstack.skills || []).map(k => `<option value="${esc(k)}">${esc(k)}</option>`)).join('');
     const opts = [`<option value="">🧠 Auto — route via the agent's brain chain</option>`]
       .concat(selectableBrainIds(brains).map(b => {
         const until = brainCooldownUntil(usage[b], brains[b]?.model || b);
@@ -1328,9 +1331,8 @@ class App {
           </select>
         </div>
       </div>
-      <label style="${labelStyle}" for="nt-skill">pstack skill <span style="text-transform:none; letter-spacing:0">(optional — executor reads vendor/pstack/skills/&lt;name&gt;/SKILL.md)</span></label>
-      <input id="nt-skill" list="nt-skill-list" style="${fieldStyle}; margin-bottom:12px" placeholder="e.g. interrogate, blast-radius, why…" autocomplete="off">
-      <datalist id="nt-skill-list">${skillOpts}</datalist>
+      <label style="${labelStyle}" for="nt-skill" title="The executor reads vendor/pstack/skills/&lt;name&gt;/SKILL.md">pstack skill <span style="text-transform:none; letter-spacing:0">(optional)</span></label>
+      <select id="nt-skill" style="${fieldStyle}; margin-bottom:12px" title="The executor reads vendor/pstack/skills/&lt;name&gt;/SKILL.md"${(pstack.skills || []).length ? '' : ' disabled'}>${skillOpts}</select>
       <label style="${labelStyle}" for="nt-brain">Brain to claim this task</label>
       <select id="nt-brain" style="${fieldStyle}; margin-bottom:12px">${opts}</select>
       <label style="${labelStyle}">Input files <span style="text-transform:none; letter-spacing:0">(optional — attached for the agent/brain to study)</span></label>
@@ -1441,7 +1443,7 @@ class App {
       // pstack triggers (G9): playbook card, review gate, explicit skill.
       const method = content.querySelector('#nt-method').value;
       const review = content.querySelector('#nt-review').value;
-      const skill = content.querySelector('#nt-skill').value.trim();
+      const skill = content.querySelector('#nt-skill').value;
       if (method) context.playbook = method;
       if (review === 'llm' || review === 'panel') context.review = review;
       else if (review === 'arena') context.arena = { runners: 3 };

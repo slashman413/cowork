@@ -144,3 +144,17 @@
   .rcp-fieldrow .rcp-key { grid-column: 1 / -1; justify-self: start; }
   .rcp-fieldrow .rcp-opts { grid-column: 1 / -1; }
 }
+
+/* Input files (editor + run sheet) */
+.rcp-files { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.rcp-file { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 4px 6px 4px 10px; border: 1px solid var(--border-color);
+  border-radius: 999px; background: var(--bg-secondary); font-size: 0.78rem; }
+label.rcp-file { padding-right: 10px; cursor: pointer; }
+.rcp-file svg { width: 13px; height: 13px; flex: none; }
+.rcp-file .rcp-rm { padding: 2px; }
+.rcp-file .rcp-rm svg { width: 13px; height: 13px; }
+.rcp-file-n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; }
+.rcp-file-new { border-style: dashed; border-color: var(--accent-color); }
+.rcp-attach { display: inline-flex; align-items: center; gap: 6px; font-size: 0.8rem; }
+.rcp-attach svg { width: 14px; height: 14px; }
+.rcp-acc { resize: vertical; line-height: 1.5; }

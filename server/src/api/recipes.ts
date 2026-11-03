@@ -8,10 +8,13 @@ import { Recipes, carryInputNames, draftFromTask, instantiate, recipeStats, reci
  *   GET    /recipes                     — library, each with derived stats
  *   GET    /recipes/:id                 — one recipe + stats, versions, runs
  *   POST   /recipes/draft-from-task/:id — editable draft from a finished task (saves nothing)
- *   POST   /recipes                     — save a draft as a recipe (copies the origin task's inputs + artifacts)
- *   PUT    /recipes/:id                 — edit; brief/fields/carry changes bump the version
+ *   POST   /recipes                     — save a draft as a recipe (copies the origin task's inputs + artifacts;
+ *                                          addInputs: [{token,name}] adds uploaded files)
+ *   PUT    /recipes/:id                 — edit; brief/fields/carry changes bump the version (addInputs as above;
+ *                                          dropping a name from carry.inputs removes that file)
  *   DELETE /recipes/:id                 — archive (soft)
- *   POST   /recipes/:id/run             — { values, extra?, brain?, scheduledAt?, recurrence? } → task
+ *   POST   /recipes/:id/run             — { values, extra?, brain?, scheduledAt?, recurrence?,
+ *                                          skipInputs?: names, inputs?: [{token,name}] (this run only) } → task
  *   POST   /inbox/:id/rating            — { good, note? } 👍/👎 on a task (feeds recipe stats)
  */
 export function createRecipeRouter(recipes: Recipes, store: Store): Router {
@@ -23,6 +26,9 @@ export function createRecipeRouter(recipes: Recipes, store: Store): Router {
     inputsDir: store.inputsPath(task.id),
     artifactsDir: store.artifactsPath(task.id),
   });
+
+  // Uploaded files (POST /api/uploads tokens) to add to a recipe's inputs.
+  const uploadsOf = (body: any) => (Array.isArray(body?.addInputs) ? body.addInputs : []);
 
   router.get('/recipes', (req, res) => {
     const tasks = allTasks();
@@ -62,13 +68,13 @@ export function createRecipeRouter(recipes: Recipes, store: Store): Router {
       // Only a real task may be the copy source: origin.taskId is client-supplied
       // and a raw "..", unresolved, would point the copy at the repo root.
       const originTask = body.origin?.taskId ? store.getTask(String(body.origin.taskId)) : null;
-      const r = recipes.create(body, originTask ? carryOrigin(originTask) : {});
+      const r = recipes.create(body, originTask ? carryOrigin(originTask) : {}, uploadsOf(body));
       res.status(201).json(r);
     } catch (e: any) { res.status(400).json({ error: e.message }); }
   });
 
   router.put('/recipes/:id', (req, res) => {
-    try { res.json(recipes.update(req.params.id, req.body || {})); }
+    try { res.json(recipes.update(req.params.id, req.body || {}, uploadsOf(req.body))); }
     catch (e: any) { res.status(/not found/.test(e.message) ? 404 : 400).json({ error: e.message }); }
   });
 
@@ -90,7 +96,8 @@ export function createRecipeRouter(recipes: Recipes, store: Store): Router {
         scheduledAt: typeof body.scheduledAt === 'string' ? body.scheduledAt : undefined,
         recurrence: body.recurrence ?? undefined,
       });
-      const staged = [...recipes.stageInputs(r), ...(Array.isArray(body.inputs) ? body.inputs : [])];
+      const skip = Array.isArray(body.skipInputs) ? body.skipInputs.map(String) : [];
+      const staged = [...recipes.stageInputs(r, skip), ...(Array.isArray(body.inputs) ? body.inputs : [])];
       const task = store.createTask(params, { inputs: staged });
       res.status(201).json(task);
     } catch (e: any) { res.status(400).json({ error: e.message }); }

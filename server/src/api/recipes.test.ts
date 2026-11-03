@@ -254,3 +254,59 @@ test('recurring recipe run: every scheduled run gets the recipe files, folders k
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+/**
+ * Input files are configurable: upload new ones into a recipe on save/edit
+ * (addInputs), drop one by leaving it out of carry.inputs (file removed), and
+ * per run skip saved inputs (skipInputs) or add run-only files (inputs).
+ */
+test('recipe API: add, remove and skip input files', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cowork-recipes-inputs-'));
+  const paths: any = {};
+  for (const k of ['inbox', 'artifacts', 'inputs', 'status', 'decisions', 'workflows', 'agencyAgents']) {
+    paths[k] = path.join(root, k);
+    fs.mkdirSync(paths[k], { recursive: true });
+  }
+  const store = new Store({ paths, platforms: {}, orchestration: { brains: {} } } as unknown as Config, new EventBus());
+  const recipes = new Recipes(path.join(root, 'recipes'), paths.inputs);
+  const app = express();
+  app.use(express.json());
+  app.use('/api', createRecipeRouter(recipes, store));
+  const server = app.listen(0);
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`;
+  const call = async (method: string, url: string, body?: any) => {
+    const r = await fetch(base + url, { method, headers: { 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+    return { status: r.status, json: await r.json() as any };
+  };
+  const stage = (name: string, data: string) => store.stageUpload(name, Buffer.from(data));
+
+  try {
+    const a = stage('a.csv', 'a\n'), b = stage('b.md', 'b\n');
+    const made = await call('POST', '/recipes', { name: 'R', title: 'T', brief: 'Do it.', carry: { inputs: [] }, addInputs: [a, b] });
+    assert.equal(made.status, 201);
+    assert.deepEqual(made.json.carry.inputs, ['a.csv', 'b.md']);
+    const dir = recipes.inputsDir(made.json.id);
+    assert.ok(fs.existsSync(path.join(dir, 'a.csv')));
+    assert.ok(!fs.existsSync(path.join(paths.inputs, '_staging', a.token)), 'staging slot consumed');
+
+    // Edit: drop b.md, add c.txt → new version; b.md is deleted from disk.
+    const c = stage('c.txt', 'c\n');
+    const edited = await call('PUT', `/recipes/${made.json.id}`, { carry: { ...made.json.carry, inputs: ['a.csv'] }, addInputs: [c] });
+    assert.equal(edited.status, 200);
+    assert.deepEqual(edited.json.carry.inputs, ['a.csv', 'c.txt']);
+    assert.equal(edited.json.version, 2);
+    assert.ok(!fs.existsSync(path.join(dir, 'b.md')));
+    // Names can't be invented through carry.inputs.
+    const bogus = await call('PUT', `/recipes/${made.json.id}`, { carry: { ...edited.json.carry, inputs: ['a.csv', 'c.txt', 'x.sh'] } });
+    assert.deepEqual(bogus.json.carry.inputs, ['a.csv', 'c.txt']);
+
+    // Run: skip a.csv, add a run-only file.
+    const extra = stage('today.json', '{}');
+    const run = await call('POST', `/recipes/${made.json.id}/run`, { values: {}, skipInputs: ['a.csv'], inputs: [extra] });
+    assert.equal(run.status, 201);
+    assert.deepEqual([...run.json.context.inputFiles].sort(), ['c.txt', 'today.json']);
+  } finally {
+    server.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

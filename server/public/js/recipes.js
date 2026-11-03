@@ -46,6 +46,43 @@
   const dots = (recent) => `<span class="rcp-dots" aria-label="Last runs, newest first">${
     (recent || []).map((v) => `<i class="rcp-dot rcp-dot-${v === 1 ? 'good' : v === 0 ? 'bad' : 'none'}"></i>`).join('')}</span>`;
 
+  /**
+   * Input-file list used by the editor and the run sheet: saved files (×
+   * removes, or a checkbox when `toggle` — skip for this run only) plus files
+   * picked from disk, staged client-side and uploaded by the caller on submit.
+   * Returns { kept() → saved names still on, files → staged File[] }.
+   */
+  const fileList = (root, sel, saved, { toggle = false } = {}) => {
+    const box = root.querySelector(sel);
+    const on = new Set(saved), files = [];
+    const draw = () => {
+      const rows = [
+        ...saved.filter((n) => toggle || on.has(n)).map((n) => toggle
+          ? `<label class="rcp-file"><input type="checkbox" data-on="${esc(n)}"${on.has(n) ? ' checked' : ''}><i data-lucide="file"></i><span class="rcp-file-n">${esc(n)}</span><span class="rcp-muted">saved</span></label>`
+          : `<span class="rcp-file"><i data-lucide="file"></i><span class="rcp-file-n">${esc(n)}</span><span class="rcp-muted">saved</span><button type="button" class="btn-icon rcp-rm" data-drop="${esc(n)}" title="Remove from the recipe"><i data-lucide="x"></i></button></span>`),
+        ...files.map((f, i) => `<span class="rcp-file rcp-file-new"><i data-lucide="file-plus"></i><span class="rcp-file-n">${esc(f.name)}</span><span class="rcp-muted">${fmtBytes(f.size)} · new</span><button type="button" class="btn-icon rcp-rm" data-unstage="${i}" title="Don't add"><i data-lucide="x"></i></button></span>`),
+      ];
+      box.querySelector('.rcp-files').innerHTML = rows.length ? rows.join('') : '<span class="rcp-muted">No input files.</span>';
+      createIcons();
+    };
+    box.innerHTML = `<div class="rcp-files"></div><input type="file" multiple hidden>
+      <button type="button" class="btn rcp-attach"><i data-lucide="paperclip"></i>Attach files</button>`;
+    const pick = box.querySelector('input[type=file]');
+    box.querySelector('.rcp-attach').onclick = () => pick.click();
+    pick.onchange = () => { files.push(...Array.from(pick.files || [])); pick.value = ''; draw(); };
+    box.addEventListener('click', (e) => {
+      const d = e.target.closest('[data-drop]'), u = e.target.closest('[data-unstage]');
+      if (d) { on.delete(d.dataset.drop); draw(); }
+      if (u) { files.splice(Number(u.dataset.unstage), 1); draw(); }
+    });
+    box.addEventListener('change', (e) => {
+      const c = e.target.closest('[data-on]');
+      if (c) c.checked ? on.add(c.dataset.on) : on.delete(c.dataset.on);
+    });
+    draw();
+    return { kept: () => saved.filter((n) => on.has(n)), files };
+  };
+
   Object.assign(App.prototype, {
     _rcpModal(html, wide) {
       const container = document.getElementById('modal-container'), content = document.getElementById('modal-content');
@@ -161,6 +198,7 @@
           ${r.fields.length ? r.fields.map((f) => `<label class="rcp-field"><span>${esc(f.label)}${f.required ? '' : ' <em>(optional)</em>'}</span>${fieldInput(f)}</label>`).join('')
             : '<p class="rcp-note">This recipe has no fields: it runs exactly as saved.</p>'}
           <label class="rcp-field"><span>Brain</span><select id="rcp-brain" class="rcp-in">${brainOpts}</select></label>
+          <div class="rcp-field"><span>Input files <em>(untick to leave a saved file out of this run; attached files are for this run only)</em></span><div id="rcp-run-files"></div></div>
           <details class="rcp-adv"><summary>More options</summary>
             <label class="rcp-field"><span>Extra instructions <em>(optional, this run only)</em></span><textarea id="rcp-extra" class="rcp-in" rows="3"></textarea></label>
             <label class="rcp-field"><span>Start at <em>(blank = now)</em></span><input id="rcp-at" class="rcp-in" type="datetime-local"></label>
@@ -170,6 +208,7 @@
           <div class="rcp-modal-actions"><button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn btn-primary" id="rcp-go"><i data-lucide="play"></i>Run</button></div>
         </form>`);
       recurrenceEditorBind(content, 'rcp-rec');
+      const runFiles = fileList(content, '#rcp-run-files', r.carry.inputs || [], { toggle: true });
       content.querySelector('#rcp-run-form').onsubmit = async (e) => {
         e.preventDefault();
         const values = {};
@@ -181,9 +220,12 @@
         if (at) body.scheduledAt = new Date(at).toISOString();
         const rec = readRecurrence(content, 'rcp-rec');
         if (rec) body.recurrence = rec;
+        const skip = (r.carry.inputs || []).filter((n) => !runFiles.kept().includes(n));
+        if (skip.length) body.skipInputs = skip;
         const go = content.querySelector('#rcp-go');
         go.disabled = true;
         try {
+          if (runFiles.files.length) body.inputs = await this.uploadInputFiles(runFiles.files);
           const t = await this.api.post(`/recipes/${encodeURIComponent(r.id)}/run`, body);
           this._rcpLast[r.id] = values;
           localStorage.setItem('rcp-last', JSON.stringify(this._rcpLast));
@@ -218,7 +260,7 @@
         <section class="rcp-pane" data-pane="Brief" hidden>
           <div class="rcp-k">Title</div><pre class="rcp-pre">${esc(r.title)}</pre>
           <div class="rcp-k">Brief</div><pre class="rcp-pre">${esc(r.brief).replace(/\{\{\s*([\w.-]+)\s*\}\}/g, '<mark>{{$1}}</mark>')}</pre>
-          ${carry.acceptance?.length ? `<div class="rcp-k">Done when</div><ul class="rcp-ul">${carry.acceptance.map((a) => `<li>${esc(a)}</li>`).join('')}</ul>` : ''}
+          ${carry.acceptance?.length ? `<div class="rcp-k">Acceptance checks (done when)</div><ul class="rcp-ul">${carry.acceptance.map((a) => `<li>${esc(a)}</li>`).join('')}</ul>` : ''}
           <dl class="rcp-dl">${facts.map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join('')}</dl>
         </section>
         <section class="rcp-pane" data-pane="Origin" hidden>${r.origin ? `
@@ -259,16 +301,15 @@
     recipeEditor(draft, { edit }) {
       const d = JSON.parse(JSON.stringify(draft));
       d.carry ||= { brainMode: 'suggest', inputs: [] };
-      const keep = { agent: !!d.carry.agent, brain: !!d.carry.brain, tier: !!d.carry.tier, acceptance: !!d.carry.acceptance?.length,
-        timeboxMin: !!d.carry.timeboxMin, inputs: !!d.carry.inputs?.length };
+      const keep = { agent: !!d.carry.agent, brain: !!d.carry.brain, tier: !!d.carry.tier, timeboxMin: !!d.carry.timeboxMin };
       const carryRows = [
         ['agent', 'Agent', d.carry.agent], ['brain', 'Brain', d.carry.brain], ['tier', 'Tier', d.carry.tier],
-        ['acceptance', 'Acceptance checks', d.carry.acceptance?.length ? `${d.carry.acceptance.length} check${d.carry.acceptance.length === 1 ? '' : 's'}` : ''],
         ['timeboxMin', 'Timebox', d.carry.timeboxMin ? `${d.carry.timeboxMin} min` : ''],
-        ['inputs', 'Input files', (d.carry.inputs || []).join(', ')
-          + (d.carryOmitted?.length ? ` (+${d.carryOmitted.length} more artifact${d.carryOmitted.length === 1 ? '' : 's'} not carried: over the size/count limit)` : '')
-          + (d.carrySkipped?.length ? ` (${d.carrySkipped.length} result, data or media file${d.carrySkipped.length === 1 ? '' : 's'} left out: only code and config are carried)` : '')],
       ].filter(([, , v]) => v);
+      const fileNotes = [
+        d.carryOmitted?.length ? `${d.carryOmitted.length} more artifact${d.carryOmitted.length === 1 ? '' : 's'} not carried: over the size/count limit.` : '',
+        d.carrySkipped?.length ? `${d.carrySkipped.length} result, data or media file${d.carrySkipped.length === 1 ? '' : 's'} left out: only code and config are carried. Attach them again if every run needs them.` : '',
+      ].filter(Boolean).join(' ');
       const { content, close } = this._rcpModal(`
         <h3>${edit ? `Edit recipe <span class="rcp-ver">v${d.version}</span>` : '★ Save as recipe'}</h3>
         <p class="rcp-modal-sub">${edit ? 'Changing the brief, fields or settings saves a new version with a fresh score.' : 'Keep what worked, and choose the words that change from run to run.'}</p>
@@ -291,10 +332,19 @@
           ${carryRows.length ? `<div class="rcp-carry">${carryRows.map(([k, l, v]) => `
             <label class="rcp-check"><input type="checkbox" data-keep="${k}"${keep[k] ? ' checked' : ''}><span><b>${l}</b> <span class="rcp-muted">${esc(v)}</span></span></label>`).join('')}</div>` : '<p class="rcp-note">Nothing to carry over: the router picks agent and brain.</p>'}
           ${d.carry.brain ? `<label class="rcp-switch"><input type="checkbox" id="rcp-lock"${d.carry.brainMode === 'lock' ? ' checked' : ''}><span>Always use <b>${esc(d.carry.brain)}</b><br><em>Off: Cowork's router picks a brain each run (can be cheaper), and ${esc(d.carry.brain)} is one tap away.</em></span></label>` : ''}
+
+          <div class="rcp-step"><span class="rcp-num">4</span><b>Acceptance checks</b></div>
+          <p class="rcp-note">What a good result must have. The verifier checks every run against these. One check per line; leave empty for none.</p>
+          <label class="rcp-field"><span>Done when</span><textarea id="rcp-acc" class="rcp-in rcp-acc" rows="${Math.min(8, Math.max(3, (d.carry.acceptance || []).length + 1))}" placeholder="e.g. A table of every product with price and status">${esc((d.carry.acceptance || []).join('\n'))}</textarea></label>
+
+          <div class="rcp-step"><span class="rcp-num">5</span><b>Input files</b></div>
+          <p class="rcp-note">Files every run gets in its inputs folder. Attach new ones, or × to remove one; a file with the same name replaces the saved one.${fileNotes ? ` <span class="rcp-muted">${esc(fileNotes)}</span>` : ''}</p>
+          <div id="rcp-files"></div>
           <div class="rcp-err" id="rcp-err"></div>
           <div class="rcp-modal-actions"><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn btn-primary" id="rcp-save">${edit ? 'Save changes' : '★ Save recipe'}</button></div>
         </div>`, true);
       const $ = (s) => content.querySelector(s);
+      const files = fileList(content, '#rcp-files', d.carry.inputs || []);
       let lastFocus = $('#rcp-brief');
       const drawFields = () => {
         $('#rcp-fields').innerHTML = d.fields.length ? d.fields.map((f, i) => `
@@ -364,20 +414,28 @@
           carry: {
             agent: kept('agent') ? c.agent : undefined, division: kept('agent') ? c.division : undefined,
             brain: kept('brain') ? c.brain : undefined, brainMode: kept('brain') && $('#rcp-lock')?.checked ? 'lock' : 'suggest',
-            tier: kept('tier') ? c.tier : undefined, acceptance: kept('acceptance') ? c.acceptance : undefined,
+            tier: kept('tier') ? c.tier : undefined,
+            acceptance: $('#rcp-acc').value.split('\n').map((x) => x.trim().replace(/^[-*•]\s+/, '')).filter(Boolean),
             timeboxMin: kept('timeboxMin') ? c.timeboxMin : undefined, priority: c.priority, tags: c.tags,
-            inputs: kept('inputs') ? c.inputs : [],
+            inputs: files.kept(),
           },
         };
         const btn = $('#rcp-save');
         btn.disabled = true;
         try {
+          if (files.files.length) {
+            btn.textContent = 'Uploading files…';
+            body.addInputs = await this.uploadInputFiles(files.files);
+          }
           const saved = edit ? await this.api.put(`/recipes/${encodeURIComponent(d.id)}`, body) : await this.api.post('/recipes', body);
           close();
           this.toast(edit ? 'recipe saved' : 'recipe created', edit ? `${saved.name} is now v${saved.version}.` : `${saved.name} is in Recipes, ready to run.`);
           if (this.currentView === 'recipes') this.renderRecipes();
           else if (this.currentView === 'tasks') this.renderInbox();
-        } catch (err) { $('#rcp-err').textContent = err.message; btn.disabled = false; }
+        } catch (err) {
+          $('#rcp-err').textContent = err.message; btn.disabled = false;
+          btn.textContent = edit ? 'Save changes' : '★ Save recipe';
+        }
       };
     },
 
