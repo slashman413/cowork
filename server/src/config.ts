@@ -372,10 +372,14 @@ export function scrubDenylistedBrains(config: Config): string[] {
  * Never alias to an id containing "deepseek" — DENYLISTED_BRAIN_RE drops it.
  */
 export const BRAIN_ID_ALIASES: Readonly<Record<string, string>> = {
-  // codex brains are claimed by a client (location "remote"), so the id says remote.
-  'local-codex-default': 'remote-codex-default',
-  'local-codex-gpt-5-6-terra': 'remote-codex-gpt-5-6-terra',
-  'local-codex-gpt-5-6-luna': 'remote-codex-gpt-5-6-luna',
+  // The id prefix names the MACHINE a brain runs on (local- = this host), not
+  // its `location`. Codex runs on this host, so local-codex-*, even though the
+  // codex client claims its tasks (location "remote"). Reverses the 2026-10-07
+  // local-codex-* → remote-codex-* rename (2026-11-03).
+  'remote-codex-default': 'local-codex-default',
+  'remote-codex-gpt-5-6-terra': 'local-codex-gpt-5-6-terra',
+  'remote-codex-gpt-5-6-luna': 'local-codex-gpt-5-6-luna',
+  'remote-codex-gpt-6-luna': 'local-codex-gpt-6-luna',
   // ids carry the model version.
   'remote-ai-code-gen-cc-opus': 'remote-ai-code-gen-cc-opus-4-8',
   'remote-ai-code-gen-cc-sonnet': 'remote-ai-code-gen-cc-sonnet-5',
@@ -419,9 +423,13 @@ export function canonicalBrainId(config: Config | undefined, id: string): string
  */
 export function clientTaskView<T extends { context?: Record<string, any> }>(config: Config, task: T): T {
   const id = task?.context?.brain;
-  const clientId = typeof id === 'string' ? config.orchestration.brains?.[id]?.clientId : undefined;
-  if (!clientId || clientId === id) return task;
-  return { ...task, context: { ...task.context, brain: clientId } };
+  if (typeof id !== 'string') return task;
+  // A task stored before a rename may still carry the retired id: resolve it, so
+  // the client that now declares the canonical id still finds it.
+  const canon = canonicalBrainId(config, id);
+  const want = config.orchestration.brains?.[canon]?.clientId || canon;
+  if (want === id) return task;
+  return { ...task, context: { ...task.context, brain: want } };
 }
 
 /**
@@ -507,6 +515,11 @@ const CLIENT_PLATFORM_EXEC: Record<string, NonNullable<import('./types.js').Brai
 /** Brain-shaped capability ids use the `local-*` / `remote-*` alias convention. */
 const BRAIN_ID_RE = /^(local|remote)-/;
 
+/** Client platforms whose brains are always claimed by the client (location
+ *  "remote") whatever the id prefix says — e.g. local-codex-* runs on this host
+ *  but the dispatcher must never spawn it itself. */
+const CLIENT_CLAIMED_PLATFORMS = new Set(['codex']);
+
 /**
  * Rebuild dynamic brains from the last known CLIENT declarations (the persisted
  * agent roster in .status/agents.json) whenever the registry lost them — a
@@ -537,7 +550,7 @@ export function restoreClientBrains(
       if (config.orchestration.brains[id]) continue;
       config.orchestration.brains[id] = {
         description: `${id} (declared by client ${a.id.slice(0, 8)}; restored from persisted registration)`,
-        location: id.startsWith('local-') ? 'local' : 'remote',
+        location: id.startsWith('local-') && !CLIENT_CLAIMED_PLATFORMS.has(a.platform) ? 'local' : 'remote',
         exec,
         dynamic: true,
         registeredBy: a.id,

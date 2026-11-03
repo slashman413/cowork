@@ -326,15 +326,22 @@ can reference. The **Brains** view lists every registered brain — its platform
 | `local-dsh-qwen3-8-27b` | local | DeepSeek Harness (`dsh`) on that model |
 | `local-cc-opus-5-5` / `-sonnet-5-5` / `-fable-5-1` | local | Claude Code on that model |
 | `local-agy-*` / `local-comfy-ltx` | local | Antigravity/Gemini / ComfyUI-LTX video |
-| `remote-codex-gpt-5-6-terra` / `-luna` / `-default` | remote | Codex, claimed by the codex client (on this host) |
+| `local-codex-gpt-6-luna` / `-gpt-5-6-terra` / `-gpt-5-6-luna` / `-default` | remote | Codex on this host, claimed by the codex client |
 | `remote-ai-code-gen-cc-opus-4-8` / `-sonnet-5` / `-fable-5` | remote | Claude Code on the ai-code-gen machine |
 | `remote-<host>-cc-sonnet-5-5` | remote | Claude Code on another machine |
 
 Brain ids carry the **model version** (`local-cc-opus-5-5`, not `local-cc-opus`) so the
 model a brain runs is readable from its id; only `-default` brains, which follow the
-account default, are unversioned. The `local-`/`remote-` prefix must match the
-brain's `location`, which means **who runs it** (local = the dispatcher spawns it;
-remote = a client claims it from the inbox), not which machine it is on. DeepSeek
+account default, are unversioned.
+
+**Naming convention — the prefix names the machine, `location` names the runner.**
+The `local-`/`remote-` id prefix says **which machine the brain executes on**:
+`local-` = this host (it can see `/home/wayne`, `~/.priv`, the GPU), `remote-` =
+another machine (`remote-<host>-…`). The separate `location` field says **who
+starts it**: `local` = the dispatcher spawns it, `remote` = a client claims it from
+the inbox. The two usually agree, but not always — `local-codex-*` runs on this
+host yet has `location: remote` because the codex client claims its tasks. Code must
+read `location`, never infer it from the prefix. DeepSeek
 brains are retired — any id matching `/deepseek/i` is scrubbed from the registry on
 load (see `DENYLISTED_BRAIN_RE`), so never put `deepseek` in a new id.
 
@@ -343,12 +350,12 @@ optional `orchestration.brainAliases` in config) maps retired ids to their canon
 id. Old ids in an on-disk config, a task's `context.brain` pin, or a client's
 registration all resolve to the canonical brain. A client that still declares an
 old id keeps receiving its tasks under that id (`clientId` on the brain), until it
-re-declares the canonical one. Renamed on 2026-10-07:
+re-declares the canonical one. Renames (2026-10-07, and codex again on 2026-11-03):
 
 | Retired id | Canonical id |
 |------------|--------------|
 | `local-ha-qwen3-8-27b`, `local-ha-qwen38-27b`, `local-ha-qwen3.8-27b` | `local-hermes-qwen3.8-27b` |
-| `local-codex-default` / `-gpt-5-6-terra` / `-gpt-5-6-luna` | `remote-codex-default` / `-gpt-5-6-terra` / `-gpt-5-6-luna` |
+| `remote-codex-default` / `-gpt-5-6-terra` / `-gpt-5-6-luna` / `-gpt-6-luna` | `local-codex-default` / `-gpt-5-6-terra` / `-gpt-5-6-luna` / `-gpt-6-luna` (2026-11-03: the prefix names the machine, so the 10-07 `local-codex-*` → `remote-codex-*` rename was reversed) |
 | `remote-ai-code-gen-cc-opus` / `-sonnet` / `-fable` | `remote-ai-code-gen-cc-opus-4-8` / `-sonnet-5` / `-fable-5` |
 
 **Local** brains the dispatcher spawns here. **Remote** brains it leaves `pending`

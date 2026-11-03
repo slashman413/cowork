@@ -81,7 +81,7 @@ test('integrations: detectRepo classifies repo contents', () => {
 });
 
 test('integrations: defaultWrapBrain picks a local brain', () => {
-  const locals = ['remote-codex', 'local-hermes-qwen3.8-27b', 'local-cc-sonnet-5-5'];
+  const locals = ['local-codex-default', 'local-hermes-qwen3.8-27b', 'local-cc-sonnet-5-5'];
   const picked = defaultWrapBrain(undefined, locals);
   assert.equal(picked, 'local-cc-sonnet-5-5');
 

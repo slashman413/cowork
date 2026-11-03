@@ -20,7 +20,9 @@ test('canonicalBrainId: resolves retired ids, leaves others, honours config alia
   const { canonicalBrainId } = await import('./config.js');
   assert.equal(canonicalBrainId(undefined, 'local-ha-qwen3-8-27b'), 'local-hermes-qwen3.8-27b');
   assert.equal(canonicalBrainId(undefined, 'local-ha-qwen38-27b'), 'local-hermes-qwen3.8-27b');
-  assert.equal(canonicalBrainId(undefined, 'local-codex-gpt-5-6-terra'), 'remote-codex-gpt-5-6-terra');
+  assert.equal(canonicalBrainId(undefined, 'remote-codex-gpt-5-6-terra'), 'local-codex-gpt-5-6-terra');
+  assert.equal(canonicalBrainId(undefined, 'remote-codex-gpt-6-luna'), 'local-codex-gpt-6-luna');
+  assert.equal(canonicalBrainId(undefined, 'local-codex-default'), 'local-codex-default');   // no cycle back
   assert.equal(canonicalBrainId(undefined, 'remote-ai-code-gen-cc-opus'), 'remote-ai-code-gen-cc-opus-4-8');
   assert.equal(canonicalBrainId(undefined, 'local-cc-opus-5-5'), 'local-cc-opus-5-5');
   const cfg: any = { orchestration: { brainAliases: { 'a': 'b', 'b': 'c', 'x': 'y', 'y': 'x' } } };
@@ -99,12 +101,49 @@ test('restoreClientBrains: restores a retired capability under its canonical id'
   try {
     const { loadConfig, restoreClientBrains } = await import('./config.js');
     const config = loadConfig();
-    delete config.orchestration.brains!['remote-codex-default'];
-    const restored = restoreClientBrains(config, [{ id: 'codex-1', platform: 'codex', capabilities: ['local-codex-default'] }]);
-    assert.deepEqual(restored, ['remote-codex-default']);
-    const b = config.orchestration.brains!['remote-codex-default'];
+    delete config.orchestration.brains!['local-codex-default'];
+    const restored = restoreClientBrains(config, [{ id: 'codex-1', platform: 'codex', capabilities: ['remote-codex-default'] }]);
+    assert.deepEqual(restored, ['local-codex-default']);
+    const b = config.orchestration.brains!['local-codex-default'];
+    // local- names the host; the codex client still claims it, so location stays remote.
     assert.equal(b.location, 'remote');
-    assert.equal(b.clientId, 'local-codex-default');
+    assert.equal(b.clientId, 'remote-codex-default');
+    // A canonical local-codex-* capability is client-claimed too, never dispatcher-spawned.
+    delete config.orchestration.brains!['local-codex-gpt-6-luna'];
+    restoreClientBrains(config, [{ id: 'codex-1', platform: 'codex', capabilities: ['local-codex-gpt-6-luna'] }]);
+    assert.equal(config.orchestration.brains!['local-codex-gpt-6-luna'].location, 'remote');
+  } finally {
+    delete process.env.COWORK_CONFIG;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('loadConfig: migrates the 2026-11-03 remote-codex-* → local-codex-* rename, keeping location remote', async () => {
+  const dir = makeConfig();
+  try {
+    writeFileSync(process.env.COWORK_CONFIG!, JSON.stringify({
+      orchestration: {
+        brains: {
+          'remote-codex-gpt-6-luna': { description: 'c', location: 'remote', exec: 'codex', model: 'gpt-6-luna', dynamic: true, registeredBy: 'c1' }
+        },
+        defaultChain: ['remote-codex-gpt-6-luna'],
+        agents: {}
+      }
+    }));
+    const { loadConfig, clientTaskView } = await import('./config.js');
+    const config = loadConfig();
+    const b = config.orchestration.brains!['local-codex-gpt-6-luna'];
+    assert.equal(config.orchestration.brains!['remote-codex-gpt-6-luna'], undefined);
+    assert.equal(b.location, 'remote');
+    assert.equal(b.model, 'gpt-6-luna');
+    assert.equal(b.clientId, 'remote-codex-gpt-6-luna');
+    assert.deepEqual(config.orchestration.defaultChain, ['local-codex-gpt-6-luna']);
+
+    // A task stored under the retired id reaches the client under whichever id it declares.
+    const oldPin = { id: 't0', context: { brain: 'remote-codex-gpt-6-luna' } };
+    assert.equal(clientTaskView(config, oldPin), oldPin);   // client still declares the old id
+    delete b.clientId;                                       // client re-declared the canonical id
+    assert.equal(clientTaskView(config, oldPin).context.brain, 'local-codex-gpt-6-luna');
   } finally {
     delete process.env.COWORK_CONFIG;
     rmSync(dir, { recursive: true, force: true });

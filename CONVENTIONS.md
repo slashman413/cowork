@@ -127,9 +127,9 @@ any `/home/wayne/` path — must run on a **local brain** (`local-hermes-qwen3.8
   access `/home/wayne/`.** A credential task routed to one will fail or vanish.
   If you are a remote brain and the task requires `~/.priv/` or local files, do NOT
   fake it — report the routing error and stop (see rule 4).
-- `remote-` in a brain id means a client claims the task, not always another
-  machine: `remote-codex-*` runs on this host. Still pin credential tasks to the
-  local brain above.
+- The `local-`/`remote-` prefix names the machine: `local-*` brains (including
+  `local-codex-*`) run on this host, `remote-*` brains run on another machine.
+  Still pin credential tasks to the local brain above.
 - When dispatching, pin the brain: `context: {"brain": "local-hermes-qwen3.8-27b"}`.
   Old ids (`local-ha-qwen3-8-27b`, …) still resolve, but use the canonical one.
 - Full rule + incident history: `/home/wayne/.hermes/cowork-routing-rules.md`.

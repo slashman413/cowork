@@ -22,8 +22,9 @@ clients get the key in env; never paste it into task text or output).
 ## Local Codex brain
 
 `cowork-local-brain@codex.service` is the persistent worker for
-`remote-codex-default` (plus `remote-codex-gpt-5-6-terra` / `-luna`; ids are `remote-`
-because the client claims them from the inbox). It registers and polls tasks automatically. Do not register the
+`local-codex-default` (plus `local-codex-gpt-6-luna` / `-gpt-5-6-terra` / `-gpt-5-6-luna`;
+ids are `local-` because they run on this host — `location` stays `remote` because the
+client claims them from the inbox). Retired `remote-codex-*` ids still resolve. It registers and polls tasks automatically. Do not register the
 same brain from an interactive Codex session, and never deregister it on session exit:
 that removes the brain from its fallback chains.
 
@@ -55,7 +56,7 @@ journalctl --user -u cowork-local-brain@codex.service -n 100 --no-pager
 - `context: {"role": "orchestrator"}` starts the two-stage dispatcher: it selects a
   division, then an agent persona and its brain fallback chain.
 - `context: {"agent": "<agent-slug>"}` targets one agent persona.
-- `context: {"brain": "remote-codex-default"}` pins a task to the Codex worker.
+- `context: {"brain": "local-codex-default"}` pins a task to the Codex worker.
 - A `manual` tag prevents automatic dispatch.
 - A failed brain rung hands the task to the next rung. Do not duplicate the task while
   handover is in progress.

@@ -262,17 +262,18 @@ export class Store {
     try {
       const data = JSON.parse(fs.readFileSync(this.brainUsageFile(), 'utf-8'));
       if (data && typeof data === 'object') {
-        const localBrains = new Set(
-          Object.entries(this.config.orchestration?.brains || {})
-            .filter(([, b]) => b.location === 'local')
-            .map(([id]) => id)
-        );
-        for (const [id, u] of Object.entries(data)) {
+        // Every configured brain, whatever its location: a `local-` id names this
+        // host, and some (local-codex-*) are client-claimed (location "remote").
+        const knownBrains = new Set(Object.keys(this.config.orchestration?.brains || {}));
+        for (const [rawId, u] of Object.entries(data)) {
           if (u && typeof u === 'object' && Array.isArray((u as any).windows)) {
+            // A snapshot written before a rename carries the retired id.
+            const id = canonicalBrainId(this.config, rawId);
             // Prune retired local brains that are no longer configured on this host
-            if (id.startsWith('local-') && localBrains.size > 0 && !localBrains.has(id)) {
+            if (id.startsWith('local-') && knownBrains.size > 0 && !knownBrains.has(id)) {
               continue;
             }
+            if (id !== rawId && this.brainUsage.has(id)) continue;   // canonical entry wins
             this.brainUsage.set(id, u as BrainUsage);
           }
         }

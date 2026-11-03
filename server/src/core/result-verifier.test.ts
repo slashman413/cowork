@@ -480,7 +480,7 @@ test('selectSpecJudge: cross-family judge selection matrix + cooldown/disabled s
     'local-agy-gemini-3.8-flash-high': { location: 'local', exec: 'agy', model: 'gemini-3.8-flash-high' },
     'local-dsh-qwen3-8-27b': { location: 'local', exec: 'dsh', model: 'qwen3.8-27b' },
     'local-hermes-qwen3.8-27b': { location: 'local', exec: 'hermes', model: 'qwen3.8-27b' },
-    'remote-codex-gpt-5-4': { location: 'remote', exec: 'codex', model: 'gpt-5.4' },
+    'local-codex-gpt-5-4': { location: 'remote', exec: 'codex', model: 'gpt-5.4' },
   };
   const judges = DEFAULT_SPEC_JUDGES as any;
 
@@ -501,7 +501,7 @@ test('selectSpecJudge: cross-family judge selection matrix + cooldown/disabled s
   assert.equal(selectSpecJudge('local-hermes-qwen3.8-27b', { brains, judges }), 'local-agy-claude-opus-5-5-medium');
 
   // Anything else (codex / gpt-oss / deepseek) -> default (Opus 5.5)
-  assert.equal(selectSpecJudge('remote-codex-gpt-5-4', { brains, judges }), 'local-agy-claude-opus-5-5-medium');
+  assert.equal(selectSpecJudge('local-codex-gpt-5-4', { brains, judges }), 'local-agy-claude-opus-5-5-medium');
 
   // Small task (result < 2 KB and <= 2 criteria) tries cheaper fallback first
   assert.equal(isSmallSpecTask('short result', ['c1', 'c2']), true);
