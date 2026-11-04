@@ -113,7 +113,7 @@ test('server-listener: multiplexed HTTP and HTTPS on same port', async () => {
 
       // 2. Plain HTTP request with external host/IP: should redirect to trusted HTTPS domain
       const redirectRes = await new Promise<{ status: number; location: string }>((resolve, reject) => {
-        http.get('http://127.0.0.1:6892/api/ping', { headers: { host: '100.80.243.33:6892', connection: 'close' } }, (r) => {
+        http.get('http://127.0.0.1:6892/api/ping', { headers: { host: '100.64.0.1:6892', connection: 'close' } }, (r) => {
           resolve({ status: r.statusCode || 0, location: r.headers.location || '' });
         }).on('error', reject);
       });

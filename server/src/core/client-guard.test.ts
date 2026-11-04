@@ -4,26 +4,26 @@ import express from 'express';
 import type { AddressInfo } from 'node:net';
 import { ClientGuard, normalizeIp } from './client-guard.js';
 
-const CFG = { ips: ['100.117.16.77', 'fd7a:115c:a1e0::4936:104d'], names: ['ai-code-gen'] };
+const CFG = { ips: ['100.64.0.1', 'fd7a:115c:a1e0::1'], names: ['ai-code-gen'] };
 const req = (over: Partial<{ ip: string; headers: Record<string, unknown>; path: string; body: unknown }> = {}) =>
-  ({ ip: '100.80.243.33', headers: { 'user-agent': 'node' }, path: '/api/tasks', ...over });
+  ({ ip: '100.64.0.2', headers: { 'user-agent': 'node' }, path: '/api/tasks', ...over });
 
 test('normalizeIp strips IPv4-mapped prefix and brackets', () => {
-  assert.equal(normalizeIp('::ffff:100.117.16.77'), '100.117.16.77');
-  assert.equal(normalizeIp('[FD7A:115C:A1E0::4936:104D]'), 'fd7a:115c:a1e0::4936:104d');
+  assert.equal(normalizeIp('::ffff:100.64.0.1'), '100.64.0.1');
+  assert.equal(normalizeIp('[FD7A:115C:A1E0::1]'), 'fd7a:115c:a1e0::1');
 });
 
 test('inactive guard blocks nothing', () => {
   const g = new ClientGuard(undefined);
   assert.equal(g.active, false);
-  assert.equal(g.check(req({ ip: '100.117.16.77' })).blocked, false);
+  assert.equal(g.check(req({ ip: '100.64.0.1' })).blocked, false);
 });
 
 test('blocks by source ip (v4, mapped v4, v6) on any path', () => {
   const g = new ClientGuard(CFG);
-  assert.equal(g.check(req({ ip: '100.117.16.77', path: '/' })).blocked, true);
-  assert.equal(g.check(req({ ip: '::ffff:100.117.16.77' })).blocked, true);
-  assert.equal(g.check(req({ ip: 'fd7a:115c:a1e0::4936:104d' })).blocked, true);
+  assert.equal(g.check(req({ ip: '100.64.0.1', path: '/' })).blocked, true);
+  assert.equal(g.check(req({ ip: '::ffff:100.64.0.1' })).blocked, true);
+  assert.equal(g.check(req({ ip: 'fd7a:115c:a1e0::1' })).blocked, true);
   assert.equal(g.check(req()).blocked, false);
 });
 
@@ -37,7 +37,7 @@ test('blocks MCP initialize from a blocked clientInfo name', () => {
   const g = new ClientGuard(CFG);
   const body = { jsonrpc: '2.0', id: 1, method: 'initialize', params: { clientInfo: { name: 'remote-brain:ai-code-gen' } } };
   assert.equal(g.check(req({ path: '/mcp', body })).blocked, true);
-  const ok = { ...body, params: { clientInfo: { name: 'remote-brain:aitopatom' } } };
+  const ok = { ...body, params: { clientInfo: { name: 'remote-brain:peer-host' } } };
   assert.equal(g.check(req({ path: '/mcp', body: ok })).blocked, false);
 });
 
@@ -48,7 +48,7 @@ test('blocks MCP register_agent declaring a blocked agent name or brain', () => 
   assert.equal(g.check(req({ path: '/mcp', body: call({ platform: 'claude', agent_name: 'x', brains: [{ id: 'remote-ai-code-gen-cc-opus-5-5' }] }) })).blocked, true);
   assert.equal(g.check(req({ path: '/mcp', body: call({ platform: 'claude', agent_name: 'x', capabilities: ['remote-ai-code-gen-cc-fable-5-1'] }) })).blocked, true);
   assert.equal(g.check(req({ path: '/mcp', body: [call({ platform: 'claude', agent_name: 'ok' }), call({ platform: 'claude', agent_name: 'ai-code-gen' })] })).blocked, true);
-  assert.equal(g.check(req({ path: '/mcp', body: call({ platform: 'claude', agent_name: 'aitopatom' }) })).blocked, false);
+  assert.equal(g.check(req({ path: '/mcp', body: call({ platform: 'claude', agent_name: 'peer-host' }) })).blocked, false);
 });
 
 test('blocks tool calls carrying a blocked agent_id (live roster or registry owner)', () => {
