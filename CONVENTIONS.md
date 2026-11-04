@@ -142,7 +142,7 @@ Every task, subtask, or goal you create goes to the **local cowork server on
 - **Use:** `http://localhost:6868` (`POST /api/inbox`, `POST /api/goals`) or the
   `cowork-local` MCP server (`mcp__cowork-local__create_task` / `create_goal`).
 - **Never use** the remotely-registered server — the `cowork` MCP server
-  (`https://aitopatom-a4e2.tail5cf769.ts.net:6868`, tools `mcp__cowork__*`) or any
+  (`https://<remote-cowork-host>.tailXXXX.ts.net:6868`, tools `mcp__cowork__*`) or any
   other non-local cowork URL — to create, dispatch, or decompose tasks. That server
   is where this host is a *client*; tasks filed there are invisible to the local
   dashboard and run on the wrong fleet.

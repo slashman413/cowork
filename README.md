@@ -540,7 +540,7 @@ Migrate in this order:
      `~/.cowork/tls/cert.pem` and `~/.cowork/tls/key.pem`.
    - **Self-Signed (Alternative)**:
      ```bash
-     server/gen-tls-cert.sh ~/.cowork/tls cowork-host 100.80.243.33 cowork.tailXXXX.ts.net
+     server/gen-tls-cert.sh ~/.cowork/tls cowork-host 100.64.0.1 cowork.tailXXXX.ts.net
      ```
 
 2. **Point the config at the files.** Add a `tls` block under `server` in

@@ -9,7 +9,7 @@
 #
 # Examples:
 #   ./gen-tls-cert.sh                       # -> ~/.cowork/tls/{cert,key}.pem, CN=localhost
-#   ./gen-tls-cert.sh ~/.cowork/tls cowork-host 100.80.243.33 cowork.tail1234.ts.net
+#   ./gen-tls-cert.sh ~/.cowork/tls cowork-host 100.64.0.1 cowork.tail1234.ts.net
 #
 # Then point ~/.cowork/config.json at the files and restart cowork-mcp:
 #   "server": {
