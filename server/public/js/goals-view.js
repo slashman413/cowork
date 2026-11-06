@@ -26,7 +26,10 @@
     paused: { label: 'Paused', icon: 'pause' },
     achieved: { label: 'Achieved', icon: 'circle-check' }
   };
-  const FILTERS = [['all', 'All'], ['needs-you', 'Needs you'], ['stuck', 'Stuck'], ['running', 'Running'], ['sleeping', 'Sleeping'], ['achieved', 'Achieved']];
+  // Every state lands under some chip, so no goal is reachable only through All.
+  const FILTERS = [['all', 'All'], ['needs-you', 'Needs you'], ['stuck', 'Stuck'], ['running', 'Running'], ['retrying', 'Retrying'], ['sleeping', 'Sleeping'], ['draft', 'Draft'], ['paused', 'Paused'], ['achieved', 'Achieved']];
+  const FILTER_OF = { thinking: 'running', auditing: 'running' };
+  const filterOf = (state) => FILTER_OF[state] || state;
   const TABS = [['overview', 'Overview'], ['phases', 'Phases'], ['decisions', 'Decisions'], ['files', 'Files'], ['settings', 'Settings']];
   const PHASE_LABEL = { planned: 'Planned', active: 'In progress', completing: 'Being audited', done: 'Done', audited: 'Audited' };
   const SEG = { p: 'Planned', a: 'In progress', c: 'Being audited', d: 'Done' };
@@ -67,6 +70,7 @@
 
   // The next event, in words. Each state reads differently around the same time.
   function nextLine(d) {
+    if (d.since) return `${esc(d.line)} · ${timeTag(d.since)}`;
     if (!d.nextAt) return esc(d.line);
     if (d.state === 'sleeping') return `Next check ${timeTag(d.nextAt)} · ${esc(d.line)}`;
     if (d.state === 'retrying' || d.state === 'stuck') return `${esc(d.line)}, retry ${timeTag(d.nextAt)}`;
@@ -105,10 +109,9 @@
   function parsePhases(text) {
     const seen = new Set();
     return (text || '').split('\n').map(l => l.trim()).filter(Boolean).map((line, idx) => {
-      const i = line.indexOf(':');
-      const rawKey = (i >= 0 ? line.slice(0, i) : line).trim();
-      const title = (i >= 0 ? line.slice(i + 1) : line).trim();
-      return { key: deriveKey(rawKey, idx, seen), title: title || rawKey };
+      // One bare word before the colon, so a URL or a sentence stays whole.
+      const m = /^([A-Za-z0-9][\w-]*)\s*:\s+(.+)$/.exec(line);
+      return { key: deriveKey(m ? m[1] : line, idx, seen), title: m ? m[2] : line };
     });
   }
   const parseList = (v) => (v || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -148,8 +151,8 @@
   Object.assign(App.prototype, {
     /** The route after #goals/: [] | ['new'] | [id, tab?]. Set by navigate(). */
     _goalsParts() {
-      const raw = window.location.hash.replace(/^#/, '').split('/').slice(1).map(decodeURIComponent);
-      return raw.filter(Boolean);
+      const decode = (s) => { try { return decodeURIComponent(s); } catch { return s; } };
+      return window.location.hash.replace(/^#/, '').split('/').slice(1).map(decode).filter(Boolean);
     },
 
     async renderGoals() {
@@ -157,6 +160,7 @@
       if (parts[0] === 'new') return this._renderGoalCreate();
 
       const st = (this._gv ||= { filter: 'all', list: [], rowHtml: new Map() });
+      this._gvBindPopovers();
       st.selected = parts[0] || null;
       st.tab = TABS.some(t => t[0] === parts[1]) ? parts[1] : 'overview';
 
@@ -208,6 +212,21 @@
       this._gvTick();
     },
 
+    /** Menus and help are <details>: they close on an outside click or Esc. Bound once. */
+    _gvBindPopovers() {
+      if (this._gvPopoversBound) return;
+      this._gvPopoversBound = true;
+      const openOnes = () => [...document.querySelectorAll('.gv details.gv-menu[open], .gv details.gv-help[open]')];
+      document.addEventListener('click', (e) => {
+        const inside = e.target.closest?.('details.gv-menu, details.gv-help');
+        openOnes().forEach(d => { if (d !== inside) d.removeAttribute('open'); });
+      });
+      document.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape' || document.querySelector('.gv-dialog[open]')) return;
+        openOnes().forEach(d => { d.removeAttribute('open'); d.querySelector('summary')?.focus(); });
+      });
+    },
+
     _gvScroller() { return this.contentEl.closest('.content-area') || document.scrollingElement; },
     _gvSaveScroll() { const st = this._gv; const el = this._gvScroller(); if (st && el) st.listScroll = el.scrollTop; },
     _gvRestoreScroll() {
@@ -246,11 +265,12 @@
     _gvPatchList(root) {
       const st = this._gv;
       const counts = { all: st.list.length };
-      for (const g of st.list) counts[g.display.state] = (counts[g.display.state] || 0) + 1;
+      for (const g of st.list) { const k = filterOf(g.display.state); counts[k] = (counts[k] || 0) + 1; }
 
       // Rebuilt only on a change, so a refresh cannot take focus off a chip.
       const filters = root.querySelector('.gv-filters');
-      const chipHtml = FILTERS.filter(([k]) => k === 'all' || k === 'needs-you' || counts[k]).map(([k, label]) =>
+      // The chosen chip stays even at zero, or its empty view would have no visible cause.
+      const chipHtml = FILTERS.filter(([k]) => k === 'all' || k === 'needs-you' || k === st.filter || counts[k]).map(([k, label]) =>
         `<button type="button" class="gv-chip" data-filter="${k}" aria-pressed="${st.filter === k}">${label} <span class="gv-count">${counts[k] || 0}</span></button>`).join('');
       if (st.chipHtml !== chipHtml || !filters.firstChild) {
         st.chipHtml = chipHtml;
@@ -269,7 +289,7 @@
       strip.innerHTML = urgent.length ? `${icon('circle-alert')}<span><strong>${urgent.length} need${urgent.length === 1 ? 's' : ''} you:</strong> ${
         urgent.slice(0, 3).map(g => `<a href="#goals/${enc(g.goalId)}">${esc(g.title)}</a>`).join(', ')}</span>` : '';
 
-      const visible = st.list.filter(g => st.filter === 'all' || g.display.state === st.filter);
+      const visible = st.list.filter(g => st.filter === 'all' || filterOf(g.display.state) === st.filter);
       const ul = root.querySelector('#gv-list');
       const wanted = visible.map(g => g.goalId);
       if (!visible.length) {
@@ -327,7 +347,8 @@
       let g;
       try { g = await this.api.get(`/goals/${enc(id)}`); }
       catch (e) {
-        if (!quiet) host.innerHTML = `<div class="gv-empty-detail"><p>This goal could not be loaded: ${esc(e.message)}</p><a href="#goals">Back to goals</a></div>`;
+        // A goal that has left the list was deleted: stale controls must not stay on screen.
+        if (!quiet || !st.list.some(x => x.goalId === id)) host.innerHTML = `<div class="gv-empty-detail"><p>This goal could not be loaded: ${esc(e.message)}</p><a href="#goals">Back to goals</a></div>`;
         return;
       }
       if (st.selected !== id) return;
@@ -506,6 +527,7 @@
 
       host.querySelectorAll('[data-act]').forEach(btn => btn.addEventListener('click', () => {
         const act = btn.dataset.act;
+        btn.closest('details.gv-menu')?.removeAttribute('open');
         if (act === 'retry') return guarded(btn, async () => { await post('activate'); await after('Retrying now.'); });
         if (act === 'activate') return guarded(btn, async () => { await post('activate'); await after('Goal is active.'); });
         if (act === 'pause') return guarded(btn, async () => { await post('pause'); await after('Goal paused.'); });

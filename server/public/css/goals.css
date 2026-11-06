@@ -84,6 +84,8 @@
 .gv-row:hover { border-color: var(--gv-muted); }
 .gv-row.is-selected { border-color: var(--accent-color); background: var(--gv-tint); }
 .gv-row-top, .gv-row-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+/* Closed goals stay reachable but stop competing with live ones. */
+.gv-li[data-state="achieved"] .gv-row-line, .gv-li[data-state="achieved"] .gv-row-foot { display: none; }
 .gv-row-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gv-row-line { color: var(--gv-muted); font-size: 0.8125rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gv-budget, .gv-phases-count, .gv-time { font-size: 0.75rem; font-variant-numeric: tabular-nums; }
@@ -204,10 +206,12 @@
   .gv-menu summary { width: 44px; height: 44px; }
   .gv-menu-body { right: auto; left: 0; }
   .gv-tabs a { min-height: 44px; display: flex; align-items: center; }
+  /* Fresh is not worth the space here, stale is. */
   .gv-updated { display: none; }
-  /* One line of chrome: filters scroll sideways, and New goal is icon-only. */
-  .gv-head { flex-wrap: nowrap; margin-bottom: 8px; }
-  .gv-filters { flex-wrap: nowrap; overflow-x: auto; flex: 1; min-width: 0; padding: 2px; }
+  .gv-updated.is-stale { display: block; max-width: 88px; line-height: 1.2; }
+  /* Filters wrap, so none is hidden off the edge, and New goal is icon-only. */
+  .gv-head { flex-wrap: nowrap; align-items: flex-start; margin-bottom: 8px; }
+  .gv-filters { flex: 1; min-width: 0; gap: 4px; padding: 2px; }
   .gv-chip { white-space: nowrap; }
   .gv-head-right { gap: 4px; flex: none; }
   .gv-new { width: 44px; justify-content: center; padding: 0; }
