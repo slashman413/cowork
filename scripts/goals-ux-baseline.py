@@ -4,10 +4,10 @@
 Read-only checks run against any server. --flows mutates goals, so run it only on
 the fixture from goals-fixture.py. Never point --flows at the live server.
 
-Usage: goals-ux-baseline.py --base http://localhost:16868 [--flows] [--axe path/to/axe.min.js] [--shots dir]
+Usage: goals-ux-baseline.py --base http://localhost:16868 [--flows] [--axe path/to/axe.min.js] [--shots dir] [--insecure]
 Env:   COWORK_API_KEY, sent as a bearer token when set.
 """
-import argparse, json, os, sys, urllib.request
+import argparse, json, os, ssl, sys, urllib.request
 from playwright.sync_api import sync_playwright
 
 ap = argparse.ArgumentParser()
@@ -15,7 +15,9 @@ ap.add_argument('--base', default='http://localhost:16868')
 ap.add_argument('--flows', action='store_true')
 ap.add_argument('--axe')
 ap.add_argument('--shots')
+ap.add_argument('--insecure', action='store_true', help='accept the self-signed cert on https://localhost:6868')
 a = ap.parse_args()
+TLS = ssl._create_unverified_context() if a.insecure else None
 H = {'Authorization': 'Bearer ' + os.environ['COWORK_API_KEY']} if os.environ.get('COWORK_API_KEY') else {}
 results = []
 
@@ -23,21 +25,21 @@ def check(name, ok, value=None, target=None):
     results.append({'check': name, 'ok': bool(ok), 'value': value, 'target': target})
 
 def api(path):
-    return json.load(urllib.request.urlopen(urllib.request.Request(a.base + path, headers=H)))
+    return json.load(urllib.request.urlopen(urllib.request.Request(a.base + path, headers=H), context=TLS))
 
 EMOJI = r"/[\p{Extended_Pictographic}]/u"
 SIZES = {'desktop': (1440, 900), 'mobile': (390, 844)}
 
 def main(p):
     b = p.chromium.launch(headless=True, args=['--no-sandbox'])
-    raw = urllib.request.urlopen(urllib.request.Request(a.base + '/api/goals', headers=H)).read()
+    raw = urllib.request.urlopen(urllib.request.Request(a.base + '/api/goals', headers=H), context=TLS).read()
     check('GET /goals bytes', len(raw) <= 3000, len(raw), '<=3000')
     goals = json.loads(raw)
     first = goals[0]['goalId'] if goals else None
 
     for theme in ('light', 'dark'):
         for name, (w, h) in SIZES.items():
-            ctx = b.new_context(viewport={'width': w, 'height': h}, extra_http_headers=H, color_scheme=theme)
+            ctx = b.new_context(viewport={'width': w, 'height': h}, extra_http_headers=H, ignore_https_errors=a.insecure, color_scheme=theme)
             pg = ctx.new_page()
             pg.add_init_script(f"localStorage.setItem('theme','{theme}');localStorage.setItem('cowork-theme','{theme}')")
             fetched = []
@@ -104,7 +106,7 @@ def main(p):
             ctx.close()
 
     # A chosen filter stays visible when its count reaches zero, and popovers dismiss.
-    ctx = b.new_context(viewport={'width': 1440, 'height': 900}, extra_http_headers=H)
+    ctx = b.new_context(viewport={'width': 1440, 'height': 900}, extra_http_headers=H, ignore_https_errors=a.insecure)
     pg = ctx.new_page()
     pg.goto(a.base + '/#goals')
     pg.wait_for_selector('.gv-row')
@@ -127,7 +129,7 @@ def main(p):
     ctx.close()
 
     # State survives events; mobile back restores scroll.
-    ctx = b.new_context(viewport={'width': 390, 'height': 844}, extra_http_headers=H)
+    ctx = b.new_context(viewport={'width': 390, 'height': 844}, extra_http_headers=H, ignore_https_errors=a.insecure)
     pg = ctx.new_page()
     pg.goto(a.base + '/#goals/new')
     pg.wait_for_selector('#gc-title')
@@ -152,7 +154,7 @@ def main(p):
 
     # Keyboard: list, detail, tabs, back.
     if first:
-        ctx = b.new_context(viewport={'width': 1440, 'height': 900}, extra_http_headers=H)
+        ctx = b.new_context(viewport={'width': 1440, 'height': 900}, extra_http_headers=H, ignore_https_errors=a.insecure)
         pg = ctx.new_page()
         pg.goto(a.base + '/#goals')
         pg.wait_for_selector('.gv-row')
@@ -167,7 +169,7 @@ def main(p):
         ctx.close()
 
     if a.flows:
-        ctx = b.new_context(viewport={'width': 1440, 'height': 900}, extra_http_headers=H)
+        ctx = b.new_context(viewport={'width': 1440, 'height': 900}, extra_http_headers=H, ignore_https_errors=a.insecure)
         pg = ctx.new_page()
         dialogs = []
         pg.on('dialog', lambda d: (dialogs.append(d.type), d.dismiss()))
