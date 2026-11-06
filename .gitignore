@@ -1,4 +1,5 @@
-node_modules/
+# No trailing slash: also catches a worktree's node_modules symlink.
+node_modules
 dist/
 .status/
 *.log

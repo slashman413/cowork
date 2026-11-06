@@ -23,6 +23,8 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SERVER="$REPO/server"
 SERVICE="${COWORK_SERVICE:-cowork-mcp}"
+# shellcheck source=deploy/server-health.sh
+. "$REPO/deploy/server-health.sh"
 RESTART=1
 [ "${1:-}" = "--no-restart" ] && RESTART=0
 
@@ -57,9 +59,10 @@ if command -v systemctl >/dev/null 2>&1 && systemctl --user status "$SERVICE" >/
     echo "Scheduled — cowork-mcp will restart onto the fresh build once it goes idle."
     exit 0
   fi
+  preflight_or_die
   echo "Restarting systemd user service: $SERVICE"
   systemctl --user restart "$SERVICE"
-  sleep 2
+  wait_healthy_or_die
   systemctl --user --no-pager --lines=5 status "$SERVICE" || true
   echo "Redeploy complete — live server now runs the committed source."
 else

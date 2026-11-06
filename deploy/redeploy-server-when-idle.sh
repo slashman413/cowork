@@ -39,6 +39,8 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SERVICE="${COWORK_SERVICE:-cowork-mcp}"
+# shellcheck source=deploy/server-health.sh
+. "$REPO/deploy/server-health.sh"
 
 BUILD=1
 [ "${1:-}" = "--no-build" ] && { BUILD=0; shift; }
@@ -67,9 +69,10 @@ while pgrep -P "$MAIN_PID" >/dev/null 2>&1; do
   sleep "$POLL"
 done
 
+preflight_or_die
 echo "Restarting $SERVICE"
 systemctl --user restart "$SERVICE"
-sleep 2
+wait_healthy_or_die
 systemctl --user --no-pager --lines=5 status "$SERVICE" || true
 echo "Redeploy complete — the live server now runs the committed source."
 echo "Blocked goals can now be resumed (blocked → active); the drive loop auto-resumes them on backoff."
