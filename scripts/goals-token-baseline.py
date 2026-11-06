@@ -46,8 +46,12 @@ for f in glob.glob(os.path.join(a.root, 'goals', '*', 'achiever-turns.jsonl')):
             turn = json.loads(line)
         except Exception:
             continue
-        if turn.get('at', '') >= a.since and turn.get('usage'):
+        if turn.get('at', '') < a.since:
+            continue
+        if turn.get('usage'):
             turns.append(weighted(turn['usage']))
+        else:
+            unmetered['achiever'] += 1
 if turns:
     roles['achiever'] = turns
 

@@ -59,6 +59,8 @@ def main(p):
                 labelled = sum(1 for g in sleepers if g['display'].get('nextAt'))
                 check('sleeping goals with next time', labelled == len(sleepers), f'{labelled}/{len(sleepers)}')
                 check('rows show budget', pg.locator('.gv-budget').count() == len(goals), pg.locator('.gv-budget').count())
+                clipped = pg.evaluate("[...document.querySelectorAll('.gv-chip')].filter(c => c.getBoundingClientRect().right > innerWidth).map(c => c.textContent.trim())")
+                check(f'no filter chip off the edge {name}', not clipped, clipped, 'none')
             if a.shots:
                 os.makedirs(a.shots, exist_ok=True)
                 pg.wait_for_timeout(500)   # the theme switch animates
@@ -100,6 +102,29 @@ def main(p):
                         }""")
                         check(f'axe serious/critical {tag} {route}', not v, v[:4], '0')
             ctx.close()
+
+    # A chosen filter stays visible when its count reaches zero, and popovers dismiss.
+    ctx = b.new_context(viewport={'width': 1440, 'height': 900}, extra_http_headers=H)
+    pg = ctx.new_page()
+    pg.goto(a.base + '/#goals')
+    pg.wait_for_selector('.gv-row')
+    states = {g['display']['state'] for g in goals}
+    chip = 'stuck' if 'stuck' in states else ('sleeping' if 'sleeping' in states else None)
+    if chip:
+        pg.click(f'.gv-chip[data-filter="{chip}"]')
+        pg.evaluate("""(chip) => { const s = window.app._gv; s.list = s.list.filter(g => g.display.state !== chip); window.app._gvPatchList(document.querySelector('.gv')); }""", chip)
+        check('chosen filter survives a zero count', pg.locator(f'.gv-chip[data-filter="{chip}"][aria-pressed="true"]').count() == 1)
+    pg.goto(a.base + '/#goals')
+    pg.reload()
+    pg.wait_for_selector('.gv-row')
+    pg.click('.gv-help summary')
+    check('help opens', pg.locator('.gv-help[open]').count() == 1)
+    pg.mouse.click(700, 800)
+    check('help closes on an outside click', pg.locator('.gv-help[open]').count() == 0)
+    pg.click('.gv-help summary')
+    pg.keyboard.press('Escape')
+    check('help closes on Esc', pg.locator('.gv-help[open]').count() == 0)
+    ctx.close()
 
     # State survives events; mobile back restores scroll.
     ctx = b.new_context(viewport={'width': 390, 'height': 844}, extra_http_headers=H)
@@ -190,7 +215,7 @@ def main(p):
         pg.wait_for_selector('dialog[open]', state='detached', timeout=10000)
         g = api(f'/api/goals/{gid}')
         check('block: dialog holds the goal with a typed check', g['status'] == 'blocked' and g.get('unblockCheck', {}).get('type') == 'after-time')
-        check('block: shows as needs you', g['display']['state'] == 'needs-you', g['display']['state'])
+        check('block with a typed check: server retries it, not the reader', g['display']['state'] == 'retrying', g['display']['state'])
         pg.wait_for_selector('[data-act=retry]')
         pg.click('[data-act=retry]')
         pg.wait_for_function(f"!document.querySelector('[data-act=retry]')", timeout=10000)
