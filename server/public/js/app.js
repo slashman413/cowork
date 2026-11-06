@@ -3189,9 +3189,16 @@ class App {
         g.history.slice(-12).map(h => `<div style="font-size:0.76rem;padding:3px 0;border-top:1px solid var(--bg-tertiary)"><code>${esc(h.kind)}</code>${h.phaseKey ? ' · ' + esc(h.phaseKey) : ''}${h.met !== undefined ? ' · met=' + h.met : ''}${h.reason ? ' — ' + esc(h.reason) : ''}${h.unblockCriteria ? ` <span style="color:var(--text-muted)">(resume when: ${esc(h.unblockCriteria)})</span>` : ''} <span style="color:var(--text-muted)">${timeAgo(h.at)}</span></div>`).join('')
       }</div>` : '';
 
+      // Judger documents open in the in-app markdown viewer (delegated .md-artifact
+      // handler). `artifact` is "<taskId>/<file>"; the href stays as the fallback for
+      // middle-click / copy-link.
+      const judgerDoc = (artifact, label) => {
+        const cut = artifact.indexOf('/');
+        return `<div style="font-size:0.78rem"><a class="md-artifact" href="/api/artifacts/${esc(artifact)}" data-md-task="${esc(artifact.slice(0, cut))}" data-md-file="${esc(artifact.slice(cut + 1))}" data-md-kind="artifacts" title="Open in the markdown viewer">${label}</a></div>`;
+      };
       const minutes = (g.minutes || []).length ? `<div style="margin-top:10px"><div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:4px">Reports &amp; meeting minutes</div>${
-        g.minutes.map(m => `<div style="font-size:0.78rem"><a href="/api/artifacts/${esc(m.artifact)}" target="_blank" rel="noopener">📝 minutes — ${esc(m.phaseKey)}</a></div>`).join('')
-      }${g.phases.filter(p => p.reportArtifact).map(p => `<div style="font-size:0.78rem"><a href="/api/artifacts/${esc(p.reportArtifact)}" target="_blank" rel="noopener">📊 report — ${esc(p.key)}</a></div>`).join('')}</div>` : '';
+        g.minutes.map(m => judgerDoc(m.artifact, `📝 minutes — ${esc(m.phaseKey)}`)).join('')
+      }${g.phases.filter(p => p.reportArtifact).map(p => judgerDoc(p.reportArtifact, `📊 report — ${esc(p.key)}`)).join('')}</div>` : '';
 
       return `<div class="card" style="margin-bottom:var(--space-md)">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
