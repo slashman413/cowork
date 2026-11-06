@@ -115,20 +115,31 @@ export function createMultiplexedServer(
   const backupCertPath = path.join(certDir, 'cert.pem.bak-selfsigned');
   const backupKeyPath = path.join(certDir, 'key.pem.bak-selfsigned');
 
+  // An SNI context only replaces the default certificate of its own key type:
+  // with an ECDSA primary and an RSA localhost cert, OpenSSL keeps both and
+  // prefers ECDSA, so localhost clients silently get the primary certificate.
+  const loadLocalhostCtx = (certPath: string, keyPath: string): tlsModule.SecureContext | null => {
+    try {
+      const key = fs.readFileSync(keyPath);
+      const keyType = crypto.createPrivateKey(key).asymmetricKeyType;
+      const primaryKeyType = crypto.createPrivateKey(primaryKey).asymmetricKeyType;
+      if (keyType !== primaryKeyType) {
+        console.warn(
+          `TLS: ${keyPath} is ${keyType} but ${tls!.keyFile} is ${primaryKeyType}; ` +
+          `SNI may not select the localhost certificate. Use the same key type for both.`
+        );
+      }
+      return tlsModule.createSecureContext({ cert: fs.readFileSync(certPath), key });
+    } catch (err) {
+      console.warn(`TLS: could not load localhost certificate ${certPath}:`, err);
+      return null;
+    }
+  };
+
   if (fs.existsSync(localhostCertPath) && fs.existsSync(localhostKeyPath)) {
-    try {
-      localhostCtx = tlsModule.createSecureContext({
-        cert: fs.readFileSync(localhostCertPath),
-        key: fs.readFileSync(localhostKeyPath)
-      });
-    } catch {}
+    localhostCtx = loadLocalhostCtx(localhostCertPath, localhostKeyPath);
   } else if (fs.existsSync(backupCertPath) && fs.existsSync(backupKeyPath)) {
-    try {
-      localhostCtx = tlsModule.createSecureContext({
-        cert: fs.readFileSync(backupCertPath),
-        key: fs.readFileSync(backupKeyPath)
-      });
-    } catch {}
+    localhostCtx = loadLocalhostCtx(backupCertPath, backupKeyPath);
   } else if (trustedDomains.includes('localhost')) {
     localhostCtx = primaryCtx;
   }

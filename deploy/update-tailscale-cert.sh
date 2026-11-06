@@ -36,17 +36,24 @@ cp -f "$TMP_DIR/cert.pem" "$DEST_DIR/cert.pem"
 cp -f "$TMP_DIR/key.pem" "$DEST_DIR/key.pem"
 chmod 600 "$DEST_DIR/cert.pem" "$DEST_DIR/key.pem"
 
-# Also ensure localhost fallback cert exists in DEST_DIR for local SNI fallback
-if [ ! -f "$DEST_DIR/localhost.pem" ] || [ ! -f "$DEST_DIR/localhost-key.pem" ]; then
+# Also ensure localhost fallback cert exists in DEST_DIR for local SNI fallback.
+# It must use the same key type as the Tailscale cert (ECDSA): with an RSA cert
+# here, TLS clients of https://localhost get the Tailscale cert instead.
+if [ ! -f "$DEST_DIR/localhost.pem" ] || [ ! -f "$DEST_DIR/localhost-key.pem" ] ||
+   ! openssl pkey -in "$DEST_DIR/localhost-key.pem" -noout -text 2>/dev/null | grep -q 'ASN1 OID: prime256v1'; then
   echo "Generating local fallback certificate for localhost/127.0.0.1..."
-  openssl req -x509 -newkey rsa:2048 -nodes \
+  openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
     -keyout "$DEST_DIR/localhost-key.pem" \
     -out "$DEST_DIR/localhost.pem" \
     -days 3650 \
     -subj "/CN=localhost" \
-    -addext "subjectAltName=DNS:localhost,IP:127.0.0.1,IP:::1" >/dev/null 2>&1 || true
-  chmod 600 "$DEST_DIR/localhost.pem" "$DEST_DIR/localhost-key.pem" 2>/dev/null || true
+    -addext "subjectAltName=DNS:localhost,IP:127.0.0.1,IP:::1" >/dev/null 2>&1
+  chmod 600 "$DEST_DIR/localhost.pem" "$DEST_DIR/localhost-key.pem"
 fi
+
+# Local clients trust cert.pem through NODE_EXTRA_CA_CERTS, so it also has to
+# carry the self-signed localhost cert. The Tailscale leaf stays first.
+cat "$DEST_DIR/localhost.pem" >> "$DEST_DIR/cert.pem"
 
 echo "Successfully installed Let's Encrypt TLS certificate to:"
 echo "  $DEST_DIR/cert.pem"
