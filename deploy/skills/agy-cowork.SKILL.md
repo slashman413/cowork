@@ -516,7 +516,7 @@ way; copy that shape rather than writing a bare metric.
 | `GET` | `/api/workflows` | Workflow templates |
 | `POST` | `/api/workflows/:id/run` | Start a workflow run |
 | `GET` | `/api/workflow-runs/:runId` | Run status and decision log |
-| `GET`/`POST` | `/api/goals` | List goals / create one |
+| `GET`/`POST` | `/api/goals` | List goal summaries (`?view=full` for whole records) / create one |
 | `GET`/`PATCH`/`DELETE` | `/api/goals/:id` | Read, edit, or remove a goal |
 | `POST` | `/api/goals/:id/activate`, `/pause`, `/block` | Drive a goal's lifecycle (`activate` also resumes a blocked goal; `block` takes a `reason` + `unblockCriteria`) |
 | `GET` | `/api/goals/:id/tasks` | The tasks a goal generated |

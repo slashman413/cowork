@@ -285,7 +285,7 @@ starters are already shaped this way — copy one rather than writing a bare met
 Achiever can also **block itself** (`{"kind":"block","reason":"…","unblockCriteria":"…"}`)
 when it hits a missing credential, an external dependency, or a human-only decision.
 
-`GET/POST /api/goals` · `GET/PATCH/DELETE /api/goals/:id` ·
+`GET/POST /api/goals` (summaries; `?view=full` for whole records) · `GET/PATCH/DELETE /api/goals/:id` ·
 `POST /api/goals/:id/{activate,pause,block}` · `GET /api/goals/:id/tasks`
 
 ## Procedure
