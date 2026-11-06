@@ -67,6 +67,20 @@ export function flatUsage(u: any, turns?: unknown): RunUsage | null {
   };
 }
 
+/** The final assistant text in a `hermes sessions export --format jsonl` file. */
+export function lastAssistantText(jsonl: string): string {
+  let text = '';
+  for (const line of jsonl.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      for (const m of JSON.parse(line).messages || []) {
+        if (m?.role === 'assistant' && typeof m.content === 'string' && m.content.trim()) text = m.content;
+      }
+    } catch { /* a bad line is skipped */ }
+  }
+  return text;
+}
+
 const clip = (s: string, n: number): string => {
   const one = s.replace(/\s+/g, ' ').trim();
   return one.length > n ? `${one.slice(0, n - 1)}…` : one;

@@ -64,7 +64,7 @@ test('display state table', () => {
     ['in progress', {}, [task({ status: 'in-progress' })], 'running'],
     ['judger open', { phases: [{ key: 'a', title: 'A', status: 'completing', taskIds: [] }] }, [], 'auditing'],
     ['idle active', {}, [], 'thinking'],
-    ['budget', { status: 'blocked', blockCode: 'budget_exhausted' }, [], 'needs-you', 'raise-budget'],
+    ['budget', { status: 'blocked', blockCode: 'budget_exhausted', stepBudget: 0 }, [], 'needs-you', 'raise-budget'],
     ['rate limit', { status: 'blocked', blockCode: 'rate_limit', nextRetryAt: '2026-11-06T09:00:00Z' }, [], 'retrying', 'retry'],
     ['first failure', { status: 'blocked', blockCode: 'achiever_no_progress', blockCount: 1 }, [], 'retrying', 'retry'],
     ['repeat failure', { status: 'blocked', blockCode: 'achiever_no_progress', blockCount: 4 }, [], 'stuck', 'retry'],
@@ -292,4 +292,84 @@ test('a failed probe advances the backoff with no history row', () => {
   assert.equal(second.blockCount, first.blockCount! + 1);
   assert.ok(Date.parse(second.nextRetryAt!) > Date.parse(first.nextRetryAt!));
   assert.equal(goals.fullHistory(g.goalId).length, before);
+});
+
+// ── Review fixes, 11-06 ─────────────────────────────────────────────────────
+
+test('coalesced blocks show the latest cause, not the first', () => {
+  const rows = [
+    { kind: 'block', code: 'achiever_no_progress', reason: 'old', at: '2026-11-01T00:00:00Z' },
+    { kind: 'resume', at: '2026-11-01T01:00:00Z' },
+    { kind: 'block', code: 'achiever_no_progress', reason: 'empty reply', at: '2026-11-01T02:00:00Z' }
+  ] as any[];
+  const [row] = coalesceHistory(rows);
+  assert.equal(row.reason, 'empty reply');
+  assert.equal(row.count, 2);
+  assert.equal(coalesceHistory([row]).length, 1, 'coalescing a coalesced row changes nothing');
+});
+
+test('a raised budget stops asking the reader to raise it', () => {
+  const blocked = (over: Partial<GoalRecord>) => rec({ status: 'blocked', blockCode: 'budget_exhausted', blockReason: 'x', ...over });
+  const tasks = [task({ context: { goalGenerated: true, role: 'goal-achiever' } })];
+  assert.equal(deriveDisplayState(blocked({ stepBudget: 1 }), tasks).state, 'needs-you');
+  const raised = deriveDisplayState(blocked({ stepBudget: 2 }), tasks);
+  assert.equal(raised.state, 'retrying');
+  assert.equal(raised.line, 'Back under budget');
+});
+
+test('a timed check retries when it passes, not after the backoff', () => {
+  const { goals } = setup();
+  const g = goals.create({ title: 'T', successCriteria: 'C?', phases: [{ key: 'a', title: 'A' }] });
+  goals.activate(g.goalId);
+  const at = new Date(Date.now() + 60_000).toISOString();
+  goals.block(g.goalId, 'waiting', 'later', { code: 'achiever_declared', check: { type: 'after-time', value: at } });
+  for (let i = 0; i < 4; i++) goals.deferRetry(g.goalId);
+  assert.equal(goals.get(g.goalId)!.nextRetryAt, at);
+});
+
+test('an accepted block clears the rejected-move note', () => {
+  const { goals } = setup();
+  const g = goals.create({ title: 'T', successCriteria: 'C?', phases: [] });
+  goals.update(g.goalId, { phases: [{ key: 'a', title: 'A' }] });
+  goals.activate(g.goalId);
+  goals.applyAchieverDecision(g.goalId, { kind: 'plan', phase: { key: 'BAD KEY', title: 'x' }, reason: 'r' } as any);
+  assert.ok(goals.get(g.goalId)!.lastRejected);
+  goals.applyAchieverDecision(g.goalId, { kind: 'block', reason: 'stuck', unblockCriteria: 'later' } as any);
+  assert.equal(goals.get(g.goalId)!.lastRejected, undefined);
+});
+
+test('Retry now clears a rate-limit hold on an active goal', () => {
+  const { goals } = setup();
+  const g = goals.create({ title: 'T', successCriteria: 'C?', phases: [{ key: 'a', title: 'A' }] });
+  goals.activate(g.goalId);
+  goals.holdForRateLimit(g.goalId, '2030-01-01T00:00:00.000Z');
+  goals.activate(g.goalId, { auto: true });
+  assert.ok(goals.get(g.goalId)!.achieverRetryAt, 'the drive loop does not clear it');
+  goals.activate(g.goalId);
+  assert.equal(goals.get(g.goalId)!.achieverRetryAt, undefined);
+});
+
+test('a block the server can check itself does not ask for the reader', () => {
+  const r = rec({ status: 'blocked', blockCode: 'achiever_declared', unblockCriteria: 'Reset passes', unblockCheck: { type: 'after-time', value: '2030-01-01T00:00:00Z' } });
+  const d = deriveDisplayState(r, [], { now: NOW });
+  assert.equal(d.state, 'retrying');
+  assert.match(d.line, /Reset passes/);
+});
+
+test('token-budget display follows the full count, Achiever turns included', () => {
+  const r = rec({ status: 'blocked', blockCode: 'token_budget', blockReason: 'x', tokenBudget: 1000 });
+  assert.equal(deriveDisplayState(r, [], { now: NOW, overTokens: true }).state, 'needs-you');
+  assert.equal(deriveDisplayState(r, [], { now: NOW, overTokens: false }).state, 'retrying');
+});
+
+test('a resumed goal tells the Achiever what it was held on, until a move progresses', () => {
+  const { goals } = setup();
+  const g = goals.create({ title: 'T', successCriteria: 'C?', phases: [{ key: 'a', title: 'A' }] });
+  goals.activate(g.goalId);
+  goals.block(g.goalId, 'LINE login expired', 'Login works', { code: 'achiever_declared' });
+  goals.activate(g.goalId, { auto: true });
+  const ctx = goals.achieverContext(g.goalId)!;
+  assert.match(buildAchieverPrompt(ctx as any), /RESUMED FROM A BLOCK: LINE login expired Resume condition: Login works/);
+  goals.applyAchieverDecision(g.goalId, { kind: 'plan', phase: { key: 'next', title: 'N' }, reason: 'r' } as any);
+  assert.equal(goals.get(g.goalId)!.lastBlock, undefined);
 });

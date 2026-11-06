@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'child_process';
+import { spawn, type ChildProcess, execFile } from 'child_process';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, readdirSync, readFileSync, writeFileSync, statSync, createWriteStream, type WriteStream } from 'node:fs';
@@ -22,7 +22,7 @@ import { extractPrUrls, openedPrUrls, prInScope, prWatchTaskSpec } from './pr-au
 import { shouldSharpenTask, sharpenTask, mergeSharpenedContext } from './sharpener.js';
 import { taskTier, mergeTierChain, reviewChain, brainFamily, type TierName } from './tiers.js';
 import { canonicalBrainId } from '../config.js';
-import { STREAMING_EXECS, streamArgs, createStreamRenderer, claudeUsage, flatUsage } from './progress-stream.js';
+import { STREAMING_EXECS, streamArgs, createStreamRenderer, claudeUsage, flatUsage, lastAssistantText } from './progress-stream.js';
 import { briefPersona } from './persona-brief.js';
 import { ClaudeProfile } from './claude-profile.js';
 import { killProcessTree } from './proc-tree.js';
@@ -991,7 +991,11 @@ export class Dispatcher {
       if (rec.unblockCheck) {
         const check = rec.unblockCheck;
         this.decidingGoals.add(rec.goalId);
-        runUnblockCheck(check, { brainAvailable: id => !this.store.brainCooldownUntil?.(id) && !!this.config.orchestration.brains?.[id] })
+        // An unknown brain can never become available, so that check must not hold the goal.
+        runUnblockCheck(check, { brainAvailable: id => {
+          const known = canonicalBrainId(this.config, id);
+          return !this.config.orchestration.brains?.[known] || !this.store.brainCooldownUntil?.(known);
+        } })
           .then(passed => {
             if (passed) {
               this.goals!.activate(rec.goalId, { auto: true });
@@ -1049,6 +1053,12 @@ export class Dispatcher {
         try {
           const turn = await this.achieverTurn(goalId, rec.achieverBrainChain, prompt, timeout);
           if (turn.held) return;   // every brain rate limited: not a failure
+          // Paused, blocked or deleted during the turn: its answer no longer applies.
+          if (this.goals!.get(goalId)?.status !== 'active') {
+            this.goals!.logAchieverTurn(goalId, { at: new Date().toISOString(), brain: turn.brain, exec: turn.exec, mode, outcome: 'rejected',
+              kind: turn.decision?.kind, reason: 'goal no longer active', usage: turn.usage, durationMs: turn.durationMs });
+            return;
+          }
           const decision = turn.decision;
           if (!decision) { this.registerGoalFailure(goalId, turn.why || 'no usable decision from the Achiever'); return; }
           const applied = this.goals!.applyAchieverDecision(goalId, decision);
@@ -1084,7 +1094,7 @@ export class Dispatcher {
     console.error(`Dispatcher: goal ${goalId} — ${why} (attempt ${n}/${Dispatcher.MAX_GOAL_FAILURES})`);
     if (n >= Dispatcher.MAX_GOAL_FAILURES) {
       this.goalFailures.delete(goalId);
-      this.goals?.block(goalId, `Achiever made no usable progress after ${n} turns (${why}) — goal held, NOT completed`, undefined, { code: 'achiever_no_progress' });
+      this.goals?.block(goalId, `Achiever made no usable progress (${why}) — goal held, NOT completed`, undefined, { code: 'achiever_no_progress' });
     }
   }
 
@@ -1112,10 +1122,8 @@ export class Dispatcher {
   private readHermesUsage(file: string | null): RunUsage | null {
     if (!file) return null;
     try {
-      const usage = flatUsage(JSON.parse(readFileSync(file, 'utf-8')));
-      rmSync(file, { force: true });
-      return usage;
-    } catch { return null; }
+      return flatUsage(JSON.parse(readFileSync(file, 'utf-8')));
+    } catch { return null; } finally { rmSync(file, { force: true }); }
   }
 
   private achieverMode(): 'toolless' | 'legacy' {
@@ -1123,29 +1131,39 @@ export class Dispatcher {
   }
 
   /** The brains an Achiever turn may use, in order: the chain's local, runnable
-   *  members, else the router brain. Remote brains execute tasks, not this. */
+   *  members. With no chain, a default-chain claude brain and then the router brain:
+   *  the prompt embeds untrusted task results, claude is the one exec that can run it
+   *  with no tools at all, and one broken brain must not stall every unpinned goal.
+   *  Remote brains execute tasks, not this. */
   private achieverBrains(chain?: string[]): { id?: string; exec: string; model: string }[] {
-    const brains = this.config.orchestration.brains || {};
-    const local = (chain || []).filter(id => {
+    const orch = this.config.orchestration;
+    const brains = orch.brains || {};
+    const runnable = (ids: string[]) => ids.map(id => canonicalBrainId(this.config, id)).filter(id => {
       const b = brains[id];
       return b?.location === 'local' && b.exec && !b.disabled;
     }).map(id => ({ id, exec: brains[id].exec as string, model: brains[id].model || '' }));
-    return local.length ? local : [this.routerModel()];
+    const pinned = runnable(chain || []);
+    if (pinned.length) return pinned;
+    const router = this.routerModel();
+    if (chain?.length) return [router];   // pinned to brains that cannot run here
+    return [...runnable(orch.defaultChain || []).filter(b => b.exec === 'claude').slice(0, 1), router];
   }
 
   /**
    * One Achiever turn. Walks the chain past cooling and rate-limited brains. A
    * rate-limit reply is not a bad decision, so it counts as nothing: if the whole
    * chain is cooling the goal is held until the earliest reset with no spawn, no
-   * failure and no block row. Every attempt is logged, with the raw reply when it
-   * could not be used, because a failure cannot be diagnosed from a log line alone.
+   * failure and no block row. An empty or unusable reply moves on to the next brain
+   * too, and counts as a failure only once the chain is exhausted. Every attempt is
+   * logged, with the raw reply when it could not be used, because a failure cannot be
+   * diagnosed from a log line alone.
    */
   private async achieverTurn(goalId: string, chain: string[] | undefined, prompt: string, timeoutMs: number): Promise<{
     decision?: AchieverDecision | null; held?: boolean; why?: string; brain?: string; exec?: string; usage?: RunUsage | null; durationMs?: number;
   }> {
     const log = (t: Omit<AchieverTurn, 'at' | 'mode'>) => this.goals!.logAchieverTurn(goalId, { at: new Date().toISOString(), mode: this.achieverMode(), ...t });
     const resets: string[] = [];
-    let lastWhy: string | undefined;
+    let failed: { why: string; brain?: string; exec?: string; usage?: RunUsage | null; durationMs?: number } | undefined;
     for (const brain of this.achieverBrains(chain)) {
       const cooling = brain.id ? this.store.brainCooldownUntil?.(brain.id) : undefined;
       if (cooling) { resets.push(cooling); continue; }
@@ -1156,53 +1174,111 @@ export class Dispatcher {
       const base = { brain: brain.id || brain.model, exec: brain.exec, usage: reply.usage, durationMs };
       if (decision) return { decision, ...base };
       // Checked only after parsing, so a real decision that mentions a rate limit counts as a decision.
-      if (isRateLimitFailure(reply.text)) {
+      // Some CLIs report a 429 only on stderr.
+      if (isRateLimitFailure(reply.text.trim() ? reply.text : reply.stderr || '')) {
         const until = brain.id ? this.store.noteBrainRateLimited?.(brain.id) : undefined;
         resets.push(until || new Date(Date.now() + 15 * 60_000).toISOString());
         log({ ...base, outcome: 'rate-limited', raw: reply.text });
         continue;
       }
-      lastWhy = reply.timedOut ? 'Achiever turn timed out' : reply.text.trim() ? 'unparseable reply' : 'empty reply';
-      log({ ...base, outcome: reply.timedOut ? 'timeout' : 'unparseable', reason: lastWhy, raw: reply.text });
-      return { why: lastWhy, ...base };
+      const why = reply.timedOut ? 'Achiever turn timed out' : reply.text.trim() ? 'unparseable reply' : 'empty reply';
+      log({ ...base, outcome: reply.timedOut ? 'timeout' : 'unparseable', reason: why, raw: reply.text.trim() ? reply.text : reply.stderr });
+      failed = { why, ...base };
     }
+    if (failed) return failed;
     if (resets.length) {
       const until = resets.sort()[0];
       this.goals!.holdForRateLimit(goalId, until);
       return { held: true };
     }
-    return { why: lastWhy || 'no Achiever brain available' };
+    return { why: 'no Achiever brain available' };
+  }
+
+  /** argv for one Achiever turn. Only claude is truly tool-free. hermes gets its
+   *  narrowest toolset and a usage report, but it has no flag that removes MCP tools
+   *  (--safe-mode also drops its provider), so its turn can still call those. */
+  private achieverArgv(brain: { exec: string; model: string }, prompt: string, usageFile: string | null): string[] {
+    if (this.achieverMode() === 'toolless') {
+      if (brain.exec === 'claude') return this.reasonArgv(brain.model, prompt);
+      if (brain.exec === 'hermes') return ['hermes', ...(brain.model ? ['-m', brain.model] : []), '-z', prompt, '-t', 'clarify', ...(usageFile ? ['--usage-file', usageFile] : [])];
+    }
+    return this.buildArgv({ exec: brain.exec as RoleConfig['exec'], model: brain.model }, prompt);
   }
 
   /** Run one reasoning call for the Achiever on a specific brain. */
-  private askAchieverBrain(brain: { exec: string; model: string }, prompt: string, timeoutMs: number): Promise<{ text: string; usage?: RunUsage | null; timedOut?: boolean }> {
-    const toolless = this.achieverMode() === 'toolless' && brain.exec === 'claude';
-    const argv = toolless
-      ? this.reasonArgv(brain.model, prompt)
-      : this.buildArgv({ exec: brain.exec as RoleConfig['exec'], model: brain.model }, prompt);
+  private askAchieverBrain(brain: { exec: string; model: string }, prompt: string, timeoutMs: number): Promise<{ text: string; usage?: RunUsage | null; timedOut?: boolean; stderr?: string }> {
+    const lean = this.achieverMode() === 'toolless' && (brain.exec === 'claude' || brain.exec === 'hermes');
+    const toolless = lean && brain.exec === 'claude';
+    const usageFile = lean && brain.exec === 'hermes' ? join(tmpdir(), `cowork-achiever-usage-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`) : null;
+    const argv = this.achieverArgv(brain, prompt, usageFile);
+    const graceMs = this.config.orchestration?.killGraceMs ?? 5000;
+    // A fresh empty cwd per turn: no project CLAUDE.md loads, and no earlier run can
+    // leave settings or hooks there for this one to pick up.
+    const scratch = lean ? mkdtempSync(join(tmpdir(), 'cowork-achiever-')) : null;
     return new Promise((resolve) => {
       const child = spawn(argv[0], argv.slice(1), {
-        env: toolless ? { ...process.env, CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' } : { ...process.env },
-        // An empty cwd, so no project CLAUDE.md loads either.
-        ...(toolless ? { cwd: this.reasonScratchDir() } : {}),
+        env: lean ? { ...process.env, CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' } : { ...process.env },
+        ...(scratch ? { cwd: scratch } : {}),
+        // Its own process group, so a timeout can kill the whole tree.
+        detached: true,
         stdio: ['ignore', 'pipe', 'pipe']
       });
       let out = '';
+      let err = '';
       let timedOut = false;
-      const timer = setTimeout(() => { timedOut = true; child.kill('SIGTERM'); }, timeoutMs);
-      child.stdout.on('data', d => { out += d.toString(); });
-      child.on('error', () => { clearTimeout(timer); resolve({ text: '' }); });
-      child.on('close', () => {
+      let done = false;
+      const finish = (r: { text: string; usage?: RunUsage | null }) => {
+        if (done) return;
+        done = true;
         clearTimeout(timer);
+        clearTimeout(giveUp);
+        if (scratch) rmSync(scratch, { recursive: true, force: true });
+        if (usageFile) rmSync(usageFile, { force: true });
+        resolve({ ...r, timedOut, stderr: err });
+      };
+      let giveUp: ReturnType<typeof setTimeout>;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        if (child.pid) void killProcessTree(child.pid, { graceMs });
+        // A survivor holding the pipe open must not leave this turn in flight forever.
+        giveUp = setTimeout(() => finish({ text: stripAnsi(out) }), graceMs + 1000);
+      }, timeoutMs);
+      child.stdout.on('data', d => { out += d.toString(); });
+      child.stderr.on('data', d => { if (err.length < 2000) err += d.toString().slice(0, 2000 - err.length); });
+      child.on('error', () => finish({ text: '' }));
+      child.on('close', () => {
         const clean = stripAnsi(out);
-        if (!toolless) return resolve({ text: clean, timedOut });
+        if (usageFile) { void this.hermesAchieverReply(usageFile, clean).then(finish); return; }
+        if (!toolless) return finish({ text: clean });
         // --output-format json: one object with the answer and its usage.
         try {
           const ev = JSON.parse(clean);
-          resolve({ text: typeof ev.result === 'string' ? ev.result : '', usage: claudeUsage(ev), timedOut });
-        } catch { resolve({ text: clean, timedOut }); }
+          finish({ text: typeof ev.result === 'string' ? ev.result : '', usage: claudeUsage(ev) });
+        } catch { finish({ text: clean }); }
       });
     });
+  }
+
+  /**
+   * hermes -z can finish a turn, store the reply in its session, and still print
+   * nothing (exit 1 with `completed: true`). The usage report names the session, so
+   * the reply is read back from there instead of wasting the turn.
+   */
+  private async hermesAchieverReply(usageFile: string, stdout: string): Promise<{ text: string; usage: RunUsage | null }> {
+    let report: any = null;
+    try { report = JSON.parse(readFileSync(usageFile, 'utf-8')); } catch { /* no report */ }
+    rmSync(usageFile, { force: true });
+    const usage = flatUsage(report);
+    if (stdout.trim() || !report?.completed || typeof report.session_id !== 'string') return { text: stdout, usage };
+    const exportFile = `${usageFile}.session.jsonl`;
+    try {
+      await new Promise<void>((ok, fail) => execFile('hermes', ['sessions', 'export', '--session-id', report.session_id, '--format', 'jsonl', exportFile, '--yes'],
+        { timeout: 20_000 }, e => (e ? fail(e) : ok())));
+      return { text: lastAssistantText(readFileSync(exportFile, 'utf-8')), usage };
+    } catch (e) {
+      console.warn('Dispatcher: could not read the hermes session back:', e);
+      return { text: '', usage };
+    } finally { rmSync(exportFile, { force: true }); }
   }
 
   /** argv for a pure reasoning call on claude. The prompt embeds task results, which
@@ -1212,11 +1288,6 @@ export class Dispatcher {
       '--setting-sources', 'project,local', '--output-format', 'json'];
   }
 
-  private reasonScratchDir(): string {
-    const dir = join(tmpdir(), 'cowork-achiever-scratch');
-    try { mkdirSync(dir, { recursive: true }); } catch { /* exists */ }
-    return dir;
-  }
 
   /** The prompt the Achiever brain answers each turn. It frames the criterion as
    *  a strict Yes/No gate and constrains the reply to a single fenced-JSON

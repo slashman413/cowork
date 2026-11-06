@@ -1018,6 +1018,9 @@ export interface GoalRecord {
   /** Optional cap on metered tokens (all kinds, including cache reads) across the
    *  goal's tasks. Going over blocks the goal with code `token_budget`. */
   tokenBudget?: number;
+  /** The obstacle a resumed goal was held on, shown in the next prompt until a move
+   *  makes progress: a tool-free Achiever has no other way to know what to re-check. */
+  lastBlock?: { reason: string; unblockCriteria?: string; at: string };
   /** Why the last Achiever move was rejected, shown in the next prompt. */
   lastRejected?: { reason: string; at: string };
   /** Every Achiever brain is rate limited: no turn before this time. No failure is

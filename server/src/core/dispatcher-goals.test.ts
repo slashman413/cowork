@@ -310,3 +310,77 @@ test('a turn over the token budget blocks with its own reason and spends nothing
   assert.equal(rec.status, 'blocked');
   assert.equal(rec.blockCode, 'token_budget');
 });
+
+// ── Review fixes, 11-06: found from the first live turn ─────────────────────
+
+test('an empty reply moves on to the next brain, with no failure counted', async () => {
+  const { goals, dispatcher, goalId } = chainHarness();
+  const asked: string[] = [];
+  (dispatcher as any).askAchieverBrain = async (b: any) => {
+    asked.push(b.id);
+    return b.id === 'first' ? { text: '\n', stderr: 'boom' }
+      : { text: '```json\n{"kind":"plan","phase":{"key":"next","title":"Next"},"reason":"r"}\n```' };
+  };
+  (dispatcher as any).driveGoals();
+  await settle();
+  assert.deepEqual(asked, ['first', 'second']);
+  assert.ok(goals.get(goalId)!.phases.some(p => p.key === 'next'));
+  assert.equal((dispatcher as any).goalFailures.get(goalId), undefined);
+  const t = goals.achieverTurns(goalId);
+  assert.equal(t[0].reason, 'empty reply');
+  assert.equal(t[0].raw, 'boom', 'stderr is kept when stdout is empty');
+});
+
+test('a failure counts once, only when every brain failed', async () => {
+  const { dispatcher, goalId } = chainHarness();
+  let spawns = 0;
+  (dispatcher as any).askAchieverBrain = async () => { spawns++; return { text: 'prose' }; };
+  (dispatcher as any).driveGoals();
+  await settle();
+  assert.equal(spawns, 2);
+  assert.equal((dispatcher as any).goalFailures.get(goalId), 1);
+});
+
+test('a goal with no chain gets a tool-free claude brain, then the router', () => {
+  const { dispatcher } = chainHarness();
+  const orch = (dispatcher as any).config.orchestration;
+  orch.classifier = { exec: 'hermes', model: 'b', timeoutMs: 1000 };
+  orch.brains.third = { location: 'local', exec: 'agy', model: 'c' };
+  orch.brains.far = { location: 'remote', exec: 'claude', model: 'd' };
+  orch.defaultChain = ['far', 'third', 'second', 'first'];
+  const names = (chain?: string[]) => (dispatcher as any).achieverBrains(chain).map((b: any) => b.id || `router:${b.model}`);
+  // agy keeps its tools, and remote brains cannot run this.
+  assert.deepEqual(names([]), ['first', 'router:b']);
+  assert.deepEqual(names(undefined), ['first', 'router:b']);
+  assert.deepEqual(names(['second']), ['second'], 'a pinned chain is respected');
+  assert.deepEqual(names(['far']), ['router:b'], 'a pin that cannot run here does not widen to the default chain');
+});
+
+test('hermes turns use the narrowest toolset and report usage', () => {
+  const { dispatcher } = chainHarness();
+  const argv = (dispatcher as any).achieverArgv({ exec: 'hermes', model: 'm' }, 'P', '/tmp/u.json');
+  assert.deepEqual(argv, ['hermes', '-m', 'm', '-z', 'P', '-t', 'clarify', '--usage-file', '/tmp/u.json']);
+});
+
+test('a rate limit reported only on stderr holds the goal instead of failing it', async () => {
+  const { goals, dispatcher, goalId } = chainHarness();
+  (dispatcher as any).askAchieverBrain = async () => ({ text: '', stderr: "You've hit your 5-hour limit" });
+  (dispatcher as any).driveGoals();
+  await settle();
+  assert.ok(goals.get(goalId)!.achieverRetryAt);
+  assert.equal((dispatcher as any).goalFailures.get(goalId), undefined);
+});
+
+test('a turn whose goal was paused meanwhile neither applies nor counts', async () => {
+  const { goals, dispatcher, goalId } = chainHarness();
+  (dispatcher as any).askAchieverBrain = async () => {
+    goals.pause(goalId);
+    return { text: '```json\n{"kind":"plan","phase":{"key":"late","title":"Late"},"reason":"r"}\n```' };
+  };
+  (dispatcher as any).driveGoals();
+  await settle();
+  assert.equal(goals.get(goalId)!.status, 'paused');
+  assert.ok(!goals.get(goalId)!.phases.some(p => p.key === 'late'));
+  assert.equal((dispatcher as any).goalFailures.get(goalId), undefined);
+  assert.equal(goals.achieverTurns(goalId).at(-1)!.reason, 'goal no longer active', 'its tokens still reach the log');
+});

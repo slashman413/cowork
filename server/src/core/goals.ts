@@ -245,9 +245,11 @@ export class Goals {
     if (!dir || !phase.attentionArtifact) return false;
     const file = path.join(dir, phase.attentionArtifact);
     try {
-      if (fs.existsSync(file) && fs.readFileSync(file, 'utf-8').trim()) return true;
+      const existing = fs.existsSync(file) ? fs.readFileSync(file, 'utf-8').trim() : '';
+      // Only a section counts as kept: the report merge reads it back by its heading.
+      if (extractAttention(existing)) return true;
       fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file, `${text}\n`);
+      fs.writeFileSync(file, `${existing ? `${existing}\n\n` : ''}${text}\n`);
       return true;
     } catch { return false; }
   }
@@ -411,7 +413,11 @@ export class Goals {
   activate(goalId: string, opts: { auto?: boolean } = {}): GoalRecord {
     const rec = this.load(goalId);
     if (!rec) throw new Error('goal not found');
-    if (rec.status === 'active') return rec;
+    if (rec.status === 'active') {
+      // Retry now on a rate-limit hold: the goal is active, but it is waiting.
+      if (!opts.auto && rec.achieverRetryAt) { delete rec.achieverRetryAt; return this.save(rec); }
+      return rec;
+    }
     if (rec.status !== 'draft' && rec.status !== 'paused' && rec.status !== 'blocked') {
       throw new Error(`cannot activate an ${rec.status} goal`);
     }
@@ -420,6 +426,9 @@ export class Goals {
     if (rec.status === 'blocked') {
       const how = opts.auto ? 'auto-resumed (circuit-breaker half-open probe)' : 'resumed by operator';
       this.addHistory(rec, { kind: 'resume', reason: how, at: new Date().toISOString() });
+      if (opts.auto && rec.blockCode === 'achiever_declared' && rec.blockReason) {
+        rec.lastBlock = { reason: rec.blockReason, ...(rec.unblockCriteria ? { unblockCriteria: rec.unblockCriteria } : {}), at: rec.blockedAt || new Date().toISOString() };
+      } else delete rec.lastBlock;
       delete rec.blockReason;
       delete rec.unblockCriteria;
       delete rec.blockedAt;
@@ -489,7 +498,13 @@ export class Goals {
     const rec = this.load(goalId);
     if (!rec || rec.status !== 'blocked') return rec;
     rec.blockCount = (rec.blockCount || 0) + 1;
-    rec.nextRetryAt = new Date(Date.now() + this.backoffMs(rec.blockCount)).toISOString();
+    let next = Date.now() + this.backoffMs(rec.blockCount);
+    // A timed check knows when it passes, so the backoff must not overshoot it.
+    if (rec.unblockCheck?.type === 'after-time') {
+      const at = Date.parse(rec.unblockCheck.value);
+      if (Number.isFinite(at)) next = Math.min(next, at);
+    }
+    rec.nextRetryAt = new Date(next).toISOString();
     return this.save(rec);
   }
 
@@ -540,8 +555,14 @@ export class Goals {
   /** The list view: every goal's derived state, sorted by what needs attention. */
   summaries(): GoalSummary[] {
     const byGoal = this.tasksByGoal();
-    return sortSummaries(this.list().map(rec =>
-      goalSummary(rec, byGoal.get(rec.goalId) || [], { deciding: this.deciding.has(rec.goalId) })));
+    return sortSummaries(this.list().map(rec => goalSummary(rec, byGoal.get(rec.goalId) || [], this.displayOpts(rec))));
+  }
+
+  private displayOpts(rec: GoalRecord) {
+    return {
+      deciding: this.deciding.has(rec.goalId),
+      ...(rec.status === 'blocked' && rec.blockCode === 'token_budget' ? { overTokens: this.overTokenBudget(rec.goalId) } : {})
+    };
   }
 
   /** Summaries plus the full record, usage rollups and compact task rows. */
@@ -549,7 +570,7 @@ export class Goals {
     const rec = this.load(goalId);
     if (!rec) return null;
     const tasks = this.generatedTasks(goalId);
-    const summary = goalSummary(rec, tasks, { deciding: this.deciding.has(goalId) });
+    const summary = goalSummary(rec, tasks, this.displayOpts(rec));
     const usagePhases: Record<string, ReturnType<typeof rollupTaskUsage>> = {};
     for (const ph of rec.phases) usagePhases[ph.key] = rollupTaskUsage(tasks.filter(t => t.context?.phaseKey === ph.key));
     const last = rec.minutes[rec.minutes.length - 1];
@@ -756,6 +777,8 @@ export class Goals {
       // named the recovery condition. Hold the goal honestly rather than spinning
       // turns until the failure ceiling kills it. This is the intended, graceful
       // stop — it counts as PROGRESS (the loop resolved), not a failure.
+      delete rec.lastRejected;   // this move was accepted, so that note is stale
+      delete rec.lastBlock;      // and block() records the new obstacle
       this.save(rec);
       this.block(goalId, decision.reason || 'Achiever declared the goal blocked', decision.unblockCriteria,
         { code: 'achiever_declared', check: sanitizeCheck(decision.unblockCheck) });
@@ -773,6 +796,8 @@ export class Goals {
         rec.status = 'achieved';
         this.clearBackoff(rec);
         rec.closedReason = decision.reason || 'success criteria met';
+        delete rec.lastRejected;
+        delete rec.lastBlock;
         this.addHistory(rec, { kind: 'finish', reason: rec.closedReason, at });
         this.save(rec);
         console.log(`Goals: ${goalId} ACHIEVED — ${rec.closedReason}`);
@@ -793,6 +818,7 @@ export class Goals {
       rec.phases.push({ key, title: title || key, status: 'planned', taskIds: [] });
       this.addHistory(rec, { kind: 'plan', phaseKey: key, reason: decision.reason, at });
       delete rec.lastRejected;
+      delete rec.lastBlock;
       this.trail(goalId, { phase: key, decision: `planned phase "${title || key}"`, why: decision.reason,
         evidence: 'goal history', result: 'planned' });
       this.clearBackoff(rec);   // forward progress → breaker back to CLOSED
@@ -846,6 +872,7 @@ export class Goals {
         why: decision.reason, evidence: `tasks ${created.map(id => id.slice(0, 8)).join(', ')}`, result: 'open' });
       this.clearBackoff(rec);   // forward progress → breaker back to CLOSED
       delete rec.lastRejected;
+      delete rec.lastBlock;
       this.save(rec);
       console.log(`Goals: ${goalId} emitted ${created.length} task(s) for phase "${phase.key}"`);
       return { emitted: created.length };

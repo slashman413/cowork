@@ -24,6 +24,8 @@ export interface DisplayState {
   action?: GoalAction;
   /** The task an `open-task` action points to. */
   taskId?: string;
+  /** When the running task started. */
+  since?: string;
 }
 
 /** Page sort order: what needs attention first. */
@@ -59,12 +61,14 @@ export const BLOCK_TEXT: Partial<Record<GoalBlockCode, { reason: string; resume:
   token_budget: { reason: 'Token budget used up before the criterion was met', resume: 'Raise the token budget or narrow the criterion. The goal then resumes on its next retry.' }
 };
 
-/** Block text with the standard wording filled in. */
-export function blockReasonText(row: { code?: GoalBlockCode; reason?: string }): string {
-  return row.reason || (row.code && BLOCK_TEXT[row.code]?.reason) || 'Held';
+export interface DisplayOpts {
+  deciding?: boolean;
+  now?: number;
+  /** Includes Achiever turns, which the task list cannot show. Set by Goals for a token-budget block. */
+  overTokens?: boolean;
 }
 
-export function deriveDisplayState(rec: GoalRecord, tasks: Task[], opts: { deciding?: boolean; now?: number } = {}): DisplayState {
+export function deriveDisplayState(rec: GoalRecord, tasks: Task[], opts: DisplayOpts = {}): DisplayState {
   const now = opts.now ?? Date.now();
   if (rec.status === 'achieved') return { state: 'achieved', line: clip(rec.closedReason || 'Success criterion met', 90) };
   if (rec.status === 'draft') return { state: 'draft', line: 'Not started', action: 'activate' };
@@ -77,14 +81,22 @@ export function deriveDisplayState(rec: GoalRecord, tasks: Task[], opts: { decid
     const code = blockCodeOf(rec);
     const noPhase = rec.phases.length > 0 && rec.phases.every(p => p.status === 'audited' || p.status === 'done');
     const retry = rec.nextRetryAt;
-    if (code === 'budget_exhausted') return { state: 'needs-you', line: 'Step budget used up. Raise it to continue.', nextAt: retry, action: 'raise-budget' };
-    if (code === 'token_budget') return { state: 'needs-you', line: 'Token budget used up. Raise it to continue.', nextAt: retry, action: 'raise-budget' };
+    // Once raised, the block clears on its next retry: nothing is left for the reader to do.
+    const execUsed = tasks.filter(t => !REVIEW_ROLES.has(t.context?.role)).length;
+    if (code === 'budget_exhausted') return execUsed < (rec.stepBudget ?? 24)
+      ? { state: 'retrying', line: 'Back under budget', nextAt: retry, action: 'retry' }
+      : { state: 'needs-you', line: 'Step budget used up. Raise it to continue.', nextAt: retry, action: 'raise-budget' };
+    if (code === 'token_budget') return !(opts.overTokens ?? (!!rec.tokenBudget && rollupTaskUsage(tasks).total >= rec.tokenBudget))
+      ? { state: 'retrying', line: 'Back under budget', nextAt: retry, action: 'retry' }
+      : { state: 'needs-you', line: 'Token budget used up. Raise it to continue.', nextAt: retry, action: 'raise-budget' };
     if (code === 'rate_limit') return { state: 'retrying', line: 'Rate limited', nextAt: retry, action: 'retry' };
     if (code === 'achiever_no_progress') {
       if (noPhase) return { state: 'stuck', line: 'No phase left to work on', nextAt: retry, action: 'plan-phase' };
       if ((rec.blockCount || 0) >= STUCK_AFTER_BLOCKS) return { state: 'stuck', line: `Failed ${rec.blockCount} retries in a row`, nextAt: retry, action: 'retry' };
       return { state: 'retrying', line: 'Achiever turn failed', nextAt: retry, action: 'retry' };
     }
+    // The server runs this check itself, so nobody has to act unless they want to.
+    if (rec.unblockCheck) return { state: 'retrying', line: clip(`Waiting: ${rec.unblockCriteria || rec.blockReason || 'a check to pass'}`, 90), nextAt: retry, action: 'retry' };
     return { state: 'needs-you', line: clip(rec.unblockCriteria && code === 'achiever_declared' ? rec.unblockCriteria : rec.blockReason || 'Held', 90), nextAt: retry, action: 'retry' };
   }
 
@@ -94,7 +106,7 @@ export function deriveDisplayState(rec: GoalRecord, tasks: Task[], opts: { decid
   if (phase) return { state: 'auditing', line: clip(`Reviewing: ${phase.title || phase.key}`, 90) };
 
   const executing = open.find(t => t.status === 'claimed' || t.status === 'in-progress');
-  if (executing) return { state: 'running', line: clip(`Running: ${executing.title}`, 90), taskId: executing.id };
+  if (executing) return { state: 'running', line: clip(`Running: ${executing.title}`, 90), taskId: executing.id, ...(executing.claimedAt ? { since: executing.claimedAt } : {}) };
 
   const isFuture = (t: Task) => !!t.scheduledAt && Date.parse(t.scheduledAt) > now;
   const future = open.filter(isFuture).sort((a, b) => Date.parse(a.scheduledAt!) - Date.parse(b.scheduledAt!));
@@ -151,7 +163,7 @@ export interface GoalSummary {
   updatedAt: string;
 }
 
-export function goalSummary(rec: GoalRecord, tasks: Task[], opts: { deciding?: boolean; now?: number } = {}): GoalSummary {
+export function goalSummary(rec: GoalRecord, tasks: Task[], opts: DisplayOpts = {}): GoalSummary {
   const exec = tasks.filter(t => !REVIEW_ROLES.has(t.context?.role));
   return {
     goalId: rec.goalId,
@@ -197,6 +209,7 @@ export function coalesceHistory(rows: GoalDecision[], tail = HISTORY_TAIL): Goal
         prior.count = (prior.count || 1) + (row.count || 1);
         prior.firstAt = prior.firstAt || prior.at;
         prior.lastAt = row.lastAt || row.at;
+        if (row.reason) prior.reason = row.reason;   // the latest cause, not the first
         prior.at = row.at;
         continue;
       }

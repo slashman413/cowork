@@ -86,6 +86,7 @@ export function buildAchieverPrompt(ctx: AchieverPromptContext): string {
   }
 
   if (ctx.nextMove) lines.push('', `NEXT MOVE (from the Judger's latest minutes): ${ctx.nextMove}`);
+  if (rec.lastBlock) lines.push('', `RESUMED FROM A BLOCK: ${clip(rec.lastBlock.reason, 300)}${rec.lastBlock.unblockCriteria ? ` Resume condition: ${clip(rec.lastBlock.unblockCriteria, 200)}` : ''} To check it, emit a mechanical task. If it still holds, block again.`);
   if (rec.lastRejected) lines.push('', `LAST MOVE REJECTED: ${clip(rec.lastRejected.reason, 300)}`);
 
   const noPhase = !ctx.currentPhaseKey;
