@@ -5,6 +5,7 @@ import path from 'path';
 import os from 'os';
 import http from 'http';
 import https from 'https';
+import tlsModule from 'tls';
 import { execFileSync } from 'child_process';
 import express from 'express';
 import { extractCertDomains, getPrimaryTrustedDomain, createMultiplexedServer } from './server-listener.js';
@@ -183,6 +184,42 @@ test('server-listener: multiplexed HTTP and HTTPS on same port', async () => {
       // server already closed in test flow above
     }
   } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('createMultiplexedServer: SNI routes between ECDSA primary and localhost certs', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mux-ecdsa-test-'));
+  const genEcCert = (name: string, cn: string) => execFileSync('openssl', [
+    'req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256', '-nodes',
+    '-keyout', path.join(tmpDir, `${name}-key.pem`),
+    '-out', path.join(tmpDir, `${name}.pem`),
+    '-days', '1',
+    '-subj', `/CN=${cn}`,
+    '-addext', `subjectAltName=DNS:${cn}`
+  ], { stdio: 'pipe' });
+  genEcCert('cert', 'primary.test');
+  genEcCert('localhost', 'localhost');
+
+  const { server } = createMultiplexedServer(express(), {
+    port: 6893,
+    host: '127.0.0.1',
+    tls: { certFile: path.join(tmpDir, 'cert.pem'), keyFile: path.join(tmpDir, 'cert-key.pem') }
+  });
+  const servedCn = (servername: string) => new Promise<string>((resolve, reject) => {
+    const socket = tlsModule.connect({ host: '127.0.0.1', port: 6893, servername, rejectUnauthorized: false }, () => {
+      const cn = socket.getPeerCertificate().subject.CN;
+      socket.destroy();
+      resolve(String(cn));
+    });
+    socket.on('error', reject);
+  });
+  try {
+    await new Promise(r => setTimeout(r, 100));
+    assert.equal(await servedCn('localhost'), 'localhost');
+    assert.equal(await servedCn('primary.test'), 'primary.test');
+  } finally {
+    await new Promise(r => server.close(r));
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
