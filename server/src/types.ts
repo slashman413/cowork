@@ -412,6 +412,16 @@ export interface OrchestrationConfig {
    *  decisions.tsv and writes an Attention section into the phase report.
    *  Default ON; `false` turns the review task off (the trail is always kept). */
   goalAttention?: boolean;
+  /** Goal-loop token controls. See docs/plans/goals-token-and-ux-plan.md. */
+  goals?: {
+    /** `toolless` (default): a claude Achiever runs with no tools, no MCP, no
+     *  auto-memory, in an empty cwd. `legacy`: the previous prompt and full argv. */
+    achieverMode?: 'toolless' | 'legacy';
+    /** A/B: half of goal execution tasks run with auto-memory off (context.usageArm). */
+    autoMemoryAB?: boolean;
+    /** A/B: half of Judgers get an evidence digest and length caps (context.usageArm). */
+    judgerDigestAB?: boolean;
+  };
   /** Per-task method cards from pinned pstack playbooks (PS-4). */
   methods?: MethodsConfig;
   /** PR shepherd (pstack opening-a-pr / babysit / shipping). See core/pr-automation.ts. */
@@ -831,6 +841,7 @@ export interface CoworkEventPayloads {
   taskCreated: { task: Task };
   taskClaimed: { task: Task; agentId: string };
   taskCompleted: { task: Task };
+  goalUpdated: { goalId: string };
   heartbeat: { agentId: string; status: string; currentTask?: string };
   brainExecuted: { brainId: string; exec: string; taskId: string };
   taskDeleted: { taskId: string; status?: string };
@@ -923,9 +934,11 @@ export interface GoalPhase {
   attentionTaskId?: string;
   /** "<taskId>/attention-<key>.md" once the review finished. */
   attentionArtifact?: string;
-  /** The review's "## Attention" section, kept so it can be merged into the
-   *  report whichever of Judger / Attention finishes last. */
+  /** Legacy inline copy of the "## Attention" section. New records keep only the
+   *  artifact pointer and the flag count; old records may still carry this. */
   attention?: string;
+  /** How many flags the Attention review raised. */
+  attentionFlags?: number;
 }
 
 /** One row of a goal's audit trail — every autonomous move is recorded so the
@@ -941,7 +954,33 @@ export interface GoalDecision {
   /** For 'block': the specific, checkable condition that would let the goal
    *  resume (the WOOP-style if-then unblock plan). */
   unblockCriteria?: string;
+  /** For 'block': machine-readable cause; display text is rendered from it. */
+  code?: GoalBlockCode;
+  /** Coalesced block rows: how many same-cause cycles this row stands for. */
+  count?: number;
+  firstAt?: string;
+  lastAt?: string;
   at: string;
+}
+
+/** Why a goal is blocked. Drives the page's display state and action. */
+export type GoalBlockCode = 'rate_limit' | 'achiever_no_progress' | 'budget_exhausted' | 'token_budget' | 'achiever_declared' | 'operator';
+
+/** A check the server runs itself before spending an LLM turn on a blocked goal.
+ *  Closed set on purpose: this text comes from an LLM, so no free-form commands. */
+export interface GoalUnblockCheck {
+  type: 'brain-available' | 'file-exists' | 'http-200' | 'after-time';
+  value: string;
+}
+
+/** Normalised token usage of one brain run. */
+export interface RunUsage {
+  input: number;
+  cacheRead: number;
+  cacheWrite: number;
+  output: number;
+  turns?: number;
+  costUsd?: number;
 }
 
 /** The Goal aggregate root, persisted as goals/<goalId>.json (ADR-006),
@@ -968,12 +1007,22 @@ export interface GoalRecord {
   achieverBrainChain?: string[];
   /** Ordered brain-id chain the Judger runs on (audit role). */
   judgerBrainChain?: string[];
-  /** Full audit trail (§4 domain events). */
+  /** Coalesced tail of the audit trail (at most 20 rows). The complete, append-only
+   *  record is goals/<id>/history.jsonl once `historyInJsonl` is set. */
   history: GoalDecision[];
+  historyInJsonl?: boolean;
   /** Meeting-minutes pointers, one per audited phase. */
   minutes: { phaseKey: string; artifact: string; at: string }[];
   /** Hard cap on generated EXECUTION tasks — the primary runaway guard. */
   stepBudget?: number;
+  /** Optional cap on metered tokens (all kinds, including cache reads) across the
+   *  goal's tasks. Going over blocks the goal with code `token_budget`. */
+  tokenBudget?: number;
+  /** Why the last Achiever move was rejected, shown in the next prompt. */
+  lastRejected?: { reason: string; at: string };
+  /** Every Achiever brain is rate limited: no turn before this time. No failure is
+   *  counted and the goal stays active. */
+  achieverRetryAt?: string;
   /** Honest reason the goal reached `achieved`. */
   closedReason?: string;
   /** Set while `blocked`: what obstacle stopped forward progress. Cleared on
@@ -997,6 +1046,9 @@ export interface GoalRecord {
   blockedAt?: string;
   blockCount?: number;
   nextRetryAt?: string;
+  blockCode?: GoalBlockCode;
+  /** Zero-token probe: when set, the retry fires an LLM turn only if this passes. */
+  unblockCheck?: GoalUnblockCheck;
   createdAt: string;
   updatedAt: string;
 }
@@ -1017,6 +1069,7 @@ export interface AchieverDecision {
    *  only a human can make, an external dependency), so the goal HOLDS with an
    *  honest recovery contract instead of spinning turns until it is killed. */
   unblockCriteria?: string;
+  unblockCheck?: GoalUnblockCheck;
   /** plan: the phase to append. */
   phase?: { key: string; title: string };
   /** emit: the tasks to generate for the current phase (chained in order; the
@@ -1028,5 +1081,11 @@ export interface AchieverDecision {
    *  Achiever takes no turns and burns no step budget until the checkpoint fires.
    *  That is what lets a goal wait out real-world time (a month of revenue, a
    *  cohort of traffic) instead of spinning evaluations until it blocks. */
-  tasks?: { title: string; description?: string; brain?: string; scheduledAt?: string }[];
+  tasks?: { title: string; description?: string; brain?: string; scheduledAt?: string;
+    /** Brain class; a tiered task is not pinned to the Achiever's brain. */
+    tier?: string;
+    /** With both present the task skips the intake sharpener. */
+    acceptance?: string[];
+    verify?: string[];
+  }[];
 }

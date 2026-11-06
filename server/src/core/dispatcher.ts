@@ -3,12 +3,14 @@ import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, readdirSync, readFileSync, writeFileSync, statSync, createWriteStream, type WriteStream } from 'node:fs';
 import { tmpdir } from 'node:os';
-import type { Config, RoleConfig, Task, AchieverDecision } from '../types.js';
+import type { Config, RoleConfig, Task, AchieverDecision, RunUsage } from '../types.js';
+import type { AchieverTurn } from './goal-view.js';
 import type { EventBus } from './events.js';
 import type { Store, CompletionDecision } from './store.js';
 import { isFailedTask } from './store.js';
 import type { Goals } from './goals.js';
-import { FIGURE_IT_OUT_RULES } from './goals.js';
+import { FIGURE_IT_OUT_RULES, hashArm, runUnblockCheck } from './goals.js';
+import { buildAchieverPrompt } from './achiever-prompt.js';
 import { verifyOutput, isRateLimitFailure, isCliRateLimitSignal, buildVerifierPrompt, shouldLlmVerify, parseLlmVerdict, parseSpecVerdict, selectSpecJudges, explainSpecJudgeSkips, DEFAULT_SPEC_JUDGES, extractEvidenceBlock, detectInputRequest, detectBackgroundWait, unaccountedFailedDeps, parseStatusFooter, type StatusFooter, type VerifyVerdict, type VerifierArtifact, type SpecVerdictRecord, type InputOptions, type InputRequest, type BackgroundOptions, type BackgroundWait } from './result-verifier.js';
 import { buildLesson, appendLesson, type LessonPanel } from './lessons.js';
 import { buildPanelReviewerPrompt, buildLeadJudgmentPrompt, parseLeadJudgment } from './review-panel.js';
@@ -20,7 +22,7 @@ import { extractPrUrls, openedPrUrls, prInScope, prWatchTaskSpec } from './pr-au
 import { shouldSharpenTask, sharpenTask, mergeSharpenedContext } from './sharpener.js';
 import { taskTier, mergeTierChain, reviewChain, brainFamily, type TierName } from './tiers.js';
 import { canonicalBrainId } from '../config.js';
-import { STREAMING_EXECS, streamArgs, createStreamRenderer } from './progress-stream.js';
+import { STREAMING_EXECS, streamArgs, createStreamRenderer, claudeUsage, flatUsage } from './progress-stream.js';
 import { briefPersona } from './persona-brief.js';
 import { ClaudeProfile } from './claude-profile.js';
 import { killProcessTree } from './proc-tree.js';
@@ -984,6 +986,22 @@ export class Dispatcher {
     try { due = this.goals.blockedGoalsDueForRetry(); } catch { due = []; }
     for (const rec of due) {
       if (this.decidingGoals.has(rec.goalId)) continue;
+      // Zero-token probe: the server checks the condition itself, and a turn fires
+      // only once it passes. The next tick then sees the goal active.
+      if (rec.unblockCheck) {
+        const check = rec.unblockCheck;
+        this.decidingGoals.add(rec.goalId);
+        runUnblockCheck(check, { brainAvailable: id => !this.store.brainCooldownUntil?.(id) && !!this.config.orchestration.brains?.[id] })
+          .then(passed => {
+            if (passed) {
+              this.goals!.activate(rec.goalId, { auto: true });
+              this.goalFailures.set(rec.goalId, Dispatcher.MAX_GOAL_FAILURES - 1);
+            } else this.goals!.deferRetry(rec.goalId);
+          })
+          .catch(e => console.error(`Dispatcher: goal ${rec.goalId} unblock check failed:`, e))
+          .finally(() => this.decidingGoals.delete(rec.goalId));
+        continue;
+      }
       try {
         this.goals.activate(rec.goalId, { auto: true });
         this.goalFailures.set(rec.goalId, Dispatcher.MAX_GOAL_FAILURES - 1);
@@ -1012,31 +1030,42 @@ export class Dispatcher {
         this.goalFailures.delete(goalId);
         continue;
       }
+      if (this.goals.overTokenBudget(goalId)) {
+        this.goals.block(goalId, `token budget exhausted (${rec.tokenBudget} tokens) without meeting the success criterion`, undefined, { code: 'token_budget' });
+        this.goalFailures.delete(goalId);
+        continue;
+      }
 
       const ctx = this.goals.achieverContext(goalId);
       if (!ctx) continue;
 
       this.decidingGoals.add(goalId);
+      this.goals.setDeciding(goalId, true);
       const timeout = this.config.orchestration.classifier?.timeoutMs || 300000;
-      const prompt = this.achieverPrompt(ctx);
+      const mode = this.achieverMode();
+      const prompt = mode === 'legacy' ? this.achieverPrompt(ctx) : buildAchieverPrompt(ctx);
 
       (async () => {
         try {
-          const out = await this.askExecutor(rec.achieverBrainChain, prompt, timeout);
-          const decision = this.parseAchieverDecision(out);
-          if (!decision) { this.registerGoalFailure(goalId, 'no usable decision from the Achiever (timeout or unparseable JSON)'); return; }
+          const turn = await this.achieverTurn(goalId, rec.achieverBrainChain, prompt, timeout);
+          if (turn.held) return;   // every brain rate limited: not a failure
+          const decision = turn.decision;
+          if (!decision) { this.registerGoalFailure(goalId, turn.why || 'no usable decision from the Achiever'); return; }
           const applied = this.goals!.applyAchieverDecision(goalId, decision);
+          this.goals!.logAchieverTurn(goalId, { at: new Date().toISOString(), brain: turn.brain, exec: turn.exec, mode,
+            outcome: applied.rejected ? 'rejected' : 'applied', kind: decision.kind, reason: applied.rejected, usage: turn.usage, durationMs: turn.durationMs });
           // Progress = the goal ended (achieved), the Achiever declared an honest
           // block (loop resolved, recoverable), a phase was planned, or work was
           // emitted. An evaluate(met:false) that neither advances nor emits is NO
           // progress — count it so a stuck goal can't spin on empty evaluations.
           const progressed = applied.achieved || applied.blocked || applied.planned || (applied.emitted ?? 0) > 0;
           if (progressed) this.goalFailures.delete(goalId);
-          else this.registerGoalFailure(goalId, `Achiever turn made no progress (kind=${decision.kind})`);
+          else this.registerGoalFailure(goalId, applied.rejected || `Achiever turn made no progress (kind=${decision.kind})`);
         } catch (e) {
           console.error(`Dispatcher: goal ${goalId} Achiever turn failed:`, e);
         } finally {
           this.decidingGoals.delete(goalId);
+          this.goals!.setDeciding(goalId, false);
         }
       })();
     }
@@ -1055,12 +1084,138 @@ export class Dispatcher {
     console.error(`Dispatcher: goal ${goalId} — ${why} (attempt ${n}/${Dispatcher.MAX_GOAL_FAILURES})`);
     if (n >= Dispatcher.MAX_GOAL_FAILURES) {
       this.goalFailures.delete(goalId);
-      this.goals?.block(
-        goalId,
-        `Achiever made no usable progress after ${n} turns (${why}) — goal held, NOT completed`,
-        `The Achiever brain is reachable and returns a parseable decision. This ceiling usually trips on a transient fault (brain offline/overloaded/unparseable output), so the goal auto-retries on a backoff and self-heals once the brain recovers — no action needed for a blip. If it keeps re-blocking, the brain or the goal's criterion/phases are genuinely unworkable — verify the brain or edit the goal.`
-      );
+      this.goals?.block(goalId, `Achiever made no usable progress after ${n} turns (${why}) — goal held, NOT completed`, undefined, { code: 'achiever_no_progress' });
     }
+  }
+
+  /** Add one run's usage to task.context.usage (retries sum). A run that reported
+   *  nothing is marked not metered, so it is never mistaken for zero tokens. */
+  private recordRunUsage(taskId: string, brainId: string | undefined, usage: RunUsage | null, arm?: string): void {
+    try {
+      const t = this.store.getTask?.(taskId);
+      if (!t) return;
+      const prior = t.context?.usage;
+      const merged = !usage
+        ? (prior?.input !== undefined ? prior : { metered: false, brain: brainId })
+        : {
+            input: usage.input + (prior?.input || 0), cacheRead: usage.cacheRead + (prior?.cacheRead || 0),
+            cacheWrite: usage.cacheWrite + (prior?.cacheWrite || 0), output: usage.output + (prior?.output || 0),
+            turns: (usage.turns || 0) + (prior?.turns || 0),
+            ...(usage.costUsd !== undefined || prior?.costUsd !== undefined ? { costUsd: (usage.costUsd || 0) + (prior?.costUsd || 0) } : {}),
+            brain: brainId, runs: (prior?.runs || 0) + 1
+          };
+      t.context = { ...(t.context || {}), usage: merged, ...(arm ? { usageArm: arm } : {}) };
+      this.store.saveTask(t);
+    } catch (e) { console.warn(`Dispatcher: could not record usage for ${taskId}:`, e); }
+  }
+
+  private readHermesUsage(file: string | null): RunUsage | null {
+    if (!file) return null;
+    try {
+      const usage = flatUsage(JSON.parse(readFileSync(file, 'utf-8')));
+      rmSync(file, { force: true });
+      return usage;
+    } catch { return null; }
+  }
+
+  private achieverMode(): 'toolless' | 'legacy' {
+    return this.config.orchestration.goals?.achieverMode === 'legacy' ? 'legacy' : 'toolless';
+  }
+
+  /** The brains an Achiever turn may use, in order: the chain's local, runnable
+   *  members, else the router brain. Remote brains execute tasks, not this. */
+  private achieverBrains(chain?: string[]): { id?: string; exec: string; model: string }[] {
+    const brains = this.config.orchestration.brains || {};
+    const local = (chain || []).filter(id => {
+      const b = brains[id];
+      return b?.location === 'local' && b.exec && !b.disabled;
+    }).map(id => ({ id, exec: brains[id].exec as string, model: brains[id].model || '' }));
+    return local.length ? local : [this.routerModel()];
+  }
+
+  /**
+   * One Achiever turn. Walks the chain past cooling and rate-limited brains. A
+   * rate-limit reply is not a bad decision, so it counts as nothing: if the whole
+   * chain is cooling the goal is held until the earliest reset with no spawn, no
+   * failure and no block row. Every attempt is logged, with the raw reply when it
+   * could not be used, because a failure cannot be diagnosed from a log line alone.
+   */
+  private async achieverTurn(goalId: string, chain: string[] | undefined, prompt: string, timeoutMs: number): Promise<{
+    decision?: AchieverDecision | null; held?: boolean; why?: string; brain?: string; exec?: string; usage?: RunUsage | null; durationMs?: number;
+  }> {
+    const log = (t: Omit<AchieverTurn, 'at' | 'mode'>) => this.goals!.logAchieverTurn(goalId, { at: new Date().toISOString(), mode: this.achieverMode(), ...t });
+    const resets: string[] = [];
+    let lastWhy: string | undefined;
+    for (const brain of this.achieverBrains(chain)) {
+      const cooling = brain.id ? this.store.brainCooldownUntil?.(brain.id) : undefined;
+      if (cooling) { resets.push(cooling); continue; }
+      const started = Date.now();
+      const reply = await this.askAchieverBrain(brain, prompt, timeoutMs);
+      const durationMs = Date.now() - started;
+      const decision = this.parseAchieverDecision(reply.text);
+      const base = { brain: brain.id || brain.model, exec: brain.exec, usage: reply.usage, durationMs };
+      if (decision) return { decision, ...base };
+      // Checked only after parsing, so a real decision that mentions a rate limit counts as a decision.
+      if (isRateLimitFailure(reply.text)) {
+        const until = brain.id ? this.store.noteBrainRateLimited?.(brain.id) : undefined;
+        resets.push(until || new Date(Date.now() + 15 * 60_000).toISOString());
+        log({ ...base, outcome: 'rate-limited', raw: reply.text });
+        continue;
+      }
+      lastWhy = reply.timedOut ? 'Achiever turn timed out' : reply.text.trim() ? 'unparseable reply' : 'empty reply';
+      log({ ...base, outcome: reply.timedOut ? 'timeout' : 'unparseable', reason: lastWhy, raw: reply.text });
+      return { why: lastWhy, ...base };
+    }
+    if (resets.length) {
+      const until = resets.sort()[0];
+      this.goals!.holdForRateLimit(goalId, until);
+      return { held: true };
+    }
+    return { why: lastWhy || 'no Achiever brain available' };
+  }
+
+  /** Run one reasoning call for the Achiever on a specific brain. */
+  private askAchieverBrain(brain: { exec: string; model: string }, prompt: string, timeoutMs: number): Promise<{ text: string; usage?: RunUsage | null; timedOut?: boolean }> {
+    const toolless = this.achieverMode() === 'toolless' && brain.exec === 'claude';
+    const argv = toolless
+      ? this.reasonArgv(brain.model, prompt)
+      : this.buildArgv({ exec: brain.exec as RoleConfig['exec'], model: brain.model }, prompt);
+    return new Promise((resolve) => {
+      const child = spawn(argv[0], argv.slice(1), {
+        env: toolless ? { ...process.env, CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' } : { ...process.env },
+        // An empty cwd, so no project CLAUDE.md loads either.
+        ...(toolless ? { cwd: this.reasonScratchDir() } : {}),
+        stdio: ['ignore', 'pipe', 'pipe']
+      });
+      let out = '';
+      let timedOut = false;
+      const timer = setTimeout(() => { timedOut = true; child.kill('SIGTERM'); }, timeoutMs);
+      child.stdout.on('data', d => { out += d.toString(); });
+      child.on('error', () => { clearTimeout(timer); resolve({ text: '' }); });
+      child.on('close', () => {
+        clearTimeout(timer);
+        const clean = stripAnsi(out);
+        if (!toolless) return resolve({ text: clean, timedOut });
+        // --output-format json: one object with the answer and its usage.
+        try {
+          const ev = JSON.parse(clean);
+          resolve({ text: typeof ev.result === 'string' ? ev.result : '', usage: claudeUsage(ev), timedOut });
+        } catch { resolve({ text: clean, timedOut }); }
+      });
+    });
+  }
+
+  /** argv for a pure reasoning call on claude. The prompt embeds task results, which
+   *  are untrusted text, so it gets no tools, no MCP and no permission bypass. */
+  private reasonArgv(model: string, prompt: string): string[] {
+    return ['claude', '-p', prompt, ...(model ? ['--model', model] : []), '--tools', '', '--strict-mcp-config',
+      '--setting-sources', 'project,local', '--output-format', 'json'];
+  }
+
+  private reasonScratchDir(): string {
+    const dir = join(tmpdir(), 'cowork-achiever-scratch');
+    try { mkdirSync(dir, { recursive: true }); } catch { /* exists */ }
+    return dir;
   }
 
   /** The prompt the Achiever brain answers each turn. It frames the criterion as
@@ -1448,7 +1603,7 @@ export class Dispatcher {
     // humanInput as a dedicated "answers" section (below), and the brief fields
     // as their own sections — drop them from the raw context dump so they aren't
     // duplicated or lost as noise in the JSON blob.
-    for (const k of ['persona', 'brainAuto', 'remoteWaitSince', 'dispatched', 'attempts', 'agentName', 'ranAgent', 'ranDivision', 'ranBrain', 'isRoster', 'inputFiles', 'humanInput', 'awaitingInput', 'inputQuestions', 'backgroundWait', 'specVerdict', 'specFindings', 'gate', 'gateFindings', 'gateReviewFor', 'gateStepKey', 'gateRound', 'gateMaxRounds', 'judgeFamily', 'judgeBrain', 'escalated', 'escalatedAtRound', 'escalatedBrain', 'acceptanceSource', 'outsideCheck', 'deliverable', 'playbook', 'openChoices', 'sharpen', ...BRIEF_KEYS]) delete shownCtx[k];
+    for (const k of ['persona', 'brainAuto', 'remoteWaitSince', 'dispatched', 'attempts', 'agentName', 'ranAgent', 'ranDivision', 'ranBrain', 'isRoster', 'inputFiles', 'humanInput', 'awaitingInput', 'inputQuestions', 'backgroundWait', 'specVerdict', 'specFindings', 'gate', 'gateFindings', 'gateReviewFor', 'gateStepKey', 'gateRound', 'gateMaxRounds', 'judgeFamily', 'judgeBrain', 'escalated', 'escalatedAtRound', 'escalatedBrain', 'acceptanceSource', 'outsideCheck', 'deliverable', 'playbook', 'openChoices', 'sharpen', 'usage', 'usageArm', ...BRIEF_KEYS]) delete shownCtx[k];
     // The brief contract (P0-3 / P1-3) gets its own sections right under the task text.
     // Default timeboxMin = taskTimeoutMs / 60000 - 5 (e.g. 50 min cap → 45 min timebox).
     const timeoutMs = Number(this.config.orchestration?.taskTimeoutMs) || 3_000_000;
@@ -2539,6 +2694,13 @@ export class Dispatcher {
     const argv = [...this.buildArgv({ exec: plan.exec, model: plan.model, effort: plan.effort, command: plan.command }, prompt,
       `${task.title}\n${task.description || ''}`, task.context?.claudeProfile === 'full'), ...streamArgs(plan.exec)];
     const renderer = streaming ? createStreamRenderer(plan.exec) : null;
+    // hermes writes its usage report to a file (-z only); metered like the streaming execs.
+    const hermesUsageFile = plan.exec === 'hermes' && !plan.command ? join(tmpdir(), `cowork-hermes-usage-${task.id}-${plan.attempt}.json`) : null;
+    if (hermesUsageFile) argv.push('--usage-file', hermesUsageFile);
+    // A/B (plan phase 3): half of goal execution tasks run with auto-memory off.
+    const memoryAB = this.config.orchestration.goals?.autoMemoryAB === true && plan.exec === 'claude'
+      && task.context?.goalGenerated === true && task.context?.role === 'goal-achiever';
+    const memoryOff = memoryAB && hashArm(task.id);
 
     // Live PROGRESS LOG: stream the brain's stdout/stderr to artifacts/<id>/progress.log
     // as it runs, so the dashboard can show a "what is it doing right now" window on
@@ -2578,6 +2740,7 @@ export class Dispatcher {
           COWORK_API: `http://localhost:${this.config.server.port}/api`,
           COWORK_ARTIFACTS_DIR: artDir,
           COWORK_OUTPUTS_DIR: outDir,
+          ...(memoryOff ? { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' } : {}),
           // When the server runs https with a self-signed cert, node-based child
           // brains (claude CLI, exec:script pipelines) must trust it to reach
           // COWORK_API or remote endpoints — add the cert as an extra CA rather than
@@ -2615,6 +2778,7 @@ export class Dispatcher {
       child.on('close', (code) => {
         clearTimeout(timer);
         if (renderer) { logProgress(stripAnsi(renderer.flush())); out = renderer.finalText(); }
+        this.recordRunUsage(task.id, plan.brainId, renderer?.usage() ?? this.readHermesUsage(hermesUsageFile), memoryAB ? (memoryOff ? 'memory-off' : 'memory-on') : undefined);
         // Strip ANSI/terminal control sequences some CLIs emit even to a pipe
         // (e.g. Ollama's streaming cursor redraws) so results are clean text.
         const clean = stripAnsi(out).trim();

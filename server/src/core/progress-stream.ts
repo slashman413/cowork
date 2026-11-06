@@ -15,6 +15,8 @@
  * the raw passthrough: their stdout/stderr already IS their progress.
  */
 
+import type { RunUsage } from '../types.js';
+
 /** Exec types whose argv gets `--output-format stream-json` in execute(). */
 export const STREAMING_EXECS = new Set(['claude', 'agy']);
 
@@ -36,6 +38,33 @@ export interface StreamRenderer {
    * output (a CLI that errored before streaming), so nothing is silently lost.
    */
   finalText(): string;
+  /** Token usage from the run's terminal event, or null when it reported none. */
+  usage(): RunUsage | null;
+}
+
+const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+
+/** Claude `result` event → RunUsage. Its `usage` is cumulative across the run. */
+export function claudeUsage(ev: any): RunUsage | null {
+  const u = ev?.usage;
+  if (!u || typeof u !== 'object') return null;
+  return {
+    input: num(u.input_tokens), cacheRead: num(u.cache_read_input_tokens),
+    cacheWrite: num(u.cache_creation_input_tokens), output: num(u.output_tokens),
+    ...(typeof ev.num_turns === 'number' ? { turns: ev.num_turns } : {}),
+    ...(typeof ev.total_cost_usd === 'number' ? { costUsd: ev.total_cost_usd } : {})
+  };
+}
+
+/** The usage report `hermes --usage-file` writes, or agy's result usage. */
+export function flatUsage(u: any, turns?: unknown): RunUsage | null {
+  if (!u || typeof u !== 'object') return null;
+  return {
+    input: num(u.input_tokens), cacheRead: num(u.cache_read_tokens), cacheWrite: num(u.cache_write_tokens),
+    output: num(u.output_tokens) + num(u.thinking_tokens) + num(u.reasoning_tokens),
+    ...(typeof turns === 'number' ? { turns } : {}),
+    ...(num(u.estimated_cost_usd) > 0 ? { costUsd: u.estimated_cost_usd } : {})
+  };
 }
 
 const clip = (s: string, n: number): string => {
@@ -74,6 +103,7 @@ const ts = () => new Date().toISOString().slice(11, 19);
 export function createStreamRenderer(exec: string): StreamRenderer {
   let buf = '';
   let result: string | null = null;
+  let usage: RunUsage | null = null;
   let assistantText = '';           // fallback answer if no result event arrives
   let plain = '';                   // non-JSON output (startup errors etc.)
   let agyStep = -1;                 // agy: step currently streaming text deltas
@@ -110,6 +140,7 @@ export function createStreamRenderer(exec: string): StreamRenderer {
           ? `[${ts()}] ⚠ rate limit: ${ev.rate_limit_info.status}\n` : '';
       case 'result': {
         if (typeof ev.result === 'string') result = ev.result;
+        usage = claudeUsage(ev) ?? usage;
         const secs = ev.duration_ms ? `${Math.round(ev.duration_ms / 1000)}s` : '?';
         const cost = typeof ev.total_cost_usd === 'number' ? ` · $${ev.total_cost_usd.toFixed(3)}` : '';
         return `[${ts()}] ${ev.is_error ? '✗ ended with error' : '✔ agent finished'} · ${secs} · ${ev.num_turns ?? '?'} turns${cost}\n`;
@@ -126,6 +157,7 @@ export function createStreamRenderer(exec: string): StreamRenderer {
     if (ev.event === 'result') {
       const r = ev.result || {};
       if (typeof r.response === 'string') result = r.response;
+      usage = flatUsage(r.usage, r.num_turns) ?? usage;
       const secs = r.duration_seconds ? `${Math.round(r.duration_seconds)}s` : '?';
       return `${agyStep >= 0 ? '\n' : ''}[${ts()}] ${r.status === 'SUCCESS' ? '✔ agent finished' : `✗ ended: ${r.status || 'unknown'}`} · ${secs}\n`;
     }
@@ -182,6 +214,7 @@ export function createStreamRenderer(exec: string): StreamRenderer {
     finalText() {
       if (result !== null) return result;
       return `${assistantText}${agyText}${plain}`.trim();
-    }
+    },
+    usage() { return usage; }
   };
 }

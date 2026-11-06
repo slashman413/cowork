@@ -446,10 +446,10 @@ function buildServer(config: Config, store: Store, eventBus: EventBus, goals?: G
 
     server.tool(
       'list_goals',
-      'List all Goals (newest first) with status, phases and audit history.',
-      {},
-      async () => {
-        try { return { content: [{ type: 'text', text: JSON.stringify(goals.list()) }] }; }
+      'List Goals as compact summaries sorted by what needs attention (state, next event, budget). Pass view:"full" only if you need every record; use get_goal for one.',
+      { view: z.enum(['summary', 'full']).optional() },
+      async (args) => {
+        try { return { content: [{ type: 'text', text: JSON.stringify(args?.view === 'full' ? goals.list() : goals.summaries()) }] }; }
         catch (e: any) { return { content: [{ type: 'text', text: e.message }], isError: true }; }
       }
     );
@@ -460,7 +460,7 @@ function buildServer(config: Config, store: Store, eventBus: EventBus, goals?: G
       { goal_id: z.string() },
       async (args) => {
         try {
-          const g = goals.get(args.goal_id);
+          const g = goals.detail(args.goal_id);
           if (!g) throw new Error('goal not found');
           return { content: [{ type: 'text', text: JSON.stringify(g) }] };
         } catch (e: any) {
@@ -491,8 +491,13 @@ function buildServer(config: Config, store: Store, eventBus: EventBus, goals?: G
         tasks: z.array(z.object({
           title: z.string(),
           description: z.string().optional(),
-          brain: z.string().optional()
-        })).optional()
+          brain: z.string().optional(),
+          scheduledAt: z.string().optional(),
+          tier: z.string().optional(),
+          acceptance: z.array(z.string()).optional(),
+          verify: z.array(z.string()).optional()
+        })).optional(),
+        unblockCheck: z.object({ type: z.enum(['brain-available', 'file-exists', 'http-200', 'after-time']), value: z.string() }).optional()
       },
       async (args) => {
         try {
@@ -501,10 +506,11 @@ function buildServer(config: Config, store: Store, eventBus: EventBus, goals?: G
             met: args.met,
             reason: args.reason,
             unblockCriteria: args.unblockCriteria,
+            unblockCheck: args.unblockCheck,
             phase: args.phase,
             tasks: args.tasks
           });
-          return { content: [{ type: 'text', text: JSON.stringify({ ok: true, applied, goal: goals.get(args.goal_id) }) }] };
+          return { content: [{ type: 'text', text: JSON.stringify({ applied, status: goals.get(args.goal_id)?.status }) }] };
         } catch (e: any) {
           return { content: [{ type: 'text', text: e.message }], isError: true };
         }

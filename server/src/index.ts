@@ -222,6 +222,13 @@ async function main() {
     try { fs.mkdirSync(config.paths.goals, { recursive: true }); } catch { /* ignore */ }
   }
   const goals = new Goals(config, store);
+  goals.onChange = goalId => eventBus.emitEvent('goalUpdated', { goalId });
+  // One-way upgrade to the compact record shape. Done here because no goal is being
+  // written yet; it is a no-op once every record is upgraded.
+  try {
+    const m = goals.migrateAll();
+    if (m.migrated.length) console.log(`Goals: migrated ${m.migrated.length} record(s); originals in ${m.backupDir}`);
+  } catch (e) { console.error('Goals: migration failed, old records still read fine:', e); }
   app.use('/api', createGoalRouter(goals));
 
   // Recipes: reusable tasks saved from good runs (core/recipes.ts). State lives in

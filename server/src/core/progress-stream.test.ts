@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createStreamRenderer, streamArgs } from './progress-stream.js';
+import { flatUsage, createStreamRenderer, streamArgs } from './progress-stream.js';
 
 const j = (o: unknown) => `${JSON.stringify(o)}\n`;
 
@@ -78,4 +78,24 @@ test('agy: compaction lifecycle events render progress notices', () => {
   log += r.feed(j({ event: 'compaction_end' }));
   assert.match(log, /⚙ Context compaction in progress…/);
   assert.match(log, /✔ Context compaction complete/);
+});
+
+test('usage: claude result event is captured, including cache and cost', () => {
+  const r = createStreamRenderer('claude');
+  r.feed(JSON.stringify({ type: 'result', result: 'ok', num_turns: 3, total_cost_usd: 0.5,
+    usage: { input_tokens: 10, cache_read_input_tokens: 100, cache_creation_input_tokens: 20, output_tokens: 5 } }) + '\n');
+  assert.deepEqual(r.usage(), { input: 10, cacheRead: 100, cacheWrite: 20, output: 5, turns: 3, costUsd: 0.5 });
+});
+
+test('usage: agy result event is captured; a run with none reports null', () => {
+  const r = createStreamRenderer('agy');
+  r.feed(JSON.stringify({ event: 'result', result: { status: 'SUCCESS', response: 'OK', num_turns: 1,
+    usage: { input_tokens: 22863, output_tokens: 107, thinking_tokens: 106, cache_read_tokens: 0 } } }) + '\n');
+  assert.deepEqual(r.usage(), { input: 22863, cacheRead: 0, cacheWrite: 0, output: 213, turns: 1 });
+  assert.equal(createStreamRenderer('claude').usage(), null);
+});
+
+test('usage: the hermes report shape maps to the same fields', () => {
+  assert.deepEqual(flatUsage({ input_tokens: 28160, output_tokens: 39, cache_read_tokens: 1, cache_write_tokens: 2, reasoning_tokens: 3, estimated_cost_usd: 0 }),
+    { input: 28160, cacheRead: 1, cacheWrite: 2, output: 42 });
 });

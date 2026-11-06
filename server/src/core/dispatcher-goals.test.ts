@@ -11,7 +11,7 @@ import type { Config, Task, AchieverDecision } from '../types.js';
 /**
  * Exercise the DISPATCHER's Goal driver (`driveGoals`) — the glue that turns
  * "the Achiever decides its next move" into real tasks — WITHOUT spawning any
- * LLM. `askExecutor` (the only place a brain is spawned) is stubbed with a
+ * LLM. `askAchieverBrain` (the only place a brain is spawned) is stubbed with a
  * scripted queue of decisions, so the evaluate→plan→emit loop runs
  * deterministically: decide → materialise task(s) → complete → decide again.
  */
@@ -42,9 +42,10 @@ function harness(decisions: (AchieverDecision | null)[]) {
   // Stub the brain call: return the next scripted decision as a fenced JSON block
   // (so it also exercises parseAchieverDecision), or empty for a "no decision".
   const queue = [...decisions];
-  (dispatcher as any).askExecutor = async () => {
+  (dispatcher as any).achieverBrains = () => [{ exec: 'claude', model: 'test' }];
+  (dispatcher as any).askAchieverBrain = async () => {
     const d = queue.length ? queue.shift() : null;
-    return d ? '```json\n' + JSON.stringify(d) + '\n```' : '';
+    return { text: d ? '```json\n' + JSON.stringify(d) + '\n```' : '' };
   };
   return { goals, store, dispatcher, dir };
 }
@@ -125,8 +126,8 @@ test('driver BLOCKS (honest reason + resume contract) a goal that exhausts its s
   // complete each task's status (→ quiescent) WITHOUT auditing its phase, so the
   // phase stays workable and execution tasks accrue until the budget guard bites.
   const { goals, store, dispatcher } = harness([]);
-  (dispatcher as any).askExecutor = async () =>
-    '```json\n' + JSON.stringify({ kind: 'emit', tasks: [{ title: 'again' }] }) + '\n```';
+  (dispatcher as any).askAchieverBrain = async () => ({ text:
+    '```json\n' + JSON.stringify({ kind: 'emit', tasks: [{ title: 'again' }] }) + '\n```' });
   const g = goals.create({
     title: 'Endless', successCriteria: 'Never?', stepBudget: 2,
     phases: [{ key: 'p', title: 'P' }]
@@ -147,7 +148,7 @@ test('driver BLOCKS (honest reason + resume contract) a goal that exhausts its s
 
 test('driver BLOCKS (recoverably) a goal whose Achiever never returns a usable decision', async () => {
   const { goals, dispatcher } = harness([]);
-  (dispatcher as any).askExecutor = async () => 'sorry, I could not decide';   // unparseable every time
+  (dispatcher as any).askAchieverBrain = async () => ({ text: 'sorry, I could not decide' });   // unparseable every time
   const goalId = seedGoal(goals);
   for (let i = 0; i < Dispatcher.MAX_GOAL_FAILURES + 1; i++) {
     drive(dispatcher);
@@ -162,8 +163,8 @@ test('driver BLOCKS (recoverably) a goal whose Achiever never returns a usable d
 
 test('an Achiever that self-declares a block holds the goal recoverably (not a failure)', async () => {
   const { goals, dispatcher } = harness([]);
-  (dispatcher as any).askExecutor = async () =>
-    '```json\n' + JSON.stringify({ kind: 'block', reason: 'needs a human decision on pricing', unblockCriteria: 'the CEO approves the price' }) + '\n```';
+  (dispatcher as any).askAchieverBrain = async () => ({ text:
+    '```json\n' + JSON.stringify({ kind: 'block', reason: 'needs a human decision on pricing', unblockCriteria: 'the CEO approves the price' }) + '\n```' });
   const goalId = seedGoal(goals);
   drive(dispatcher); await settle();
   const rec = goals.get(goalId)!;
@@ -191,7 +192,7 @@ test('a blocked goal AUTO-RESUMES when its retry time arrives — recovery needs
 
 test('a half-open probe that still fails re-blocks with a GROWN backoff (one-shot trial)', async () => {
   const { goals, dispatcher, dir } = harness([]);
-  (dispatcher as any).askExecutor = async () => 'still broken, no JSON';   // fault persists
+  (dispatcher as any).askAchieverBrain = async () => ({ text: 'still broken, no JSON' });   // fault persists
   const goalId = seedGoal(goals);
   goals.block(goalId, 'transient brain fault');
   assert.equal(goals.get(goalId)!.blockCount, 1);
@@ -217,4 +218,95 @@ test('driver self-heals a dropped Judger event by re-emitting the Judger', async
   drive(dispatcher); await settle();
   const revived = goals.generatedTasks(goalId).find(t => t.context!.role === 'goal-judger');
   assert.ok(revived, 'a fresh Judger task was re-emitted by the self-heal');
+});
+
+// ── Rate limits and the brain chain ─────────────────────────────────────────
+
+function chainHarness(cooling: Record<string, string> = {}) {
+  const h = harness([]);
+  delete (h.dispatcher as any).achieverBrains;   // the real chain walk
+  const config = (h.dispatcher as any).config;
+  config.orchestration.brains = {
+    first: { location: 'local', exec: 'claude', model: 'a' },
+    second: { location: 'local', exec: 'hermes', model: 'b' }
+  };
+  (h.store as any).brainCooldownUntil = (id: string) => cooling[id];
+  (h.store as any).noteBrainRateLimited = (id: string) => { cooling[id] = '2030-01-01T00:00:00.000Z'; return cooling[id]; };
+  const g = h.goals.create({ title: 'G', successCriteria: 'C?', phases: [{ key: 'a', title: 'A' }], achieverBrainChain: ['first', 'second'] });
+  h.goals.activate(g.goalId);
+  return { ...h, goalId: g.goalId };
+}
+
+test('a rate-limit reply falls through to the next brain, with no failure and no block row', async () => {
+  const { goals, store, dispatcher, goalId } = chainHarness();
+  const asked: string[] = [];
+  (dispatcher as any).askAchieverBrain = async (b: any) => {
+    asked.push(b.id);
+    return { text: b.id === 'first' ? "You've hit your weekly limit" : '```json\n' + JSON.stringify({ kind: 'emit', tasks: [{ title: 'work' }] }) + '\n```' };
+  };
+  drive(dispatcher); await settle();
+  assert.deepEqual(asked, ['first', 'second']);
+  assert.equal(store.tasks.length, 1);
+  assert.equal(goals.get(goalId)!.status, 'active');
+  assert.equal(goals.fullHistory(goalId).filter(r => r.kind === 'block').length, 0);
+  assert.equal((dispatcher as any).goalFailures.get(goalId), undefined);
+  const turns = goals.achieverTurns(goalId);
+  assert.deepEqual(turns.map(t => t.outcome), ['rate-limited', 'applied']);
+  assert.match(turns[0].raw!, /weekly limit/);
+});
+
+test('with every brain cooling the goal holds until the reset: zero spawns, no failure', async () => {
+  const { goals, dispatcher, goalId } = chainHarness({ first: '2030-01-02T00:00:00.000Z', second: '2030-01-01T00:00:00.000Z' });
+  let spawns = 0;
+  (dispatcher as any).askAchieverBrain = async () => { spawns++; return { text: '' }; };
+  for (let i = 0; i < 3; i++) { drive(dispatcher); await settle(); }
+  assert.equal(spawns, 0);
+  const rec = goals.get(goalId)!;
+  assert.equal(rec.status, 'active');
+  assert.equal(rec.achieverRetryAt, '2030-01-01T00:00:00.000Z', 'the earliest reset');
+  assert.equal((dispatcher as any).goalFailures.get(goalId), undefined);
+  assert.equal(goals.goalsAwaitingAchiever().length, 0);
+});
+
+test('a real decision that mentions a rate limit is still a decision', async () => {
+  const { store, dispatcher } = chainHarness();
+  (dispatcher as any).askAchieverBrain = async () => ({ text: 'The API rate limit matters.\n```json\n' + JSON.stringify({ kind: 'emit', tasks: [{ title: 'work' }] }) + '\n```' });
+  drive(dispatcher); await settle();
+  assert.equal(store.tasks.length, 1);
+});
+
+test('an unusable reply is logged with its raw text, the thing that was missing before', async () => {
+  const { goals, dispatcher, goalId } = chainHarness();
+  (dispatcher as any).askAchieverBrain = async () => ({ text: 'prose with no json at all' });
+  drive(dispatcher); await settle();
+  const t = goals.achieverTurns(goalId).at(-1)!;
+  assert.equal(t.outcome, 'unparseable');
+  assert.match(t.raw!, /prose with no json/);
+});
+
+test('a blocked goal with a failing typed check fires no LLM turn and pushes its retry out', async () => {
+  const { goals, dispatcher, dir, goalId } = chainHarness();
+  let spawns = 0;
+  (dispatcher as any).askAchieverBrain = async () => { spawns++; return { text: '' }; };
+  goals.block(goalId, 'waiting on a time', 'after 2030', { code: 'achiever_declared', check: { type: 'after-time', value: '2030-01-01T00:00:00Z' } });
+  makeRetryDue(dir, goalId);
+  drive(dispatcher); await settle();
+  const rec = goals.get(goalId)!;
+  assert.equal(spawns, 0);
+  assert.equal(rec.status, 'blocked');
+  assert.ok(Date.parse(rec.nextRetryAt!) > Date.now());
+});
+
+test('a turn over the token budget blocks with its own reason and spends nothing', async () => {
+  const { goals, store, dispatcher } = harness([]);
+  let spawns = 0;
+  (dispatcher as any).askAchieverBrain = async () => { spawns++; return { text: '' }; };
+  const g = goals.create({ title: 'G', successCriteria: 'C?', tokenBudget: 100, phases: [{ key: 'a', title: 'A' }] });
+  goals.activate(g.goalId);
+  store.tasks.push({ id: 'x', title: 't', status: 'done', context: { goalId: g.goalId, goalGenerated: true, usage: { input: 90, cacheRead: 50, cacheWrite: 0, output: 1 } } } as any);
+  drive(dispatcher); await settle();
+  const rec = goals.get(g.goalId)!;
+  assert.equal(spawns, 0);
+  assert.equal(rec.status, 'blocked');
+  assert.equal(rec.blockCode, 'token_budget');
 });

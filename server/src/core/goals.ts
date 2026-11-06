@@ -2,10 +2,18 @@ import fs from 'fs';
 import path from 'path';
 import { globSync } from 'glob';
 import { v4 as uuidv4 } from 'uuid';
-import type { Config, GoalRecord, GoalPhase, AchieverDecision, GoalTemplate, Task } from '../types.js';
+import { createHash } from 'crypto';
+import type { Config, GoalRecord, GoalPhase, GoalDecision, GoalBlockCode, GoalUnblockCheck, AchieverDecision, GoalTemplate, Task } from '../types.js';
 import { GOAL_TEMPLATES, withLoopDriver } from './goal-templates.js';
 import { appendGoalDecision, goalTrailPath, readGoalTrail, taskTrailRows, trailLine, type GoalDecisionRow } from './goal-trail.js';
-import { brainFamily, reviewChain } from './tiers.js';
+import { brainFamily, reviewChain, taskTier } from './tiers.js';
+import { extractEvidenceBlock } from './result-verifier.js';
+import { extractNextMove } from './achiever-prompt.js';
+import {
+  appendAchieverTurn, appendHistory, BLOCK_TEXT, classifyBlockReason, coalesceHistory, deriveDisplayState, flagsIn, goalSummary,
+  readAchieverTurns, readHistory, rollupAchieverTurns, rollupTaskUsage, sortSummaries, taskRow,
+  type AchieverTurn, type GoalSummary
+} from './goal-view.js';
 
 /** The slice of Store that Goals touches. Keeping it structural lets the unit
  *  tests drive Goals with an in-memory fake. */
@@ -36,6 +44,62 @@ export const FIGURE_IT_OUT_RULES = [
   `  3. VERIFY/BASELINE BEFORE FEATURES — before any feature or build phase, plan a verification/baseline phase that measures where the criterion stands today and sets up the check that will prove it later. Without a baseline, no later phase can show it moved the needle.`
 ].join('\n');
 
+/** Block rows drop text the renderer can produce from the code. */
+function compactBlockRow(row: GoalDecision): GoalDecision {
+  if (!row.code || !BLOCK_TEXT[row.code]) return row;
+  const { unblockCriteria: _drop, reason, ...rest } = row;
+  return { ...rest, ...(reason ? { reason: reason.slice(0, 160) } : {}) };
+}
+
+const cleanList = (v: unknown): string[] => (Array.isArray(v) ? v.map(x => String(x ?? '').trim()).filter(Boolean).slice(0, 8) : []);
+
+/** Stable 50/50 split for the A/B arms. */
+export function hashArm(id: string): boolean {
+  return createHash('sha1').update(id).digest()[0] % 2 === 0;
+}
+
+const CHECK_TYPES = new Set(['brain-available', 'file-exists', 'http-200', 'after-time']);
+
+/** The check comes from an LLM: keep only well-formed ones. */
+export function sanitizeCheck(raw: unknown): GoalUnblockCheck | undefined {
+  const c = raw as GoalUnblockCheck | undefined;
+  if (!c || typeof c !== 'object' || !CHECK_TYPES.has(c.type) || typeof c.value !== 'string' || !c.value.trim()) return undefined;
+  return { type: c.type, value: c.value.trim().slice(0, 500) };
+}
+
+/** Public HTTPS only. The server fetches this URL because an LLM named it, so it
+ *  must not reach the loopback or private ranges. Hostnames are not resolved, so
+ *  this is a guard against the obvious cases, and only the status code is read. */
+export function isPublicHttpsUrl(value: string): boolean {
+  let u: URL;
+  try { u = new URL(value); } catch { return false; }
+  if (u.protocol !== 'https:') return false;
+  const h = u.hostname.toLowerCase();
+  if (h === 'localhost' || h.endsWith('.local') || h.endsWith('.internal') || h.endsWith('.ts.net') || h.startsWith('[')) return false;
+  return !/^\d+\.\d+\.\d+\.\d+$/.test(h);
+}
+
+/**
+ * Run a zero-token probe. False means the obstacle is still there. A malformed
+ * check returns true, so a bad check costs one LLM probe and never strands a goal.
+ */
+export async function runUnblockCheck(check: GoalUnblockCheck, deps: { brainAvailable: (id: string) => boolean; now?: number; fetchStatus?: (url: string) => Promise<number> }): Promise<boolean> {
+  switch (check.type) {
+    case 'after-time': {
+      const at = Date.parse(check.value);
+      return !Number.isFinite(at) || at <= (deps.now ?? Date.now());
+    }
+    case 'brain-available': return deps.brainAvailable(check.value);
+    case 'file-exists': return !path.isAbsolute(check.value) || fs.existsSync(check.value);
+    case 'http-200': {
+      if (!isPublicHttpsUrl(check.value)) return true;
+      const get = deps.fetchStatus ?? (async (url: string) => (await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(5000) })).status);
+      try { return (await get(check.value)) === 200; } catch { return false; }
+    }
+    default: return true;
+  }
+}
+
 /** The "## Attention" section of a review, or '' when absent. */
 export function extractAttention(text: string | undefined): string {
   const m = /^#{1,3}\s*Attention\b[\s\S]*/im.exec(text || '');
@@ -60,6 +124,10 @@ export function extractAttention(text: string | undefined): string {
 export class Goals {
   private config: Config;
   private store: GoalStore;
+  /** Goals with an Achiever turn in flight, for the `thinking` display state. */
+  private deciding = new Set<string>();
+  /** Called after every write, so the page can patch one row. */
+  onChange?: (goalId: string) => void;
 
   /**
    * Auto-resume backoff for a blocked goal (ADR-008 — self-healing circuit
@@ -115,8 +183,73 @@ export class Goals {
     const dir = this.dir();
     try { fs.mkdirSync(dir, { recursive: true }); } catch { /* exists */ }
     rec.updatedAt = new Date().toISOString();
+    if (rec.historyInJsonl === undefined) this.migrateHistory(rec);
+    rec.history = coalesceHistory(rec.history);
     fs.writeFileSync(path.join(dir, `${rec.goalId}.json`), JSON.stringify(rec, null, 2));
+    try { this.onChange?.(rec.goalId); } catch { /* a listener must not break a write */ }
     return rec;
+  }
+
+  /** One audit row: appended to history.jsonl now, coalesced into the record's tail on save. */
+  private addHistory(rec: GoalRecord, row: GoalDecision): void {
+    if (rec.historyInJsonl === undefined) this.migrateHistory(rec);
+    appendHistory(this.dir(), rec.goalId, row);
+    rec.history.push(row);
+  }
+
+  /** Move an old record's rows to history.jsonl. Tagging block rows lets them coalesce. */
+  private migrateHistory(rec: GoalRecord): void {
+    appendHistory(this.dir(), rec.goalId, ...(rec.history || []));
+    rec.history = (rec.history || []).map(r => (r.kind === 'block' && !r.code
+      ? compactBlockRow({ ...r, code: classifyBlockReason(r.reason || '') }) : r));
+    rec.historyInJsonl = true;
+  }
+
+  /**
+   * One-way, idempotent upgrade of one stored record to the compact shape: history
+   * to JSONL, inline Attention text to its artifact. Returns whether it wrote.
+   * Reads tolerate the old shape, so an unmigrated record still works.
+   */
+  migrateRecord(goalId: string): boolean {
+    const rec = this.load(goalId);
+    if (!rec) return false;
+    let changed = false;
+    if (rec.historyInJsonl === undefined) { this.migrateHistory(rec); changed = true; }
+    const coalesced = coalesceHistory(rec.history);
+    if (JSON.stringify(coalesced) !== JSON.stringify(rec.history)) { rec.history = coalesced; changed = true; }
+    for (const ph of rec.phases) {
+      if (typeof ph.attention !== 'string') continue;
+      const merged = this.mergeAttention(ph);
+      const kept = this.persistAttention(ph, ph.attention);
+      if (merged || kept) { ph.attentionFlags = flagsIn(ph.attention); delete ph.attention; changed = true; }
+    }
+    if (changed) fs.writeFileSync(path.join(this.dir(), `${rec.goalId}.json`), JSON.stringify(rec, null, 2));
+    return changed;
+  }
+
+  /** Upgrade every record, backing up the originals once. Safe to re-run. */
+  migrateAll(): { migrated: string[]; backupDir?: string } {
+    const dir = this.dir();
+    const all = this.list();
+    const pending = all.filter(r => r.historyInJsonl === undefined || r.phases.some(p => typeof p.attention === 'string'));
+    if (!pending.length) return { migrated: [] };
+    const backupDir = path.join(dir, `.backup-${new Date().toISOString().replace(/[:.]/g, '-')}`);
+    fs.mkdirSync(backupDir, { recursive: true });
+    for (const r of all) fs.copyFileSync(path.join(dir, `${r.goalId}.json`), path.join(backupDir, `${r.goalId}.json`));
+    return { migrated: pending.filter(r => this.migrateRecord(r.goalId)).map(r => r.goalId), backupDir };
+  }
+
+  /** Write Attention text to its artifact unless the file already holds it. */
+  private persistAttention(phase: GoalPhase, text: string): boolean {
+    const dir = this.config.paths.artifacts;
+    if (!dir || !phase.attentionArtifact) return false;
+    const file = path.join(dir, phase.attentionArtifact);
+    try {
+      if (fs.existsSync(file) && fs.readFileSync(file, 'utf-8').trim()) return true;
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, `${text}\n`);
+      return true;
+    } catch { return false; }
   }
 
   load(goalId: string): GoalRecord | null {
@@ -189,6 +322,7 @@ export class Goals {
     achieverBrainChain?: string[];
     judgerBrainChain?: string[];
     stepBudget?: number;
+    tokenBudget?: number;
   }): GoalRecord {
     const phases: GoalPhase[] = (input.phases || []).map(p => ({
       key: String(p.key || '').trim().toLowerCase(),
@@ -210,8 +344,10 @@ export class Goals {
       achieverBrainChain: input.achieverBrainChain,
       judgerBrainChain: input.judgerBrainChain,
       history: [],
+      historyInJsonl: true,
       minutes: [],
       stepBudget: typeof input.stepBudget === 'number' && input.stepBudget > 0 ? Math.floor(input.stepBudget) : 24,
+      ...(typeof input.tokenBudget === 'number' && input.tokenBudget > 0 ? { tokenBudget: Math.floor(input.tokenBudget) } : {}),
       createdAt: now,
       updatedAt: now
     };
@@ -223,7 +359,7 @@ export class Goals {
   /** Patch an editable goal (draft or active): criteria, description, brains,
    *  budget, and appended phases. Never mutates history or terminal goals. */
   update(goalId: string, patch: Partial<Pick<GoalRecord,
-    'title' | 'description' | 'successCriteria' | 'reportBrief' | 'achieverBrainChain' | 'judgerBrainChain' | 'stepBudget'>>
+    'title' | 'description' | 'successCriteria' | 'reportBrief' | 'achieverBrainChain' | 'judgerBrainChain' | 'stepBudget' | 'tokenBudget'>>
     & { phases?: { key: string; title: string }[] }): GoalRecord {
     const rec = this.load(goalId);
     if (!rec) throw new Error('goal not found');
@@ -238,6 +374,10 @@ export class Goals {
     if (patch.achieverBrainChain !== undefined) rec.achieverBrainChain = patch.achieverBrainChain;
     if (patch.judgerBrainChain !== undefined) rec.judgerBrainChain = patch.judgerBrainChain;
     if (patch.stepBudget !== undefined && patch.stepBudget > 0) rec.stepBudget = Math.floor(patch.stepBudget);
+    if (patch.tokenBudget !== undefined) {
+      // 0 clears the cap.
+      if (patch.tokenBudget > 0) rec.tokenBudget = Math.floor(patch.tokenBudget); else delete rec.tokenBudget;
+    }
     if (patch.phases !== undefined) {
       // Merge: keep existing phases' progress, append new keys, update titles.
       const byKey = new Map(rec.phases.map(p => [p.key, p]));
@@ -279,14 +419,17 @@ export class Goals {
     if (!rec.phases.length) throw new Error('cannot activate: at least one phase (waypoint) is required');
     if (rec.status === 'blocked') {
       const how = opts.auto ? 'auto-resumed (circuit-breaker half-open probe)' : 'resumed by operator';
-      rec.history.push({ kind: 'resume', reason: `${how} (was: ${rec.blockReason || 'blocked'})`, at: new Date().toISOString() });
+      this.addHistory(rec, { kind: 'resume', reason: how, at: new Date().toISOString() });
       delete rec.blockReason;
       delete rec.unblockCriteria;
       delete rec.blockedAt;
       delete rec.nextRetryAt;
+      delete rec.blockCode;
+      delete rec.unblockCheck;
       if (!opts.auto) delete rec.blockCount;   // manual resume resets the breaker
     }
     rec.status = 'active';
+    if (!opts.auto) delete rec.achieverRetryAt;   // an operator's retry skips the hold
     return this.save(rec);
   }
 
@@ -320,21 +463,51 @@ export class Goals {
    * consecutive block, so the next retry is further out). An `achieved` goal is
    * terminal and is left untouched.
    */
-  block(goalId: string, reason: string, unblockCriteria?: string): GoalRecord {
+  block(goalId: string, reason: string, unblockCriteria?: string, opts: { code?: GoalBlockCode; check?: GoalUnblockCheck } = {}): GoalRecord {
     const rec = this.load(goalId);
     if (!rec) throw new Error('goal not found');
     if (rec.status === 'achieved') return rec;
+    const code = opts.code ?? classifyBlockReason(reason);
     rec.status = 'blocked';
     rec.blockReason = reason;
+    rec.blockCode = code;
+    if (opts.check) rec.unblockCheck = opts.check; else delete rec.unblockCheck;
     rec.unblockCriteria = unblockCriteria && unblockCriteria.trim()
       ? unblockCriteria.trim()
-      : 'Addressed automatically on the next scheduled retry, or by a human who resolves the reason above and resumes.';
+      : BLOCK_TEXT[code]?.resume || 'Addressed automatically on the next scheduled retry, or by a human who resolves the reason above and resumes.';
     rec.blockCount = (rec.blockCount || 0) + 1;
     rec.blockedAt = new Date().toISOString();
     rec.nextRetryAt = new Date(Date.now() + this.backoffMs(rec.blockCount)).toISOString();
-    rec.history.push({ kind: 'block', reason, unblockCriteria: rec.unblockCriteria, at: rec.blockedAt });
+    this.addHistory(rec, { kind: 'block', code, reason, unblockCriteria: rec.unblockCriteria, at: rec.blockedAt });
+    rec.history[rec.history.length - 1] = compactBlockRow(rec.history[rec.history.length - 1]);
     console.log(`Goals: blocked ${goalId} — ${reason} | unblock when: ${rec.unblockCriteria} | auto-retry #${rec.blockCount} at ${rec.nextRetryAt}`);
     return this.save(rec);
+  }
+
+  /** A zero-token probe failed: advance the backoff with no LLM turn and no row. */
+  deferRetry(goalId: string): GoalRecord | null {
+    const rec = this.load(goalId);
+    if (!rec || rec.status !== 'blocked') return rec;
+    rec.blockCount = (rec.blockCount || 0) + 1;
+    rec.nextRetryAt = new Date(Date.now() + this.backoffMs(rec.blockCount)).toISOString();
+    return this.save(rec);
+  }
+
+  /**
+   * Every Achiever brain is rate limited. The goal stays active and takes no turn
+   * until `until`. This is not a failure: nothing is counted and no row is written,
+   * which is what stops a weekly limit turning into a storm of false blocks.
+   */
+  holdForRateLimit(goalId: string, until: string): void {
+    const rec = this.load(goalId);
+    if (!rec || rec.status !== 'active' || rec.achieverRetryAt === until) return;
+    rec.achieverRetryAt = until;
+    this.save(rec);
+  }
+
+  setDeciding(goalId: string, on: boolean): void {
+    if (on) this.deciding.add(goalId); else this.deciding.delete(goalId);
+    try { this.onChange?.(goalId); } catch { /* a listener must not break the loop */ }
   }
 
   /** Blocked goals whose scheduled auto-retry time has arrived — the population
@@ -355,10 +528,70 @@ export class Goals {
   delete(goalId: string, opts: { withTasks?: boolean } = {}): void {
     const p = path.join(this.dir(), `${goalId}.json`);
     if (fs.existsSync(p)) fs.unlinkSync(p);
+    try { this.onChange?.(goalId); } catch { /* a listener must not break a delete */ }
     if (opts.withTasks && this.store.deleteTask) {
       for (const t of this.generatedTasks(goalId)) this.store.deleteTask(t.id);
     }
     console.log(`Goals: deleted ${goalId}${opts.withTasks ? ' (+ generated tasks)' : ''}`);
+  }
+
+  // ── Views ──────────────────────────────────────────────────────────────────
+
+  /** The list view: every goal's derived state, sorted by what needs attention. */
+  summaries(): GoalSummary[] {
+    const byGoal = this.tasksByGoal();
+    return sortSummaries(this.list().map(rec =>
+      goalSummary(rec, byGoal.get(rec.goalId) || [], { deciding: this.deciding.has(rec.goalId) })));
+  }
+
+  /** Summaries plus the full record, usage rollups and compact task rows. */
+  detail(goalId: string) {
+    const rec = this.load(goalId);
+    if (!rec) return null;
+    const tasks = this.generatedTasks(goalId);
+    const summary = goalSummary(rec, tasks, { deciding: this.deciding.has(goalId) });
+    const usagePhases: Record<string, ReturnType<typeof rollupTaskUsage>> = {};
+    for (const ph of rec.phases) usagePhases[ph.key] = rollupTaskUsage(tasks.filter(t => t.context?.phaseKey === ph.key));
+    const last = rec.minutes[rec.minutes.length - 1];
+    return {
+      ...rec,
+      display: summary.display,
+      budget: summary.budget,
+      progress: summary.tasks,
+      nextMove: last ? this.readNextMove(last.artifact) : undefined,
+      usage: {
+        tasks: rollupTaskUsage(tasks),
+        achiever: rollupAchieverTurns(this.achieverTurns(goalId)),
+        phases: usagePhases
+      },
+      taskRows: tasks.map(taskRow)
+    };
+  }
+
+  /** The complete audit trail, oldest first. Old records fall back to their own rows. */
+  fullHistory(goalId: string): GoalDecision[] {
+    const rows = readHistory(this.dir(), goalId);
+    return rows.length ? rows : this.load(goalId)?.history || [];
+  }
+
+  logAchieverTurn(goalId: string, turn: AchieverTurn): void { appendAchieverTurn(this.dir(), goalId, turn); }
+  achieverTurns(goalId: string): AchieverTurn[] { return readAchieverTurns(this.dir(), goalId); }
+
+  private tasksByGoal(): Map<string, Task[]> {
+    const out = new Map<string, Task[]>();
+    for (const t of this.store.listTasks()) {
+      const id = t.context?.goalId;
+      if (typeof id !== 'string' || !t.context?.goalGenerated) continue;
+      (out.get(id) || out.set(id, []).get(id)!).push(t);
+    }
+    return out;
+  }
+
+  private readNextMove(artifact: string): string | undefined {
+    const dir = this.config.paths.artifacts;
+    if (!dir) return undefined;
+    try { return extractNextMove(fs.readFileSync(path.join(dir, artifact), 'utf-8')) || undefined; }
+    catch { return undefined; }
   }
 
   // ── Lineage helpers ────────────────────────────────────────────────────────
@@ -420,8 +653,9 @@ export class Goals {
 
   /** Active goals whose last work has finished — the ones the Achiever should
    *  take a turn on this tick. */
-  goalsAwaitingAchiever(): GoalRecord[] {
-    return this.activeGoals().filter(rec => this.quiescent(rec));
+  goalsAwaitingAchiever(now: number = Date.now()): GoalRecord[] {
+    return this.activeGoals().filter(rec => this.quiescent(rec)
+      && !(rec.achieverRetryAt && Date.parse(rec.achieverRetryAt) > now));
   }
 
   /** A goal that is stuck with a `completing` phase but no live Judger task — a
@@ -445,6 +679,14 @@ export class Goals {
     return this.executionTaskCount(goalId) >= (rec.stepBudget ?? 24);
   }
 
+  /** Whether the goal has used up its optional token budget. Unmetered runs count 0. */
+  overTokenBudget(goalId: string): boolean {
+    const rec = this.load(goalId);
+    if (!rec?.tokenBudget) return false;
+    const used = rollupTaskUsage(this.generatedTasks(goalId)).total + rollupAchieverTurns(this.achieverTurns(goalId)).total;
+    return used >= rec.tokenBudget;
+  }
+
   /** The current workable phase: the earliest one not yet done/audited. */
   private currentPhase(rec: GoalRecord): GoalPhase | null {
     return rec.phases.find(p => p.status !== 'audited' && p.status !== 'done') || null;
@@ -461,6 +703,7 @@ export class Goals {
     phases: { key: string; title: string; status: string; results: { title: string; status: string; result?: string }[] }[];
     currentPhaseKey: string | null;
     latestMinutes?: string;
+    nextMove?: string;
     budget: { used: number; cap: number };
   } | null {
     const rec = this.load(goalId);
@@ -480,6 +723,7 @@ export class Goals {
       phases,
       currentPhaseKey: this.currentPhase(rec)?.key || null,
       latestMinutes: rec.minutes.length ? rec.minutes[rec.minutes.length - 1].artifact : undefined,
+      nextMove: rec.minutes.length ? this.readNextMove(rec.minutes[rec.minutes.length - 1].artifact) : undefined,
       budget: { used: this.executionTaskCount(goalId), cap: rec.stepBudget ?? 24 }
     };
   }
@@ -494,17 +738,27 @@ export class Goals {
    * Returns a small summary the dispatcher uses to manage idle/failure counters.
    */
   applyAchieverDecision(goalId: string, decision: AchieverDecision):
-    { achieved?: boolean; planned?: boolean; emitted?: number; evaluated?: boolean; blocked?: boolean } {
+    { achieved?: boolean; planned?: boolean; emitted?: number; evaluated?: boolean; blocked?: boolean; rejected?: string } {
     const rec = this.load(goalId);
     if (!rec || rec.status !== 'active') return {};
     const at = new Date().toISOString();
+    // A move that changes nothing has a reason, and the next turn must see it.
+    const reject = (reason: string) => {
+      console.warn(`Goals: ${goalId} move rejected — ${reason}`);
+      rec.lastRejected = { reason, at };
+      this.save(rec);
+      return { rejected: reason };
+    };
+    delete rec.achieverRetryAt;   // a turn ran, so the rate-limit hold is over
 
     if (decision.kind === 'block') {
       // The Achiever recognised a genuine obstacle it cannot clear itself and
       // named the recovery condition. Hold the goal honestly rather than spinning
       // turns until the failure ceiling kills it. This is the intended, graceful
       // stop — it counts as PROGRESS (the loop resolved), not a failure.
-      this.block(goalId, decision.reason || 'Achiever declared the goal blocked', decision.unblockCriteria);
+      this.save(rec);
+      this.block(goalId, decision.reason || 'Achiever declared the goal blocked', decision.unblockCriteria,
+        { code: 'achiever_declared', check: sanitizeCheck(decision.unblockCheck) });
       this.trail(goalId, { phase: this.currentPhase(rec)?.key || 'goal', decision: 'blocked the goal', why: decision.reason,
         evidence: 'goal history', result: `blocked; unblock when: ${decision.unblockCriteria || 'auto-retry'}` });
       return { blocked: true };
@@ -512,20 +766,21 @@ export class Goals {
 
     if (decision.kind === 'evaluate') {
       const met = decision.met === true;
-      rec.history.push({ kind: 'evaluate', met, reason: decision.reason, at });
+      this.addHistory(rec, { kind: 'evaluate', met, reason: decision.reason, at });
       this.trail(goalId, { phase: this.currentPhase(rec)?.key || 'goal', decision: 'evaluated the success criterion',
         why: decision.reason, evidence: `criterion: ${rec.successCriteria}`, result: met ? 'MET' : 'not met' });
       if (met) {
         rec.status = 'achieved';
         this.clearBackoff(rec);
         rec.closedReason = decision.reason || 'success criteria met';
-        rec.history.push({ kind: 'finish', reason: rec.closedReason, at });
+        this.addHistory(rec, { kind: 'finish', reason: rec.closedReason, at });
         this.save(rec);
         console.log(`Goals: ${goalId} ACHIEVED — ${rec.closedReason}`);
         // Closeout audit — a final report over the whole goal.
         this.emitJudgerTask(goalId, 'closeout', { closeout: true });
         return { achieved: true, evaluated: true };
       }
+      rec.lastRejected = { reason: 'evaluate met:false changed nothing. Plan or emit the work that moves the criterion, or block.', at };
       this.save(rec);
       return { evaluated: true };
     }
@@ -533,10 +788,11 @@ export class Goals {
     if (decision.kind === 'plan') {
       const key = String(decision.phase?.key || '').trim().toLowerCase();
       const title = String(decision.phase?.title || '').trim();
-      if (!key || !/^[a-z0-9][a-z0-9-]*$/.test(key)) { console.warn(`Goals: ${goalId} plan rejected — bad phase key "${key}"`); return {}; }
-      if (rec.phases.some(p => p.key === key)) { console.warn(`Goals: ${goalId} plan rejected — phase "${key}" exists`); return {}; }
+      if (!key || !/^[a-z0-9][a-z0-9-]*$/.test(key)) return reject(`plan: bad phase key "${key}", use kebab-case`);
+      if (rec.phases.some(p => p.key === key)) return reject(`plan: phase "${key}" already exists, pick a new key`);
       rec.phases.push({ key, title: title || key, status: 'planned', taskIds: [] });
-      rec.history.push({ kind: 'plan', phaseKey: key, reason: decision.reason, at });
+      this.addHistory(rec, { kind: 'plan', phaseKey: key, reason: decision.reason, at });
+      delete rec.lastRejected;
       this.trail(goalId, { phase: key, decision: `planned phase "${title || key}"`, why: decision.reason,
         evidence: 'goal history', result: 'planned' });
       this.clearBackoff(rec);   // forward progress → breaker back to CLOSED
@@ -547,9 +803,9 @@ export class Goals {
 
     if (decision.kind === 'emit') {
       const phase = this.currentPhase(rec);
-      if (!phase) { console.warn(`Goals: ${goalId} emit rejected — no workable phase (plan one first)`); return {}; }
+      if (!phase) return reject('emit: no workable phase, every phase is audited. Plan one first.');
       const specs = (decision.tasks || []).filter(t => t && t.title && String(t.title).trim());
-      if (!specs.length) { console.warn(`Goals: ${goalId} emit rejected — no tasks`); return {}; }
+      if (!specs.length) return reject('emit: no task had a title');
       const created: string[] = [];
       let prevId: string | undefined;
       specs.forEach((spec, i) => {
@@ -557,8 +813,17 @@ export class Goals {
         const context: Record<string, any> = {
           goalId, phaseKey: phase.key, goalGenerated: true, role: 'goal-achiever'
         };
-        const brain = spec.brain || rec.achieverBrainChain?.[0];
+        // A tiered task routes by class; pinning it to the Achiever's brain would defeat that.
+        const tier = taskTier({ tier: spec.tier });
+        if (tier) context.tier = tier;
+        const brain = spec.brain || (tier ? undefined : rec.achieverBrainChain?.[0]);
         if (brain) context.brain = brain;
+        const acceptance = cleanList(spec.acceptance);
+        const verify = cleanList(spec.verify);
+        if (acceptance.length) context.acceptance = acceptance;
+        if (verify.length) context.verify = verify;
+        // The Achiever already wrote the brief's contract: no sharpening call needed.
+        if (acceptance.length && verify.length) context.sharpen = false;
         if (isTerminal) context.completesPhase = true;
         if (prevId) context.dependsOn = [prevId];   // chain in order → terminal runs last
         const task = this.store.createTask({
@@ -573,19 +838,20 @@ export class Goals {
         });
         created.push(task.id);
         prevId = task.id;
-        rec.history.push({ kind: 'emit', phaseKey: phase.key, taskId: task.id, at });
+        this.addHistory(rec, { kind: 'emit', phaseKey: phase.key, taskId: task.id, at });
       });
       phase.taskIds.push(...created);
       phase.status = 'active';
       this.trail(goalId, { phase: phase.key, decision: `emitted ${created.length} task(s): ${specs.map(t => String(t.title).trim()).join('; ')}`,
         why: decision.reason, evidence: `tasks ${created.map(id => id.slice(0, 8)).join(', ')}`, result: 'open' });
       this.clearBackoff(rec);   // forward progress → breaker back to CLOSED
+      delete rec.lastRejected;
       this.save(rec);
       console.log(`Goals: ${goalId} emitted ${created.length} task(s) for phase "${phase.key}"`);
       return { emitted: created.length };
     }
 
-    return {};
+    return reject(`unknown move "${(decision as any).kind}"`);
   }
 
   // ── The Judger (event-triggered auditor) ────────────────────────────────────
@@ -607,8 +873,11 @@ export class Goals {
     };
     if (brain) context.brain = brain;
     if (opts.closeout) context.closeout = true;
+    // A/B (plan phase 3): half of Judgers get evidence and a length cap inline.
+    const digest = this.config.orchestration?.goals?.judgerDigestAB === true && hashArm(`${goalId}/${phaseKey}`);
+    if (this.config.orchestration?.goals?.judgerDigestAB === true) context.usageArm = digest ? 'judger-digest' : 'judger-plain';
 
-    const doneWork = phase
+    const doneWork = digest ? this.judgerDigest(rec, phase) : phase
       ? phase.taskIds.map(id => this.store.getTask(id)).filter(Boolean).map(t => `- ${t!.title} [${t!.status}]`).join('\n')
       : rec.phases.flatMap(p => p.taskIds).map(id => this.store.getTask(id)).filter(Boolean).map(t => `- ${t!.title} [${t!.status}]`).join('\n');
 
@@ -637,6 +906,7 @@ export class Goals {
       'Produce TWO artifacts in your artifacts dir (relative paths):',
       `  1. report-${phaseKey}.md — a ${rec.reportBrief ? rec.reportBrief + ' style' : 'concise'} status report on what was actually built/executed/verified this phase vs. the success criteria, calling out any step that was merely planned or reported but not done.`,
       `  2. minutes-${phaseKey}.md — meeting minutes of the Achiever↔Judger sync. End with a section "NEXT MOVE:" giving the Achiever ONE concrete, decisive instruction — the specific execution work to emit next (real build/change/run/deploy/test, not another plan), the specific phase to plan, or "evaluate met" WITH the evidence that the criterion is genuinely satisfied. Never make the next move "write another report".`,
+      ...(digest ? ['', 'Keep the report under 400 words and the minutes under 200. Open a task\'s artifact only when its evidence above does not settle a claim.'] : []),
       '',
       'You are read-mostly: do NOT create execution tasks yourself. But your minutes ARE the',
       "manager's decision the Achiever acts on next — make the NEXT MOVE unambiguous and biased",
@@ -653,10 +923,24 @@ export class Goals {
       tags: ['goal', goalId, 'goal-judger']
     });
     if (phase) { phase.judgerTaskId = task.id; }
-    rec.history.push({ kind: 'judge', phaseKey, taskId: task.id, at: new Date().toISOString() });
+    this.addHistory(rec, { kind: 'judge', phaseKey, taskId: task.id, at: new Date().toISOString() });
     this.save(rec);
     console.log(`Goals: ${goalId} → Judger task ${task.id} for phase "${phaseKey}"`);
     return task;
+  }
+
+  /** Each in-scope task's evidence block and artifact list, in place of bare titles. */
+  private judgerDigest(rec: GoalRecord, phase: GoalPhase | undefined): string {
+    const ids = phase ? phase.taskIds : rec.phases.flatMap(p => p.taskIds);
+    const root = this.config.paths.artifacts;
+    return ids.map(id => this.store.getTask(id)).filter((t): t is Task => !!t).map(t => {
+      let files: string[] = [];
+      try { if (root) files = fs.readdirSync(path.join(root, t.id)).filter(f => !f.startsWith('.')).slice(0, 15); } catch { /* none */ }
+      const evidence = extractEvidenceBlock(t.result || '') || (t.result || '').slice(0, 500);
+      return [`- ${t.title} [${t.status}] (artifacts/${t.id}/)`,
+        evidence ? `  evidence: ${evidence.replace(/\s*\n\s*/g, ' | ').slice(0, 800)}` : '  evidence: (none)',
+        files.length ? `  files: ${files.join(', ')}` : ''].filter(Boolean).join('\n');
+    }).join('\n');
   }
 
   /**
@@ -746,12 +1030,18 @@ export class Goals {
    *  Idempotent: a report that already carries an Attention heading is left alone. */
   private mergeAttention(phase: GoalPhase): boolean {
     const dir = this.config.paths.artifacts;
-    if (!phase.attention || !phase.reportArtifact || !dir) return false;
+    if (!phase.reportArtifact || !dir) return false;
+    // New records keep the text only in its artifact; old ones may still hold it inline.
+    let attention = phase.attention || '';
+    if (!attention && phase.attentionArtifact) {
+      try { attention = extractAttention(fs.readFileSync(path.join(dir, phase.attentionArtifact), 'utf-8')); } catch { /* not written yet */ }
+    }
+    if (!attention) return false;
     const file = path.join(dir, phase.reportArtifact);
     try {
       const report = fs.readFileSync(file, 'utf-8');
       if (/^#{1,3}\s*Attention\b/im.test(report)) return false;
-      fs.appendFileSync(file, `${report.endsWith('\n') ? '' : '\n'}\n${phase.attention}\n`);
+      fs.appendFileSync(file, `${report.endsWith('\n') ? '' : '\n'}\n${attention}\n`);
       return true;
     } catch { return false; }
   }
@@ -778,11 +1068,14 @@ export class Goals {
       let text = '';
       try { text = extractAttention(fs.readFileSync(path.join(this.config.paths.artifacts, artifact), 'utf-8')); } catch { /* fall back to result */ }
       text = text || extractAttention(task.result);
-      phase.attention = text || `## Attention\nreviewed by ${ctx.brain || 'unknown'}\n(review produced no Attention section — status ${task.status})`;
+      const section = text || `## Attention\nreviewed by ${ctx.brain || 'unknown'}\n(review produced no Attention section — status ${task.status})`;
       phase.attentionArtifact = artifact;
+      // No artifact directory to keep it in (tests, odd configs): stay inline.
+      if (this.persistAttention(phase, section)) delete phase.attention; else phase.attention = section;
       this.mergeAttention(phase);
+      const flags = flagsIn(text);
+      phase.attentionFlags = flags;
       this.save(rec);
-      const flags = (text.match(/^\s*[-*]\s+\S/gm) || []).length;
       this.trail(rec.goalId, { phase: phaseKey, decision: 'cross-family Attention review', why: `reviewer family ≠ executor (${ctx.reviewOf || '?'})`,
         evidence: `artifacts/${artifact}`, result: !text ? `no Attention section (${task.status})` : /no flags/i.test(text) && !flags ? 'no flags' : `${flags} flag(s)` });
       return;
