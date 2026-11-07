@@ -280,7 +280,7 @@ An unassigned task is routed in **two stages** by an orchestrator/classifier age
 2. **Agent** — pick 1 of ~285 agents in that division. The chosen agent's
    full `.md` **persona** becomes the system prompt.
 
-The agent then runs on a **agent fallback chain** (below). Skip the classifier by
+The persona then runs on an **agent fallback chain** (below). Skip the classifier by
 targeting directly: `context.persona: "<persona-slug>"` or a special-executor name.
 Tag a task `manual` to never auto-execute.
 
