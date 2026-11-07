@@ -33,6 +33,8 @@
   const TABS = [['overview', 'Overview'], ['phases', 'Phases'], ['decisions', 'Decisions'], ['files', 'Files'], ['settings', 'Settings']];
   const PHASE_LABEL = { planned: 'Planned', active: 'In progress', completing: 'Being audited', done: 'Done', audited: 'Audited' };
   const SEG = { p: 'Planned', a: 'In progress', c: 'Being audited', d: 'Done' };
+  // Inverse of the server's compact letter (core/goal-view.ts PHASE_LETTER).
+  const PHASE_LETTER_STATUS = { p: 'planned', a: 'active', c: 'completing', d: 'done' };
   const BLOCK_TEXT = {
     rate_limit: 'Every Achiever brain was rate limited',
     achiever_no_progress: 'Achiever turns made no usable progress',
@@ -352,6 +354,17 @@
         return;
       }
       if (st.selected !== id) return;
+      // A page that outlived a server redeploy can hold the old API's shape: a
+      // summary whose `phases` is the compact letter string instead of phase
+      // objects, which reads as "g.phases.filter is not a function". Normalise
+      // once here — every pane reads this object — so a skewed payload degrades
+      // to empty phases instead of crashing the whole view.
+      if (g && !Array.isArray(g.phases)) {
+        g.phases = typeof g.phases === 'string'
+          ? [...g.phases].map((l, i) => ({ key: String(i + 1), title: '', status: PHASE_LETTER_STATUS[l] || 'planned' }))
+          : [];
+        if (!g.progress) g.progress = g.tasks || { done: 0, total: 0 };
+      }
       st.detail = g;
       st.lastSelected = id;
       // Settings is a form: a refresh updates the read-only facts and leaves the
