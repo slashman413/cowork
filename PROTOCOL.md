@@ -174,7 +174,7 @@ The Cowork MCP Server exposes these tools via Streamable HTTP at `/mcp`:
 | `register_agent` | Register an agent session; optionally DECLARE runnable `agents` |
 | `deregister_agent` | Remove the agent and cascade-remove every agent it registered |
 | `heartbeat` | Update agent status; may carry `usage` — the client's self-measured rate-limit snapshot per agent (`{ exec, windows: [{ label, usedPct, resetsAt }], at }`), shown as meters on the Connections cards. Only metered execs (claude/codex) report; hermes/ollama/script have no quota and send nothing |
-| `get_roster` | Query the Agencies (~285 agents across 19 divisions) |
+| `get_roster` | Query the Agencies (~285 personas across 19 divisions) |
 | `create_task` | Create a cross-platform task; optional `scheduled_at` (ISO 8601) parks it as `scheduled` until launch time (default: run now); optional `recurrence` (or legacy `loop_interval_hours`) makes it repeat on a flexible cadence (minutes/hours/daily/weekly/monthly/cron) |
 | `claim_task` | Claim a pending task |
 | `complete_task` | Mark task as done |

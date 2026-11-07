@@ -82,7 +82,7 @@ Resources: `cowork://status`, `cowork://roster`.
 | `humanInput` | Answers from a human-in-the-loop round (server-written, read-only to you) |
 
 With none of these set, an **LLM router** runs two stages: pick 1 of 19 **divisions**,
-then 1 of ~285 **agents** in it; that agent's full `.md` persona becomes the
+then 1 of ~285 **personas** in it; that persona's full `.md` file becomes the
 system prompt. Tag a task `manual` to skip routing and dispatch entirely.
 
 Special executors (`orchestration.roleChains`): `orchestrator`, `generalist`, `video` only.

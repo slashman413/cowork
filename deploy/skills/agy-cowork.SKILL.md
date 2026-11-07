@@ -109,7 +109,7 @@ replies arrive on `context.humanInput`.
 
 | Tool | Purpose | Key Arguments |
 |------|---------|---------------|
-| `get_roster` | Search the Agencies (~288 agents) | `platform`, `category` (= division), `search`, `active_only` |
+| `get_roster` | Search the Agencies (~288 personas) | `platform`, `category` (= division), `search`, `active_only` |
 | `get_dashboard` | Full dashboard snapshot | _(none)_ |
 
 ---
@@ -179,7 +179,7 @@ or a special-executor name skips classification.
   `orchestrator`, `generalist`, `video`) — each is `{description, agents: [...]}` with
   its own chain. Edit in the dashboard **Agents** view → *Special executors*
   (or `PUT /api/roles-config/:name`).
-- **Agencies agents** are the 288 personas in `agency-agents`, grouped into 19 divisions
+- **Agencies personas** are the 288 personas in `agency-agents`, grouped into 19 divisions
   (`GET /api/roster-divisions`). They don't carry their own chain — they run on the
   **division chain** if one is set, else the **global default chain**.
 

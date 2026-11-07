@@ -51,7 +51,7 @@ shown in context throughout this README.
 - **Node.js** ≥ 20 (tested with v22)
 - **npm** ≥ 10
 - The [agency-agents](./agency-agents) repo — bundled as a **git submodule** at
-  `cowork/agency-agents` (the Agencies — 285 agents). Clone with submodules:
+  `cowork/agency-agents` (the Agencies — 285 personas). Clone with submodules:
 
   ```bash
   git clone --recurse-submodules https://github.com/slashman413/cowork
@@ -277,7 +277,7 @@ An unassigned task is routed in **two stages** by an orchestrator/classifier age
 (default `qwen3.8-27b` via Hermes, `orchestration.classifier`):
 
 1. **Division** — pick 1 of 19 divisions (testing, engineering, security, …).
-2. **Agent** — pick 1 of ~285 agents in that division. The chosen agent's
+2. **Persona** — pick 1 of ~285 personas in that division. The chosen persona's
    full `.md` **persona** becomes the system prompt.
 
 The persona then runs on an **agent fallback chain** (below). Skip the classifier by
@@ -290,7 +290,7 @@ Tag a task `manual` to never auto-execute.
   `orchestrator`, `generalist`, `video`; each is `{description, agents: [...]}`
   with its own chain. `video` runs the ComfyUI **LTX** pipeline
   (`deploy/video-pipeline.sh`; LTX only — never Wan/Hunyuan/SVD).
-- **Agencies agents** — the ~285 personas in the `agency-agents` submodule, grouped
+- **Agencies personas** — the ~285 personas in the `agency-agents` submodule, grouped
   into 19 divisions. They have no chain of their own; they run on the division's
   chain if one is set, else the global default.
 
@@ -656,7 +656,7 @@ Once connected, agents have access to these tools:
 | `register_agent` | Register this client; optionally DECLARE the `agents` it can run |
 | `deregister_agent` | Remove this client and cascade-remove every agent it registered |
 | `heartbeat` | Update status and current task |
-| `get_roster` | Search ~285 agents across 19 divisions |
+| `get_roster` | Search ~285 personas across 19 divisions |
 | `create_task` | Create a task for another agent/platform |
 | `claim_task` | Claim a pending inbox task |
 | `complete_task` | Mark a task as done with results |
@@ -861,7 +861,7 @@ cowork/
 ├── README.md                # This file
 ├── PROTOCOL.md              # Protocol specification
 ├── JOIN-AS-AN-AGENT.md       # Onboarding for a remote agent client
-├── agency-agents/           # git SUBMODULE — the Agencies (~285 agents)
+├── agency-agents/           # git SUBMODULE — the Agencies (~285 personas)
 ├── workflows/               # Workflow templates (*.json) — DAG + orchestrated
 ├── workflow-runs/           # Orchestrated run records + decision logs (gitignored)
 ├── server/                  # MCP Server + Web UI

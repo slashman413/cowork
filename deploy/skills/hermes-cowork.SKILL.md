@@ -195,7 +195,7 @@ their own chains; everything else routes through the Agencies:
 | orchestrator | special | `orchestration.roleChains.orchestrator.agents` |
 | generalist | special | `orchestration.roleChains.generalist.agents` |
 | video | special | `orchestration.roleChains.video.agents` (LTX only — never Wan/Hunyuan) |
-| any of 288 agents | Agencies | `orchestration.divisionChains[<division>]` if set, else `orchestration.defaultChain` |
+| any of 288 personas | Agencies | `orchestration.divisionChains[<division>]` if set, else `orchestration.defaultChain` |
 
 - **Global default chain**: `orchestration.defaultChain` — drag-reorder in the Agents
   view (`PUT /api/chains/default`). Currently `local-cc-opus-5-5` →
