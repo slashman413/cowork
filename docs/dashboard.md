@@ -269,13 +269,13 @@ Edit **who runs what** without touching code. Two kinds of worker:
 A chain is an **ordered list of agent ids**: `agents[0]` is tried first, and on
 failed verification the dispatcher hands the task to `agents[1]`, then `agents[2]`,
 and so on. Chains are drag-sortable in the UI. This is why shipped agents pin a
-`division`/`agent` and never a `agent` — you retune execution here, live.
+`division`/`persona` and never an `agent` — you retune execution here, live.
 
 ---
 
 ## Agents
 
-The **agent registry** (`GET/PUT/DELETE /api/agents`). A *agent* is a concrete
+The **agent registry** (`GET/PUT/DELETE /api/agents`). An *agent* is a concrete
 execution identity — a specific model on a specific platform at a specific
 location (`AgentConfig`):
 
@@ -299,7 +299,7 @@ The full catalog of specialist agents (`GET /api/roster`, filterable by division
 `GET /api/roster-divisions` groups them for this view). Each `AgentCard` carries a
 slug, name, description, emoji/color/vibe, and division. This is the pool the
 two-stage router picks from when a task isn't pinned to a specific agent — browse
-it to learn which specialist a `division`/`agent` pin will reach.
+it to learn which specialist a `division`/`persona` pin will reach.
 
 ---
 

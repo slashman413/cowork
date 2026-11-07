@@ -45,6 +45,18 @@ export function createApiRouter(store: Store, eventBus: EventBus): Router {
     }).map(t => boundTaskArtifacts(t)));
   });
 
+  // Alias for task list querying
+  router.get('/tasks', (req, res) => {
+    const tasks = store.listTasks({
+      status: req.query.status as string,
+      platform: req.query.platform as string,
+      agent: req.query.agent as string,
+      tag: req.query.tag as string,
+      limit: req.query.limit ? parseInt(req.query.limit as string, 10) : undefined
+    }).map(t => boundTaskArtifacts(t));
+    res.json({ tasks });
+  });
+
   // Calendar projection for the Calendar page: past runs + projected future fires
   // of scheduled tasks in [from, to) (ISO; default: 7 days back .. 35 days ahead,
   // window capped at 100 days). See core/calendar.ts.

@@ -82,7 +82,7 @@ test('an untagged task keeps exactly the old chain', () => {
   assert.deepEqual(chain(put({ persona: 'backend', tier: 'bogus' })), DEFAULT, 'unknown tier is ignored at dispatch');
 });
 
-test('a tier does not override a pinned agent or an personaChains override', () => {
+test('a tier does not override a pinned agent or a personaChains override', () => {
   const { put, plan, chain } = harness({ personaChains: { backend: ['local-cc-opus-5-5'] } });
   assert.deepEqual(chain(put({ persona: 'backend', tier: 'mechanical' })), ['local-cc-opus-5-5']);
   const p = plan(put({ persona: 'backend', tier: 'mechanical', agent: 'local-agy-gemini-4-argon' }));

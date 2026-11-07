@@ -747,7 +747,7 @@ and render its DAG with per-node live status. Templates are validated on load
 `dependsOn` forever); a template that fails validation is skipped rather than
 crashing the list, and the reason is surfaced in the dashboard (and at
 `GET /api/workflows-invalid`) so a malformed template is easy to fix. Steps can
-pin an `agent`, `division`, or `agent`, or leave them off and let the router pick.
+pin a `persona`, `division`, or `agent`, or leave them off and let the router pick.
 
 ### Orchestrated (adaptive) mode
 
@@ -794,7 +794,7 @@ reconstruction, and the orchestrated decision loop) is covered by a test suite �
 ### Shipped company workflows
 
 The `workflows/` directory ships a set of realistic, cross-functional company
-pipelines. Each step pins a **`division`** or **`agent`** (never a `agent`), so
+pipelines. Each step pins a **`division`** or **`persona`** (never an `agent`), so
 the agent **fallback chain for every role stays editable from the dashboard's
 Agents view** (`orchestration.roleChains[*].agents` for special roles;
 `divisionChains[*]` / `defaultChain` for agents) — change who runs a step
@@ -827,9 +827,10 @@ The Web UI uses these endpoints (also available for scripts/integrations):
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/status` | Dashboard overview data |
-| `GET` | `/api/agents` | All active workers (id → name) |
+| `GET` | `/api/workers` | All active workers (id → name) |
 | `GET` | `/api/connections` | Live MCP clients (heartbeat) + per-agent ran/submitted counters |
 | `GET` | `/api/inbox?status=pending` | Inbox tasks (filterable) |
+| `GET` | `/api/tasks` | Same list and filters as `/api/inbox`, wrapped as `{tasks}` |
 | `POST` | `/api/inbox` | Create a new task; optional `inputs: [{token,name}]` attaches uploaded files |
 | `PATCH` | `/api/inbox/:id` | Claim or complete a task |
 | `POST` | `/api/inbox/:id/rerun` | Re-queue a FAILED (chain-exhausted) task — reset to pending from the top of its chain, keep its inputs |
@@ -896,7 +897,7 @@ MCP tools interactively.
 curl http://localhost:6868/api/status | jq
 
 # List active workers
-curl http://localhost:6868/api/agents | jq
+curl http://localhost:6868/api/workers | jq
 
 # List pending inbox tasks
 curl "http://localhost:6868/api/inbox?status=pending" | jq

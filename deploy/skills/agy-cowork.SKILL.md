@@ -475,7 +475,7 @@ way; copy that shape rather than writing a bare metric.
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/status` | Dashboard overview (activeAgents, inboxSummary, uptime) |
-| `GET` | `/api/agents` | Active workers |
+| `GET` | `/api/workers` | Active workers |
 | `GET` | `/api/connections` | Live MCP clients with per-agent stats |
 | `GET` | `/api/roster` | Agencies (filterable by division/search) |
 | `GET` | `/api/roster-divisions` | Agencies grouped by division |
@@ -529,7 +529,7 @@ journalctl --user -u cowork-local-agent@agy -f   # live logs
 ### Modifying Agents
 
 Edit `~/.config/cowork-local-agent/agy.env`, then:
-1. Note the current agent ID from `.status/workers.json` or `GET /api/agents`
+1. Note the current agent ID from `.status/workers.json` or `GET /api/workers`
 2. `systemctl --user restart cowork-local-agent@agy`
 3. Deregister the old agent ID via `deregister_agent` MCP tool (agents persist until
    explicitly deregistered!)
@@ -547,7 +547,7 @@ curl -sk https://localhost:6868/api/status | jq
 curl -kN https://localhost:6868/api/events
 
 # Check active workers
-curl -sk https://localhost:6868/api/agents | jq
+curl -sk https://localhost:6868/api/workers | jq
 
 # Check registered agents
 curl -sk https://localhost:6868/api/agents | jq

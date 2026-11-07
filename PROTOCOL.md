@@ -185,7 +185,7 @@ The Cowork MCP Server exposes these tools via Streamable HTTP at `/mcp`:
 | `integrations` | Fetch, audit, rescan and install external integrations (unless `config.integrations.enabled` is false) |
 
 **Routing context** — the dispatcher reads these `task.context` fields:
-`agent` (an persona slug or special-executor name → skip the classifier),
+`persona` (a persona slug or special-executor name → skip the classifier),
 `agent` (pin one agent id; the dispatcher also *publishes* the target remote agent
 here so its client can claim the task), and `division` (override the routed
 division). With none set, the two-stage router picks division → agent.
@@ -224,8 +224,9 @@ no `agent_disconnected` event — a client that stops heartbeating is pruned sil
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/status` | Dashboard overview |
-| GET | `/api/agents` | Active workers |
-| GET | `/api/inbox` | Task list (query: status, platform, limit) |
+| GET | `/api/workers` | Active workers |
+| GET | `/api/inbox` | Task list (query: status, platform, agent, tag, limit) |
+| GET | `/api/tasks` | Same list and filters as `/api/inbox`, wrapped as `{tasks}` |
 | POST | `/api/inbox` | Create task |
 | PATCH | `/api/inbox/:id` | Claim or complete task |
 | GET | `/api/roster` | Agencies (query: division, search) |

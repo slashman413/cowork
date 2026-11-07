@@ -50,7 +50,7 @@ curl -s --cacert ~/.cowork/tls/cert.pem -H "Authorization: Bearer $COWORK_API_KE
 cd server && node dist/eval-cli.js run --family engineering --a ../CONVENTIONS.md --b /tmp/conventions-old.md --out /tmp/eval-out
 ```
 
-`family` is a division (`engineering`, `marketing`, …) or an persona slug. Pick
+`family` is a division (`engineering`, `marketing`, …) or a persona slug. Pick
 the family the change affects most. For a persona, that is the persona's own
 slug. For `CONVENTIONS.md`, use the busiest division. The run writes
 `eval-report.md` (per-task scores, Δ(A−B), the outward-action check) into the

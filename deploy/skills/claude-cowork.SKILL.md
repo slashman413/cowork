@@ -75,7 +75,7 @@ Resources: `cowork://status`, `cowork://roster`.
 
 | Field | Effect |
 |-------|--------|
-| `agent` (or `role`, alias) | An persona slug or special-executor name → **skips the classifier** |
+| `persona` (or `role`, alias) | A persona slug or special-executor name → **skips the classifier** |
 | `division` | Force the division; the router still picks the persona |
 | `agent` | Pin one agent id → overrides the whole chain |
 | `dependsOn: [taskIds]` | Gate until those finish, then inject their results into the brief |
@@ -197,7 +197,7 @@ curl -sk -X POST https://localhost:6868/api/workflows/<id>/run \
   -H 'content-type: application/json' -d '{"params":{"idea":"..."},"dryRun":true}'
 ```
 
-Steps pin a `division` or `agent` (never a `agent`) so chains stay editable from the
+Steps pin a `division` or `persona` (never an `agent`) so chains stay editable from the
 dashboard. Templates are validated on load (unique keys, deps exist, DAG acyclic);
 invalid ones are skipped and surfaced at `GET /api/workflows-invalid`.
 
