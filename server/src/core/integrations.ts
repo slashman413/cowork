@@ -18,7 +18,7 @@ import type { IntegrationsConfig } from '../types.js';
  *         skill  → copied to the shared skills home (~/.agents/skills/<name>) and
  *                  symlinked into every client skills dir that exists — the same
  *                  convention the `skills` CLI already uses on this host, so every
- *                  brain (claude / codex / agy / hermes) picks it up.
+ *                  agent (claude / codex / agy / hermes) picks it up.
  *         web    → served sandboxed at /plugins/<id>/ and registered as a Portal card.
  *         mcp / cli / library → nothing runs automatically (installing deps executes
  *                  repo code); instead `buildWrapTask` drafts a cowork task asking an
@@ -90,18 +90,18 @@ const SKIP_DIRS = new Set(['.git', 'node_modules', '.venv', 'venv', '__pycache__
 const home = () => os.homedir();
 const expand = (p: string) => p.startsWith('~') ? path.join(home(), p.slice(1)) : p;
 
-/** Client skill dirs that brains on this host read from (only existing ones are linked). */
+/** Client skill dirs that agents on this host read from (only existing ones are linked). */
 export function defaultClientSkillDirs(): string[] {
   return ['.claude/skills', '.codex/skills', '.gemini/config/skills', '.hermes/skills'].map(p => path.join(home(), p));
 }
 
-/** Brain for "wrap with an agent" tasks: the configured one if it is a local
- *  brain, else the first local coding brain present (Operating Rule 6 — the
- *  clone lives under the operator's home, remote brains can't reach it). */
-export function defaultWrapBrain(configured: string | undefined, localBrains: string[]): string | undefined {
-  if (configured && localBrains.includes(configured)) return configured;
-  const preferred = ['local-cc-sonnet-5-5', 'local-cc-opus-5-5', 'local-agy-claude-sonnet-5-5-medium', 'local-hermes-qwen3.8-27b'];
-  return preferred.find(b => localBrains.includes(b)) || localBrains[0];
+/** Agent for "wrap with an agent" tasks: the configured one if it is a local
+ *  agent, else the first local coding agent present (Operating Rule 6 — the
+ *  clone lives under the operator's home, remote agents can't reach it). */
+export function defaultWrapAgent(configured: string | undefined, localAgents: string[]): string | undefined {
+  if (configured && localAgents.includes(configured)) return configured;
+  const preferred = ['local-cc-sonnet-5-5', 'local-cc-opus-5-5', 'local-agy-claude-sonnet-5-5', 'local-hermes-qwen3.8-27b'];
+  return preferred.find(b => localAgents.includes(b)) || localAgents[0];
 }
 
 /** What `npm run audit-skills` scans with no arguments. */
@@ -646,7 +646,7 @@ export class Integrations {
    * library as an agent skill. The agent writes ONLY into the wrapper dir (and a
    * venv/node_modules inside the clone); a rescan then installs the wrapper.
    */
-  buildWrapTask(id: string, opts: { brain?: string; notes?: string } = {}) {
+  buildWrapTask(id: string, opts: { agent?: string; notes?: string } = {}) {
     const e = this.get(id);
     if (!e) throw new Error(`unknown integration ${id}`);
     const name = e.id.split('__')[1] || e.id;
@@ -677,7 +677,7 @@ export class Integrations {
       title: `🧩 Integrate ${e.source} as a cowork skill`,
       description,
       tags: ['integration', 'engineering'],
-      context: { integrationId: e.id, ...(opts.brain ? { brain: opts.brain } : {}) },
+      context: { integrationId: e.id, ...(opts.agent ? { agent: opts.agent } : {}) },
     };
   }
 }

@@ -5,7 +5,7 @@
  * signature, ≥2 occurrences) and drafts, per class, a human-gated proposal whose
  * remedy menu is ordered STRUCTURE FIRST:
  *
- *   router rule → brain cooldown → brain `env` requires-filter → verifier
+ *   router rule → agent cooldown → agent `env` requires-filter → verifier
  *   failPattern → workflow gate → acceptance criterion → CONVENTIONS.md note (last)
  *
  * A structural remedy is offered only when its check, replayed against the
@@ -20,20 +20,20 @@ import type { Lesson } from './lessons.js';
 import { classifyRejection, classifyWaitInput, REPEAT_WINDOW_MS } from './quality-metrics.js';
 
 export type RemedyId =
-  | 'router-rule' | 'brain-cooldown' | 'env-requires' | 'verifier-pattern'
+  | 'router-rule' | 'agent-cooldown' | 'env-requires' | 'verifier-pattern'
   | 'acceptance-criterion' | 'conventions-note';
 
 /** The remedy menu, highest level (most mechanical) first. Order is the contract. */
 export const REMEDY_ORDER: readonly RemedyId[] = [
-  'router-rule', 'brain-cooldown', 'env-requires', 'verifier-pattern',
+  'router-rule', 'agent-cooldown', 'env-requires', 'verifier-pattern',
   'acceptance-criterion', 'conventions-note',
 ] as const;
 
 /** Where each remedy is applied (all human-gated; this module never writes). */
 export const REMEDY_LEVER: Record<RemedyId, string> = {
-  'router-rule': '~/.cowork/config.json orchestration.agentChains / divisionChains (drop or demote the brain family for this class)',
-  'brain-cooldown': 'Store brain cooldown (Store.noteBrainRateLimited / brainCooldownUntil, decided from CLI signals) + ~/.cowork/config.json orchestration.autoRerunRateLimited',
-  'env-requires': 'brain `env` manifest + task `requires` filter (WF-3; the router-side filter is not wired yet)',
+  'router-rule': '~/.cowork/config.json orchestration.personaChains / divisionChains (drop or demote the agent family for this class)',
+  'agent-cooldown': 'Store agent cooldown (Store.noteAgentRateLimited / agentCooldownUntil, decided from CLI signals) + ~/.cowork/config.json orchestration.autoRerunRateLimited',
+  'env-requires': 'agent `env` manifest + task `requires` filter (WF-3; the router-side filter is not wired yet)',
   'verifier-pattern': '~/.cowork/config.json orchestration.verifier.failPatterns',
   'acceptance-criterion': 'task brief `acceptance` + `scope` (P0-3 brief contract)',
   'conventions-note': 'CONVENTIONS.md prose (prompt-injected; must go through eval-prompt-change, P2-1) — unenforced',
@@ -42,7 +42,7 @@ export const REMEDY_LEVER: Record<RemedyId, string> = {
 export const MIN_CLASS_SIZE = 2;
 export const MIN_CITED = 2;
 
-export interface CitedEvent { task: string; at: string; brain: string; kind: Lesson['kind']; reason: string; }
+export interface CitedEvent { task: string; at: string; agent: string; kind: Lesson['kind']; reason: string; }
 
 export interface LessonClass {
   signature: string;
@@ -50,7 +50,7 @@ export interface LessonClass {
   count: number;
   first: string;
   last: string;
-  brainFamilies: Record<string, number>;
+  agentFamilies: Record<string, number>;
   events: Lesson[];
 }
 
@@ -111,14 +111,14 @@ export function groupLessons(lessons: Lesson[], minCount = MIN_CLASS_SIZE): Less
   for (const [signature, events] of by) {
     if (events.length < minCount) continue;
     events.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
-    const brainFamilies: Record<string, number> = {};
-    for (const e of events) brainFamilies[e.brainFamily || '?'] = (brainFamilies[e.brainFamily || '?'] || 0) + 1;
-    out.push({ signature, kind: events[0].kind, count: events.length, first: events[0].at, last: events[events.length - 1].at, brainFamilies, events });
+    const agentFamilies: Record<string, number> = {};
+    for (const e of events) agentFamilies[e.agentFamily || '?'] = (agentFamilies[e.agentFamily || '?'] || 0) + 1;
+    out.push({ signature, kind: events[0].kind, count: events.length, first: events[0].at, last: events[events.length - 1].at, agentFamilies, events });
   }
   return out.sort((a, b) => b.count - a.count || a.signature.localeCompare(b.signature));
 }
 
-const cite = (l: Lesson): CitedEvent => ({ task: l.task, at: l.at, brain: l.brain, kind: l.kind, reason: (l.reason || (l.questions || [])[0] || '').slice(0, 160) });
+const cite = (l: Lesson): CitedEvent => ({ task: l.task, at: l.at, agent: l.agent, kind: l.kind, reason: (l.reason || (l.questions || [])[0] || '').slice(0, 160) });
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /** First ≤4 plain words (no digits / ids) of a raw reason, or '' when too short. */
@@ -130,9 +130,9 @@ export function literalPhrase(reason: string): string {
   return p.length >= 6 ? p : '';
 }
 
-/** Dominant brain family of a class when the failure concentrates on it (≥60%). */
+/** Dominant agent family of a class when the failure concentrates on it (≥60%). */
 function dominantFamily(c: LessonClass): string | null {
-  const [fam, n] = Object.entries(c.brainFamilies).sort((a, b) => b[1] - a[1])[0] || [];
+  const [fam, n] = Object.entries(c.agentFamilies).sort((a, b) => b[1] - a[1])[0] || [];
   if (!fam || fam === '?') return null;
   return n / c.count >= 0.6 ? fam : null;
 }
@@ -158,17 +158,17 @@ export function remedyMenu(c: LessonClass): RemedyOption[] {
   const sample = c.events.find(e => e.reason) || c.events[0];
   const isRateLimit = (e: Lesson) => e.kind === 'verify-fail' && classifyRejection(e.reason) === 'rateLimit';
 
-  // 1. router rule — the failure concentrates on one brain family: route this
+  // 1. router rule — the failure concentrates on one agent family: route this
   //    class's work away from it. Would have caught every event on that family.
   //    Not for rate limits (transient → cooldown) or wait-inputs (the agent asked,
-  //    the brain did not fail).
+  //    the agent did not fail).
   const fam = dominantFamily(c);
   if (fam && c.kind !== 'wait-input' && !c.events.every(isRateLimit)) {
-    add('router-rule', `stop routing "${c.signature}" work to brain family ${fam}-* (demote it in the matching agent/division chain)`,
-      c.events.filter(e => e.brainFamily === fam));
+    add('router-rule', `stop routing "${c.signature}" work to agent family ${fam}-* (demote it in the matching persona/division chain)`,
+      c.events.filter(e => e.agentFamily === fam));
   }
 
-  // 2. brain cooldown — a rate-limit class: a second hit on the same brain within
+  // 2. agent cooldown — a rate-limit class: a second hit on the same agent within
   //    the breaker window would not have been dispatched at all.
   if (c.events.some(isRateLimit)) {
     const lastHit = new Map<string, number>();
@@ -176,16 +176,16 @@ export function remedyMenu(c: LessonClass): RemedyOption[] {
     for (const e of c.events) {
       if (!isRateLimit(e)) continue;
       const t = Date.parse(e.at);
-      const prev = lastHit.get(e.brain);
+      const prev = lastHit.get(e.agent);
       if (prev !== undefined && t - prev <= REPEAT_WINDOW_MS) repeats.push(e);
-      lastHit.set(e.brain, t);
+      lastHit.set(e.agent, t);
     }
-    add('brain-cooldown', `cool the brain down for ≥${REPEAT_WINDOW_MS / 60_000} min after a "${normalizeReason(sample.reason)}" notice (Store rate-limit cooldown; extend isRateLimitFailure / verifier.failPatterns if this text is not matched)`, repeats);
+    add('agent-cooldown', `cool the agent down for ≥${REPEAT_WINDOW_MS / 60_000} min after a "${normalizeReason(sample.reason)}" notice (Store rate-limit cooldown; extend isRateLimitFailure / verifier.failPatterns if this text is not matched)`, repeats);
   }
 
   // 3. env requires-filter — events share a missing path/tool/secret.
   const req = sharedRequire(c);
-  if (req) add('env-requires', `require \`${req}\` and only route to brains whose env manifest has it`, c.events.filter(e => (e.requiresGuess || []).includes(req)));
+  if (req) add('env-requires', `require \`${req}\` and only route to agents whose env manifest has it`, c.events.filter(e => (e.requiresGuess || []).includes(req)));
 
   // 4. verifier failPattern — only for failures a deterministic check did NOT
   //    catch (LLM/spec judge, shadow verdict, BLOCKED): a cheap literal pattern

@@ -43,7 +43,7 @@ export interface CalendarEvent {
   /** Human cadence label for recurring entries ("every day at 08:00"). */
   cadence?: string;
   priority?: Task['priority'];
-  brain?: string;
+  agent?: string;
   /** Only on the FIRST projected fire of a series: it is the task's real
    *  `scheduledAt`, so it can be dragged / run-now. Later fires are virtual. */
   head?: boolean;
@@ -58,7 +58,7 @@ export interface CalendarSeries {
   recurring: boolean;
   overdue: boolean;
   priority?: Task['priority'];
-  brain?: string;
+  agent?: string;
   tags?: string[];
   /** Outcome of the most recent finished run of this series, if any. */
   lastRun?: { taskId: string; status: CalendarStatus; at: string };
@@ -104,9 +104,9 @@ export function runStatus(task: Task): CalendarStatus {
   }
 }
 
-function brainOf(task: Task): string | undefined {
+function agentOf(task: Task): string | undefined {
   const c = task.context || {};
-  return c.ranBrain || (c.brainAuto ? undefined : c.brain) || undefined;
+  return c.ranAgent || (c.agentAuto ? undefined : c.agent) || undefined;
 }
 
 /**
@@ -139,7 +139,7 @@ export function buildCalendar(tasks: Task[], from: Date, to: Date, now: Date = n
       start: new Date(startMs).toISOString(),
       ...(Number.isFinite(endMs) ? { end: new Date(endMs).toISOString() } : {}),
       ...(parent ? { seriesId: parent } : {}),
-      priority: task.priority, brain: brainOf(task),
+      priority: task.priority, agent: agentOf(task),
     });
   }
 
@@ -150,7 +150,7 @@ export function buildCalendar(tasks: Task[], from: Date, to: Date, now: Date = n
     const cadence = rec ? describeRecurrence(rec) : '';
     const firstMs = Date.parse(String(task.scheduledAt ?? ''));
     const overdue = Number.isFinite(firstMs) && firstMs < nowMs - OVERDUE_GRACE_MS;
-    const base = { taskId: task.id, title: task.title, kind: 'planned' as const, priority: task.priority, brain: brainOf(task) };
+    const base = { taskId: task.id, title: task.title, kind: 'planned' as const, priority: task.priority, agent: agentOf(task) };
     let fires = 0, truncated = false;
 
     if (Number.isFinite(firstMs)) {
@@ -182,7 +182,7 @@ export function buildCalendar(tasks: Task[], from: Date, to: Date, now: Date = n
       taskId: task.id, title: task.title,
       next: Number.isFinite(firstMs) ? new Date(firstMs).toISOString() : null,
       cadence: cadence || 'once', recurring: !!rec, overdue,
-      priority: task.priority, brain: brainOf(task), tags: task.tags,
+      priority: task.priority, agent: agentOf(task), tags: task.tags,
       ...(last ? { lastRun: { taskId: last.taskId, status: last.status, at: last.at } } : {}),
       firesInWindow: fires, ...(truncated ? { truncated: true } : {}),
     });

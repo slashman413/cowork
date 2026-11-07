@@ -86,8 +86,8 @@ export function readGoalTrail(goalsDir: string, goalId: string, phase?: string):
  */
 export function taskTrailRows(task: Task, phase: string): GoalDecisionRow[] {
   const ctx = (task.context || {}) as Record<string, any>;
-  const brain = String(ctx.ranBrain || ctx.brain || '');
-  const evidence = `task ${task.id.slice(0, 8)}${brain ? ` (${brain})` : ''}`;
+  const agent = String(ctx.ranAgent || ctx.agent || '');
+  const evidence = `task ${task.id.slice(0, 8)}${agent ? ` (${agent})` : ''}`;
   const ts = trailTs(task.completedAt || new Date());
   const rows: GoalDecisionRow[] = [{
     ts, phase, decision: `task finished: ${task.title}`, why: 'phase work', evidence: `${evidence}; artifacts/${task.id}/`,

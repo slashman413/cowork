@@ -25,7 +25,7 @@ function harness() {
   const config = {
     paths, platforms: {}, server: { port: 6868 },
     inbox: { maxRetries: 3 },
-    orchestration: { agents: {}, brains: {} }
+    orchestration: { agents: {}, agents: {} }
   } as unknown as Config;
   const store = new Store(config, new EventBus());
   const dispatcher = new Dispatcher(config, store, new EventBus());
@@ -67,7 +67,7 @@ test('a malformed brief is rejected at creation', () => {
 test('buildPrompt renders acceptance / verify / timebox / scope as their own sections, not in the context JSON', () => {
   const { store, dispatcher } = harness();
   const t = store.createTask({ title: 'ship it', description: 'do the thing', from: { platform: 'p', agent: 'a' }, to: {}, priority: 'normal', context: { ...BRIEF, note: 'keep-me' } });
-  const prompt: string = (dispatcher as any).buildPrompt(t, { agent: 'engineer', isRoster: false });
+  const prompt: string = (dispatcher as any).buildPrompt(t, { persona: 'engineer', isRoster: false });
   for (const h of ['# Acceptance criteria', '# How to verify', '# Timebox', '# Scope']) assert.ok(prompt.includes(h), `missing ${h}`);
   assert.ok(prompt.includes('- [ ] report.md exists in the artifacts dir'));
   assert.ok(prompt.includes('- cd server && npm test'));
@@ -83,7 +83,7 @@ test('buildPrompt renders acceptance / verify / timebox / scope as their own sec
 test('a task without a brief gets no acceptance/verify/scope sections, but buildPrompt renders the default timebox (taskTimeoutMs/60000 - 5)', () => {
   const { store, dispatcher } = harness();
   const t = store.createTask({ title: 'x', description: 'y', from: { platform: 'p', agent: 'a' }, to: {}, priority: 'normal' });
-  const prompt: string = (dispatcher as any).buildPrompt(t, { agent: 'engineer', isRoster: false });
+  const prompt: string = (dispatcher as any).buildPrompt(t, { persona: 'engineer', isRoster: false });
   assert.ok(!prompt.includes('# Acceptance criteria') && !prompt.includes('# How to verify') && !prompt.includes('# Scope'));
   assert.ok(prompt.includes('# Timebox'));
   assert.ok(prompt.includes('Spend at most 45 min on this task.'));
@@ -96,10 +96,10 @@ test('P1-3 progress.md: absent on first run, injected on re-run/handover under "
   const t = store.createTask({ title: 'render video', description: 'render 10 songs', from: { platform: 'p', agent: 'a' }, to: {}, priority: 'normal' });
 
   // 1) First run — no progress.md on disk → section absent.
-  const firstPrompt: string = (dispatcher as any).buildPrompt(t, { agent: 'engineer', isRoster: false });
+  const firstPrompt: string = (dispatcher as any).buildPrompt(t, { persona: 'engineer', isRoster: false });
   assert.ok(!firstPrompt.includes('# Prior progress — resume, do not redo'));
 
-  // 2) Brain writes artifacts/<id>/progress.md, then task is re-run / handed over.
+  // 2) Agent writes artifacts/<id>/progress.md, then task is re-run / handed over.
   const artDir = path.join(paths.artifacts, t.id);
   fs.mkdirSync(artDir, { recursive: true });
   fs.writeFileSync(path.join(artDir, 'progress.md'), [
@@ -108,7 +108,7 @@ test('P1-3 progress.md: absent on first run, injected on re-run/handover under "
     '- [ ] step 3: ffmpeg assembly'
   ].join('\n'));
 
-  const rerunPrompt: string = (dispatcher as any).buildPrompt(t, { agent: 'engineer', isRoster: false });
+  const rerunPrompt: string = (dispatcher as any).buildPrompt(t, { persona: 'engineer', isRoster: false });
   assert.ok(rerunPrompt.includes('# Prior progress — resume, do not redo'));
   assert.ok(rerunPrompt.includes('- [x] step 1: generated 5 songs — songs/01..05.wav (42 MB)'));
   assert.ok(rerunPrompt.includes('- [ ] step 3: ffmpeg assembly'));
@@ -126,7 +126,7 @@ test('P1-3 progress.md: absent on first run, injected on re-run/handover under "
   assert.ok(!cappedLedger.includes('step 0: very old step'));
   assert.ok(cappedLedger.includes('step 99: final completed checkpoint — output_99.mp4 (88MB)'));
 
-  const cappedPrompt: string = (dispatcher as any).buildPrompt(t, { agent: 'engineer', isRoster: false });
+  const cappedPrompt: string = (dispatcher as any).buildPrompt(t, { persona: 'engineer', isRoster: false });
   assert.ok(cappedPrompt.includes('# Prior progress — resume, do not redo'));
   assert.ok(!cappedPrompt.includes('step 0: very old step'));
   assert.ok(cappedPrompt.includes('step 99: final completed checkpoint — output_99.mp4 (88MB)'));
@@ -143,8 +143,8 @@ test('P1-3 timeout captures progress.md and mentions it in the lessons.jsonl eve
       taskTimeoutMs: 3000000,
       defaultRole: 'generalist',
       verifier: { enabled: true },
-      agents: { engineer: { description: '', brains: ['b1', 'b2'] } },
-      brains: {
+      roleChains: { engineer: { description: '', agents: ['b1', 'b2'] } },
+      agents: {
         b1: { description: '', location: 'remote' },
         b2: { description: '', location: 'remote' }
       }
@@ -157,7 +157,7 @@ test('P1-3 timeout captures progress.md and mentions it in the lessons.jsonl eve
     from: { platform: 'p', agent: 'a' },
     to: {},
     priority: 'normal',
-    context: { agent: 'engineer', brain: 'b1', brainAuto: true, attempts: 0 }
+    context: { persona: 'engineer', agent: 'b1', agentAuto: true, attempts: 0 }
   });
   const artDir = path.join(paths.artifacts, t.id);
   fs.mkdirSync(artDir, { recursive: true });
@@ -178,7 +178,7 @@ test('P1-3 timeout captures progress.md and mentions it in the lessons.jsonl eve
 test('orchestrator prompt demands acceptance + verify on every subtask POST', () => {
   const { store, dispatcher } = harness();
   const t = store.createTask({ title: 'plan', description: 'big job', from: { platform: 'p', agent: 'a' }, to: {}, priority: 'normal' });
-  const prompt: string = (dispatcher as any).buildPrompt(t, { agent: 'orchestrator', isRoster: false });
+  const prompt: string = (dispatcher as any).buildPrompt(t, { persona: 'orchestrator', isRoster: false });
   assert.ok(prompt.includes('"context":{"acceptance":['));
   assert.ok(prompt.includes('A subtask you cannot write acceptance for is not scoped yet'));
 });

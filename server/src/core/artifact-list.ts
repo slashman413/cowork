@@ -48,7 +48,7 @@ export function listArtifactFiles(root: string, opts: { skipTop?: string; max?: 
 /**
  * Shallow copy of `task` with an over-long `artifacts` list cut to the cap and
  * `artifactsTotal` set to the real count — for API responses, so tasks stored
- * before the cap existed (or reported by remote brains) can't bloat the list.
+ * before the cap existed (or reported by remote agents) can't bloat the list.
  * Returns the task itself when nothing needs trimming.
  */
 export function boundTaskArtifacts<T extends Task>(task: T, max = TASK_ARTIFACT_LIST_MAX): T {

@@ -2,14 +2,13 @@
  * Lesson ledger (WF-1) — the cross-task memory layer.
  *
  * Every time a task teaches the network something (a verifier rejection, or a
- * brain parking on `wait-input`), the dispatcher appends ONE structured JSON
+ * agent parking on `wait-input`), the dispatcher appends ONE structured JSON
  * line here. This is pure event capture: deterministic, no LLM, no scheduler —
  * nothing in this module decides or applies anything. A recurrence detector
  * (WF-2) reads the ledger to draft *human-gated* proposals; the ledger itself
  * only remembers.
  *
  * Design: `self-improvement-and-env-sharing-design.md` §A1 +
- * `workflow-specs-self-improvement-env-sharing.md` §WF-1.
  *
  * Invariant — never break dispatch: a full/unwritable disk MUST NOT throw into
  * the task lifecycle. Capture is best-effort observability. All I/O here is
@@ -27,9 +26,9 @@ export interface Lesson {
   kind: 'verify-fail' | 'wait-input' | 'blocked' | 'brief-missing-acceptance' | 'quality-shadow' | 'sharpen-failed' | 'gate-panel';  // blocked = agent's STATUS: BLOCKED (P0-2); brief-missing-acceptance = orchestrator subtask without acceptance (P0-3); quality-shadow = P1-1 shadow spec verdict; sharpen-failed = PS-1 sharpener failure; gate-panel = PS-2 panel round
   task: string;                     // task id
   titleSlug: string;                // kebab of the title, first 6 words
-  agent: string;                    // roster slug (best-effort)
-  brain: string;                    // brain id
-  brainFamily: string;              // brain id with the final -segment dropped
+  persona: string;                    // roster slug (best-effort)
+  agent: string;                    // agent id
+  agentFamily: string;              // agent id with the final -segment dropped
   attempt: number;
   reason: string;                   // truncated to 500 chars
   requiresGuess: string[];          // deterministic extract, ≤10 entries
@@ -52,13 +51,13 @@ const REQUIRES_CAP = 10;
 const LEDGER_FILE = 'lessons.jsonl';
 
 /**
- * Derive a brain "family" by stripping the trailing model segment so sibling
- * brains on the same host collapse together for recurrence counting:
+ * Derive an agent "family" by stripping the trailing model segment so sibling
+ * agents on the same host collapse together for recurrence counting:
  *   remote-ai-code-gen-cc-fable → remote-ai-code-gen-cc
- * A brain id with no `-` is returned unchanged. Deterministic.
+ * An agent id with no `-` is returned unchanged. Deterministic.
  */
-export function deriveBrainFamily(brainId: string): string {
-  const id = (brainId || '').trim();
+export function deriveAgentFamily(agentId: string): string {
+  const id = (agentId || '').trim();
   const i = id.lastIndexOf('-');
   return i > 0 ? id.slice(0, i) : id;
 }
@@ -132,8 +131,8 @@ export function buildLesson(input: {
   kind: Lesson['kind'];
   task: string;
   title: string;
+  persona: string;
   agent: string;
-  brain: string;
   attempt: number;
   reason?: string;
   resultText?: string;
@@ -147,9 +146,9 @@ export function buildLesson(input: {
     kind: input.kind,
     task: input.task,
     titleSlug: titleSlug(input.title),
+    persona: input.persona || '',
     agent: input.agent || '',
-    brain: input.brain || '',
-    brainFamily: deriveBrainFamily(input.brain || ''),
+    agentFamily: deriveAgentFamily(input.agent || ''),
     attempt: input.attempt,
     reason,
     requiresGuess,

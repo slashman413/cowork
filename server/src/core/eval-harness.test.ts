@@ -7,9 +7,9 @@ import { spawnSync } from 'child_process';
 import {
   EVAL_RUBRIC, SANDBOX_FORBID, isReplayable, selectReplayTasks, buildReplayPrompt, sandboxEnv, writeGuardDir, readBlockedLog,
   blindPairs, buildJudgePrompt, parseJudgeScores, unblind, summarize, diffSnapshots, normalizeStatus, renderReport,
-  firstRunnableBrain, brainArgv, sandboxClean, type JudgedTask, type SandboxCheck,
+  firstRunnableAgent, agentArgv, sandboxClean, type JudgedTask, type SandboxCheck,
 } from './eval-harness.js';
-import type { Task, BrainConfig } from '../types.js';
+import type { Task, AgentConfig } from '../types.js';
 
 function task(id: string, over: Partial<Task> = {}, ctx: Record<string, any> = {}): Task {
   return {
@@ -22,7 +22,7 @@ function task(id: string, over: Partial<Task> = {}, ctx: Record<string, any> = {
 
 test('isReplayable keeps family done tasks and drops eval/continue/input/short/other-family ones', () => {
   assert.equal(isReplayable(task('1'), 'engineering'), true);
-  assert.equal(isReplayable(task('1', {}, { division: undefined, ranAgent: 'engineering-sre' }), 'engineering-sre'), true);
+  assert.equal(isReplayable(task('1', {}, { division: undefined, ranPersona: 'engineering-sre' }), 'engineering-sre'), true);
   assert.equal(isReplayable(task('1', { status: 'pending' as Task['status'] }), 'engineering'), false);
   assert.equal(isReplayable(task('1', {}, { division: 'marketing' }), 'engineering'), false);
   assert.equal(isReplayable(task('1', { title: 'Continue: something' }), 'engineering'), false);
@@ -47,8 +47,8 @@ test('selectReplayTasks is seeded-reproducible, dedupes recurring titles, return
 
 test('replay prompt: banner on top and bottom, variant rules, sandbox scope replaces the original, no variant label', () => {
   const p = buildReplayPrompt({
-    rules: '# RULES-VARIANT-TEXT', persona: 'You are a backend architect.', agent: 'engineering-backend-architect',
-    task: { title: 'Ship X', description: 'Build X and push it.', context: { acceptance: ['X works'], scope: { write: ['/orig-write-scope'] }, ranBrain: 'b', planItem: 'P9' } },
+    rules: '# RULES-VARIANT-TEXT', personaPrompt: 'You are a backend architect.', persona: 'engineering-backend-architect',
+    task: { title: 'Ship X', description: 'Build X and push it.', context: { acceptance: ['X works'], scope: { write: ['/orig-write-scope'] }, ranAgent: 'b', planItem: 'P9' } },
     sandboxDir: '/sb/1', timeboxMin: 12, depResults: [{ title: 'Prev step', result: 'prev result' }],
   });
   assert.ok(p.startsWith('# ⚠ SANDBOX REPLAY — do not perform outward actions'));
@@ -59,7 +59,7 @@ test('replay prompt: banner on top and bottom, variant rules, sandbox scope repl
   assert.match(p, /Spend at most 12 min/);
   for (const f of SANDBOX_FORBID) assert.ok(p.includes(f), `forbid "${f}" rendered`);
   assert.ok(!p.includes('/orig-write-scope'), 'original write scope is replaced');
-  assert.ok(!/"ranBrain"/.test(p), 'internal context stripped');
+  assert.ok(!/"ranAgent"/.test(p), 'internal context stripped');
   assert.match(p, /"planItem": "P9"/);
   assert.match(p, /## Prev step\n\nprev result/);
   assert.ok(!/variant [AB]\b/i.test(p));
@@ -162,18 +162,18 @@ test('diffSnapshots flags head/ref/status changes; runtime dirs are ignored in s
   assert.deepEqual(diffSnapshots(before, before), []);
 });
 
-test('firstRunnableBrain skips disabled/remote/script brains; brainArgv mirrors the dispatcher', () => {
-  const brains: Record<string, BrainConfig> = {
-    off: { description: '', location: 'local', exec: 'claude', disabled: true } as BrainConfig,
-    rem: { description: '', location: 'remote', exec: 'claude' } as BrainConfig,
-    scr: { description: '', location: 'local', exec: 'script', command: ['x'] } as BrainConfig,
-    cc: { description: '', location: 'local', exec: 'claude', model: 'claude-opus-5-5' } as BrainConfig,
+test('firstRunnableAgent skips disabled/remote/script agents; agentArgv mirrors the dispatcher', () => {
+  const agents: Record<string, AgentConfig> = {
+    off: { description: '', location: 'local', exec: 'claude', disabled: true } as AgentConfig,
+    rem: { description: '', location: 'remote', exec: 'claude' } as AgentConfig,
+    scr: { description: '', location: 'local', exec: 'script', command: ['x'] } as AgentConfig,
+    cc: { description: '', location: 'local', exec: 'claude', model: 'claude-opus-5-5' } as AgentConfig,
   };
-  assert.equal(firstRunnableBrain(['off', 'rem', 'scr', 'cc'], brains), 'cc');
-  assert.equal(firstRunnableBrain(['off'], brains), null);
-  assert.deepEqual(brainArgv(brains.cc, 'P', 1000), ['claude', '-p', 'P', '--model', 'claude-opus-5-5', '--dangerously-skip-permissions']);
-  assert.deepEqual(brainArgv({ exec: 'agy', model: 'gemini-4-argon-medium' }, 'P', 60000).slice(0, 4), ['agy', '-p', 'P', '--print-timeout']);
-  assert.throws(() => brainArgv({ exec: 'script' }, 'P', 1), /cannot run/);
+  assert.equal(firstRunnableAgent(['off', 'rem', 'scr', 'cc'], agents), 'cc');
+  assert.equal(firstRunnableAgent(['off'], agents), null);
+  assert.deepEqual(agentArgv(agents.cc, 'P', 1000), ['claude', '-p', 'P', '--model', 'claude-opus-5-5', '--dangerously-skip-permissions']);
+  assert.deepEqual(agentArgv({ exec: 'agy', model: 'gemini-4-argon-medium' }, 'P', 60000).slice(0, 4), ['agy', '-p', 'P', '--print-timeout']);
+  assert.throws(() => agentArgv({ exec: 'script' }, 'P', 1), /cannot run/);
 });
 
 test('report carries delta, per-task rows, the n caveat, sandbox verdict and the commit citation', () => {
@@ -185,7 +185,7 @@ test('report carries delta, per-task rows, the n caveat, sandbox verdict and the
   const md = renderReport({
     runId: 'run-9', family: 'engineering', createdAt: 'now',
     variantA: { path: 'CONVENTIONS.md', sha256: 'a'.repeat(64) }, variantB: { path: 'old.md', sha256: 'b'.repeat(64) },
-    executor: 'local-cc-opus-5-5', judge: 'local-agy-gemini-4-argon-medium', executorFamily: 'claude', judgeFamily: 'gemini',
+    executor: 'local-cc-opus-5-5', judge: 'local-agy-gemini-4-argon', executorFamily: 'claude', judgeFamily: 'gemini',
     rows, summary: summarize(rows), replayStatus: [{ taskId: 'abcdef123', A: 'ok', B: 'timeout' }],
     checks: [check, { ...check, label: 'B', blockedAttempts: [], repoChanges: [{ repo: '/r', changed: ['working tree changed'] }] }],
   });

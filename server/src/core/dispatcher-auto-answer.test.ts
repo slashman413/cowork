@@ -35,13 +35,13 @@ function harness(opts: { answer: string; autoAnswer?: any }) {
       tasks.set(t.id, t);
       return t;
     },
-    getAgentPersona: () => null
+    getPersona: () => null
   };
   const config = {
     inbox: { maxRetries: 3 },
     orchestration: {
-      agents: { orchestrator: { description: '', brains: ['local-cc-opus'] } },
-      brains: { 'local-cc-opus': { location: 'local', exec: 'claude' } },
+      roleChains: { orchestrator: { description: '', agents: ['local-cc-opus'] } },
+      agents: { 'local-cc-opus': { location: 'local', exec: 'claude' } },
       classifier: { timeoutMs: 1000 },
       autoAnswer: { enabled: true, maxAttempts: 3, ...(opts.autoAnswer || {}) }
     }

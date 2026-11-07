@@ -5,14 +5,14 @@
  * sets against a fixed rubric in a single pass.
  *
  * This module is the pure part — selection, sandbox prompt/env, blinding, judge
- * prompt + parsing, scoring and the report. Everything that spawns brains,
+ * prompt + parsing, scoring and the report. Everything that spawns agents,
  * touches git or calls the hub lives in `../eval-cli.ts`, which the
- * `eval-prompt-change` workflow runs through an exec:script brain.
+ * `eval-prompt-change` workflow runs through an exec:script agent.
  */
 import { createHash } from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import type { BrainConfig, Task } from '../types.js';
+import type { AgentConfig, Task } from '../types.js';
 import { renderBriefSections } from './brief.js';
 import { JUDGE_COMPLIANCE_RULES, JUDGE_RULES_HEADING } from './result-verifier.js';
 
@@ -149,7 +149,7 @@ export function readBlockedLog(guardDir: string): string[] {
 /** The family labels a task belongs to (division and agent, as routed and as run). */
 export function taskFamilies(t: Pick<Task, 'context'>): string[] {
   const c = t.context || {};
-  return [c.division, c.ranDivision, c.agent, c.ranAgent].filter((x): x is string => typeof x === 'string' && !!x);
+  return [c.division, c.ranDivision, c.persona, c.ranPersona].filter((x): x is string => typeof x === 'string' && !!x);
 }
 
 /** A done task we can faithfully replay: the family matches, it is not itself an
@@ -211,12 +211,12 @@ export function selectReplayTasks(tasks: Task[], family: string, n = 5, seed = '
 // ── Replay prompt ────────────────────────────────────────────────────────────
 
 /** Context keys that are dispatcher bookkeeping, not part of the brief. */
-const INTERNAL_CTX = ['persona', 'brainAuto', 'remoteWaitSince', 'dispatched', 'attempts', 'agentName', 'ranAgent', 'ranDivision', 'ranBrain', 'isRoster', 'inputFiles', 'humanInput', 'awaitingInput', 'inputQuestions', 'backgroundWait', 'specVerdict', 'specFindings', 'acceptance', 'verify', 'timeboxMin', 'scope', 'dependsOn', 'workflowRunId', 'stepKey', 'pendingReason', 'pendingReasonAt', 'brain', 'autoRerun', 'rateLimited', 'handover', 'verdict'];
+const INTERNAL_CTX = ['personaPrompt', 'agentAuto', 'remoteWaitSince', 'dispatched', 'attempts', 'personaName', 'ranPersona', 'ranDivision', 'ranAgent', 'isRoster', 'inputFiles', 'humanInput', 'awaitingInput', 'inputQuestions', 'backgroundWait', 'specVerdict', 'specFindings', 'acceptance', 'verify', 'timeboxMin', 'scope', 'dependsOn', 'workflowRunId', 'stepKey', 'pendingReason', 'pendingReasonAt', 'agent', 'autoRerun', 'rateLimited', 'handover', 'verdict'];
 
 export interface ReplayPromptInput {
   rules: string;
-  persona?: string | null;
-  agent?: string;
+  personaPrompt?: string | null;
+  persona?: string;
   task: Pick<Task, 'title' | 'description' | 'context'>;
   sandboxDir: string;
   timeboxMin: number;
@@ -229,11 +229,11 @@ export interface ReplayPromptInput {
 export function buildReplayPrompt(p: ReplayPromptInput): string {
   const lines: string[] = [sandboxBanner(p.sandboxDir), ``, `---`, ``];
   if (p.rules.trim()) lines.push(p.rules.trim(), ``, `---`, ``);
-  if (p.persona) {
-    lines.push(p.persona, ``, `---`, ``,
+  if (p.personaPrompt) {
+    lines.push(p.personaPrompt, ``, `---`, ``,
       `You have been assigned the following task. Work autonomously and produce your final deliverable as plain text (markdown allowed).`, ``);
   } else {
-    lines.push(`You are the "${p.agent || 'generalist'}" agent in a multi-agent company. Work autonomously and produce your final deliverable as plain text output.`, ``);
+    lines.push(`You are the "${p.persona || 'generalist'}" agent in a multi-agent company. Work autonomously and produce your final deliverable as plain text output.`, ``);
   }
   lines.push(`# Task: ${p.task.title}`, ``, p.task.description, ``);
   const ctx = p.task.context || {};
@@ -262,26 +262,26 @@ export function buildReplayPrompt(p: ReplayPromptInput): string {
   return lines.join('\n');
 }
 
-// ── Brains ───────────────────────────────────────────────────────────────────
+// ── Agents ───────────────────────────────────────────────────────────────────
 
 export const REPLAY_EXECS = new Set(['claude', 'agy', 'codex', 'hermes', 'dsh']);
 
-/** argv for a one-shot, non-interactive brain run (mirrors Dispatcher.buildArgv). */
-export function brainArgv(b: Pick<BrainConfig, 'exec' | 'model'>, prompt: string, timeoutMs: number): string[] {
+/** argv for a one-shot, non-interactive agent run (mirrors Dispatcher.buildArgv). */
+export function agentArgv(b: Pick<AgentConfig, 'exec' | 'model'>, prompt: string, timeoutMs: number): string[] {
   switch (b.exec) {
     case 'claude': return ['claude', '-p', prompt, ...(b.model ? ['--model', b.model] : []), '--dangerously-skip-permissions'];
     case 'agy': return ['agy', '-p', prompt, '--print-timeout', `${timeoutMs}ms`, ...(b.model ? ['--model', b.model] : []), '--dangerously-skip-permissions'];
     case 'codex': return ['codex', 'exec', '--skip-git-repo-check', '--dangerously-bypass-approvals-and-sandbox', ...(b.model ? ['-m', b.model] : []), prompt];
     case 'hermes': return b.model ? ['hermes', '-m', b.model, '-z', prompt] : ['hermes', '-z', prompt];
     case 'dsh': return ['env', `DSH_HOME=${process.env.HOME}/.dsh`, 'SGLANG_API_KEY=dummy', 'dsh', '--profile', 'headless', prompt];
-    default: throw new Error(`eval harness cannot run exec:${b.exec} brains`);
+    default: throw new Error(`eval harness cannot run exec:${b.exec} agents`);
   }
 }
 
-/** First usable local brain of a chain (enabled, local, an exec we can spawn). */
-export function firstRunnableBrain(chain: string[], brains: Record<string, BrainConfig>): string | null {
+/** First usable local agent of a chain (enabled, local, an exec we can spawn). */
+export function firstRunnableAgent(chain: string[], agents: Record<string, AgentConfig>): string | null {
   for (const id of chain) {
-    const b = brains[id];
+    const b = agents[id];
     if (b && !b.disabled && b.location !== 'remote' && b.exec && REPLAY_EXECS.has(b.exec)) return id;
   }
   return null;
@@ -525,7 +525,7 @@ export function renderReport(r: ReportInput): string {
       ``);
   }
   L.push(
-    `How this was checked: every replay ran with secrets stripped from its environment (hub key, SSH agent, *_TOKEN/*_KEY), git hooks that refuse commit/push, \`GIT_SSH_COMMAND\` + \`ssh\`/\`gh\`/\`vercel\`/\`wrangler\`/\`systemctl\`/\`docker\` shims that log and refuse, and a \`curl\` wrapper that only allows unauthenticated GET/HEAD. Before and after each variant's replays the harness snapshotted HEAD, refs and \`git status\` of every repo under the workspace, and listed cowork tasks created in the window. Not covered: network calls made from inside python/node code; those would only show up as repo/task side effects.`,
+    `How this was checked: every replay ran with secrets stripped from its environment (hub key, SSH persona, *_TOKEN/*_KEY), git hooks that refuse commit/push, \`GIT_SSH_COMMAND\` + \`ssh\`/\`gh\`/\`vercel\`/\`wrangler\`/\`systemctl\`/\`docker\` shims that log and refuse, and a \`curl\` wrapper that only allows unauthenticated GET/HEAD. Before and after each variant's replays the harness snapshotted HEAD, refs and \`git status\` of every repo under the workspace, and listed cowork tasks created in the window. Not covered: network calls made from inside python/node code; those would only show up as repo/task side effects.`,
     ``,
     `## Rubric`,
     ``,

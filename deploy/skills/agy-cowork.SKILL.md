@@ -1,9 +1,14 @@
 ---
 name: cowork
-description: Full-lifecycle Cowork multi-agent framework skill — register brains, dispatch and schedule tasks, collect artifacts, run workflows, and administer the local Cowork MCP server at https://localhost:6868.
+description: Full-lifecycle Cowork multi-agent framework skill — register agents, dispatch and schedule tasks, collect artifacts, run workflows, and administer the local Cowork MCP server at https://localhost:6868.
 ---
 
 # Cowork — Multi-Agent Coordination Skill
+
+> **Naming (2026-11):** what used to be a "brain" is an **agent**. Pin with `context.agent`, name a persona with
+> `context.persona`, and set the level with `context.thinking` (`low|medium|high|xhigh|max`, default `medium`).
+> Agent ids never end in `-low`, `-medium` or `-high`. Declare agents in `register_agent`'s `agents` array;
+> `agent_id` in the MCP tools is your worker's registration id. See `JOIN-AS-AN-AGENT.md`.
 
 You are connected to the **Cowork MCP server** at `https://localhost:6868/mcp` (configured
 in `~/.gemini/config/mcp.json`). Cowork is a filesystem-based MCP server + Web UI
@@ -25,7 +30,7 @@ glass.
 - "Check my inbox" / "list pending tasks"
 - "Schedule this for 9am tomorrow" (`create_task(scheduled_at: …)`)
 - "Show the dashboard" / "what's happening across agents"
-- "Register this agent" / "add my brains"
+- "Register this agent" / "add my agents"
 - Cross-platform agent coordination (Antigravity, Claude Code, Hermes, Codex, etc.)
 - Heartbeat monitoring / agent lifecycle management
 
@@ -33,12 +38,12 @@ glass.
 
 - **Cowork MCP server**: systemd user service `cowork-mcp.service` (auto-starts at boot)
   - Config: `~/.cowork/config.json`
-  - Port: 6868. API key: send `Authorization: Bearer $COWORK_API_KEY` (dispatched tasks and brain clients have it in env; the hub on a non-loopback host requires it)
+  - Port: 6868. API key: send `Authorization: Bearer $COWORK_API_KEY` (dispatched tasks and agent clients have it in env; the hub on a non-loopback host requires it)
 - **Antigravity MCP endpoint**: `~/.gemini/config/mcp.json` →
   `{ "mcpServers": { "cowork": { "url": "https://localhost:6868/mcp" } } }`
-- **Brain client service**: `cowork-local-brain@agy.service` (systemd user unit)
-  - Config: `~/.config/cowork-local-brain/agy.env`
-  - Script: `~/workspace/github/slashman413/cowork/deploy/remote-brain-client.mjs`
+- **Agent client service**: `cowork-local-agent@agy.service` (systemd user unit)
+  - Config: `~/.config/cowork-local-agent/agy.env`
+  - Script: `~/workspace/github/slashman413/cowork/deploy/remote-agent-client.mjs`
 - **Cowork repo**: `~/workspace/github/slashman413/cowork/`
 - `agency-agents` — a git submodule at `./agency-agents` (init: `git submodule update --init`)
 
@@ -47,38 +52,30 @@ glass.
 | Path | Purpose |
 |------|---------|
 | `~/.gemini/config/mcp.json` | Antigravity MCP server connections |
-| `~/.cowork/config.json` | Server configuration (port, brains, chains, orchestration) |
-| `~/.config/cowork-local-brain/agy.env` | Brain client env (COWORK_URL, BRAINS, EXEC, HOST) |
-| `~/.config/systemd/user/cowork-local-brain@.service` | Systemd template unit |
+| `~/.cowork/config.json` | Server configuration (port, agents, chains, orchestration) |
+| `~/.config/cowork-local-agent/agy.env` | Agent client env (COWORK_URL, AGENTS, EXEC, HOST) |
+| `~/.config/systemd/user/cowork-local-agent@.service` | Systemd template unit |
 | `~/workspace/github/slashman413/cowork/` | Source repo |
 | `inbox/` | Task queue (JSON files, server-owned — never edit by hand) |
 | `artifacts/<task-id>/` | Per-task OUTPUT files — write yours here; downloadable from the Inbox |
 | `inputs/<task-id>/` | Per-task INPUT files a person attached — read-only |
 | `decisions/lessons.jsonl` | Lesson ledger (server-owned, gitignored) |
 | `.status/` | Runtime state (auto-managed) |
-| `deploy/remote-brain-client.mjs` | Remote brain registration script (zero-config) |
+| `deploy/remote-agent-client.mjs` | Remote agent registration script (zero-config) |
 
-## Registered Local Brains (via `agy.env`)
+## Registered Local Agents (via `agy.env`)
 
-One brain per `agy models` slug (agy 1.3.6, 2026-10-16). Gemini 4 Argon has its own weekly
+One agent per `agy models` slug (agy 1.3.6, 2026-10-16). Gemini 4 Argon has its own weekly
 quota, separate from the Gemini Models group (see the dashboard's agy meter). Re-check with `agy models` when
-Antigravity rotates models; retired ids resolve via `BRAIN_ID_ALIASES` in `server/src/config.ts`.
+Antigravity rotates models; retired ids resolve via `AGENT_ID_ALIASES` in `server/src/config.ts`.
 
-| Brain ID | Model | Location |
+| Agent ID | Model | Location |
 |----------|-------|----------|
-| `local-agy-gemini-4-argon-high` | Gemini 4 Argon (High) | local |
-| `local-agy-gemini-4-argon-medium` | Gemini 4 Argon (Medium) | local |
-| `local-agy-gemini-4-argon-low` | Gemini 4 Argon (Low) | local |
-| `local-agy-gemini-3.8-flash-high` | Gemini 3.8 Flash (High) | local |
-| `local-agy-gemini-3.8-flash-medium` | Gemini 3.8 Flash (Medium) | local |
-| `local-agy-gemini-3.8-flash-low` | Gemini 3.8 Flash (Low) | local |
-| `local-agy-claude-opus-5-5-low` | Claude Opus 5.5 (Low) | local |
-| `local-agy-claude-opus-5-5-medium` | Claude Opus 5.5 (Medium) | local |
-| `local-agy-claude-opus-5-5-high` | Claude Opus 5.5 (High) | local |
-| `local-agy-claude-sonnet-5-5-low` | Claude Sonnet 5.5 (Low) | local |
-| `local-agy-claude-sonnet-5-5-medium` | Claude Sonnet 5.5 (Medium) | local |
-| `local-agy-claude-sonnet-5-5-high` | Claude Sonnet 5.5 (High) | local |
-| `local-agy-gpt-oss-120b-medium` | GPT-OSS 120B (Medium) | local |
+| `local-agy-gemini-4-argon` | Gemini 4 Argon | local |
+| `local-agy-gemini-3.8-flash` | Gemini 3.8 Flash | local |
+| `local-agy-claude-opus-5-5` | Claude Opus 5.5 | local |
+| `local-agy-claude-sonnet-5-5` | Claude Sonnet 5.5 | local |
+| `local-agy-gpt-oss-120b` | GPT-OSS 120B | local |
 
 ---
 
@@ -90,8 +87,8 @@ All tools are called via the `cowork` MCP server. Use these tools directly.
 
 | Tool | Purpose | Key Arguments |
 |------|---------|---------------|
-| `register_agent` | Register as a worker; declare brains (supports `env` capability manifests) | `platform`, `agent_name`, `capabilities[]`, `brains[]` |
-| `deregister_agent` | Remove agent AND cascade-remove all its brains | `agent_id` |
+| `register_agent` | Register as a worker; declare agents (supports `env` capability manifests) | `platform`, `agent_name`, `capabilities[]`, `agents[]` |
+| `deregister_agent` | Remove agent AND cascade-remove all its agents | `agent_id` |
 | `heartbeat` | Keep-alive; report status and current task | `agent_id`, `status` (`idle`/`working`/`blocked`), `current_task` |
 
 ### Task Management
@@ -117,68 +114,52 @@ replies arrive on `context.humanInput`.
 
 ---
 
-## Agent Registration (with Brains)
+## Agent Registration (with Agents)
 
-Register once per session with `register_agent`, declaring your brains so they propagate
-into the brain registry (visible under **Connections** and targetable via `context.brain`):
+Register once per session with `register_agent`, declaring your agents so they propagate
+into the agent registry (visible under **Connections** and targetable via `context.agent`):
 
 ```
 register_agent(
   platform="antigravity",
   agent_name="local",
   capabilities=[
-    "local-agy-gemini-4-argon-high",
-    "local-agy-gemini-4-argon-medium",
-    "local-agy-gemini-4-argon-low",
-    "local-agy-gemini-3.8-flash-high",
-    "local-agy-gemini-3.8-flash-medium",
-    "local-agy-gemini-3.8-flash-low",
-    "local-agy-claude-opus-5-5-low",
-    "local-agy-claude-opus-5-5-medium",
-    "local-agy-claude-opus-5-5-high",
-    "local-agy-claude-sonnet-5-5-low",
-    "local-agy-claude-sonnet-5-5-medium",
-    "local-agy-claude-sonnet-5-5-high",
-    "local-agy-gpt-oss-120b-medium"
+    "local-agy-gemini-4-argon",
+    "local-agy-gemini-3.8-flash",
+    "local-agy-claude-opus-5-5",
+    "local-agy-claude-sonnet-5-5",
+    "local-agy-gpt-oss-120b"
   ],
-  brains=[
-    {"id": "local-agy-gemini-4-argon-high",        "location": "local", "exec": "agy", "model": "gemini-4-argon-high"},
-    {"id": "local-agy-gemini-4-argon-medium",      "location": "local", "exec": "agy", "model": "gemini-4-argon-medium"},
-    {"id": "local-agy-gemini-4-argon-low",         "location": "local", "exec": "agy", "model": "gemini-4-argon-low"},
-    {"id": "local-agy-gemini-3.8-flash-high",      "location": "local", "exec": "agy", "model": "gemini-3.8-flash-high"},
-    {"id": "local-agy-gemini-3.8-flash-medium",    "location": "local", "exec": "agy", "model": "gemini-3.8-flash-medium"},
-    {"id": "local-agy-gemini-3.8-flash-low",       "location": "local", "exec": "agy", "model": "gemini-3.8-flash-low"},
-    {"id": "local-agy-claude-opus-5-5-low",        "location": "local", "exec": "agy", "model": "claude-opus-5-5-low"},
-    {"id": "local-agy-claude-opus-5-5-medium",     "location": "local", "exec": "agy", "model": "claude-opus-5-5-medium"},
-    {"id": "local-agy-claude-opus-5-5-high",       "location": "local", "exec": "agy", "model": "claude-opus-5-5-high"},
-    {"id": "local-agy-claude-sonnet-5-5-low",      "location": "local", "exec": "agy", "model": "claude-sonnet-5-5-low"},
-    {"id": "local-agy-claude-sonnet-5-5-medium",   "location": "local", "exec": "agy", "model": "claude-sonnet-5-5-medium"},
-    {"id": "local-agy-claude-sonnet-5-5-high",     "location": "local", "exec": "agy", "model": "claude-sonnet-5-5-high"},
-    {"id": "local-agy-gpt-oss-120b-medium",        "location": "local", "exec": "agy", "model": "gpt-oss-120b-medium"}
+  agents=[
+    {"id": "local-agy-gemini-4-argon",        "location": "local", "exec": "agy", "model": "gemini-4-argon"},
+    {"id": "local-agy-gemini-3.8-flash",      "location": "local", "exec": "agy", "model": "gemini-3.8-flash"},
+    {"id": "local-agy-claude-opus-5-5",        "location": "local", "exec": "agy", "model": "claude-opus-5-5"},
+    {"id": "local-agy-claude-sonnet-5-5",      "location": "local", "exec": "agy", "model": "claude-sonnet-5-5"},
+    {"id": "local-agy-gpt-oss-120b",        "location": "local", "exec": "agy", "model": "gpt-oss-120b"}
   ]
 )
 ```
 
-Save the returned `id`. The server auto-registers each declared brain. Declaring the
+Save the returned `id`. The server auto-registers each declared agent. Declaring the
 **same ids** the box already uses just refreshes them (idempotent) — do NOT invent new
 ids for the same models.
 
-> ⚠️ The background brain client (`cowork-local-brain@agy.service`) already handles
-> brain registration and task polling automatically. Interactive Antigravity sessions
+> ⚠️ The background agent client (`cowork-local-agent@agy.service`) already handles
+> agent registration and task polling automatically. Interactive Antigravity sessions
 > typically only need to **create tasks**, **check the inbox/dashboard**, and
-> **read results** — you do NOT need to re-register brains that the systemd service
+> **read results** — you do NOT need to re-register agents that the systemd service
 > already declared.
 
-> ⚠️ Do **not** call `deregister_agent` for these local brains on exit — it cascades
+> ⚠️ Do **not** call `deregister_agent` for these local agents on exit — it cascades
 > them out of the default/division chains that the box's config depends on. Just
-> disconnect; brains persist (they're only removed by an explicit deregister).
+> disconnect; agents persist (they're only removed by an explicit deregister).
 
-### Brain Environment Manifests (`env`)
+### Agent Environment Manifests (`env`)
 
-When declaring brains in `register_agent`, each brain object supports an optional `env` capability manifest (`BrainEnv: { paths[], tools[], secrets[], net[], traits[] }`):
+When declaring agents in `register_agent`, each agent object supports an optional `env` capability manifest (`AgentEnv: { paths[], tools[], secrets[], net[], traits[] }`):
 - **Purpose**: Enables the router to avoid dispatching tasks to hosts lacking required CLI tools, directory paths, or credentials.
 - **Secrets Rule (Zero Leakage)**: The `secrets` array must declare credential **names only** (e.g., file basenames under `~/.priv/`), **never** secret values or file contents.
-- **Auto-Detection**: `deploy/remote-brain-client.mjs` automatically calls `detectEnv()` to probe installed binaries (`$ENV_TOOLS` or standard list), directories (`$ENV_PATHS`), and secret file basenames. The Cowork server defensively caps each list to ≤200 items of ≤300 characters (`capEnv`).
+- **Auto-Detection**: `deploy/remote-agent-client.mjs` automatically calls `detectEnv()` to probe installed binaries (`$ENV_TOOLS` or standard list), directories (`$ENV_PATHS`), and secret file basenames. The Cowork server defensively caps each list to ≤200 items of ≤300 characters (`capEnv`).
 
 ---
 
@@ -186,51 +167,51 @@ When declaring brains in `register_agent`, each brain object supports an optiona
 
 The always-on coordinator (shown in **Connections** as `cowork/orchestrator`) polls the
 inbox and executes any task that resolves to an executor. Routing is **two-stage**:
-an orchestrator/classifier brain (default Qwen3.8-27B via Hermes) first picks a **division**
+an orchestrator/classifier agent (default Qwen3.8-27B via Hermes) first picks a **division**
 (1 of 19), then picks an **agent** (1 of 288) inside it. The chosen agent's full
 `.md` persona (from the `agency-agents` repo) becomes the system prompt, run on the
-division's brain chain. You can also target directly: `context.agent: "<agent-slug>"`
+division's agent chain. You can also target directly: `context.persona: "<persona-slug>"`
 or a special-executor name skips classification.
 
 ### Executors: Special Agents + the Agencies
 
-- **Special executors** live in `config.json → orchestration.agents` (only
-  `orchestrator`, `generalist`, `video`) — each is `{description, brains: [...]}` with
+- **Special executors** live in `config.json → orchestration.roleChains` (only
+  `orchestrator`, `generalist`, `video`) — each is `{description, agents: [...]}` with
   its own chain. Edit in the dashboard **Agents** view → *Special executors*
-  (or `PUT /api/agents-config/:name`).
+  (or `PUT /api/roles-config/:name`).
 - **Agencies agents** are the 288 personas in `agency-agents`, grouped into 19 divisions
   (`GET /api/roster-divisions`). They don't carry their own chain — they run on the
   **division chain** if one is set, else the **global default chain**.
 
-### Brain Fallback Chains (Global Default + Per-Division Override)
+### Agent Fallback Chains (Global Default + Per-Division Override)
 
 - **Global default**: `config.json → orchestration.defaultChain` — the fallback chain
   every agent uses unless its division overrides it. Reorder by **drag & drop**
-  in the dashboard **Brains** view (`PUT /api/chains/default`).
+  in the dashboard **Agents** view (`PUT /api/chains/default`).
 - **Per-division override**: `orchestration.divisionChains[<division>]` — set/clear in
   the **Agents** view per division (`PUT /api/chains/division/:division`; empty body
   reverts to the default).
 - A chain runs top → bottom: task runs on `chain[0]`; on failure the dispatcher **hands
   over to `chain[1]`, then `[2]`…**, until success or the
   chain is exhausted. `remoteGraceMs` (20s in the template config; 60s code default) auto-advances past a **remote** rung
-  whose owning client hasn't claimed it, so a cold remote brain never stalls the chain.
-- Pin one task to a specific brain with `context.brain: "<id>"` (overrides the chain).
+  whose owning client hasn't claimed it, so a cold remote agent never stalls the chain.
+- Pin one task to a specific agent with `context.agent: "<id>"` (overrides the chain).
 
-### Brains = Model × Platform × Location
+### Agents = Model × Platform × Location
 
-`config.json → orchestration.brains` (`GET /api/brains`) — the execution identities a
+`config.json → orchestration.agents` (`GET /api/agents`) — the execution identities a
 chain references: `local-hermes-qwen3.8-27b` (Hermes),
 `local-cc-opus-5-5/-sonnet-5-5/-fable-5-1` (Claude), `local-agy-*` (Antigravity/Gemini),
-`local-comfy-ltx` (LTX video), `remote-<host>-…`. **Local** brains
-the dispatcher spawns; **remote** brains it leaves `pending` for that machine's client
+`local-comfy-ltx` (LTX video), `remote-<host>-…`. **Local** agents
+the dispatcher spawns; **remote** agents it leaves `pending` for that machine's client
 to claim.
 
-- **Brains auto-register**: a connecting client declares them via `register_agent`'s
-  `brains` field; `deregister_agent` (or the Brains UI) removes them and cascades the
-  removal out of the default chain, every division chain, and every special agent.
-- **Remote brain client**: poll `list_inbox(status:"pending")`, take tasks whose
-  `context.brain` is one of yours, `claim_task` → run → `complete_task`. Ready-made
-  helper: `deploy/remote-brain-client.mjs`; onboarding doc: `JOIN-AS-A-BRAIN.md`.
+- **Agents auto-register**: a connecting client declares them via `register_agent`'s
+  `agents` field; `deregister_agent` (or the Agents UI) removes them and cascades the
+  removal out of the default chain, every division chain, and every special role.
+- **Remote agent client**: poll `list_inbox(status:"pending")`, take tasks whose
+  `context.agent` is one of yours, `claim_task` → run → `complete_task`. Ready-made
+  helper: `deploy/remote-agent-client.mjs`; onboarding doc: `JOIN-AS-AN-AGENT.md`.
 
 ### Execution Timeouts & agy `--print-timeout`
 
@@ -242,9 +223,9 @@ Cowork features an event-driven, human-gated learning system. When a task fails 
 
 ---
 
-## Operating as a Brain Worker
+## Operating as an Agent Worker
 
-When invoked to operate as a Cowork brain (rather than interactive use), follow this
+When invoked to operate as a Cowork agent (rather than interactive use), follow this
 lifecycle:
 
 ### Step 1 — Register
@@ -253,12 +234,12 @@ lifecycle:
 {
   "platform": "antigravity",
   "agent_name": "local",
-  "capabilities": ["local-agy-gemini-3.8-flash-high"],
-  "brains": [{
-    "id": "local-agy-gemini-3.8-flash-high",
+  "capabilities": ["local-agy-gemini-3.8-flash"],
+  "agents": [{
+    "id": "local-agy-gemini-3.8-flash",
     "location": "local",
     "exec": "agy",
-    "model": "gemini-3.8-flash-high"
+    "model": "gemini-3.8-flash"
   }]
 }
 ```
@@ -271,7 +252,7 @@ Save the returned `agent_id` — you need it for all subsequent calls.
 loop:
   1. heartbeat(agent_id, status="idle")
   2. list_inbox(status="pending", limit=50)
-  3. Filter for tasks where context.brain matches one of your brain IDs
+  3. Filter for tasks where context.agent matches one of your agent IDs
   4. claim_task(task_id, agent_id)
   5. heartbeat(agent_id, status="working", current_task=<task title>)
   6. Execute the task — write output files into $COWORK_ARTIFACTS_DIR
@@ -282,8 +263,8 @@ loop:
 
 ### Step 3 — Deregister on Exit
 
-Always call `deregister_agent(agent_id)` before stopping. Brains are NOT auto-removed
-on disconnect — they persist until explicitly deregistered, and ghost brains will clutter
+Always call `deregister_agent(agent_id)` before stopping. Agents are NOT auto-removed
+on disconnect — they persist until explicitly deregistered, and ghost agents will clutter
 the dashboard.
 
 ---
@@ -296,7 +277,7 @@ the dashboard.
 get_dashboard()
 ```
 
-Shows active agents, inbox stats, and service health (`vllm`, `firecrawl`, and the `forgejo` self-hosted Git server at `http://localhost:3001`). The Portal launcher categorizes services (e.g., Forgejo under **Dev**).
+Shows active workers, inbox stats, and service health (`vllm`, `firecrawl`, and the `forgejo` self-hosted Git server at `http://localhost:3001`). The Portal launcher categorizes services (e.g., Forgejo under **Dev**).
 
 ### 2. Heartbeat
 
@@ -323,8 +304,8 @@ create_task(
 ```
 
 Add `context: {"role": "<role>"}` to have the server execute it automatically via the
-dispatcher. For direct targeting: `context: {"agent": "<agent-slug>"}` or
-`context: {"brain": "<brain-id>"}`.
+dispatcher. For direct targeting: `context: {"persona": "<persona-slug>"}` or
+`context: {"agent": "<agent-id>"}`.
 
 ### 4. Check Inbox
 
@@ -352,7 +333,7 @@ If you cannot finish without a decision only the user can make, end your output 
 line beginning `NEEDS_INPUT:` followed by your question(s), one per line. The dispatcher
 parks the task on `wait-input` and re-dispatches it once the user answers. Never emit a
 rate-limit or quota notice as the deliverable — the verifier rejects those and hands the
-task to the next brain in the chain.
+task to the next agent in the chain.
 
 ### 7. Query Agencies
 
@@ -408,7 +389,7 @@ expanded into inbox tasks up front.
 ### Orchestrated Mode
 
 Adaptive, LLM-driven. Steps are a candidate library. After each step completes, the
-orchestrator brain decides the next step or says `DONE`.
+orchestrator agent decides the next step or says `DONE`.
 
 ```json
 {
@@ -478,7 +459,7 @@ date can never abort an emit.
 
 An `evaluate{met:false}` is one of those non-progressing turns. When a guard trips the
 Goal is **blocked with a concrete resume contract** (raise the budget / narrow the
-criterion, or verify the brain) and then **auto-retried on a backoff** — a transient brain
+criterion, or verify the agent) and then **auto-retried on a backoff** — a transient agent
 blip self-heals in minutes, and raising the budget lets it self-resume with no click; held,
 not thrown away. Both guards punish
 metric-open objectives ("$10k/month"), which is why such a Goal needs an
@@ -494,22 +475,22 @@ way; copy that shape rather than writing a bare metric.
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/status` | Dashboard overview (activeAgents, inboxSummary, uptime) |
-| `GET` | `/api/agents` | Active agents |
-| `GET` | `/api/connections` | Live MCP clients with per-brain stats |
+| `GET` | `/api/agents` | Active workers |
+| `GET` | `/api/connections` | Live MCP clients with per-agent stats |
 | `GET` | `/api/roster` | Agencies (filterable by division/search) |
 | `GET` | `/api/roster-divisions` | Agencies grouped by division |
-| `GET` | `/api/dispatcher` | Special agents + brains + defaultChain + divisionChains + running |
+| `GET` | `/api/dispatcher` | Special roles + agents + defaultChain + divisionChains + running |
 | `GET` | `/api/chains` | Default + per-division (+ per-agent) chains |
 | `PUT` | `/api/chains/default` | Global default chain |
 | `PUT` | `/api/chains/division/:div` | Per-division chain |
-| `GET/PUT/DELETE` | `/api/brains`, `/api/brains/:id` | Brain registry (cascades on delete) |
-| `GET/PUT/DELETE` | `/api/agents-config`, `/api/agents-config/:name` | Special-executor chains |
+| `GET/PUT/DELETE` | `/api/agents`, `/api/agents/:id` | Agent registry (cascades on delete) |
+| `GET/PUT/DELETE` | `/api/roles-config`, `/api/roles-config/:name` | Special-executor chains |
 | `GET` | `/api/artifacts/:taskId`, `/api/artifacts/:taskId/:file` | List / download task artifacts |
 | `GET` | `/api/inbox?status=pending` | Inbox tasks (filterable) |
 | `POST` | `/api/inbox` | Create a new task |
 | `PATCH` | `/api/inbox/:id` | Claim or complete a task |
 | `POST` | `/api/inbox/:id/rerun` | Re-queue a FAILED (chain-exhausted) task from the top of its chain |
-| `POST` | `/api/inbox/:id/continue` | Spawn a follow-up to a finished task (same brain by default) |
+| `POST` | `/api/inbox/:id/continue` | Spawn a follow-up to a finished task (same agent by default) |
 | `POST` | `/api/inbox/:id/interaction` | Submit a person's answers → releases a `wait-input` task |
 | `GET`/`POST` | `/api/inputs/:taskId`, `/api/inbox/:id/inputs` | List / attach task input files |
 | `GET` | `/api/config` | Current configuration |
@@ -525,8 +506,8 @@ way; copy that shape rather than writing a bare metric.
 ### Web Dashboard
 
 - `https://localhost:6868/` — Web UI (Overview, Portal, Tasks, Recipes, Calendar,
-  Workflows, Goals, Routing, Brains, Personas, Workers, Configuration) with raw/rendered markdown viewer and artifact downloads
-- **Inbox UX**: Real-time SSE updates preserve card expansion and scroll position; status pills display live counts; and a **+ New task** toolbar button lets you create and dispatch tasks with title, brief, priority, and target brain directly from the Tasks page.
+  Workflows, Goals, Routing, Agents, Personas, Workers, Configuration) with raw/rendered markdown viewer and artifact downloads
+- **Inbox UX**: Real-time SSE updates preserve card expansion and scroll position; status pills display live counts; and a **+ New task** toolbar button lets you create and dispatch tasks with title, brief, priority, and target agent directly from the Tasks page.
 
 ---
 
@@ -539,18 +520,18 @@ way; copy that shape rather than writing a bare metric.
 systemctl --user status cowork-mcp
 systemctl --user restart cowork-mcp
 
-# Brain client (the background Node.js process that polls and claims tasks)
-systemctl --user status cowork-local-brain@agy
-systemctl --user restart cowork-local-brain@agy
-journalctl --user -u cowork-local-brain@agy -f   # live logs
+# Agent client (the background Node.js process that polls and claims tasks)
+systemctl --user status cowork-local-agent@agy
+systemctl --user restart cowork-local-agent@agy
+journalctl --user -u cowork-local-agent@agy -f   # live logs
 ```
 
-### Modifying Brains
+### Modifying Agents
 
-Edit `~/.config/cowork-local-brain/agy.env`, then:
-1. Note the current agent ID from `.status/agents.json` or `GET /api/agents`
-2. `systemctl --user restart cowork-local-brain@agy`
-3. Deregister the old agent ID via `deregister_agent` MCP tool (brains persist until
+Edit `~/.config/cowork-local-agent/agy.env`, then:
+1. Note the current agent ID from `.status/workers.json` or `GET /api/agents`
+2. `systemctl --user restart cowork-local-agent@agy`
+3. Deregister the old agent ID via `deregister_agent` MCP tool (agents persist until
    explicitly deregistered!)
 
 ### Debugging
@@ -565,11 +546,11 @@ curl -sk https://localhost:6868/api/status | jq
 # Watch real-time SSE events
 curl -kN https://localhost:6868/api/events
 
-# Check active agents
+# Check active workers
 curl -sk https://localhost:6868/api/agents | jq
 
-# Check registered brains
-curl -sk https://localhost:6868/api/brains | jq
+# Check registered agents
+curl -sk https://localhost:6868/api/agents | jq
 ```
 
 ---
@@ -613,15 +594,15 @@ or `GET /api/artifacts/:taskId/:file`.
 
 - Server must be running — check with `curl -sk https://localhost:6868/api/status`
 - MCP endpoint: `/mcp` (Streamable HTTP). REST API: `/api/...`. Do not mix.
-- API key: every /api and /mcp request needs `Authorization: Bearer $COWORK_API_KEY` (or `X-API-Key`). Dispatched tasks and brain clients get `COWORK_API_KEY` in env; never paste the key into task text or output.
+- API key: every /api and /mcp request needs `Authorization: Bearer $COWORK_API_KEY` (or `X-API-Key`). Dispatched tasks and agent clients get `COWORK_API_KEY` in env; never paste the key into task text or output.
 - Task lifecycle: `scheduled` / `wait-input` → `pending` → `claimed` → `in-progress` →
   `done` / `rejected`; a task whose whole chain was rejected finishes `failed: true`
   (re-queue with `POST /api/inbox/:id/rerun`). `scheduled` and `wait-input` are held OUT
   of the pending pool — never claimed or routed until released.
 - SSE at `/api/events` needs `curl -kN` (no buffering).
-- Chain/brain edits via the dashboard or `/api/chains*`, `/api/agents-config`,
-  `/api/brains` are applied live AND persisted to config.json (no restart). Only manual
+- Chain/agent edits via the dashboard or `/api/chains*`, `/api/roles-config`,
+  `/api/agents` are applied live AND persisted to config.json (no restart). Only manual
   hand-edits of config.json require a restart.
-- Brains persist until `deregister_agent` — they do NOT auto-remove on disconnect.
+- Agents persist until `deregister_agent` — they do NOT auto-remove on disconnect.
 - If `agency-agents` repo is missing/misconfigured, Agencies queries return empty.
 - Port is 6868, NOT 4200.

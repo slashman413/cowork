@@ -398,15 +398,15 @@ test('agy: OAuth clients come from env/file — override, Antigravity, then Gemi
   }
 });
 
-test('UsagePoller: refreshExec ignores non-metered execs and handles local brains', async () => {
+test('UsagePoller: refreshExec ignores non-metered execs and handles local agents', async () => {
   const store = {
-    setBrainUsage: () => {}
+    setAgentUsage: () => {}
   } as any;
-  const brains = {
+  const agents = {
     'local-hermes': { location: 'local', exec: 'hermes' },
     'remote-agy': { location: 'remote', exec: 'agy' }
   } as any;
-  const poller = new UsagePoller(store, () => brains, 60000);
+  const poller = new UsagePoller(store, () => agents, 60000);
   // hermes is unmetered -> no-op
   await poller.refreshExec('hermes');
   // remote-agy is remote -> no-op
@@ -480,25 +480,25 @@ test('agyWindowMatchesModel: partitions Antigravity quota groups by model family
   const ungroupedWin = { label: '5h', usedPct: 20 };
 
   // Standard Gemini models (gemini-3.8-flash, etc.)
-  assert.equal(agyWindowMatchesModel('local-agy-gemini-3.8-flash-high', geminiWin), true);
+  assert.equal(agyWindowMatchesModel('local-agy-gemini-3.8-flash', geminiWin), true);
   assert.equal(agyWindowMatchesModel('gemini-3.8-flash-high', geminiWin), true);
-  assert.equal(agyWindowMatchesModel('local-agy-gemini-3.8-flash-high', claudeWin), false, 'gemini must not match claude/gpt group');
-  assert.equal(agyWindowMatchesModel('local-agy-gemini-3.8-flash-high', argonWin), false, 'gemini must not match argon group');
-  assert.equal(agyWindowMatchesModel('local-agy-gemini-3.8-flash-high', ungroupedWin), true, 'ungrouped matches all');
+  assert.equal(agyWindowMatchesModel('local-agy-gemini-3.8-flash', claudeWin), false, 'gemini must not match claude/gpt group');
+  assert.equal(agyWindowMatchesModel('local-agy-gemini-3.8-flash', argonWin), false, 'gemini must not match argon group');
+  assert.equal(agyWindowMatchesModel('local-agy-gemini-3.8-flash', ungroupedWin), true, 'ungrouped matches all');
 
   // Argon models
-  assert.equal(agyWindowMatchesModel('local-agy-gemini-4-argon-high', argonWin), true);
+  assert.equal(agyWindowMatchesModel('local-agy-gemini-4-argon', argonWin), true);
   assert.equal(agyWindowMatchesModel('gemini-4-argon-high', argonWin), true);
-  assert.equal(agyWindowMatchesModel('local-agy-gemini-4-argon-high', geminiWin), false, 'argon must not match standard gemini group');
-  assert.equal(agyWindowMatchesModel('local-agy-gemini-4-argon-high', claudeWin), false, 'argon must not match claude/gpt group');
+  assert.equal(agyWindowMatchesModel('local-agy-gemini-4-argon', geminiWin), false, 'argon must not match standard gemini group');
+  assert.equal(agyWindowMatchesModel('local-agy-gemini-4-argon', claudeWin), false, 'argon must not match claude/gpt group');
 
   // Claude models
-  assert.equal(agyWindowMatchesModel('local-agy-claude-opus-5-5-high', claudeWin), true);
-  assert.equal(agyWindowMatchesModel('local-agy-claude-opus-5-5-high', geminiWin), false);
-  assert.equal(agyWindowMatchesModel('local-agy-claude-opus-5-5-high', argonWin), false);
+  assert.equal(agyWindowMatchesModel('local-agy-claude-opus-5-5', claudeWin), true);
+  assert.equal(agyWindowMatchesModel('local-agy-claude-opus-5-5', geminiWin), false);
+  assert.equal(agyWindowMatchesModel('local-agy-claude-opus-5-5', argonWin), false);
 
   // GPT models
-  assert.equal(agyWindowMatchesModel('local-agy-gpt-oss-120b-medium', claudeWin), true);
-  assert.equal(agyWindowMatchesModel('local-agy-gpt-oss-120b-medium', geminiWin), false);
-  assert.equal(agyWindowMatchesModel('local-agy-gpt-oss-120b-medium', argonWin), false);
+  assert.equal(agyWindowMatchesModel('local-agy-gpt-oss-120b', claudeWin), true);
+  assert.equal(agyWindowMatchesModel('local-agy-gpt-oss-120b', geminiWin), false);
+  assert.equal(agyWindowMatchesModel('local-agy-gpt-oss-120b', argonWin), false);
 });

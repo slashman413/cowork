@@ -1,5 +1,5 @@
 {
-  "_comment": "TEMPLATE ONLY. The real per-server config lives at ~/.cowork/config.json (override with COWORK_CONFIG). On first run the server copies this file there; edit the copy, not this template. Personal host/brain settings must never be committed here.",
+  "_comment": "TEMPLATE ONLY. The real per-server config lives at ~/.cowork/config.json (override with COWORK_CONFIG). On first run the server copies this file there; edit the copy, not this template. Personal host/agent settings must never be committed here.",
   "server": {
     "port": 6868,
     "host": "127.0.0.1",
@@ -34,7 +34,7 @@
     }
   },
   "_portal_comment": "Portal launcher cards moved to portal.json (live: ~/.cowork/portal.json, hot-reloaded). The optional serviceControl.enabled switch for lifecycle buttons stays in this file.",
-  "_obsidian_comment": "Shared knowledge base every brain can query. Local brains (same host) may read vaultPath off disk directly; remote brains use GET /api/obsidian/* and the obsidian_* MCP tools. Served read-only. The Portal shows an 'Obsidian Vault' web-viewer card when enabled.",
+  "_obsidian_comment": "Shared knowledge base every agent can query. Local agents (same host) may read vaultPath off disk directly; remote agents use GET /api/obsidian/* and the obsidian_* MCP tools. Served read-only. The Portal shows an 'Obsidian Vault' web-viewer card when enabled.",
   "obsidian": {
     "vaultPath": "~/Documents/Obsidian Vault",
     "enabled": true
@@ -45,9 +45,10 @@
   },
   "orchestration": {
     "enabled": true,
-    "_concurrency_comment": "maxConcurrent is the GLOBAL ceiling on locally-spawned runs across all brains. defaultBrainConcurrency is the per-brain fallback cap for brains without their own maxConcurrent. A brain backed by a shared inference server (the local hermes/vLLM brains) or a stateless CLI can set brains.<id>.maxConcurrent > 1 to serve several tasks at once on ONE instance; when a preferred chain rung is saturated the dispatcher load-balances the overflow onto the next local rung with spare capacity, so no single workhorse brain absorbs every task.",
+    "_concurrency_comment": "maxConcurrent is the GLOBAL ceiling on locally-spawned runs across all agents. defaultAgentConcurrency is the per-agent fallback cap for agents without their own maxConcurrent. An agent backed by a shared inference server (the local hermes/vLLM agents) or a stateless CLI can set agents.<id>.maxConcurrent > 1 to serve several tasks at once on ONE instance; when a preferred chain rung is saturated the dispatcher load-balances the overflow onto the next local rung with spare capacity, so no single workhorse agent absorbs every task.",
     "maxConcurrent": 6,
-    "defaultBrainConcurrency": 1,
+    "defaultAgentConcurrency": 1,
+    "defaultThinking": "medium",
     "pollIntervalMs": 5000,
     "taskTimeoutMs": 3000000,
     "defaultRole": "generalist",
@@ -60,7 +61,7 @@
       "timeoutMs": 300000
     },
     "verifier": {
-      "_comment": "Rejects soft failures that exit 0 (rate-limit/quota/overloaded/empty replies) so they hand over to the next fallback brain instead of being marked done. failPatterns are merged with the built-ins. Enable llm for an extra LLM quality gate that judges genuine task completion.",
+      "_comment": "Rejects soft failures that exit 0 (rate-limit/quota/overloaded/empty replies) so they hand over to the next fallback agent instead of being marked done. failPatterns are merged with the built-ins. Enable llm for an extra LLM quality gate that judges genuine task completion.",
       "enabled": true,
       "minLength": 1,
       "failPatterns": [],
@@ -69,7 +70,10 @@
         "exec": "claude",
         "model": "claude-sonnet-5-5",
         "timeoutMs": 120000,
-        "priorities": ["high", "urgent"]
+        "priorities": [
+          "high",
+          "urgent"
+        ]
       },
       "maxBackgroundDeferrals": 120,
       "spec": {
@@ -80,19 +84,19 @@
         "timeoutMs": 300000,
         "judges": {
           "claude": [
-            "local-agy-gemini-4-argon-medium",
-            "local-agy-gemini-3.8-flash-high"
+            "local-agy-gemini-4-argon",
+            "local-agy-gemini-3.8-flash"
           ],
           "gemini": [
-            "local-agy-claude-opus-5-5-medium",
+            "local-agy-claude-opus-5-5",
             "local-cc-opus-5-5"
           ],
           "qwen": [
-            "local-agy-claude-opus-5-5-medium",
+            "local-agy-claude-opus-5-5",
             "local-cc-opus-5-5"
           ],
           "default": [
-            "local-agy-claude-opus-5-5-medium",
+            "local-agy-claude-opus-5-5",
             "local-cc-opus-5-5"
           ]
         },
@@ -108,7 +112,7 @@
     "sharpener": {
       "enabled": true,
       "mode": "shadow",
-      "brain": "local-agy-gemini-3.8-flash-high"
+      "agent": "local-agy-gemini-3.8-flash"
     },
     "methods": {
       "enabled": true,
@@ -135,29 +139,29 @@
       "local-hermes-qwen3.8-27b",
       "local-cc-opus-5-5"
     ],
-    "agents": {
+    "roleChains": {
       "orchestrator": {
         "description": "Decompose a CEO idea into role-tagged subtasks and dispatch them",
-        "brains": [
+        "agents": [
           "local-hermes-qwen3.8-27b",
           "local-cc-fable-5-1"
         ]
       },
       "generalist": {
         "description": "Fallback when the router can't classify or an agent fails through its chain",
-        "brains": [
+        "agents": [
           "local-hermes-qwen3.8-27b",
           "local-cc-sonnet-5-5"
         ]
       },
       "video": {
         "description": "Short vertical promo/shorts video via the ComfyUI LTX pipeline",
-        "brains": [
+        "agents": [
           "local-comfy-ltx"
         ]
       }
     },
-    "brains": {
+    "agents": {
       "local-hermes-qwen3.8-27b": {
         "description": "Local Hermes agent on Qwen3.8-27B",
         "location": "local",
@@ -204,7 +208,7 @@
         "maxConcurrent": 2
       },
       "remote-example-cc-sonnet-5-5": {
-        "description": "EXAMPLE remote brain — a Claude Code client on another machine. Delete or edit; remote brains normally auto-register via register_agent (see JOIN-AS-A-BRAIN.md).",
+        "description": "EXAMPLE remote agent — a Claude Code client on another machine. Delete or edit; remote agents normally auto-register via register_agent (see JOIN-AS-AN-AGENT.md).",
         "location": "remote",
         "exec": "claude",
         "model": "claude-sonnet-5-5",
@@ -214,12 +218,11 @@
     "tiers": {
       "mechanical": [
         "local-dsh-qwen3-8-27b",
-        "local-agy-gemini-3.8-flash-high",
-        "local-agy-gemini-3.8-flash-medium"
+        "local-agy-gemini-3.8-flash"
       ],
       "standard": [
-        "local-agy-gemini-4-argon-medium",
-        "local-agy-claude-opus-5-5-medium"
+        "local-agy-gemini-4-argon",
+        "local-agy-claude-opus-5-5"
       ],
       "judgment": [
         "local-cc-opus-5-5",

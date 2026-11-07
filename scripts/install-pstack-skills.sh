@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# install-pstack-skills.sh — expose every vendored pstack skill to every brain runtime.
+# install-pstack-skills.sh — expose every vendored pstack skill to every agent runtime.
 #
-#   ~/.claude/skills/<name>  -> symlink to vendor/pstack/skills/<name>  (Claude brains, G8: all skills)
+#   ~/.claude/skills/<name>  -> symlink to vendor/pstack/skills/<name>  (Claude agents, G8: all skills)
 #   ~/.agents/skills/<name>  <- rsync --delete copy of the vendored skill (shared install)
-#   ~/.hermes/skills/<name>  -> symlink to ../../.agents/skills/<name>  (Hermes brains)
+#   ~/.hermes/skills/<name>  -> symlink to ../../.agents/skills/<name>  (Hermes agents)
 #
 # Usage:
 #   scripts/install-pstack-skills.sh           install / refresh (idempotent)

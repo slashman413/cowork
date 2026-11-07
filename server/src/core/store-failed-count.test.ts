@@ -31,7 +31,7 @@ function makeStore(): { store: Store; root: string } {
     agencyAgents: path.join(root, 'agency-agents'),
   };
   for (const p of Object.values(paths)) fs.mkdirSync(p, { recursive: true });
-  const config = { paths, platforms: {}, orchestration: { brains: {} } } as unknown as Config;
+  const config = { paths, platforms: {}, orchestration: { agents: {} } } as unknown as Config;
   return { store: new Store(config, new EventBus()), root };
 }
 
@@ -49,7 +49,7 @@ test('dashboard failed count matches the UI/rerun canonical predicate', async ()
 
   // (A) done + flagged: the "FAILED after N attempt(s)" chain-exhausted path.
   const a = mkTask(store, 'chain exhausted flagged');
-  await store.completeTask({ taskId: a.id, result: 'FAILED after 2 attempt(s) (chain exhausted). Brains: x.', internal: true });
+  await store.completeTask({ taskId: a.id, result: 'FAILED after 2 attempt(s) (chain exhausted). Agents: x.', internal: true });
   assert.equal(store.getTask(a.id)!.failed, true, 'A is flagged failed');
 
   // (B) rejected status, no flag — UI shows it failed, old count ignored it.

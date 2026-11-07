@@ -1,11 +1,11 @@
 /**
- * Result verification — catches the case a raw exit-code check misses: a brain's
+ * Result verification — catches the case a raw exit-code check misses: an agent's
  * CLI exits 0 (so the spawn *looks* successful) but the "result" is really a soft
  * failure — a rate-limit / quota notice, an overloaded / try-again message, an
  * auth error, or an empty answer. Left unchecked these masquerade as completed
  * tasks with no errors. The dispatcher runs this verdict on every finished attempt
- * and, on a bad one, hands the task to the NEXT brain in the fallback chain
- * (recording which brain failed on the task — see Dispatcher.execute).
+ * and, on a bad one, hands the task to the NEXT agent in the fallback chain
+ * (recording which agent failed on the task — see Dispatcher.execute).
  *
  * Two independent gates:
  *   1. this module — cheap, deterministic pattern/emptiness check (always on).
@@ -13,8 +13,8 @@
  *      that judges whether the output actually satisfies the task.
  */
 
-import type { BrainConfig, SpecVerifierJudgesConfig } from '../types.js';
-import { brainFamily } from './tiers.js';
+import type { AgentConfig, SpecVerifierJudgesConfig } from '../types.js';
+import { agentFamily } from './tiers.js';
 
 export interface VerifyVerdict {
   ok: boolean;
@@ -39,8 +39,8 @@ export interface SpecCriterionVerdict {
 export interface SpecVerdictRecord {
   verdict: SpecVerdictStatus;
   mode: 'shadow' | 'enforce';
-  judgeBrain: string | null;
-  executorBrain: string;
+  judgeAgent: string | null;
+  executorAgent: string;
   criteria: SpecCriterionVerdict[];
   failedCriteria: string[];
   summary: string;
@@ -234,12 +234,12 @@ export function isRateLimitFailure(text: string): boolean {
 }
 
 /**
- * Whether a failed attempt should put its brain on a rate-limit cooldown. Decided
+ * Whether a failed attempt should put its agent on a rate-limit cooldown. Decided
  * only from the CLI's own signals: its stderr, and the deterministic gate's verdict
  * on its output (a non-zero exit, or a short exit-0 refusal). Free text such as the
  * LLM verifier's reason, or a deliverable that merely mentions rate limits, never
  * counts, so a real failure that talks about "too many requests" does not pause
- * the brain.
+ * the agent.
  */
 export function isCliRateLimitSignal(signal: { gateFailed: boolean; gateReason?: string; stderr?: string }): boolean {
   if (!signal.gateFailed) return false;
@@ -252,7 +252,7 @@ export const RATE_LIMIT_STDERR_TAIL_LINES = 5;
 /**
  * The last few non-empty lines of a CLI's stderr (≤2000 chars). Only the tail
  * explains why the run ended: a CLI that logged "retrying after 429", recovered,
- * then timed out or returned nothing must not put its brain on a cooldown.
+ * then timed out or returned nothing must not put its agent on a cooldown.
  */
 export function stderrTail(stderr: string, lines = RATE_LIMIT_STDERR_TAIL_LINES): string {
   return stderr.split(/\r?\n/).map(l => l.trim()).filter(Boolean).slice(-lines).join('\n').slice(-2000);
@@ -610,17 +610,17 @@ export function parseSpecVerdict(
 /**
  * Default cross-family judge chains by executor model family (CEO ruling 2026-10-20, P1-1):
  *   - claude (`local-cc-*`, `local-agy-claude-*`, `remote-*-cc-*`) → Gemini judge:
- *     `local-agy-gemini-4-argon-medium`, fallback `local-agy-gemini-3.8-flash-high`
+ *     `local-agy-gemini-4-argon`, fallback `local-agy-gemini-3.8-flash`
  *   - gemini or qwen3.8-27b (`local-agy-gemini-*`, `local-dsh-qwen3-8-27b`, `local-hermes-qwen3.8-27b`)
- *     → opus-class judge: `local-agy-claude-opus-5-5-medium`, fallback `local-cc-opus-5-5`
+ *     → opus-class judge: `local-agy-claude-opus-5-5`, fallback `local-cc-opus-5-5`
  *   - anything else (gpt-oss, codex, deepseek, other) → opus-class judge (RULING).
  */
 export const DEFAULT_SPEC_JUDGES: Readonly<Record<string, readonly string[]>> = {
-  claude: ['local-agy-gemini-4-argon-medium', 'local-agy-gemini-3.8-flash-high'],
-  gemini: ['local-agy-claude-opus-5-5-medium', 'local-cc-opus-5-5'],
-  qwen: ['local-agy-claude-opus-5-5-medium', 'local-cc-opus-5-5'],
-  'qwen3.8-27b': ['local-agy-claude-opus-5-5-medium', 'local-cc-opus-5-5'],
-  default: ['local-agy-claude-opus-5-5-medium', 'local-cc-opus-5-5'],
+  claude: ['local-agy-gemini-4-argon', 'local-agy-gemini-3.8-flash'],
+  gemini: ['local-agy-claude-opus-5-5', 'local-cc-opus-5-5'],
+  qwen: ['local-agy-claude-opus-5-5', 'local-cc-opus-5-5'],
+  'qwen3.8-27b': ['local-agy-claude-opus-5-5', 'local-cc-opus-5-5'],
+  default: ['local-agy-claude-opus-5-5', 'local-cc-opus-5-5'],
 };
 
 /** True when a task is small enough (result < 2 KB and ≤ 2 criteria) to try the cheaper fallback judge first. */
@@ -629,9 +629,9 @@ export function isSmallSpecTask(result: string, acceptance: string[]): boolean {
 }
 
 export interface SelectSpecJudgeOptions {
-  brains?: Record<string, BrainConfig>;
+  agents?: Record<string, AgentConfig>;
   judges?: SpecVerifierJudgesConfig;
-  isCooling?: (brainId: string) => boolean;
+  isCooling?: (agentId: string) => boolean;
   smallTask?: boolean;
   result?: string;
   acceptance?: string[];
@@ -639,33 +639,33 @@ export interface SelectSpecJudgeOptions {
    *  (never the executor's family), up to `panel` judges. Default 1 = today's
    *  ordered fallback chain. */
   panel?: number;
-  /** PS-2: extra candidate brains (e.g. the tier lists) tried after the
+  /** PS-2: extra candidate agents (e.g. the tier lists) tried after the
    *  configured judge chain when filling a panel with more families. */
   panelPool?: string[];
-  /** Single-judge mode: brains tried AFTER the configured chain when every
-   *  configured judge is unavailable (disabled / cooling). Only brains of a
+  /** Single-judge mode: agents tried AFTER the configured chain when every
+   *  configured judge is unavailable (disabled / cooling). Only agents of a
    *  different model family than the executor qualify. Without this, a 2-deep
-   *  chain whose two brains share one quota left 7 of 8 shadow verdicts
-   *  UNVERIFIABLE ("no judge brain available") in 2026-10. */
+   *  chain whose two agents share one quota left 7 of 8 shadow verdicts
+   *  UNVERIFIABLE ("no judge agent available") in 2026-10. */
   fallbackPool?: string[];
 }
 
 /** Why `id` cannot judge right now, or null when it can. */
-function judgeUnavailable(id: string, executorBrainId: string, opts: SelectSpecJudgeOptions): string | null {
-  if (id === executorBrainId) return 'same brain as the executor';
-  if (opts.brains) {
-    const b = opts.brains[id];
-    if (!b) return 'not registered in orchestration.brains';
+function judgeUnavailable(id: string, executorAgentId: string, opts: SelectSpecJudgeOptions): string | null {
+  if (id === executorAgentId) return 'same agent as the executor';
+  if (opts.agents) {
+    const b = opts.agents[id];
+    if (!b) return 'not registered in orchestration.agents';
     if (b.disabled) return 'disabled';
-    if (b.location === 'remote') return 'remote (the verifier only spawns local brains)';
+    if (b.location === 'remote') return 'remote (the verifier only spawns local agents)';
   }
   if (opts.isCooling && opts.isCooling(id)) return 'cooling after a rate limit';
   return null;
 }
 
 /** The configured judge chain for the executor's model family (before availability filtering). */
-function configuredJudgeChain(executorBrainId: string, opts: SelectSpecJudgeOptions): readonly string[] {
-  const family = brainFamily(opts.brains?.[executorBrainId], executorBrainId);
+function configuredJudgeChain(executorAgentId: string, opts: SelectSpecJudgeOptions): readonly string[] {
+  const family = agentFamily(opts.agents?.[executorAgentId], executorAgentId);
   const cfg = opts.judges;
   if (family === 'claude') return cfg?.claude?.length ? cfg.claude : DEFAULT_SPEC_JUDGES.claude;
   if (family === 'gemini') return cfg?.gemini?.length ? cfg.gemini : DEFAULT_SPEC_JUDGES.gemini;
@@ -676,33 +676,33 @@ function configuredJudgeChain(executorBrainId: string, opts: SelectSpecJudgeOpti
 /**
  * Every judge candidate (configured chain, then the other-family fallback pool)
  * with the reason it was skipped. Recorded on a `no-judge` UNVERIFIABLE verdict
- * so the cause is visible instead of a bare "no judge brain available".
+ * so the cause is visible instead of a bare "no judge agent available".
  */
-export function explainSpecJudgeSkips(executorBrainId: string, opts: SelectSpecJudgeOptions = {}): SpecJudgeSkip[] {
-  const execFamily = brainFamily(opts.brains?.[executorBrainId], executorBrainId);
+export function explainSpecJudgeSkips(executorAgentId: string, opts: SelectSpecJudgeOptions = {}): SpecJudgeSkip[] {
+  const execFamily = agentFamily(opts.agents?.[executorAgentId], executorAgentId);
   const out: SpecJudgeSkip[] = [];
-  for (const id of configuredJudgeChain(executorBrainId, opts)) {
+  for (const id of configuredJudgeChain(executorAgentId, opts)) {
     if (!id || out.some(s => s.id === id)) continue;
-    out.push({ id, why: judgeUnavailable(id, executorBrainId, opts) || 'available' });
+    out.push({ id, why: judgeUnavailable(id, executorAgentId, opts) || 'available' });
   }
   for (const id of opts.fallbackPool || []) {
     if (!id || out.some(s => s.id === id)) continue;
-    const why = judgeUnavailable(id, executorBrainId, opts)
-      || (brainFamily(opts.brains?.[id], id) === execFamily ? 'same model family as the executor' : null);
+    const why = judgeUnavailable(id, executorAgentId, opts)
+      || (agentFamily(opts.agents?.[id], id) === execFamily ? 'same model family as the executor' : null);
     out.push({ id, why: why || 'available' });
   }
   return out;
 }
 
 /**
- * Return the ordered list of available judge brains for `executorBrainId`.
+ * Return the ordered list of available judge agents for `executorAgentId`.
  * Skips judges that are disabled, remote (cannot be spawned locally by the
  * verifier), cooling after a rate limit (P0-1), or identical to the executor.
  */
-export function selectSpecJudges(executorBrainId: string, opts: SelectSpecJudgeOptions = {}): string[] {
-  const family = brainFamily(opts.brains?.[executorBrainId], executorBrainId);
+export function selectSpecJudges(executorAgentId: string, opts: SelectSpecJudgeOptions = {}): string[] {
+  const family = agentFamily(opts.agents?.[executorAgentId], executorAgentId);
   const cfg = opts.judges;
-  const raw = configuredJudgeChain(executorBrainId, opts);
+  const raw = configuredJudgeChain(executorAgentId, opts);
 
   const small = opts.smallTask ?? (opts.result !== undefined && opts.acceptance !== undefined
     ? isSmallSpecTask(opts.result, opts.acceptance)
@@ -711,13 +711,13 @@ export function selectSpecJudges(executorBrainId: string, opts: SelectSpecJudgeO
 
   const out: string[] = [];
   for (const id of ordered) {
-    if (!id || out.includes(id) || judgeUnavailable(id, executorBrainId, opts)) continue;
+    if (!id || out.includes(id) || judgeUnavailable(id, executorAgentId, opts)) continue;
     out.push(id);
   }
   // Configured chain first; other-family fallbacks only extend it.
   for (const id of opts.fallbackPool || []) {
-    if (!id || out.includes(id) || judgeUnavailable(id, executorBrainId, opts)) continue;
-    if (brainFamily(opts.brains?.[id], id) === family) continue;
+    if (!id || out.includes(id) || judgeUnavailable(id, executorAgentId, opts)) continue;
+    if (agentFamily(opts.agents?.[id], id) === family) continue;
     out.push(id);
   }
   const panel = opts.panel ?? 1;
@@ -727,7 +727,7 @@ export function selectSpecJudges(executorBrainId: string, opts: SelectSpecJudgeO
   // The configured chain keeps priority (CEO judge-family ruling); the pool
   // (tier lists + every family's judge chain) only adds further families.
   const execFamily = family;
-  const famOf = (id: string) => brainFamily(opts.brains?.[id], id);
+  const famOf = (id: string) => agentFamily(opts.agents?.[id], id);
   const pool = [
     ...out,
     ...(opts.panelPool || []),
@@ -738,9 +738,9 @@ export function selectSpecJudges(executorBrainId: string, opts: SelectSpecJudgeO
   const families = new Set<string>();
   for (const id of pool) {
     if (panelOut.length >= panel) break;
-    if (!id || id === executorBrainId || panelOut.includes(id)) continue;
-    if (opts.brains) {
-      const b = opts.brains[id];
+    if (!id || id === executorAgentId || panelOut.includes(id)) continue;
+    if (opts.agents) {
+      const b = opts.agents[id];
       if (!b || b.disabled || b.location === 'remote') continue;
     }
     if (opts.isCooling && opts.isCooling(id)) continue;
@@ -752,9 +752,9 @@ export function selectSpecJudges(executorBrainId: string, opts: SelectSpecJudgeO
   return panelOut;
 }
 
-/** Pick the primary available judge brain for `executorBrainId`, or null when none is available. */
-export function selectSpecJudge(executorBrainId: string, opts: SelectSpecJudgeOptions = {}): string | null {
-  return selectSpecJudges(executorBrainId, opts)[0] ?? null;
+/** Pick the primary available judge agent for `executorAgentId`, or null when none is available. */
+export function selectSpecJudge(executorAgentId: string, opts: SelectSpecJudgeOptions = {}): string | null {
+  return selectSpecJudges(executorAgentId, opts)[0] ?? null;
 }
 
 /**
@@ -773,7 +773,7 @@ export function parseLlmVerdict(reply: string): VerifyVerdict {
 }
 
 /* ────────────────────────────────────────────────────────────────────────────
- * INPUT-REQUEST detection — the third outcome a raw "done" status hides. A brain
+ * INPUT-REQUEST detection — the third outcome a raw "done" status hides. An agent
  * can exit 0 with a genuine, on-topic result that is NOT a deliverable but a
  * QUESTION back to the user ("which environment should I target?"). Marking that
  * "done" loses the question and strands the requester. When detected the
@@ -1066,7 +1066,7 @@ function capQuestions(questions: string[]): string[] {
  * AFTER the failure / NEEDS_INPUT / WAITING_ON_BACKGROUND gates (those win):
  *   DONE                → done
  *   DONE_WITH_CONCERNS  → done, flagged (context.qualityFlag = "concerns")
- *   BLOCKED             → failed with the reason, NOT handed to the next brain
+ *   BLOCKED             → failed with the reason, NOT handed to the next agent
  *   no footer           → unchanged behaviour, context.hasEvidence = false
  * ──────────────────────────────────────────────────────────────────────────── */
 

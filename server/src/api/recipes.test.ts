@@ -23,7 +23,7 @@ test('recipe API: capture a done task, run it, rate it', async () => {
     paths[k] = path.join(root, k);
     fs.mkdirSync(paths[k], { recursive: true });
   }
-  const store = new Store({ paths, platforms: {}, orchestration: { brains: {} } } as unknown as Config, new EventBus());
+  const store = new Store({ paths, platforms: {}, orchestration: { agents: {} } } as unknown as Config, new EventBus());
   const recipes = new Recipes(path.join(root, 'recipes'), paths.inputs);
   const app = express();
   app.use(express.json());
@@ -52,7 +52,7 @@ test('recipe API: capture a done task, run it, rate it', async () => {
     const draft = await call('POST', `/recipes/draft-from-task/${origin.id}`);
     assert.equal(draft.status, 200);
     assert.deepEqual(draft.json.carry.inputs, ['skus.csv']);
-    assert.equal(draft.json.carry.agent, 'analyst');
+    assert.equal(draft.json.carry.persona, 'analyst');
 
     // The user turns "October" into a field in the editor, then saves.
     const saved = await call('POST', '/recipes', {
@@ -78,7 +78,7 @@ test('recipe API: capture a done task, run it, rate it', async () => {
     assert.equal(t.context?.recipe?.id, id);
     assert.ok(t.tags?.includes(`recipe:${id}`));
     assert.equal(t.to?.agent, 'analyst');
-    assert.equal(t.context?.brain, undefined, 'suggest mode leaves routing to the router');
+    assert.equal(t.context?.agent, undefined, 'suggest mode leaves routing to the router');
 
     // Finish + 👎 with a note → stats, and the note rides along on the next run.
     t.status = 'done'; t.result = 'meh\nSTATUS: DONE';
@@ -110,7 +110,7 @@ test('recipe independence: runs successfully even after origin task is deleted w
     paths[k] = path.join(root, k);
     fs.mkdirSync(paths[k], { recursive: true });
   }
-  const store = new Store({ paths, platforms: {}, orchestration: { brains: {} } } as unknown as Config, new EventBus());
+  const store = new Store({ paths, platforms: {}, orchestration: { agents: {} } } as unknown as Config, new EventBus());
   const recipes = new Recipes(path.join(root, 'recipes'), paths.inputs);
   const app = express();
   app.use(express.json());
@@ -225,7 +225,7 @@ test('recurring recipe run: every scheduled run gets the recipe files, folders k
     paths[k] = path.join(root, k);
     fs.mkdirSync(paths[k], { recursive: true });
   }
-  const store = new Store({ paths, platforms: {}, orchestration: { brains: {} } } as unknown as Config, new EventBus());
+  const store = new Store({ paths, platforms: {}, orchestration: { agents: {} } } as unknown as Config, new EventBus());
   const recipes = new Recipes(path.join(root, 'recipes'), paths.inputs);
   try {
     const art = path.join(paths.artifacts, 'origin');
@@ -269,7 +269,7 @@ test('recipe API: add, remove and skip input files', async () => {
     paths[k] = path.join(root, k);
     fs.mkdirSync(paths[k], { recursive: true });
   }
-  const store = new Store({ paths, platforms: {}, orchestration: { brains: {} } } as unknown as Config, new EventBus());
+  const store = new Store({ paths, platforms: {}, orchestration: { agents: {} } } as unknown as Config, new EventBus());
   const recipes = new Recipes(path.join(root, 'recipes'), paths.inputs);
   const app = express();
   app.use(express.json());

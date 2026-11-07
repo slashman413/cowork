@@ -57,9 +57,9 @@ test('parsePstackCommand: non-commands return null', () => {
 });
 
 test('applyPstackCommand: strips the command and merges context', () => {
-  const out = applyPstackCommand({ title: 'T', description: '/pstack interrogate check it', context: { brain: 'b' } }, fakeSkills());
+  const out = applyPstackCommand({ title: 'T', description: '/pstack interrogate check it', context: { agent: 'b' } }, fakeSkills());
   assert.equal(out.description, 'check it');
-  assert.deepEqual(out.context, { brain: 'b', skill: 'interrogate' });
+  assert.deepEqual(out.context, { agent: 'b', skill: 'interrogate' });
   const t = applyPstackCommand({ title: '/pstack feature add a button', description: '' }, fakeSkills());
   assert.equal(t.title, 'add a button');
   assert.equal(t.description, 'add a button');
@@ -74,7 +74,7 @@ test('POST /api/inbox: /pstack sets context.playbook/skill; GET /api/pstack list
     paths[k] = path.join(root, k);
     fs.mkdirSync(paths[k], { recursive: true });
   }
-  const store = new Store({ paths, platforms: {}, orchestration: { brains: {} } } as unknown as Config, new EventBus());
+  const store = new Store({ paths, platforms: {}, orchestration: { agents: {} } } as unknown as Config, new EventBus());
   (store as any).getConfig = undefined; // no background sharpen in this test
   const app = express();
   app.use(express.json());

@@ -15,13 +15,13 @@ const L = (over: Partial<Lesson> & { min?: number }): Lesson => {
   const { min = n * 60, ...rest } = over;
   n++;
   return {
-    at: new Date(T0 + min * 60_000).toISOString(), kind: 'verify-fail', task: `task-${n}`, titleSlug: 'some-task', agent: 'eng',
-    brain: 'remote-host-cc-opus', brainFamily: 'remote-host-cc', attempt: 1, reason: '', requiresGuess: [], ...rest,
+    at: new Date(T0 + min * 60_000).toISOString(), kind: 'verify-fail', task: `task-${n}`, titleSlug: 'some-task', persona: 'eng',
+    agent: 'remote-host-cc-opus', agentFamily: 'remote-host-cc', attempt: 1, reason: '', requiresGuess: [], ...rest,
   };
 };
 
 test('the remedy menu order is structure first, prose note last', () => {
-  assert.deepEqual([...REMEDY_ORDER], ['router-rule', 'brain-cooldown', 'env-requires', 'verifier-pattern', 'acceptance-criterion', 'conventions-note']);
+  assert.deepEqual([...REMEDY_ORDER], ['router-rule', 'agent-cooldown', 'env-requires', 'verifier-pattern', 'acceptance-criterion', 'conventions-note']);
 });
 
 test('normalizeReason collapses reset times, ids and numbers so recurrences group', () => {
@@ -40,7 +40,7 @@ test('groupLessons: ≥2 occurrences make a class; singletons are dropped', () =
   assert.equal(cls[0].signature, lessonSignature(L({ reason: 'timeout after 1ms' })));
 });
 
-test('rate-limit class → brain cooldown first, citing the repeat hits it would have prevented', () => {
+test('rate-limit class → agent cooldown first, citing the repeat hits it would have prevented', () => {
   const evs = [
     L({ min: 0, reason: "You've hit your session limit · resets 3pm (Asia/Taipei)" }),
     L({ min: 5, reason: "You've hit your session limit · resets 3pm (Asia/Taipei)" }),
@@ -48,7 +48,7 @@ test('rate-limit class → brain cooldown first, citing the repeat hits it would
     L({ min: 500, reason: "You've hit your session limit · resets 9pm (Asia/Taipei)" }),
   ];
   const p = draftProposal(groupLessons(evs)[0]);
-  assert.equal(p.recommended, 'brain-cooldown');
+  assert.equal(p.recommended, 'agent-cooldown');
   assert.equal(p.unenforced, false);
   const cd = p.remedies[0];
   assert.deepEqual(cd.caught.map(c => c.task), [evs[1].task, evs[2].task]);   // the 500-min one was outside the window
@@ -56,11 +56,11 @@ test('rate-limit class → brain cooldown first, citing the repeat hits it would
   assert.equal(p.remedies[p.remedies.length - 1].id, 'conventions-note');
 });
 
-test('brain-specific failure → router rule first; menu stays in REMEDY_ORDER', () => {
+test('agent-specific failure → router rule first; menu stays in REMEDY_ORDER', () => {
   const evs = [
-    L({ reason: 'Error: invalid model selection (--model "gemini-3.1-pro-high" --effort high)', brain: 'local-agy-gemini', brainFamily: 'local-agy', requiresGuess: ['tool:agy'] }),
-    L({ reason: 'Error: invalid model selection (--model "gemini-3.1-pro-high" --effort low)', brain: 'local-agy-gemini', brainFamily: 'local-agy', requiresGuess: ['tool:agy'] }),
-    L({ reason: 'Error: invalid model selection (--model "gemini-3.1-pro-high" --effort max)', brain: 'local-agy-gemini2', brainFamily: 'local-agy', requiresGuess: ['tool:agy'] }),
+    L({ reason: 'Error: invalid model selection (--model "gemini-3.1-pro-high" --effort high)', agent: 'local-agy-gemini', agentFamily: 'local-agy', requiresGuess: ['tool:agy'] }),
+    L({ reason: 'Error: invalid model selection (--model "gemini-3.1-pro-high" --effort low)', agent: 'local-agy-gemini', agentFamily: 'local-agy', requiresGuess: ['tool:agy'] }),
+    L({ reason: 'Error: invalid model selection (--model "gemini-3.1-pro-high" --effort max)', agent: 'local-agy-gemini2', agentFamily: 'local-agy', requiresGuess: ['tool:agy'] }),
   ];
   const menu = remedyMenu(groupLessons(evs)[0]);
   assert.deepEqual(menu.map(r => r.id), ['router-rule', 'env-requires', 'conventions-note']);
@@ -71,9 +71,9 @@ test('brain-specific failure → router rule first; menu stays in REMEDY_ORDER',
 
 test('LLM-judged quality failures → verifier failPattern before prose note', () => {
   const evs = [
-    L({ reason: 'verifier LLM: placeholder output, no code changes', brainFamily: 'a' }),
-    L({ reason: 'verifier LLM: placeholder output, no code changes', brainFamily: 'b' }),
-    L({ reason: 'verifier LLM: placeholder output, no code changes', brainFamily: 'c' }),
+    L({ reason: 'verifier LLM: placeholder output, no code changes', agentFamily: 'a' }),
+    L({ reason: 'verifier LLM: placeholder output, no code changes', agentFamily: 'b' }),
+    L({ reason: 'verifier LLM: placeholder output, no code changes', agentFamily: 'c' }),
   ];
   const menu = remedyMenu(groupLessons(evs)[0]);
   assert.deepEqual(menu.map(r => r.id), ['verifier-pattern', 'conventions-note']);
@@ -92,7 +92,7 @@ test('permission-type wait-inputs → acceptance criterion', () => {
 });
 
 test('no structural check catches ≥2 events → prose note only, flagged unenforced, still citing ≥2 events', () => {
-  const evs = [L({ reason: 'timeout after 300000ms', brainFamily: 'x' }), L({ reason: 'timeout after 900000ms', brainFamily: 'y' })];
+  const evs = [L({ reason: 'timeout after 300000ms', agentFamily: 'x' }), L({ reason: 'timeout after 900000ms', agentFamily: 'y' })];
   const p = draftProposal(groupLessons(evs)[0]);
   assert.equal(p.recommended, 'conventions-note');
   assert.equal(p.unenforced, true);
@@ -102,7 +102,7 @@ test('no structural check catches ≥2 events → prose note only, flagged unenf
 
 test('correctLoop windows the ledger and counts unenforced classes', () => {
   const evs = [
-    L({ min: 0, reason: 'timeout after 1ms', brainFamily: 'x' }), L({ min: 1, reason: 'timeout after 2ms', brainFamily: 'y' }),
+    L({ min: 0, reason: 'timeout after 1ms', agentFamily: 'x' }), L({ min: 1, reason: 'timeout after 2ms', agentFamily: 'y' }),
     L({ min: 60 * 24 * 60, reason: 'timeout after 3ms' }),   // 60 days later, outside the window
   ];
   const r = correctLoop(evs, T0, T0 + 30 * 86_400_000);

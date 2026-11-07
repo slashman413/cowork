@@ -1,7 +1,7 @@
 ---
 name: cowork
 description: >-
-  Multi-agent Cowork MCP framework: register agents with brains, dispatch and
+  Multi-agent Cowork MCP framework: register agents with agents, dispatch and
   schedule tasks, heartbeat, agencies, inbox, artifacts, dashboard. Local MCP
   server at https://localhost:6868 (self-signed TLS). Recurring tasks + Calendar.
 version: 1.3.0
@@ -9,14 +9,19 @@ author: Hermes
 platforms: [linux]
 metadata:
   hermes:
-    tags: Cowork, MCP, Multi-Agent, Coordination, Brain-Registration
+    tags: Cowork, MCP, Multi-Agent, Coordination, Agent-Registration
 ---
 
 # Cowork MCP Framework
 
+> **Naming (2026-11):** what used to be a "brain" is an **agent**. Pin with `context.agent`, name a persona with
+> `context.persona`, and set the level with `context.thinking` (`low|medium|high|xhigh|max`, default `medium`).
+> Agent ids never end in `-low`, `-medium` or `-high`. Declare agents in `register_agent`'s `agents` array;
+> `agent_id` in the MCP tools is your worker's registration id. See `JOIN-AS-AN-AGENT.md`.
+
 Multi-agent coordination framework (slashman413/cowork) running as a local MCP server
 on `https://localhost:6868` (HTTPS, self-signed — use `curl -k`). Agents register with
-capabilities AND brains (model specs), dispatch cross-platform tasks, heartbeat, and query agencies/inbox.
+capabilities AND agents (model specs), dispatch cross-platform tasks, heartbeat, and query agencies/inbox.
 
 > **There is no report store.** `file_report` and `complete_task(report_path:)` were
 > removed. A task's complete record is `task.result` + `artifacts/<task-id>/`.
@@ -32,7 +37,7 @@ capabilities AND brains (model specs), dispatch cross-platform tasks, heartbeat,
 - "Check my inbox" / "list pending tasks"
 - "Schedule this for 9am tomorrow" (`create_task(scheduled_at: …)`)
 - "Show the dashboard" / "what's happening across agents"
-- "Register this agent" / "add my brains"
+- "Register this agent" / "add my agents"
 - Cross-platform agent coordination (Hermes, Claude, Gemini, Antigravity, Codex, etc.)
 - Heartbeat monitoring / agent lifecycle management
 
@@ -40,7 +45,7 @@ capabilities AND brains (model specs), dispatch cross-platform tasks, heartbeat,
 
 - Cowork MCP server: systemd service `cowork-mcp.service` (auto-starts at boot)
   - Config: `~/.cowork/config.json` (real per-server; repo `config.json` is a template)
-  - Port: 6868. API key: send `Authorization: Bearer $COWORK_API_KEY` (dispatched tasks and brain clients have it in env; the hub on a non-loopback host requires it)
+  - Port: 6868. API key: send `Authorization: Bearer $COWORK_API_KEY` (dispatched tasks and agent clients have it in env; the hub on a non-loopback host requires it)
 - `agency-agents` — a git submodule at `./agency-agents` (init: `git submodule update --init`)
 - Hermes MCP endpoint: `mcp_endpoints: { cowork: "https://localhost:6868/mcp" }`
 - Hermes model CLIs: `hermes` (qwen3.8-27b), optional `claude`, `agy`, `codex`, `ollama`
@@ -51,7 +56,7 @@ capabilities AND brains (model specs), dispatch cross-platform tasks, heartbeat,
 - `inbox/` — Task queue (JSON files, auto-managed)
 - `artifacts/` — Per-task output files (audio/video/md), downloadable from the Inbox
 - `.status/` — Runtime state (auto-managed)
-- `deploy/remote-brain-client.mjs` — Remote brain registration script (zero-config)
+- `deploy/remote-agent-client.mjs` — Remote agent registration script (zero-config)
 - `deploy/presets/hermes.json` — Hermes preset: qwen3.8-27b
 - `deploy/presets/claude.json` — Claude preset: opus, sonnet, fable, default
 
@@ -61,9 +66,9 @@ capabilities AND brains (model specs), dispatch cross-platform tasks, heartbeat,
 
 | Tool | Purpose |
 |------|---------|
-| `register_agent` | Register agent with platform, name, capabilities, AND brains (model specs) |
+| `register_agent` | Register agent with platform, name, capabilities, AND agents (model specs) |
 | `heartbeat` | Update status and current task (keep agent alive) |
-| `deregister_agent` | Remove agent and all its brains from the registry |
+| `deregister_agent` | Remove agent and all its agents from the registry |
 | `get_roster` | Search agents across all platforms |
 | `create_task` | Create a task for another agent/platform; optional `scheduled_at` (ISO 8601) parks it until launch time, optional `recurrence` makes it a recurring scheduler, optional `interaction` asks a human for input first |
 | `claim_task` | Claim a pending inbox task |
@@ -81,19 +86,19 @@ capabilities AND brains (model specs), dispatch cross-platform tasks, heartbeat,
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/status` | Dashboard overview (activeAgents, inboxSummary, uptime) |
-| GET | `/api/connections` | Live MCP clients (heartbeat) + per-brain ran/submitted counters |
+| GET | `/api/connections` | Live MCP clients (heartbeat) + per-agent ran/submitted counters |
 | GET | `/api/roster` | Agencies (filterable by division/search/category) |
 | GET | `/api/roster-divisions` | Agencies grouped by division (for the Agents view) |
-| GET | `/api/dispatcher` | Special agents + brains + defaultChain + divisionChains + running |
-| GET / PUT | `/api/chains`, `/api/chains/default`, `/api/chains/division/:div` | Read / edit brain fallback chains |
-| GET / PUT / DELETE | `/api/brains`, `/api/brains/:id` | Brain registry (cascades on delete) |
-| GET / PUT / DELETE | `/api/agents-config`, `/api/agents-config/:name` | Special-executor chains |
+| GET | `/api/dispatcher` | Special roles + agents + defaultChain + divisionChains + running |
+| GET / PUT | `/api/chains`, `/api/chains/default`, `/api/chains/division/:div` | Read / edit agent fallback chains |
+| GET / PUT / DELETE | `/api/agents`, `/api/agents/:id` | Agent registry (cascades on delete) |
+| GET / PUT / DELETE | `/api/roles-config`, `/api/roles-config/:name` | Special-executor chains |
 | GET | `/api/artifacts/:taskId`, `/api/artifacts/:taskId/:file` | List / download task artifacts |
 | GET | `/api/inbox?status=pending` | Inbox tasks (filterable) |
 | POST | `/api/inbox` | Create a new task |
 | PATCH | `/api/inbox/:id` | Claim or complete a task |
 | POST | `/api/inbox/:id/rerun` | Re-queue a FAILED (chain-exhausted) task from the top of its chain |
-| POST | `/api/inbox/:id/continue` | Spawn a follow-up to a finished task (same brain by default) |
+| POST | `/api/inbox/:id/continue` | Spawn a follow-up to a finished task (same agent by default) |
 | POST | `/api/inbox/:id/edit` | Edit a task (e.g. `scheduledAt`, `recurrence`) |
 | POST | `/api/inbox/:id/run-now` | Run a scheduled/recurring task now (a recurring task re-arms) |
 | POST | `/api/inbox/:id/interaction` | Submit a person's answers → releases a `wait-input` task |
@@ -107,7 +112,7 @@ SSE event types are camelCase: `agentRegistered`, `taskCreated`, `taskClaimed`,
 ### Web Dashboard
 
 - `https://localhost:6868/` — Web UI (Overview, Portal, Tasks, Recipes, Calendar, Workflows,
-  Goals, Routing, Brains, Personas, Workers, Configuration) with a raw/rendered markdown viewer and artifact downloads
+  Goals, Routing, Agents, Personas, Workers, Configuration) with a raw/rendered markdown viewer and artifact downloads
 
 ### MCP Inspector (debugging)
 
@@ -115,9 +120,9 @@ SSE event types are camelCase: `agentRegistered`, `taskCreated`, `taskClaimed`,
 npx @modelcontextprotocol/inspector https://localhost:6868/mcp
 ```
 
-## Agent Registration (with Brains)
+## Agent Registration (with Agents)
 
-Register with `register_agent`, passing a `brains` array to declare models you can run:
+Register with `register_agent`, passing a `agents` array to declare models you can run:
 
 ```
 register_agent(
@@ -125,7 +130,7 @@ register_agent(
   agent_name="hermes-agent-01",
   capabilities=["engineering", "research", "planner", "generalist"],
   current_task="Working on X",
-  brains=[
+  agents=[
     {"id": "local-hermes-qwen3.8-27b", "location": "local", "exec": "hermes", "model": "qwen3.8-27b"}
   ]
 )
@@ -134,26 +139,26 @@ register_agent(
 Available exec types: `hermes`, `claude`, `agy`, `codex`, `ollama`, `dsh`, `script`.
 Location: `local` (runs on this machine) or `remote` (runs on another machine).
 
-Brains persist until explicitly deregistered — they do NOT auto-remove on disconnect.
+Agents persist until explicitly deregistered — they do NOT auto-remove on disconnect.
 
-### Remote Brain Client
+### Remote Agent Client
 
-A machine can join as a remote brain provider with zero config:
+A machine can join as a remote agent provider with zero config:
 
 ```bash
 COWORK_URL=https://<cowork-host>:6868 NODE_EXTRA_CA_CERTS=~/.cowork/tls/cert.pem \
-  node cowork/deploy/remote-brain-client.mjs
+  node cowork/deploy/remote-agent-client.mjs
 ```
 
 Node clients must trust the self-signed cert (`NODE_EXTRA_CA_CERTS`), or the MCP
 handshake fails with `SELF_SIGNED_CERT_IN_CHAIN`. Clients still on `http://` must be
 relaunched with `https://`.
 
-Auto-detects `claude`/`hermes`/`agy`/`codex`/`ollama` CLIs and declares matching brains.
+Auto-detects `claude`/`hermes`/`agy`/`codex`/`ollama` CLIs and declares matching agents.
 For remote machines, use a systemd service:
 
 ```bash
-cp cowork/deploy/cowork-remote-brain@.service ~/.config/systemd/user/
+cp cowork/deploy/cowork-remote-agent@.service ~/.config/systemd/user/
 # Edit env file, enable service
 ```
 
@@ -171,41 +176,41 @@ When the user shares a business idea or multi-part request:
    - `from_platform`, `from_agent`: your identity
    - `context: {"role": "orchestrator"}`, `tags: ["orchestrator"]`
 
-2. The dispatcher runs the orchestrator brain; it decomposes the idea into subtasks.
+2. The dispatcher runs the orchestrator agent; it decomposes the idea into subtasks.
    Each unassigned subtask is **routed in two stages** — an orchestrator/classifier
-   brain (qwen3.8-27b) picks a **division** (1 of 19), then an **agent**
+   agent (qwen3.8-27b) picks a **division** (1 of 19), then an **agent**
    (1 of 288) whose `.md` persona becomes the system prompt, run on that division's
-   brain chain (or the global default). Target directly at dispatch with `context.agent: "<slug>"` and/or `context.division: "<division>"`.
+   agent chain (or the global default). Target directly at dispatch with `context.persona: "<slug>"` and/or `context.division: "<division>"`.
 
 3. Track progress with `list_inbox` / `get_dashboard`; results appear on the task card;
    any generated files land in `cowork/artifacts/<task-id>/` (downloadable).
 
 ### Routing model (config.json orchestration)
 
-There is **no fixed role→brain table** anymore. Only three **special executors** carry
+There is **no fixed role→agent table** anymore. Only three **special executors** carry
 their own chains; everything else routes through the Agencies:
 
-| Executor | Kind | Brain chain source |
+| Executor | Kind | Agent chain source |
 |----------|------|--------------------|
-| orchestrator | special | `orchestration.agents.orchestrator.brains` |
-| generalist | special | `orchestration.agents.generalist.brains` |
-| video | special | `orchestration.agents.video.brains` (LTX only — never Wan/Hunyuan) |
+| orchestrator | special | `orchestration.roleChains.orchestrator.agents` |
+| generalist | special | `orchestration.roleChains.generalist.agents` |
+| video | special | `orchestration.roleChains.video.agents` (LTX only — never Wan/Hunyuan) |
 | any of 288 agents | Agencies | `orchestration.divisionChains[<division>]` if set, else `orchestration.defaultChain` |
 
-- **Global default chain**: `orchestration.defaultChain` — drag-reorder in the Brains
+- **Global default chain**: `orchestration.defaultChain` — drag-reorder in the Agents
   view (`PUT /api/chains/default`). Currently `local-cc-opus-5-5` →
-  `local-agy-claude-opus-5-5-medium` → `local-agy-gemini-3.8-flash-high` →
-  `local-dsh-qwen3-8-27b` → `local-hermes-qwen3.8-27b`. deepseek brains are retired
-  (denylisted by `DENYLISTED_BRAIN_RE=/deepseek/i`).
+  `local-agy-claude-opus-5-5` → `local-agy-gemini-3.8-flash` →
+  `local-dsh-qwen3-8-27b` → `local-hermes-qwen3.8-27b`. deepseek agents are retired
+  (denylisted by `DENYLISTED_AGENT_RE=/deepseek/i`).
 - **Per-division override**: `orchestration.divisionChains[<division>]` — set/clear in
   the Agents view (`PUT /api/chains/division/:division`; empty reverts to default).
-- The live registry (`curl -sk https://localhost:6868/api/brains`) holds ~25 brains
+- The live registry (`curl -sk https://localhost:6868/api/agents`) holds ~25 agents
   (local `cc` opus-5-5/sonnet-5-5/fable-5-1, `agy` opus-5-5/sonnet-5-5/gemini-3.8-flash/
   gemini-4-argon/gpt-oss-120b-medium, `local-dsh-qwen3-8-27b`, `local-hermes-qwen3.8-27b`;
   remote cc-opus-4-8/cc-fable-5/cc-sonnet-5/codex-default/gpt-5.6-terra/gpt-5.6-luna).
-  Retired ids resolve via `BRAIN_ID_ALIASES` (old qwen3.8 ids → `local-hermes-qwen3.8-27b`).
+  Retired ids resolve via `AGENT_ID_ALIASES` (old qwen3.8 ids → `local-hermes-qwen3.8-27b`).
 - Chains run top→bottom with failure handover; `remoteGraceMs` (20s in the template config; 60s code default) auto-advances past
-  an unclaimed remote rung. Pin a single task with `context.brain: "<id>"`.
+  an unclaimed remote rung. Pin a single task with `context.agent: "<id>"`.
 - Workflows (dashboard **workflows** view) are capped by config `maxWorkflowSteps` (live: 12).
 
 ## Recurring tasks & Calendar
@@ -275,7 +280,7 @@ and the task runs now, so one bad date never aborts an emit.
 execution tasks; `MAX_GOAL_FAILURES` (5) counts *consecutive* Achiever turns that neither
 plan nor emit — and an `evaluate{met:false}` is one of those. When either trips the goal
 is **blocked with a concrete resume contract** (raise the budget / narrow the criterion,
-or verify the brain) and then **auto-retried on a backoff** — a transient brain blip
+or verify the agent) and then **auto-retried on a backoff** — a transient agent blip
 self-heals in minutes, and raising the budget lets it self-resume with no click, not
 discarded. Both punish metric-open objectives, so a
 goal riding an external number needs an evidence-bound criterion ("does a dated snapshot
@@ -290,7 +295,7 @@ when it hits a missing credential, an external dependency, or a human-only decis
 
 ## Procedure
 
-### 1. Register + Declare Brains
+### 1. Register + Declare Agents
 
 Call `register_agent` at the start of a session to be discoverable:
 
@@ -300,11 +305,11 @@ register_agent(
   agent_name="hermes-agent-01",
   capabilities=["engineering", "research", "planner", "generalist"],
   current_task="Working on X",
-  brains=[{"id": "local-hermes-qwen3.8-27b", "location": "local", "exec": "hermes", "model": "qwen3.8-27b"}]
+  agents=[{"id": "local-hermes-qwen3.8-27b", "location": "local", "exec": "hermes", "model": "qwen3.8-27b"}]
 )
 ```
 
-If already registered, your MCP tools already have the brains — skip re-registration.
+If already registered, your MCP tools already have the agents — skip re-registration.
 
 ### 2. Heartbeat
 
@@ -359,7 +364,7 @@ If you cannot finish without a decision only the user can make, end your output 
 line beginning `NEEDS_INPUT:` followed by your question(s), one per line. The dispatcher
 parks the task on `wait-input` and re-dispatches it once the user answers (their replies
 arrive on `context.humanInput`). Never emit a rate-limit or quota notice as the
-deliverable — the verifier rejects those and hands the task to the next brain in the chain.
+deliverable — the verifier rejects those and hands the task to the next agent in the chain.
 
 ### 7. Query Agencies
 
@@ -373,7 +378,7 @@ get_roster(category="engineering", search="keyword", active_only=true)
 get_dashboard()
 ```
 
-Shows active agents, inbox stats, service health (vllm, firecrawl, forgejo).
+Shows active workers, inbox stats, service health (vllm, firecrawl, forgejo).
 
 ## Heartbeat Pattern
 
@@ -390,9 +395,9 @@ may appear stale on the dashboard; a task claim goes stale after `staleClaimMs`
 ## Credential / local-filesystem rule (CONVENTIONS.md §6)
 
 Any task that needs the **local filesystem** — credentials under `~/.priv/`, or any path
-under the cowork host's home dir — MUST run on a **local** brain. Pin it explicitly:
-`context: {"brain": "local-hermes-qwen3.8-27b"}`. `remote-*` brains cannot see that
-filesystem; such a task routed to one will fail or vanish. If you are a remote brain and
+under the cowork host's home dir — MUST run on a **local** agent. Pin it explicitly:
+`context: {"agent": "local-hermes-qwen3.8-27b"}`. `remote-*` agents cannot see that
+filesystem; such a task routed to one will fail or vanish. If you are a remote agent and
 the brief needs local files, report the routing error and stop — do not fake it.
 
 ## REST API: task creation body shape (critical)
@@ -406,7 +411,7 @@ task schema:
   "description": "…",
   "from": {"platform": "hermes", "agent": "<your agent name>"},
   "to": {},
-  "context": {"brain": "local-hermes-qwen3.8-27b"}
+  "context": {"agent": "local-hermes-qwen3.8-27b"}
 }
 ```
 
@@ -424,16 +429,16 @@ The flat `from_platform` / `from_agent` / `to_platform` / `to_agent` form is the
 
 - Server must be running — check with `curl -sk https://localhost:6868/api/status`
 - MCP endpoint: `/mcp` (Streamable HTTP). REST API: `/api/...`. Do not mix.
-- API key: every /api and /mcp request needs `Authorization: Bearer $COWORK_API_KEY` (or `X-API-Key`). Dispatched tasks and brain clients get `COWORK_API_KEY` in env; never paste the key into task text or output.
+- API key: every /api and /mcp request needs `Authorization: Bearer $COWORK_API_KEY` (or `X-API-Key`). Dispatched tasks and agent clients get `COWORK_API_KEY` in env; never paste the key into task text or output.
 - Task lifecycle: `scheduled` / `wait-input` → `pending` → `claimed` → `in-progress` →
   `done` / `rejected`; a task whose whole chain was rejected finishes `failed: true`
   (re-queue with `POST /api/inbox/:id/rerun`). `scheduled` and `wait-input` are held OUT
   of the pending pool — never claimed or routed until released.
 - SSE at `/api/events` needs `curl -kN` (no buffering).
-- Chain/brain edits via the dashboard or `/api/chains*`, `/api/agents-config`,
-  `/api/brains` are applied live AND persisted to config.json (no restart). Only manual
+- Chain/agent edits via the dashboard or `/api/chains*`, `/api/roles-config`,
+  `/api/agents` are applied live AND persisted to config.json (no restart). Only manual
   hand-edits of config.json require a restart.
-- Brains persist until `deregister_agent` — they do NOT auto-remove on disconnect.
+- Agents persist until `deregister_agent` — they do NOT auto-remove on disconnect.
 - If `agency-agents` repo is missing/misconfigured, Agencies queries return empty.
 - Port is 6868, NOT 4200.
 
@@ -443,7 +448,7 @@ The flat `from_platform` / `from_agent` / `to_platform` / `to_agent` form is the
 # Health check
 curl -sk https://localhost:6868/api/status | python3 -m json.tool
 
-# List active agents
+# List active workers
 curl -sk https://localhost:6868/api/agents | python3 -m json.tool
 
 # Test MCP tool
@@ -472,5 +477,5 @@ retired.
 
 The hub requires an API key on every `/api` and `/mcp` request:
 `curl -H "Authorization: Bearer $COWORK_API_KEY" …` (or `X-API-Key`). Dispatched tasks and the
-brain clients get `COWORK_API_KEY` in their environment; MCP client configs carry it as a
+agent clients get `COWORK_API_KEY` in their environment; MCP client configs carry it as a
 header. Never paste the key into task text, output or artifacts.

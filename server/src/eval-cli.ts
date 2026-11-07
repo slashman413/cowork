@@ -2,7 +2,7 @@
 /**
  * eval-cli — the side-effecting half of the P2-1 eval harness (pure logic lives
  * in core/eval-harness.ts). Run by the `eval-prompt-change` workflow through the
- * exec:script brain `local-script-eval-harness` (`node dist/eval-cli.js step`),
+ * exec:script agent `local-script-eval-harness` (`node dist/eval-cli.js step`),
  * or by hand:
  *
  *   node dist/eval-cli.js run --family engineering --a CONVENTIONS.md --b /tmp/old.md --out <dir>
@@ -10,7 +10,7 @@
  *   node dist/eval-cli.js replay --selection <dir>/selection.json --variant <path> --label A --out <dir>
  *   node dist/eval-cli.js judge --a <replayDirA> --b <replayDirB> --out <dir>
  *
- * Common flags: --executor <brainId> --judge <brainId> --timebox <min> --concurrency <k>.
+ * Common flags: --executor <agentId> --judge <agentId> --timebox <min> --concurrency <k>.
  * Progress goes to stderr; stdout is the step's result (the report, for judge/run).
  */
 import fs from 'fs';
@@ -21,10 +21,10 @@ import https from 'https';
 import { spawn, execFileSync } from 'child_process';
 import { loadConfig } from './config.js';
 import { Roster } from './core/roster.js';
-import { brainFamily } from './core/tiers.js';
+import { agentFamily } from './core/tiers.js';
 import { selectSpecJudges } from './core/result-verifier.js';
 import {
-  selectReplayTasks, buildReplayPrompt, sandboxEnv, writeGuardDir, readBlockedLog, brainArgv, firstRunnableBrain,
+  selectReplayTasks, buildReplayPrompt, sandboxEnv, writeGuardDir, readBlockedLog, agentArgv, firstRunnableAgent,
   blindPairs, buildJudgePrompt, parseJudgeScores, unblind, summarize, renderReport, normalizeStatus, diffSnapshots,
   sandboxClean, sha256, type Snapshot, type SandboxCheck, type ReplayOutput,
 } from './core/eval-harness.js';
@@ -76,38 +76,38 @@ function getJson<T = any>(cfg: Config, pathname: string): Promise<T> {
   });
 }
 
-// ── brains ───────────────────────────────────────────────────────────────────
+// ── agents ───────────────────────────────────────────────────────────────────
 
 function resolveExecutor(cfg: Config, family: string, wanted?: string): string {
-  const brains = cfg.orchestration.brains || {};
+  const agents = cfg.orchestration.agents || {};
   if (wanted && wanted !== 'auto' && !/^\{\{/.test(wanted)) {
-    if (!firstRunnableBrain([wanted], brains)) throw new Error(`executor "${wanted}" is not an enabled local brain the harness can run`);
+    if (!firstRunnableAgent([wanted], agents)) throw new Error(`executor "${wanted}" is not an enabled local agent the harness can run`);
     return wanted;
   }
   const o = cfg.orchestration;
-  const chain = o.agentChains?.[family]?.length ? o.agentChains[family] : o.divisionChains?.[family]?.length ? o.divisionChains[family] : o.defaultChain || [];
-  const id = firstRunnableBrain(chain, brains);
-  if (!id) throw new Error(`no runnable local brain in the chain for "${family}"`);
+  const chain = o.personaChains?.[family]?.length ? o.personaChains[family] : o.divisionChains?.[family]?.length ? o.divisionChains[family] : o.defaultChain || [];
+  const id = firstRunnableAgent(chain, agents);
+  if (!id) throw new Error(`no runnable local agent in the chain for "${family}"`);
   return id;
 }
 
 /** Judge = the P1-1 cross-family mapping for the executor, first available. */
 function resolveJudge(cfg: Config, executor: string, wanted?: string): string {
-  const brains = cfg.orchestration.brains || {};
-  const exFam = brainFamily(brains[executor], executor);
+  const agents = cfg.orchestration.agents || {};
+  const exFam = agentFamily(agents[executor], executor);
   const pick = wanted && wanted !== 'auto' && !/^\{\{/.test(wanted)
     ? wanted
-    : selectSpecJudges(executor, { brains, judges: cfg.orchestration.verifier?.spec?.judges }).find(id => firstRunnableBrain([id], brains));
-  if (!pick || !firstRunnableBrain([pick], brains)) throw new Error(`no runnable judge brain for executor ${executor}`);
-  const jFam = brainFamily(brains[pick], pick);
+    : selectSpecJudges(executor, { agents, judges: cfg.orchestration.verifier?.spec?.judges }).find(id => firstRunnableAgent([id], agents));
+  if (!pick || !firstRunnableAgent([pick], agents)) throw new Error(`no runnable judge agent for executor ${executor}`);
+  const jFam = agentFamily(agents[pick], pick);
   if (jFam === exFam) throw new Error(`judge ${pick} is the same family (${jFam}) as executor ${executor} — the judge must be cross-family`);
   return pick;
 }
 
-function runBrain(cfg: Config, brainId: string, prompt: string, cwd: string, env: Record<string, string>, timeoutMs: number):
+function runAgent(cfg: Config, agentId: string, prompt: string, cwd: string, env: Record<string, string>, timeoutMs: number):
   Promise<{ status: 'ok' | 'error' | 'timeout'; text: string; ms: number }> {
-  const b = (cfg.orchestration.brains || {})[brainId];
-  const argv = brainArgv(b, prompt, timeoutMs);
+  const b = (cfg.orchestration.agents || {})[agentId];
+  const argv = agentArgv(b, prompt, timeoutMs);
   const t0 = Date.now();
   return new Promise(resolve => {
     const child = spawn(argv[0], argv.slice(1), { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -182,7 +182,7 @@ async function tasksCreatedBetween(cfg: Config, start: string, end: string, ownR
 
 interface Selection {
   runId: string; family: string; seed: string; createdAt: string;
-  tasks: { id: string; title: string; description: string; context: Record<string, any>; agent: string; depResults: { title: string; result: string }[] }[];
+  tasks: { id: string; title: string; description: string; context: Record<string, any>; persona: string; depResults: { title: string; result: string }[] }[];
 }
 
 async function cmdSelect(cfg: Config, a: Args): Promise<string> {
@@ -200,7 +200,7 @@ async function cmdSelect(cfg: Config, a: Args): Promise<string> {
     for (const id of Array.isArray(t.context?.dependsOn) ? t.context!.dependsOn as string[] : []) {
       try { const d = await getJson<Task>(cfg, `/inbox/${id}`); if (d.result) depResults.push({ title: d.title, result: d.result }); } catch { /* dep purged */ }
     }
-    tasks.push({ id: t.id, title: t.title, description: t.description, context: t.context || {}, agent: String(t.context?.ranAgent || t.context?.agent || ''), depResults });
+    tasks.push({ id: t.id, title: t.title, description: t.description, context: t.context || {}, persona: String(t.context?.ranPersona || t.context?.persona || ''), depResults });
   }
   const sel: Selection = { runId, family, seed, createdAt: new Date().toISOString(), tasks };
   fs.mkdirSync(out, { recursive: true });
@@ -239,11 +239,11 @@ async function cmdReplay(cfg: Config, a: Args): Promise<string> {
   const results = await pool(sel.tasks, Number(a.concurrency) || 3, async (t, i) => {
     const dir = path.join(out, 'replays', `${i + 1}-${t.id.slice(0, 8)}`);
     fs.mkdirSync(dir, { recursive: true });
-    const persona = t.agent ? roster.getPersona(t.agent)?.persona : null;
-    const prompt = buildReplayPrompt({ rules, persona, agent: t.agent, task: t, sandboxDir: dir, timeboxMin: timebox, depResults: t.depResults });
+    const personaPrompt = t.persona ? roster.getPersona(t.persona)?.persona : null;
+    const prompt = buildReplayPrompt({ rules, personaPrompt, persona: t.persona, task: t, sandboxDir: dir, timeboxMin: timebox, depResults: t.depResults });
     fs.writeFileSync(path.join(dir, '..', `${i + 1}-${t.id.slice(0, 8)}.prompt.md`), prompt);
     const env = { ...sandboxEnv(process.env, guard), COWORK_ARTIFACTS_DIR: dir, COWORK_TASK_ID: `replay-${label}-${t.id}` };
-    const r = await runBrain(cfg, executor, prompt, dir, env, (timebox + 3) * 60_000);
+    const r = await runAgent(cfg, executor, prompt, dir, env, (timebox + 3) * 60_000);
     const resultFile = path.join(out, 'replays', `${i + 1}-${t.id.slice(0, 8)}.result.md`);
     fs.writeFileSync(resultFile, r.text);
     log(`replay ${label} ${i + 1}/${sel.tasks.length} ${t.id.slice(0, 8)} → ${r.status} in ${Math.round(r.ms / 1000)}s`);
@@ -288,7 +288,7 @@ async function cmdJudge(cfg: Config, a: Args): Promise<string> {
   let raw = ''; let judged = null as ReturnType<typeof parseJudgeScores> | null; let parseErr = '';
   for (let attempt = 1; attempt <= 2 && !judged; attempt++) {
     const p = attempt === 1 ? prompt : `${prompt}\n\nYour previous reply could not be parsed (${parseErr}). Reply with ONLY the JSON object.`;
-    const r = await runBrain(cfg, judge, p, jdir, env, 15 * 60_000);
+    const r = await runAgent(cfg, judge, p, jdir, env, 15 * 60_000);
     raw = r.text;
     fs.writeFileSync(path.join(jdir, `judge-reply-${attempt}.txt`), raw);
     try { judged = parseJudgeScores(raw, items.map(i => i.alias)); }
@@ -298,11 +298,11 @@ async function cmdJudge(cfg: Config, a: Args): Promise<string> {
   fs.writeFileSync(path.join(jdir, 'blind-key.json'), JSON.stringify(key, null, 2));   // written only after scoring
   const rows = unblind(judged, key, items);
   const summary = summarize(rows);
-  const brains = cfg.orchestration.brains || {};
+  const agents = cfg.orchestration.agents || {};
   const report = renderReport({
     runId: sel.runId, family: sel.family, createdAt: new Date().toISOString(),
     variantA: { path: mA.variantPath, sha256: mA.variantSha256 }, variantB: { path: mB.variantPath, sha256: mB.variantSha256 },
-    executor: mA.executor, judge, executorFamily: brainFamily(brains[mA.executor], mA.executor), judgeFamily: brainFamily(brains[judge], judge),
+    executor: mA.executor, judge, executorFamily: agentFamily(agents[mA.executor], mA.executor), judgeFamily: agentFamily(agents[judge], judge),
     rows, summary,
     replayStatus: sel.tasks.map(t => ({ taskId: t.id, A: mA.results.find(r => r.taskId === t.id)?.status || '?', B: mB.results.find(r => r.taskId === t.id)?.status || '?' })),
     checks: [mA.check, mB.check],
@@ -340,7 +340,7 @@ async function cmdStep(cfg: Config): Promise<string> {
   const ctx = JSON.parse(process.env.COWORK_TASK_CONTEXT || '{}');
   const desc = process.env.COWORK_TASK_DESCRIPTION || '';
   const out = process.env.COWORK_ARTIFACTS_DIR;
-  if (!out) throw new Error('step mode needs COWORK_ARTIFACTS_DIR (run me through the exec:script brain)');
+  if (!out) throw new Error('step mode needs COWORK_ARTIFACTS_DIR (run me through the exec:script agent)');
   const m = desc.match(/^EVAL_ARGS:\s*(\{.*\})\s*$/m);
   if (!m) throw new Error('task description has no "EVAL_ARGS: {…}" line');
   const args: Args = JSON.parse(m[1]);

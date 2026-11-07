@@ -48,73 +48,73 @@ export interface RoleConfig {
    *  OpenAI-compatible endpoint wired in $DSH_HOME/settings.yaml. */
   exec: 'claude' | 'hermes' | 'agy' | 'script' | 'codex' | 'ollama' | 'dsh';
   model: string;
-  /** claude only: thinking effort passed as `--effort` (low|medium|high|xhigh|max). */
-  effort?: string;
+  /** Thinking level for runs (low|medium|high|xhigh|max, see core/thinking.ts). */
+  thinking?: import('./core/thinking.js').ThinkingLevel;
   /** argv for exec:script roles (the command + args to run). */
   command?: string[];
-  /** Delegate execution to a named brain (see BrainConfig) instead of the
+  /** Delegate execution to a named agent (see AgentConfig) instead of the
    *  inline exec/model above. */
-  brain?: string;
+  agent?: string;
   /** Role to hand the task to after a failed attempt (see Dispatcher handover). */
   fallback?: string;
 }
 
 /**
- * A "brain" is a concrete execution identity — a specific model on a specific
+ * An "agent" is a concrete execution identity — a specific model on a specific
  * platform at a specific location. Aliased (e.g. `local-ha-qwen35b`,
  * `remote-aicodegen-cc-fable`) so the orchestrator can target one directly via
- * a task's `context.brain`. LOCAL brains are spawned by the dispatcher; REMOTE
- * brains are left in the inbox for that remote MCP client to claim itself.
+ * a task's `context.agent`. LOCAL agents are spawned by the dispatcher; REMOTE
+ * agents are left in the inbox for that remote MCP client to claim itself.
  */
-export interface BrainConfig {
+export interface AgentConfig {
   /** Human description shown to the orchestrator so it can choose. */
   description: string;
   location: 'local' | 'remote';
-  /** local brains: how to run them. */
+  /** local agents: how to run them. */
   exec?: 'claude' | 'hermes' | 'agy' | 'script' | 'codex' | 'ollama' | 'dsh';
   model?: string;
-  /** claude only: thinking effort passed as `--effort` (low|medium|high|xhigh|max). */
-  effort?: string;
+  /** Thinking level for runs (low|medium|high|xhigh|max, see core/thinking.ts). */
+  thinking?: import('./core/thinking.js').ThinkingLevel;
   command?: string[];
-  /** remote brains: which machine/client (informational + claim-routing hint). */
+  /** remote agents: which machine/client (informational + claim-routing hint). */
   host?: string;
-  /** How many tasks this ONE instance may run CONCURRENTLY. A brain backed by a
-   *  shared inference server (the local hermes/vLLM brains) or a stateless CLI can
+  /** How many tasks this ONE instance may run CONCURRENTLY. An agent backed by a
+   *  shared inference server (the local hermes/vLLM agents) or a stateless CLI can
    *  serve several requests at once, so it need not serialise one-task-at-a-time.
-   *  The dispatcher never launches more than this many local runs on the brain
+   *  The dispatcher never launches more than this many local runs on the agent
    *  simultaneously, and — when the preferred chain rung is saturated — spreads the
    *  overflow to the next local rung with spare capacity (load balancing). Defaults
-   *  to orchestration.defaultBrainConcurrency (or 1). Ignored for remote brains
+   *  to orchestration.defaultAgentConcurrency (or 1). Ignored for remote agents
    *  (their own client governs concurrency). */
   maxConcurrent?: number;
-  /** Brain alias to hand off to after a failed attempt. */
+  /** Agent alias to hand off to after a failed attempt. */
   fallback?: string;
   /** True when auto-registered by a connecting MCP client (vs configured by
    *  hand). Persisted, and only removed via explicit deregister or the UI —
    *  never on heartbeat timeout. */
   dynamic?: boolean;
-  /** Agent id of the client that registered this brain (for explicit deregister). */
+  /** Agent id of the client that registered this agent (for explicit deregister). */
   registeredBy?: string;
   /** WF-3: machine-detected environment facts, so the router can know what this
-   *  brain's host actually has and stop landing tasks where they cannot run.
+   *  agent's host actually has and stop landing tasks where they cannot run.
    *  Auto-detected by the client at registration (names only — never secret
-   *  values). A brain with no `env` is treated permissively (legacy behavior)
+   *  values). An agent with no `env` is treated permissively (legacy behavior)
    *  except against `path:`/`secret:` task requirements, which fail closed. */
-  env?: BrainEnv;
-  /** When true the brain is excluded from dispatch, chain resolution, and the
-   *  brain picker. It stays in the registry (config persisted) so it can be
+  env?: AgentEnv;
+  /** When true the agent is excluded from dispatch, chain resolution, and the
+   *  agent picker. It stays in the registry (config persisted) so it can be
    *  re-enabled without re-configuration. Default false (enabled). */
   disabled?: boolean;
   /** The id the owning client declared, when it differs from this (canonical)
    *  registry id because the client still uses a retired alias. The MCP task
-   *  views translate context.brain back to it so that client can still find and
+   *  views translate context.agent back to it so that client can still find and
    *  claim its tasks. Cleared as soon as the client re-declares the canonical id. */
   clientId?: string;
 }
 
-/** Environment capability manifest for a brain (WF-3 §B-I). All fields are
+/** Environment capability manifest for an agent (WF-3 §B-I). All fields are
  *  detected facts, not values: `secrets` holds credential NAMES only. */
-export interface BrainEnv {
+export interface AgentEnv {
   /** Absolute paths present on the host (matched by prefix against `path:` requires). */
   paths?: string[];
   /** CLI tools available (`command -v` hits): git, gh, ffmpeg, python3, … */
@@ -128,11 +128,11 @@ export interface BrainEnv {
 }
 
 /**
- * One rate-limit window of a metered brain (e.g. Claude's 5-hour session or
+ * One rate-limit window of a metered agent (e.g. Claude's 5-hour session or
  * 7-day cap, Codex's primary/secondary windows). Percent-used plus when it
  * resets — exactly what the Connections cards render.
  */
-export interface BrainUsageWindow {
+export interface AgentUsageWindow {
   /** Short human label: '5h', '7d', '7d-opus', … */
   label: string;
   /** Percent of the window consumed, 0–100. */
@@ -175,15 +175,15 @@ export interface BrainUsageWindow {
 }
 
 /**
- * A point-in-time usage snapshot for one brain. Only brains whose exec has a
+ * A point-in-time usage snapshot for one agent. Only agents whose exec has a
  * queryable rate limit (claude, codex, …) ever produce one — hermes/ollama/
- * script brains have no external quota, report nothing, and stay hidden in the
- * UI. Local brains are probed by the server itself; remote brains self-report
+ * script agents have no external quota, report nothing, and stay hidden in the
+ * UI. Local agents are probed by the server itself; remote agents self-report
  * via the `usage` field of their heartbeat.
  */
-export interface BrainUsage {
+export interface AgentUsage {
   exec: string;
-  windows: BrainUsageWindow[];
+  windows: AgentUsageWindow[];
   /** ISO timestamp of the measurement (staleness marker in the UI). */
   at: string;
 }
@@ -192,7 +192,7 @@ export interface BrainUsage {
  * The RESULT VERIFIER — inspects each finished attempt so a soft failure (a
  * rate-limit / quota / overloaded notice, an auth error, or an empty answer) that
  * still exited 0 is NOT mistaken for a completed task. A bad verdict makes the
- * dispatcher hand the task to the next brain in the fallback chain.
+ * dispatcher hand the task to the next agent in the fallback chain.
  */
 export interface VerifierConfig {
   /** Master switch. Default on (omit or set true). Set false to trust exit codes only. */
@@ -230,10 +230,10 @@ export interface VerifierConfig {
    *  background job never finishes). Default 30. */
   maxBackgroundDeferrals?: number;
   /** Deterministic artifact quality gate (core/artifact-lint.ts, ADR-013) run on the
-   *  files a LOCAL brain wrote to its artifacts dir during the attempt.
+   *  files a LOCAL agent wrote to its artifacts dir during the attempt.
    *  'enforce' (default): CRITICAL defects (empty deliverable, invalid JSON, lorem
    *  ipsum / unresolved {{template}} tags outside code) reject the attempt and hand
-   *  it to the next brain; warnings are recorded on the task. 'warn': record only.
+   *  it to the next agent; warnings are recorded on the task. 'warn': record only.
    *  'off': skip. */
   artifactLint?: 'enforce' | 'warn' | 'off';
   /** Optional LLM verifier agent stacked on top of the deterministic check. */
@@ -276,7 +276,7 @@ export interface SpecVerifierConfig {
   enabled?: boolean;
   /** "shadow" stores context.specVerdict + appends lessons.jsonl kind:"quality-shadow"
    *  without rejecting; "enforce" rejects CHANGES_REQUESTED and hands over to the next
-   *  brain with failing criteria appended to the brief. Default "shadow". */
+   *  agent with failing criteria appended to the brief. Default "shadow". */
   mode?: 'shadow' | 'enforce';
   /** ISO-8601 timestamp when the shadow review task evaluates and may enable enforce. */
   enforceAfter?: string;
@@ -287,7 +287,7 @@ export interface SpecVerifierConfig {
   minDecisiveVerdicts?: number;
   /** Wall-clock budget for one judge run (ms). Default 300000 (5 min). */
   timeoutMs?: number;
-  /** Judge brain fallback chains keyed by executor model family. */
+  /** Judge agent fallback chains keyed by executor model family. */
   judges?: SpecVerifierJudgesConfig;
 }
 
@@ -304,47 +304,49 @@ export interface ClassifierConfig {
 }
 
 /**
- * An agent is a named worker with a capability + an ORDERED list of brains.
- * brains[0] is tried first; on failure the dispatcher hands the task to
- * brains[1], then brains[2], … (the list is the fallback chain). Editable live
+ * An agent is a named worker with a capability + an ORDERED list of agents.
+ * agents[0] is tried first; on failure the dispatcher hands the task to
+ * agents[1], then agents[2], … (the list is the fallback chain). Editable live
  * from the dashboard's Agents view.
  */
-export interface AgentConfig {
+export interface RoleChainConfig {
   description: string;
-  brains: string[];
+  agents: string[];
 }
 
 export interface OrchestrationConfig {
   enabled: boolean;
-  /** Global ceiling on locally-spawned concurrent runs across ALL brains. The
-   *  per-brain {@link BrainConfig.maxConcurrent} caps are the finer governor; this
+  /** Global ceiling on locally-spawned concurrent runs across ALL agents. The
+   *  per-agent {@link AgentConfig.maxConcurrent} caps are the finer governor; this
    *  is the total the host machine will run at once. */
   maxConcurrent: number;
-  /** Fallback per-brain concurrency for any brain without its own maxConcurrent.
+  /** Thinking level for a run when neither the task nor its agent sets one (default "medium"). */
+  defaultThinking?: import('./core/thinking.js').ThinkingLevel;
+  /** Fallback per-agent concurrency for any agent without its own maxConcurrent.
    *  Default 1 (one task at a time), preserving the historical behaviour. */
-  defaultBrainConcurrency?: number;
+  defaultAgentConcurrency?: number;
   pollIntervalMs: number;
   taskTimeoutMs: number;
-  /** Grace between SIGTERM and SIGKILL when a brain's process tree is killed
+  /** Grace between SIGTERM and SIGKILL when an agent's process tree is killed
    *  (task deleted / timed out). Default 5000. */
   killGraceMs?: number;
   defaultRole: string;
-  /** The global default brain fallback chain (ordered brain ids). Used by any
+  /** The global default agent fallback chain (ordered agent ids). Used by any
    *  roster-agent task whose division has no override. Drag-sortable in the UI. */
   defaultChain?: string[];
-  /** Per-division overrides of the default chain (division id -> brain ids). */
+  /** Per-division overrides of the default chain (division id -> agent ids). */
   divisionChains?: Record<string, string[]>;
-  /** Per-roster-agent overrides of the chain (agent slug -> brain ids). Highest
-   *  precedence for a roster agent: an agent with its own chain here ignores its
+  /** Per-roster-agent overrides of the chain (persona slug -> agent ids). Highest
+   *  precedence for a persona: an agent with its own chain here ignores its
    *  division override and the global default. Editable live from the Agents view. */
-  agentChains?: Record<string, string[]>;
-  /** Extra retired-id → canonical-id brain aliases, merged over the built-in
-   *  BRAIN_ID_ALIASES (config.ts). Lets a renamed brain keep resolving for tasks
+  personaChains?: Record<string, string[]>;
+  /** Extra retired-id → canonical-id agent aliases, merged over the built-in
+   *  AGENT_ID_ALIASES (config.ts). Lets a renamed agent keep resolving for tasks
    *  and clients that still use the old id. */
-  brainAliases?: Record<string, string>;
+  agentAliases?: Record<string, string>;
   /** Special (non-roster) executor agents: orchestrator (router/decomposer),
-   *  video (LTX pipeline), generalist (fallback). Each has its own brain chain. */
-  agents: Record<string, AgentConfig>;
+   *  video (LTX pipeline), generalist (fallback). Each has its own agent chain. */
+  roleChains: Record<string, RoleChainConfig>;
   /** How a roster persona is injected into LOCAL runs. 'brief' (default) inlines
    *  identity/mission/rules/style/metrics and points to the .md for the rest
    *  (templates, code samples, workflow), saving ~3k tokens per run; 'full' inlines
@@ -361,19 +363,19 @@ export interface OrchestrationConfig {
    *  title + description. Defaults: cowork + firecrawl always; twstock,
    *  notebooklm-mcp, rea on demand. */
   claudeMcp?: { always?: string[]; onDemand?: Record<string, string> };
-  /** Grace period before a task on a REMOTE brain in a chain auto-advances to
-   *  the next brain if no client has claimed it (ms; 0 disables). */
+  /** Grace period before a task on a REMOTE agent in a chain auto-advances to
+   *  the next agent if no client has claimed it (ms; 0 disables). */
   remoteGraceMs?: number;
   /** Legacy role map (pre-agents). Read only if an agent of the same name is
    *  absent; kept so old configs keep working. */
   roles?: Record<string, RoleConfig>;
   /** Named execution identities (model×platform×location) the orchestrator can
-   *  target via a task's context.brain. */
-  brains?: Record<string, BrainConfig>;
+   *  target via a task's context.agent. */
+  agents?: Record<string, AgentConfig>;
   /** LLM classifier that assigns roles to roleless tasks. */
   classifier?: ClassifierConfig;
   /** Result verifier — rejects soft failures (rate-limit/empty/refusal) that
-   *  exited 0, so they trigger a fallback-brain handover instead of "done". */
+   *  exited 0, so they trigger a fallback-agent handover instead of "done". */
   verifier?: VerifierConfig;
   /** Reclaim in-progress tasks whose claim has gone dead after this many ms
    *  (0 disables). A claim is dead once older than this AND the claimer has
@@ -399,16 +401,16 @@ export interface OrchestrationConfig {
    *  only opts a task OUT). Set `enabled: false` to restore the old opt-in. */
   autoRerunRateLimited?: AutoRerunRateLimitedConfig;
   /** Recurring-task flood guard: stops schedulers from piling duplicate runs
-   *  into the queue when brains can't keep up. Both guards default ON. */
+   *  into the queue when agents can't keep up. Both guards default ON. */
   scheduler?: SchedulerConfig;
-  /** Role → brain tiers (P1-4): mechanical / standard / judgment brain lists.
-   *  A task with context.tier (and no pinned brain / agentChains override) runs
+  /** Role → agent tiers (P1-4): mechanical / standard / judgment agent lists.
+   *  A task with context.tier (and no pinned agent / personaChains override) runs
    *  on the tier list followed by its normal chain. `review` is resolved at
    *  runtime to a different model family than the executor (core/tiers.ts). */
   tiers?: Record<string, string[]>;
-  /** Brief sharpener at intake (PS-1): pre-pass on a cheap brain to generate acceptance criteria. */
+  /** Brief sharpener at intake (PS-1): pre-pass on a cheap agent to generate acceptance criteria. */
   sharpener?: SharpenerConfig;
-  /** PS-7: at goal phase close, a different-family brain reviews the phase's
+  /** PS-7: at goal phase close, a different-family agent reviews the phase's
    *  decisions.tsv and writes an Attention section into the phase report.
    *  Default ON; `false` turns the review task off (the trail is always kept). */
   goalAttention?: boolean;
@@ -472,8 +474,8 @@ export interface SharpenerConfig {
   enabled?: boolean;
   /** 'shadow' | 'enforce'. Default 'shadow'. Sharpened criteria start in shadow. */
   mode?: 'shadow' | 'enforce';
-  /** Cheap brain to run sharpening on (default: first enabled mechanical tier brain). */
-  brain?: string;
+  /** Cheap agent to run sharpening on (default: first enabled mechanical tier agent). */
+  agent?: string;
   /** Timeout in ms. Default 60000. */
   timeoutMs?: number;
 }
@@ -517,9 +519,9 @@ export interface AutoAnswerConfig {
   /** Timeout (ms) for the orchestrator's answering turn. Defaults to
    *  classifier.timeoutMs, else 300000. */
   timeoutMs?: number;
-  /** Brain chain to answer with (ordered brain ids). Defaults to the
+  /** Agent chain to answer with (ordered agent ids). Defaults to the
    *  orchestrator agent's own chain. */
-  brains?: string[];
+  agents?: string[];
 }
 
 export interface Config {
@@ -534,7 +536,7 @@ export interface Config {
     allowUnauthenticated?: boolean;
     /** Client denylist enforced regardless of the API key (core/client-guard.ts):
      *  source IPs, and case-insensitive name substrings matched against the
-     *  caller's declared identity (User-Agent, MCP clientInfo, agent/brain ids). */
+     *  caller's declared identity (User-Agent, MCP clientInfo, persona/agent ids). */
     blockedClients?: { ips?: string[]; names?: string[] };
     corsOrigin: string;
     /** Optional TLS. When both files exist the server binds https:// instead of
@@ -549,7 +551,7 @@ export interface Config {
     inbox: string;
     /** Per-task output files, downloadable from the Inbox. */
     artifacts: string;
-    /** Files a person attaches to a task for the brain to read. */
+    /** Files a person attaches to a task for the agent to read. */
     inputs: string;
     status: string;
     decisions: string;
@@ -564,12 +566,12 @@ export interface Config {
    *  Portal stays a read-only launcher. Mutations additionally require
    *  server.apiKey to be set. */
   serviceControl?: { enabled?: boolean };
-  /** Shared Obsidian Vault — a knowledge base every brain can query. Local
-   *  brains (same host as the server) can read `vaultPath` off disk directly;
-   *  remote brains reach it through the /api/obsidian endpoints and the
+  /** Shared Obsidian Vault — a knowledge base every agent can query. Local
+   *  agents (same host as the server) can read `vaultPath` off disk directly;
+   *  remote agents reach it through the /api/obsidian endpoints and the
    *  obsidian_* MCP tools, which the server serves from this same path. */
   obsidian?: ObsidianConfig;
-  /** Video Studio page (/video-studio.html) — films rendered by a Claude brain
+  /** Video Studio page (/video-studio.html) — films rendered by a Claude agent
    *  with the lemo-opuscar library. All fields optional; see core/video-studio.ts. */
   videoStudio?: VideoStudioConfig;
   /** Shotcraft page (/shotcraft.html) — shortcut for the video-shotcraft agent
@@ -603,17 +605,17 @@ export interface IntegrationsConfig {
   auditAllow?: string[];
   /** Refuse clones bigger than this (default 3072 MB / 3 GB). */
   maxRepoMB?: number;
-  /** Brain pre-selected for "wrap with an agent" tasks (must be a LOCAL brain — Rule 6). */
-  wrapBrain?: string;
+  /** Agent pre-selected for "wrap with an agent" tasks (must be a LOCAL agent — Rule 6). */
+  wrapAgent?: string;
 }
 
 export interface ShotcraftConfig {
   /** video-shotcraft skill clone (default ~/.agents/skills/video-shotcraft). */
   skillDir?: string;
-  /** Brain pre-selected on the form (default local-cc-opus-5-5). */
-  defaultBrain?: string;
-  /** Brains offered on the form; anything else posted falls back to defaultBrain. */
-  brains?: string[];
+  /** Agent pre-selected on the form (default local-cc-opus-5-5). */
+  defaultAgent?: string;
+  /** Agents offered on the form; anything else posted falls back to defaultAgent. */
+  agents?: string[];
 }
 
 export interface VideoStudioConfig {
@@ -621,11 +623,11 @@ export interface VideoStudioConfig {
   libDir?: string;
   /** The user's own styles (default ~/lemo-my-styles). */
   myStylesDir?: string;
-  /** Brain pre-selected on the brief form (default local-cc-sonnet-5-5). */
-  defaultBrain?: string;
-  /** Brains offered on the form; anything else posted falls back to defaultBrain. */
-  brains?: string[];
-  /** RENDER_SLOTS the brief tells the brain to export (machine-wide full renders). */
+  /** Agent pre-selected on the brief form (default local-cc-sonnet-5-5). */
+  defaultAgent?: string;
+  /** Agents offered on the form; anything else posted falls back to defaultAgent. */
+  agents?: string[];
+  /** RENDER_SLOTS the brief tells the agent to export (machine-wide full renders). */
   renderSlots?: number;
 }
 
@@ -637,7 +639,7 @@ export interface ObsidianConfig {
   enabled: boolean;
 }
 
-export interface AgentCard {
+export interface PersonaCard {
   slug: string;
   name: string;
   description: string;
@@ -651,10 +653,10 @@ export interface AgentCard {
   platforms?: string[];
 }
 
-export interface ActiveAgent {
+export interface ActiveWorker {
   id: string;
   platform: string;
-  agentName: string;
+  workerName: string;
   sessionId?: string;
   capabilities?: string[];
   currentTask?: string;
@@ -704,7 +706,7 @@ export interface TaskInteraction {
   submittedBy?: string;
 }
 
-/** Isolated git worktree a code task's brain ran in (see core/worktree.ts). */
+/** Isolated git worktree a code task's agent ran in (see core/worktree.ts). */
 export interface TaskWorktree {
   path: string;
   branch: string;
@@ -761,7 +763,7 @@ export interface Task {
   priority: 'low' | 'normal' | 'high' | 'urgent';
   /** `wait-input` = a task holding an unanswered human-in-the-loop interaction
    *  packet. It is deliberately NOT `pending`, so the dispatcher never schedules,
-   *  routes, or hands it off to a fallback brain. It flips to `pending` (entering
+   *  routes, or hands it off to a fallback agent. It flips to `pending` (entering
    *  normal scheduling) only once a person submits their answers.
    *  `scheduled` = a task whose `scheduledAt` launch time is still in the future.
    *  Like `wait-input` it is held OUT of the pending pool (never claimed, routed,
@@ -808,18 +810,18 @@ export interface Task {
   worktree?: TaskWorktree;
   /**
    * True when the task FINISHED by exhausting its whole fallback chain — every
-   * brain failed verification (result is a "FAILED after N attempt(s) (chain
+   * agent failed verification (result is a "FAILED after N attempt(s) (chain
    * exhausted)…" summary). Set centrally by {@link Store.completeTask}. The UI
    * groups these into a red "failed" category and offers a confirm-gated re-run
    * (POST /api/inbox/:id/rerun) instead of silently listing them as "done".
    * Input files a person attached to the task live under `inputs/<taskId>/` and
-   * are mirrored onto `context.inputFiles` (filenames) so the brain can read them.
+   * are mirrored onto `context.inputFiles` (filenames) so the agent can read them.
    */
   failed?: boolean;
 }
 
 export interface DashboardData {
-  activeAgents: number;
+  activeWorkers: number;
   inboxSummary: {
     pending: number;
     /** Tasks parked on `scheduled` — waiting for their launch time. */
@@ -837,13 +839,13 @@ export interface DashboardData {
 }
 
 export interface CoworkEventPayloads {
-  agentRegistered: { agent: ActiveAgent };
+  workerRegistered: { worker: ActiveWorker };
   taskCreated: { task: Task };
-  taskClaimed: { task: Task; agentId: string };
+  taskClaimed: { task: Task; workerId: string };
   taskCompleted: { task: Task };
   goalUpdated: { goalId: string };
-  heartbeat: { agentId: string; status: string; currentTask?: string };
-  brainExecuted: { brainId: string; exec: string; taskId: string };
+  heartbeat: { workerId: string; status: string; currentTask?: string };
+  agentExecuted: { agentId: string; exec: string; taskId: string };
   taskDeleted: { taskId: string; status?: string };
 }
 
@@ -861,7 +863,7 @@ export interface CoworkEvent<T extends CoworkEventType> {
 // success criterion, generating and auditing its own work until the criterion
 // flips (→ achieved) or it hits an obstacle it cannot clear on its own
 // (→ blocked, RECOVERABLE — never a terminal "give up"). Unlike a workflow run —
-// which ends — a goal PERSISTS. It composes the existing task/brain/dispatcher
+// which ends — a goal PERSISTS. It composes the existing task/agent/dispatcher
 // primitives rather than adding a second execution engine. See core/goals.ts and
 // the design in goals-architecture.md (ADR-001) / goals-redesign.md (ADR-007).
 
@@ -969,11 +971,11 @@ export type GoalBlockCode = 'rate_limit' | 'achiever_no_progress' | 'budget_exha
 /** A check the server runs itself before spending an LLM turn on a blocked goal.
  *  Closed set on purpose: this text comes from an LLM, so no free-form commands. */
 export interface GoalUnblockCheck {
-  type: 'brain-available' | 'file-exists' | 'http-200' | 'after-time';
+  type: 'agent-available' | 'file-exists' | 'http-200' | 'after-time';
   value: string;
 }
 
-/** Normalised token usage of one brain run. */
+/** Normalised token usage of one agent run. */
 export interface RunUsage {
   input: number;
   cacheRead: number;
@@ -1003,10 +1005,10 @@ export interface GoalRecord {
    *  wants a goal gone DELETEs it. */
   status: 'draft' | 'active' | 'paused' | 'achieved' | 'blocked';
   phases: GoalPhase[];
-  /** Ordered brain-id chain the Achiever reasons on (execution role). */
-  achieverBrainChain?: string[];
-  /** Ordered brain-id chain the Judger runs on (audit role). */
-  judgerBrainChain?: string[];
+  /** Ordered agent-id chain the Achiever reasons on (execution role). */
+  achieverAgentChain?: string[];
+  /** Ordered agent-id chain the Judger runs on (audit role). */
+  judgerAgentChain?: string[];
   /** Coalesced tail of the audit trail (at most 20 rows). The complete, append-only
    *  record is goals/<id>/history.jsonl once `historyInJsonl` is set. */
   history: GoalDecision[];
@@ -1023,7 +1025,7 @@ export interface GoalRecord {
   lastBlock?: { reason: string; unblockCriteria?: string; at: string };
   /** Why the last Achiever move was rejected, shown in the next prompt. */
   lastRejected?: { reason: string; at: string };
-  /** Every Achiever brain is rate limited: no turn before this time. No failure is
+  /** Every Achiever agent is rate limited: no turn before this time. No failure is
    *  counted and the goal stays active. */
   achieverRetryAt?: string;
   /** Honest reason the goal reached `achieved`. */
@@ -1084,8 +1086,8 @@ export interface AchieverDecision {
    *  Achiever takes no turns and burns no step budget until the checkpoint fires.
    *  That is what lets a goal wait out real-world time (a month of revenue, a
    *  cohort of traffic) instead of spinning evaluations until it blocks. */
-  tasks?: { title: string; description?: string; brain?: string; scheduledAt?: string;
-    /** Brain class; a tiered task is not pinned to the Achiever's brain. */
+  tasks?: { title: string; description?: string; agent?: string; scheduledAt?: string;
+    /** Agent class; a tiered task is not pinned to the Achiever's agent. */
     tier?: string;
     /** With both present the task skips the intake sharpener. */
     acceptance?: string[];

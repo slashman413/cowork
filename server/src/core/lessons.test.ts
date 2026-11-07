@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, existsSync, chmodSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { extractRequires, deriveBrainFamily, titleSlug, buildLesson, appendLesson } from './lessons.js';
+import { extractRequires, deriveAgentFamily, titleSlug, buildLesson, appendLesson } from './lessons.js';
 
 /**
  * WF-1 lesson ledger. These pin the deterministic capture layer: the requires
@@ -11,11 +11,11 @@ import { extractRequires, deriveBrainFamily, titleSlug, buildLesson, appendLesso
  * (Test IDs map to the spec's WF-1 test table.)
  */
 
-test('deriveBrainFamily strips the trailing model segment (WF-1 schema)', () => {
-  assert.equal(deriveBrainFamily('remote-ai-code-gen-cc-fable'), 'remote-ai-code-gen-cc');
-  assert.equal(deriveBrainFamily('remote-ai-code-gen-cc-opus'), 'remote-ai-code-gen-cc');
-  assert.equal(deriveBrainFamily('solo'), 'solo');
-  assert.equal(deriveBrainFamily(''), '');
+test('deriveAgentFamily strips the trailing model segment (WF-1 schema)', () => {
+  assert.equal(deriveAgentFamily('remote-ai-code-gen-cc-fable'), 'remote-ai-code-gen-cc');
+  assert.equal(deriveAgentFamily('remote-ai-code-gen-cc-opus'), 'remote-ai-code-gen-cc');
+  assert.equal(deriveAgentFamily('solo'), 'solo');
+  assert.equal(deriveAgentFamily(''), '');
 });
 
 test('titleSlug kebabs the first 6 words', () => {
@@ -50,12 +50,12 @@ test('extractRequires caps at 10 entries', () => {
 test('buildLesson caps reason to 500 chars and derives fields', () => {
   const l = buildLesson({
     at: '2026-08-04T00:00:00.000Z', kind: 'verify-fail', task: 't1',
-    title: 'Deploy Blog Batch', agent: 'workflow-architect',
-    brain: 'remote-ai-code-gen-cc-opus', attempt: 1,
+    title: 'Deploy Blog Batch', persona: 'workflow-architect',
+    agent: 'remote-ai-code-gen-cc-opus', attempt: 1,
     reason: 'x'.repeat(900), resultText: '/home/wayne: No such file'
   });
   assert.equal(l.reason.length, 500);
-  assert.equal(l.brainFamily, 'remote-ai-code-gen-cc');
+  assert.equal(l.agentFamily, 'remote-ai-code-gen-cc');
   assert.equal(l.titleSlug, 'deploy-blog-batch');
   assert.deepEqual(l.requiresGuess, ['path:/home/wayne']);
 });
@@ -64,8 +64,8 @@ test('1-01/1-05: appendLesson writes one valid JSONL line, newlines escaped', ()
   const dir = mkdtempSync(join(tmpdir(), 'lessons-'));
   try {
     const l = buildLesson({
-      kind: 'wait-input', task: 't2', title: 'Which env?', agent: 'a',
-      brain: 'remote-h-cc-opus', attempt: 0,
+      kind: 'wait-input', task: 't2', title: 'Which env?', persona: 'a',
+      agent: 'remote-h-cc-opus', attempt: 0,
       reason: 'line one\nline two', questions: ['Which host?']
     });
     assert.equal(appendLesson(dir, l), true);
@@ -83,7 +83,7 @@ test('1-04: appendLesson never throws on an unwritable dir (best-effort)', () =>
   const dir = mkdtempSync(join(tmpdir(), 'lessons-ro-'));
   try {
     chmodSync(dir, 0o500);   // read+execute only — append should fail silently
-    const l = buildLesson({ kind: 'verify-fail', task: 't3', title: 't', agent: 'a', brain: 'b', attempt: 1 });
+    const l = buildLesson({ kind: 'verify-fail', task: 't3', title: 't', persona: 'a', agent: 'b', attempt: 1 });
     // Must return false, must NOT throw (dispatch lifecycle is protected).
     let threw = false;
     let ok = true;

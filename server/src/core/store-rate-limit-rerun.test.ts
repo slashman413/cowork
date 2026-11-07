@@ -6,7 +6,7 @@ import path from 'path';
 import { Store } from './store.js';
 import { EventBus } from './events.js';
 import { Dispatcher } from './dispatcher.js';
-import type { Config, BrainUsage } from '../types.js';
+import type { Config, AgentUsage } from '../types.js';
 
 /**
  * Covers the rate-limit auto-re-run plumbing added for the Inbox task-status work:
@@ -30,7 +30,7 @@ function makeStore(orchestration: Record<string, any> = {}): { store: Store; roo
     agencyAgents: path.join(root, 'agency-agents'),
   };
   for (const p of Object.values(paths)) fs.mkdirSync(p, { recursive: true });
-  const config = { paths, platforms: {}, inbox: { maxRetries: 3 }, orchestration: { brains: {}, ...orchestration } } as unknown as Config;
+  const config = { paths, platforms: {}, inbox: { maxRetries: 3 }, orchestration: { agents: {}, ...orchestration } } as unknown as Config;
   return { store: new Store(config, new EventBus()), root, config };
 }
 
@@ -47,14 +47,14 @@ function mkTask(store: Store, title: string, context?: Record<string, any>) {
 test('completeTask flags a rate-limit failure + records the window reset time', async () => {
   const { store } = makeStore();
   const resetsAt = new Date(Date.now() + 90 * 60 * 1000).toISOString();   // 90 min out
-  const usage: BrainUsage = { exec: 'claude', at: new Date().toISOString(), windows: [
+  const usage: AgentUsage = { exec: 'claude', at: new Date().toISOString(), windows: [
     { label: '5h', usedPct: 100, resetsAt },
     { label: '7d', usedPct: 40, resetsAt: new Date(Date.now() + 5 * 864e5).toISOString() },
   ] };
-  store.setBrainUsage('local-cc-opus', usage);
+  store.setAgentUsage('local-cc-opus', usage);
 
-  const t = mkTask(store, 'rate limited', { failedBrains: [{ brain: 'local-cc-opus', reason: 'matched failure pattern "rate limit reached"' }] });
-  await store.completeTask({ taskId: t.id, result: 'FAILED after 3 attempt(s) (chain exhausted). Brains that failed: local-cc-opus (rate limit reached).', internal: true });
+  const t = mkTask(store, 'rate limited', { failedAgents: [{ agent: 'local-cc-opus', reason: 'matched failure pattern "rate limit reached"' }] });
+  await store.completeTask({ taskId: t.id, result: 'FAILED after 3 attempt(s) (chain exhausted). Agents that failed: local-cc-opus (rate limit reached).', internal: true });
 
   const done = store.getTask(t.id)!;
   assert.equal(done.failed, true);
@@ -65,8 +65,8 @@ test('completeTask flags a rate-limit failure + records the window reset time', 
 
 test('a non-rate-limit failure is not flagged rate-limited', async () => {
   const { store } = makeStore();
-  const t = mkTask(store, 'auth failure', { failedBrains: [{ brain: 'b', reason: 'matched failure pattern "invalid api key"' }] });
-  await store.completeTask({ taskId: t.id, result: 'FAILED after 2 attempt(s) (chain exhausted). Brains that failed: b (invalid api key).', internal: true });
+  const t = mkTask(store, 'auth failure', { failedAgents: [{ agent: 'b', reason: 'matched failure pattern "invalid api key"' }] });
+  await store.completeTask({ taskId: t.id, result: 'FAILED after 2 attempt(s) (chain exhausted). Agents that failed: b (invalid api key).', internal: true });
   const done = store.getTask(t.id)!;
   assert.equal(done.failed, true);
   assert.notEqual(done.context?.rateLimited, true, 'auth error is not a rate limit');
@@ -104,8 +104,8 @@ test('readProgressLog tails the per-task progress.log', () => {
   assert.equal(store.readProgressLog(t2.id).log, '');
 });
 
-const RL_RESULT = 'FAILED after 2 attempt(s) (chain exhausted). Brains that failed: cc (You\'ve hit your session limit · resets 2am (Asia/Taipei)).';
-const rlFailed = (brain = 'cc') => ({ failedBrains: [{ brain, reason: "You've hit your session limit · resets 2am (Asia/Taipei)" }] });
+const RL_RESULT = 'FAILED after 2 attempt(s) (chain exhausted). Agents that failed: cc (You\'ve hit your session limit · resets 2am (Asia/Taipei)).';
+const rlFailed = (agent = 'cc') => ({ failedAgents: [{ agent, reason: "You've hit your session limit · resets 2am (Asia/Taipei)" }] });
 
 test('a rate-limited failure is auto-re-run by DEFAULT (no toggle needed)', async () => {
   const { store } = makeStore();
@@ -193,35 +193,35 @@ test('enabled=false: an unset flag is NOT auto re-run', async () => {
   assert.equal(store.getTask(id)!.failed, true);
 });
 
-test('store: setBrainUsage does not overwrite newer snapshot with older one', () => {
+test('store: setAgentUsage does not overwrite newer snapshot with older one', () => {
   const { store } = makeStore();
-  const newer: BrainUsage = { exec: 'agy', at: '2026-10-13T12:00:00.000Z', windows: [{ label: '5h', usedPct: 10 }] };
-  const older: BrainUsage = { exec: 'agy', at: '2026-10-10T12:00:00.000Z', windows: [{ label: '5h', usedPct: 80 }] };
+  const newer: AgentUsage = { exec: 'agy', at: '2026-10-13T12:00:00.000Z', windows: [{ label: '5h', usedPct: 10 }] };
+  const older: AgentUsage = { exec: 'agy', at: '2026-10-10T12:00:00.000Z', windows: [{ label: '5h', usedPct: 80 }] };
 
-  store.setBrainUsage('local-agy', newer);
-  assert.equal(store.getBrainUsage()['local-agy'].at, '2026-10-13T12:00:00.000Z');
+  store.setAgentUsage('local-agy', newer);
+  assert.equal(store.getAgentUsage()['local-agy'].at, '2026-10-13T12:00:00.000Z');
 
   // Attempting to overwrite with older timestamp is ignored
-  store.setBrainUsage('local-agy', older);
-  assert.equal(store.getBrainUsage()['local-agy'].at, '2026-10-13T12:00:00.000Z');
-  assert.equal(store.getBrainUsage()['local-agy'].windows[0].usedPct, 10);
+  store.setAgentUsage('local-agy', older);
+  assert.equal(store.getAgentUsage()['local-agy'].at, '2026-10-13T12:00:00.000Z');
+  assert.equal(store.getAgentUsage()['local-agy'].windows[0].usedPct, 10);
 });
 
-test('store: loadBrainUsage prunes retired local brains from disk snapshot', () => {
+test('store: loadAgentUsage prunes retired local agents from disk snapshot', () => {
   const { store, root, config } = makeStore({
-    brains: {
-      'local-agy-gemini-3.8-flash-high': { location: 'local', exec: 'agy' }
+    agents: {
+      'local-agy-gemini-3.8-flash': { location: 'local', exec: 'agy' }
     }
   });
-  // Write a snapshot containing both an active local brain and a retired local brain
-  const file = path.join(config.paths.status, 'brain-usage.json');
+  // Write a snapshot containing both an active local agent and a retired local agent
+  const file = path.join(config.paths.status, 'agent-usage.json');
   fs.writeFileSync(file, JSON.stringify({
-    'local-agy-gemini-3.8-flash-high': { exec: 'agy', at: '2026-10-13T12:00:00.000Z', windows: [{ label: '5h', usedPct: 10 }] },
-    'local-agy-gemini-3.7-flash-high': { exec: 'agy', at: '2026-10-10T12:00:00.000Z', windows: [{ label: '5h', usedPct: 50 }] }
+    'local-agy-gemini-3.8-flash': { exec: 'agy', at: '2026-10-13T12:00:00.000Z', windows: [{ label: '5h', usedPct: 10 }] },
+    'local-agy-gemini-3.7-flash': { exec: 'agy', at: '2026-10-10T12:00:00.000Z', windows: [{ label: '5h', usedPct: 50 }] }
   }));
 
-  (store as any).loadBrainUsage();
-  const usage = store.getBrainUsage();
-  assert.equal('local-agy-gemini-3.8-flash-high' in usage, true);
-  assert.equal('local-agy-gemini-3.7-flash-high' in usage, false, 'retired local brain must be pruned');
+  (store as any).loadAgentUsage();
+  const usage = store.getAgentUsage();
+  assert.equal('local-agy-gemini-3.8-flash' in usage, true);
+  assert.equal('local-agy-gemini-3.7-flash' in usage, false, 'retired local agent must be pruned');
 });

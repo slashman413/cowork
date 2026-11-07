@@ -4,13 +4,13 @@
 
   Served by the cowork server itself (like obsidian.html) and launched from the
   Portal card. A thin client over:
-    GET  /api/video-studio            library status + allowed brains
+    GET  /api/video-studio            library status + allowed agents
     GET  /api/video-studio/styles     the 59 library styles + the user's own
     GET  /api/video-studio/frames/:s  poster frame per style
     POST /api/video-studio/films      brief → one ordinary cowork task (tag video-studio)
     GET  /api/inbox?tag=video-studio  "My films", refreshed from SSE /api/events
     GET  /api/artifacts/:id/film.mp4?inline=1   the player
-  The film itself is directed + rendered by a Claude brain; see
+  The film itself is directed + rendered by a Claude agent; see
   server/src/core/video-studio.ts for the fixed brief it receives.
 -->
 <html lang="en" data-theme="dark">
@@ -189,7 +189,7 @@
         <div class="row">
           <div><label class="f" for="voice">Narration</label>
             <select id="voice"><option value="none">None (text on screen)</option><option value="en">English (Kokoro)</option><option value="zh">中文 (edge-tts, zh-TW)</option></select></div>
-          <div><label class="f" for="brain">Brain</label><select id="brain"></select></div>
+          <div><label class="f" for="agent">Agent</label><select id="agent"></select></div>
         </div>
         <label class="f" for="voiceHint">Voice hint (optional)</label>
         <input type="text" id="voiceHint" placeholder="e.g. warm female, calm pace">
@@ -297,11 +297,11 @@
         const brief = {
           slug: selected.slug, topic: $('#topic').value.trim(), seconds: +segVal('seconds'), aspect: segVal('aspect'),
           voice: $('#voice').value, voiceHint: $('#voiceHint').value, notes: $('#notes').value,
-          music: $('#music').checked, storyboard: $('#storyboard').checked, brain: $('#brain').value,
+          music: $('#music').checked, storyboard: $('#storyboard').checked, agent: $('#agent').value,
           ...(inputs.length ? { inputs } : {}),
         };
         const task = await api('/video-studio/films', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(brief) });
-        localStorage.setItem(LS.last, JSON.stringify({ brain: brief.brain, voice: brief.voice, aspect: brief.aspect, seconds: brief.seconds }));
+        localStorage.setItem(LS.last, JSON.stringify({ agent: brief.agent, voice: brief.voice, aspect: brief.aspect, seconds: brief.seconds }));
         msg.className = 'msg ok'; msg.textContent = 'Queued ✓';
         $('#files').value = ''; $('#filelist').textContent = '';
         await loadFilms(); showTab('films');
@@ -315,7 +315,7 @@
       $('#topic').value = vs.topic || ''; setSeg('seconds', vs.seconds); setSeg('aspect', vs.aspect);
       $('#voice').value = vs.voice || 'none'; $('#voiceHint').value = vs.voiceHint || ''; $('#notes').value = vs.notes || '';
       $('#music').checked = vs.music !== false; $('#storyboard').checked = !!vs.storyboard;
-      if ([...$('#brain').options].some(o => o.value === vs.brain)) $('#brain').value = vs.brain;
+      if ([...$('#agent').options].some(o => o.value === vs.agent)) $('#agent').value = vs.agent;
       $('#msg').textContent = 'Pre-filled from an earlier film — tweak and submit.'; $('#msg').className = 'msg';
       validate(); $('#topic').focus();
     }
@@ -363,7 +363,7 @@
         return { id: t.id, playing: playing.has(t.id), running, html: `
           <div class="film" id="film-${esc(t.id)}">
             <div class="top"><span class="ttl" title="${esc(t.title)}">${esc(vs.styleName || '')} · ${esc((vs.topic || t.title).slice(0, 80))}</span><span class="st ${cls}">${esc(label)}</span></div>
-            <div class="meta">${esc(vs.seconds || '?')}s · ${esc(vs.aspect || '')} · ${esc(vs.voice === 'none' ? 'no voice' : vs.voice || '')} · ${esc((t.context?.brain || '').replace(/^local-cc-/, ''))} · ${new Date(t.createdAt).toLocaleString()}</div>
+            <div class="meta">${esc(vs.seconds || '?')}s · ${esc(vs.aspect || '')} · ${esc(vs.voice === 'none' ? 'no voice' : vs.voice || '')} · ${esc((t.context?.agent || '').replace(/^local-cc-/, ''))} · ${new Date(t.createdAt).toLocaleString()}</div>
             ${media}
             ${running ? `<pre data-progress="${esc(t.id)}">…</pre>` : ''}
             ${cls === 'failed' && t.result ? `<pre>${esc(t.result.slice(0, 600))}</pre>` : ''}
@@ -393,7 +393,7 @@
         try {
           const p = await api(`/inbox/${encodeURIComponent(pre.dataset.progress)}/progress`);
           const lines = (p.log || '').trim().split('\n').filter(Boolean);
-          pre.textContent = lines.slice(-6).join('\n') || 'Waiting for the brain to start…';
+          pre.textContent = lines.slice(-6).join('\n') || 'Waiting for the agent to start…';
           pre.scrollTop = pre.scrollHeight;
         } catch {}
       }
@@ -428,8 +428,8 @@
       try {
         info = await api('/video-studio');
         const last = JSON.parse(localStorage.getItem(LS.last) || '{}');
-        $('#brain').innerHTML = info.brains.map(b => `<option value="${esc(b)}">${esc(b.replace(/^local-cc-/, ''))}${b === info.defaultBrain ? ' (default)' : ''}</option>`).join('');
-        $('#brain').value = info.brains.includes(last.brain) ? last.brain : info.defaultBrain;
+        $('#agent').innerHTML = info.agents.map(b => `<option value="${esc(b)}">${esc(b.replace(/^local-cc-/, ''))}${b === info.defaultAgent ? ' (default)' : ''}</option>`).join('');
+        $('#agent').value = info.agents.includes(last.agent) ? last.agent : info.defaultAgent;
         if (last.voice) $('#voice').value = last.voice;
         if (last.aspect) setSeg('aspect', last.aspect);
         if (last.seconds) setSeg('seconds', last.seconds);

@@ -19,7 +19,7 @@ import { taskTier } from './tiers.js';
 export type RejectionClass = 'rateLimit' | 'timeout' | 'exitCode' | 'quality' | 'other';
 export type WaitInputClass = 'humanOnly' | 'permissionChoice' | 'other';
 
-/** A rate-limit hit counts as a "repeat" when the same brain hit one this recently. */
+/** A rate-limit hit counts as a "repeat" when the same agent hit one this recently. */
 export const REPEAT_WINDOW_MS = 30 * 60_000;
 
 const RATE_LIMIT_RE = /session limit|weekly limit|usage limit|quota|rate[- ]?limit|too many requests|out of credits|overloaded|high traffic|you('ve| have) (hit|reached) your|\b429\b/i;
@@ -103,7 +103,7 @@ export interface SpecVerdictMetrics {
  * The shadow→enforce gate counts only DECISIVE verdicts (APPROVED +
  * CHANGES_REQUESTED). UNVERIFIABLE says nothing about the judge's accuracy —
  * in the first shadow window 8 of 14 verdicts were UNVERIFIABLE (7 "no judge
- * brain available") and still counted toward the old totalJudged ≥ 10 gate.
+ * agent available") and still counted toward the old totalJudged ≥ 10 gate.
  * The false-reject rate needs a human/agent sample of the CR tasks, so the code
  * only reports whether the volume threshold is met.
  */
@@ -127,7 +127,7 @@ export const DEFAULT_MAX_FALSE_REJECT_RATE = 0.1;
  *  `cause` field existed are classified from their summary / crashed flag. */
 export function unverifiableCause(sv: { cause?: string; crashed?: boolean; summary?: string } | undefined): SpecUnverifiableCause {
   if (sv?.cause === 'no-judge' || sv?.cause === 'judge-crashed' || sv?.cause === 'judge-unverifiable') return sv.cause;
-  if (/no judge brain available/i.test(sv?.summary || '')) return 'no-judge';
+  if (/no judge agent available/i.test(sv?.summary || '')) return 'no-judge';
   if (sv?.crashed) return 'judge-crashed';
   return 'judge-unverifiable';
 }
@@ -158,7 +158,7 @@ export interface QualityMetrics {
 /**
  * Compute the plan §2 table for [from, to]. Lessons are bucketed by `at`;
  * done tasks by completedAt (fallback createdAt); acceptance coverage by
- * createdAt over tasks that were dispatched to a brain (scheduled templates and
+ * createdAt over tasks that were dispatched to an agent (scheduled templates and
  * human-only cards excluded).
  */
 export function computeQualityMetrics(
@@ -176,7 +176,7 @@ export function computeQualityMetrics(
   for (const l of lessons) {
     const t = ms(l.at);
     if (l.kind === 'verify-fail' && t < from && t >= from - REPEAT_WINDOW_MS && classifyRejection(l.reason) === 'rateLimit') {
-      lastRateLimit.set(l.brain, Math.max(lastRateLimit.get(l.brain) ?? 0, t));
+      lastRateLimit.set(l.agent, Math.max(lastRateLimit.get(l.agent) ?? 0, t));
     }
   }
   let hits = 0, repeats = 0, rejections = 0, blocked = 0;
@@ -191,9 +191,9 @@ export function computeQualityMetrics(
       byClass[c]++;
       if (c === 'rateLimit') {
         hits++;
-        const t = ms(l.at), prev = lastRateLimit.get(l.brain);
+        const t = ms(l.at), prev = lastRateLimit.get(l.agent);
         if (prev !== undefined && t - prev < REPEAT_WINDOW_MS) repeats++;
-        lastRateLimit.set(l.brain, t);
+        lastRateLimit.set(l.agent, t);
       }
     } else if (l.kind === 'wait-input') {
       wait.total++;
@@ -237,7 +237,7 @@ export function computeQualityMetrics(
       if (ctx.resultStatus === 'DONE_WITH_CONCERNS' || ctx.qualityFlag === 'concerns') concerns++;
     }
     if (inWin(ms(t.createdAt), from, to)) {
-      if (ctx.dispatched || ctx.ranBrain || ctx.attempts) {
+      if (ctx.dispatched || ctx.ranAgent || ctx.attempts) {
         created++;
         if (Array.isArray(ctx.acceptance) && ctx.acceptance.length) {
           withAcceptance++;
@@ -251,8 +251,8 @@ export function computeQualityMetrics(
         byTier[tier] = (byTier[tier] || 0) + 1;
         if (tier === 'mechanical') {
           const tried = [
-            ...(Array.isArray(ctx.failedBrains) ? ctx.failedBrains.map((f: any) => (typeof f === 'string' ? f : f?.brain) || '') : []),
-            ...(typeof ctx.ranBrain === 'string' ? [ctx.ranBrain] : [])
+            ...(Array.isArray(ctx.failedAgents) ? ctx.failedAgents.map((f: any) => (typeof f === 'string' ? f : f?.agent) || '') : []),
+            ...(typeof ctx.ranAgent === 'string' ? [ctx.ranAgent] : [])
           ].filter(Boolean);
           mechAttempts += tried.length;
           mechOpus += tried.filter((b: string) => /opus/i.test(b)).length;

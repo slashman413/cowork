@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 /**
  * Audio Overview 語音導讀 — the server side of /audio-overview.html.
  *
- * Like Video Studio, the audio is made by an ordinary cowork task: the brain
+ * Like Video Studio, the audio is made by an ordinary cowork task: the agent
  * writes a narration script (script.md) and calls the deterministic renderer
  * deploy/scripts/audio-overview-render.mjs (edge-tts per segment + ffmpeg concat)
  * to produce outputs/audio-overview.mp3. This module validates the page's form,
@@ -38,22 +38,22 @@ export interface AudioBrief {
   style: AoStyle;
   lang: AoLang;
   length: AoLength;
-  brain: string;
+  agent: string;
   source: AoSource;
   notes?: string;
 }
 
 export const DEFAULT_AO = {
-  defaultBrain: 'local-cc-sonnet-5-5',
-  brains: ['local-cc-sonnet-5-5', 'local-cc-opus-5-5'],
+  defaultAgent: 'local-cc-sonnet-5-5',
+  agents: ['local-cc-sonnet-5-5', 'local-cc-opus-5-5'],
 };
 
 const str = (v: unknown) => (typeof v === 'string' ? v : '');
 
 export class AudioOverview {
-  constructor(private cfg: { defaultBrain: string; brains: string[] } = DEFAULT_AO) {}
-  get defaultBrain() { return this.cfg.defaultBrain; }
-  get brains() { return this.cfg.brains; }
+  constructor(private cfg: { defaultAgent: string; agents: string[] } = DEFAULT_AO) {}
+  get defaultAgent() { return this.cfg.defaultAgent; }
+  get agents() { return this.cfg.agents; }
 
   /** Validate + normalise the page's form. Throws with a user-facing message. */
   parseBrief(body: any): AudioBrief {
@@ -76,13 +76,13 @@ export class AudioOverview {
       style: b.style === 'dialogue' ? 'dialogue' : 'narrator',
       lang: b.lang === 'en' ? 'en' : 'zh-TW',
       length: b.length === 'medium' ? 'medium' : 'short',
-      brain: this.cfg.brains.includes(b.brain) ? b.brain : this.cfg.defaultBrain,
+      agent: this.cfg.agents.includes(b.agent) ? b.agent : this.cfg.defaultAgent,
       source,
       notes: str(b.notes).trim().slice(0, 1000) || undefined,
     };
   }
 
-  /** The fixed task the dispatcher hands to the brain. `sourceText` is already resolved. */
+  /** The fixed task the dispatcher hands to the agent. `sourceText` is already resolved. */
   buildTask(brief: AudioBrief, sourceText: string, rawLabel: string) {
     const label = rawLabel.replace(/[\r\n#`<>]+/g, ' ').slice(0, 120);
     const clipped = sourceText.length > SOURCE_MAX_CHARS;
@@ -131,7 +131,7 @@ export class AudioOverview {
       title: `🎧 ${title}`,
       description: lines.join('\n'),
       tags: [AUDIO_OVERVIEW_TAG],
-      context: { brain: brief.brain, audioOverview: { title, style: brief.style, lang: brief.lang, length: brief.length, source: label } },
+      context: { agent: brief.agent, audioOverview: { title, style: brief.style, lang: brief.lang, length: brief.length, source: label } },
     };
   }
 }
@@ -151,7 +151,7 @@ export function readTaskSourceFile(artifactsRoot: string, taskId: string, file: 
   return htmlToText(fs.readFileSync(abs, 'utf-8'), /\.html?$/i.test(abs));
 }
 
-/** Strip tags from HTML so the brain gets prose, not markup. Non-HTML passes through. */
+/** Strip tags from HTML so the agent gets prose, not markup. Non-HTML passes through. */
 export function htmlToText(s: string, isHtml: boolean): string {
   if (!isHtml) return s;
   return s

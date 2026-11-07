@@ -27,7 +27,7 @@ function makeStore(): { store: Store; root: string } {
     agencyAgents: path.join(root, 'agency-agents'),
   };
   for (const p of Object.values(paths)) fs.mkdirSync(p, { recursive: true });
-  const config = { paths, platforms: {}, orchestration: { brains: {} } } as unknown as Config;
+  const config = { paths, platforms: {}, orchestration: { agents: {} } } as unknown as Config;
   return { store: new Store(config, new EventBus()), root };
 }
 
@@ -46,7 +46,7 @@ test('deferForBackground re-arms on `scheduled` instead of `done` and preserves 
   assert.ok(Date.parse(out!.scheduledAt!) > Date.now(), 'scheduled into the future');
   // Held out of the pending pool until due.
   assert.equal(store.listTasks({ status: 'pending' }).length, 0);
-  assert.equal(store.claimTask({ taskId: task.id, agentId: 'w', internal: true }), null);
+  assert.equal(store.claimTask({ taskId: task.id, workerId: 'w', internal: true }), null);
 });
 
 test('repeated deferrals increment the bounded count', () => {

@@ -25,7 +25,7 @@ function makeStore(): { store: Store; root: string } {
     agencyAgents: path.join(root, 'agency-agents'),
   };
   for (const p of Object.values(paths)) fs.mkdirSync(p, { recursive: true });
-  const config = { paths, orchestration: { brains: {} } } as unknown as Config;
+  const config = { paths, orchestration: { agents: {} } } as unknown as Config;
   return { store: new Store(config, new EventBus()), root };
 }
 
@@ -81,9 +81,9 @@ test('claimTask holds a task awaiting human input, then releases it once submitt
 
   assert.equal(task.interaction?.status, 'pending', 'starts awaiting input');
   assert.equal(task.status, 'wait-input', 'parked on wait-input, not pending, so it is never scheduled/reassigned');
-  assert.equal(store.claimTask({ taskId: task.id, agentId: 'w', internal: true }), null,
+  assert.equal(store.claimTask({ taskId: task.id, workerId: 'w', internal: true }), null,
     'dispatcher cannot claim while awaiting input');
-  assert.equal(store.claimTask({ taskId: task.id, agentId: 'remote' }), null,
+  assert.equal(store.claimTask({ taskId: task.id, workerId: 'remote' }), null,
     'a remote client cannot claim while awaiting input either');
   assert.equal(store.getTask(task.id)?.status, 'wait-input', 'task stays on wait-input, not claimed');
 
@@ -92,7 +92,7 @@ test('claimTask holds a task awaiting human input, then releases it once submitt
   assert.equal(answered?.status, 'pending', 'released to pending for scheduling once answers are submitted');
   assert.equal(answered?.context?.humanInput?.['Which env?'], 'staging', 'answer mirrored into humanInput');
 
-  const claimed = store.claimTask({ taskId: task.id, agentId: 'w', internal: true });
+  const claimed = store.claimTask({ taskId: task.id, workerId: 'w', internal: true });
   assert.equal(claimed?.status, 'in-progress', 'now claimable once input is submitted');
 });
 
@@ -103,6 +103,6 @@ test('claimTask is unaffected by an interaction packet with no fields', () => {
     from: { platform: 'p', agent: 'a' },
     interaction: { fields: [] },
   } as any);
-  assert.equal(store.claimTask({ taskId: task.id, agentId: 'w', internal: true })?.status, 'in-progress',
+  assert.equal(store.claimTask({ taskId: task.id, workerId: 'w', internal: true })?.status, 'in-progress',
     'an empty interaction never blocks claiming');
 });

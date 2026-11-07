@@ -1,7 +1,7 @@
 /**
  * Brief sharpener at intake (PS-1, port of pstack `sharpen`, shadow mode).
  *
- * When a task arrives without `context.acceptance`, a pre-pass on a cheap brain
+ * When a task arrives without `context.acceptance`, a pre-pass on a cheap agent
  * (mechanical tier) sharpens it into 2-5 checkable criteria, 1-3 verification
  * checks, one outside check, deliverable shape, and open choices.
  *
@@ -14,7 +14,7 @@
  *
  * Timing:
  *   - in the BACKGROUND at creation (sharpenInBackground — the create call must
- *     not wait up to 60 s on the cheap brain), or just before first dispatch for
+ *     not wait up to 60 s on the cheap agent), or just before first dispatch for
  *     tasks that skipped intake; never both (context.sharpenStartedAt)
  *   - 60 s cap
  *   - on failure or bad JSON: dispatch unsharpened (fail-open) and log
@@ -26,7 +26,7 @@
  */
 
 import { spawn } from 'node:child_process';
-import type { BrainConfig, Config, RoleConfig, Task } from '../types.js';
+import type { AgentConfig, Config, RoleConfig, Task } from '../types.js';
 import { buildLesson, appendLesson } from './lessons.js';
 import { METHOD_PLAYBOOKS, isKnownPlaybook } from './methods.js';
 
@@ -60,15 +60,15 @@ export function isGateOrReviewOrVerifierOrEvalTask(task: Task): boolean {
   if (ctx.tier === 'review' || ctx.reviewOf || ctx.isReview) return true;
   const fromAgent = task.from?.agent?.toLowerCase() || '';
   if (fromAgent === 'reviewer' || fromAgent === 'engineering-code-reviewer' || fromAgent === 'code-reviewer') return true;
-  const targetAgent = (ctx.agent || '').toLowerCase();
-  if (targetAgent === 'reviewer' || targetAgent === 'engineering-code-reviewer' || targetAgent === 'code-reviewer') return true;
+  const targetPersona = (ctx.persona || '').toLowerCase();
+  if (targetPersona === 'reviewer' || targetPersona === 'engineering-code-reviewer' || targetPersona === 'code-reviewer') return true;
   if (typeof task.title === 'string' && /^review\b/i.test(task.title)) return true;
 
   // Verifier task
   if (ctx.verifier || fromAgent === 'verifier' || fromAgent === 'spec-verifier') return true;
 
   // Eval task
-  if (ctx.brain === 'local-script-eval-harness') return true;
+  if (ctx.agent === 'local-script-eval-harness') return true;
   if (ctx.workflowId === 'eval-prompt-change') return true;
   if (fromAgent === 'eval-harness') return true;
   if (typeof ctx.stepKey === 'string' && ctx.stepKey.toLowerCase().startsWith('eval')) return true;
@@ -178,57 +178,57 @@ export function parseSharpenOutput(rawText: string): SharpenResult | null {
   };
 }
 
-/** Pick the cheap brain to run the sharpener on (default: mechanical tier). */
-export function selectSharpenerBrain(cfg: Config): { brainId: string; brain: BrainConfig } | null {
+/** Pick the cheap agent to run the sharpener on (default: mechanical tier). */
+export function selectSharpenerAgent(cfg: Config): { agentId: string; agent: AgentConfig } | null {
   const orch = cfg.orchestration || {};
-  const brains = orch.brains || {};
+  const agents = orch.agents || {};
 
   // Configured override
-  const configured = orch.sharpener?.brain;
-  if (configured && brains[configured] && !brains[configured].disabled && brains[configured].location === 'local') {
-    return { brainId: configured, brain: brains[configured] };
+  const configured = orch.sharpener?.agent;
+  if (configured && agents[configured] && !agents[configured].disabled && agents[configured].location === 'local') {
+    return { agentId: configured, agent: agents[configured] };
   }
 
-  // Mechanical tier from config (e.g. local-dsh-qwen3-8-27b, local-agy-gemini-3.8-flash-high)
+  // Mechanical tier from config (e.g. local-dsh-qwen3-8-27b, local-agy-gemini-3.8-flash)
   const mechanical = orch.tiers?.mechanical || [];
   for (const id of mechanical) {
-    const b = brains[id];
+    const b = agents[id];
     if (b && !b.disabled && b.location === 'local' && b.exec) {
-      return { brainId: id, brain: b };
+      return { agentId: id, agent: b };
     }
   }
 
-  // Fallback to local-agy-gemini-3.8-flash-high or any enabled local brain
-  const fallback = 'local-agy-gemini-3.8-flash-high';
-  if (brains[fallback] && !brains[fallback].disabled && brains[fallback].location === 'local') {
-    return { brainId: fallback, brain: brains[fallback] };
+  // Fallback to local-agy-gemini-3.8-flash or any enabled local agent
+  const fallback = 'local-agy-gemini-3.8-flash';
+  if (agents[fallback] && !agents[fallback].disabled && agents[fallback].location === 'local') {
+    return { agentId: fallback, agent: agents[fallback] };
   }
 
-  for (const [id, b] of Object.entries(brains)) {
+  for (const [id, b] of Object.entries(agents)) {
     if (!b.disabled && b.location === 'local' && b.exec) {
-      return { brainId: id, brain: b };
+      return { agentId: id, agent: b };
     }
   }
 
   return null;
 }
 
-/** Construct command argv for one-shot execution of the sharpener brain. */
-export function buildSharpenerArgv(brain: BrainConfig, prompt: string, timeoutMs: number): string[] {
-  if (brain.command && brain.command.length) {
-    return [...brain.command, prompt];
+/** Construct command argv for one-shot execution of the sharpener agent. */
+export function buildSharpenerArgv(agent: AgentConfig, prompt: string, timeoutMs: number): string[] {
+  if (agent.command && agent.command.length) {
+    return [...agent.command, prompt];
   }
-  switch (brain.exec) {
+  switch (agent.exec) {
     case 'claude':
-      return ['claude', '-p', prompt, ...(brain.model ? ['--model', brain.model] : []), '--dangerously-skip-permissions'];
+      return ['claude', '-p', prompt, ...(agent.model ? ['--model', agent.model] : []), '--dangerously-skip-permissions'];
     case 'agy':
-      return ['agy', '-p', prompt, '--print-timeout', `${timeoutMs}ms`, ...(brain.model ? ['--model', brain.model] : []), '--dangerously-skip-permissions'];
+      return ['agy', '-p', prompt, '--print-timeout', `${timeoutMs}ms`, ...(agent.model ? ['--model', agent.model] : []), '--dangerously-skip-permissions'];
     case 'codex':
-      return ['codex', 'exec', '--skip-git-repo-check', '--dangerously-bypass-approvals-and-sandbox', ...(brain.model ? ['-m', brain.model] : []), prompt];
+      return ['codex', 'exec', '--skip-git-repo-check', '--dangerously-bypass-approvals-and-sandbox', ...(agent.model ? ['-m', agent.model] : []), prompt];
     case 'hermes':
-      return brain.model ? ['hermes', '-m', brain.model, '-z', prompt] : ['hermes', '-z', prompt];
+      return agent.model ? ['hermes', '-m', agent.model, '-z', prompt] : ['hermes', '-z', prompt];
     case 'ollama':
-      return ['ollama', 'run', brain.model || 'qwen2.5:latest', prompt];
+      return ['ollama', 'run', agent.model || 'qwen2.5:latest', prompt];
     case 'dsh':
       return ['env', `DSH_HOME=${process.env.HOME}/.dsh`, 'SGLANG_API_KEY=dummy', 'dsh', '--profile', 'headless', prompt];
     default:
@@ -236,13 +236,13 @@ export function buildSharpenerArgv(brain: BrainConfig, prompt: string, timeoutMs
   }
 }
 
-/** Spawn the brain process with a timeout. */
-export function runSharpenerBrain(
-  brain: BrainConfig,
+/** Spawn the agent process with a timeout. */
+export function runSharpenerAgent(
+  agent: AgentConfig,
   prompt: string,
   timeoutMs: number
 ): Promise<{ ok: boolean; text: string }> {
-  const argv = buildSharpenerArgv(brain, prompt, timeoutMs);
+  const argv = buildSharpenerArgv(agent, prompt, timeoutMs);
   return new Promise((resolve) => {
     try {
       const child = spawn(argv[0], argv.slice(1), {
@@ -297,16 +297,16 @@ export async function sharpenTask(
   const timeoutMs = opts.config.orchestration?.sharpener?.timeoutMs || 60_000;
   const decisionsDir = opts.decisionsDir || opts.config.paths?.decisions;
 
-  const brainSelect = selectSharpenerBrain(opts.config);
-  if (!brainSelect && !opts.runner) {
-    const reason = 'no local cheap brain available in mechanical tier';
+  const agentSelect = selectSharpenerAgent(opts.config);
+  if (!agentSelect && !opts.runner) {
+    const reason = 'no local cheap agent available in mechanical tier';
     if (decisionsDir) {
       appendLesson(decisionsDir, buildLesson({
         kind: 'sharpen-failed',
         task: task.id,
         title: task.title,
-        agent: 'sharpener',
-        brain: 'none',
+        persona: 'sharpener',
+        agent: 'none',
         attempt: 1,
         reason
       }));
@@ -315,27 +315,27 @@ export async function sharpenTask(
   }
 
   const prompt = buildSharpenerPrompt(task);
-  let brainOutput: { ok: boolean; text: string };
+  let agentOutput: { ok: boolean; text: string };
 
   try {
     if (opts.runner) {
-      brainOutput = await opts.runner(prompt, timeoutMs);
+      agentOutput = await opts.runner(prompt, timeoutMs);
     } else {
-      brainOutput = await runSharpenerBrain(brainSelect!.brain, prompt, timeoutMs);
+      agentOutput = await runSharpenerAgent(agentSelect!.agent, prompt, timeoutMs);
     }
   } catch (e: any) {
-    brainOutput = { ok: false, text: `SHARPENER ERROR: ${e?.message || e}` };
+    agentOutput = { ok: false, text: `SHARPENER ERROR: ${e?.message || e}` };
   }
 
-  if (!brainOutput.ok) {
-    const reason = `sharpener brain call failed: ${brainOutput.text.slice(0, 200)}`;
+  if (!agentOutput.ok) {
+    const reason = `sharpener agent call failed: ${agentOutput.text.slice(0, 200)}`;
     if (decisionsDir) {
       appendLesson(decisionsDir, buildLesson({
         kind: 'sharpen-failed',
         task: task.id,
         title: task.title,
-        agent: 'sharpener',
-        brain: brainSelect?.brainId || 'unknown',
+        persona: 'sharpener',
+        agent: agentSelect?.agentId || 'unknown',
         attempt: 1,
         reason
       }));
@@ -343,16 +343,16 @@ export async function sharpenTask(
     return { sharpened: false, error: reason };
   }
 
-  const parsed = parseSharpenOutput(brainOutput.text);
+  const parsed = parseSharpenOutput(agentOutput.text);
   if (!parsed) {
-    const reason = `sharpener returned bad JSON or invalid criteria: ${brainOutput.text.slice(0, 200)}`;
+    const reason = `sharpener returned bad JSON or invalid criteria: ${agentOutput.text.slice(0, 200)}`;
     if (decisionsDir) {
       appendLesson(decisionsDir, buildLesson({
         kind: 'sharpen-failed',
         task: task.id,
         title: task.title,
-        agent: 'sharpener',
-        brain: brainSelect?.brainId || 'unknown',
+        persona: 'sharpener',
+        agent: agentSelect?.agentId || 'unknown',
         attempt: 1,
         reason
       }));

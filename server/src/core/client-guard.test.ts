@@ -29,35 +29,35 @@ test('blocks by source ip (v4, mapped v4, v6) on any path', () => {
 
 test('blocks by identity headers', () => {
   const g = new ClientGuard(CFG);
-  assert.equal(g.check(req({ headers: { 'user-agent': 'remote-brain AI-Code-Gen/1.0' } })).blocked, true);
+  assert.equal(g.check(req({ headers: { 'user-agent': 'remote-agent AI-Code-Gen/1.0' } })).blocked, true);
   assert.equal(g.check(req({ headers: { 'x-cowork-client': 'ai-code-gen' } })).blocked, true);
 });
 
 test('blocks MCP initialize from a blocked clientInfo name', () => {
   const g = new ClientGuard(CFG);
-  const body = { jsonrpc: '2.0', id: 1, method: 'initialize', params: { clientInfo: { name: 'remote-brain:ai-code-gen' } } };
+  const body = { jsonrpc: '2.0', id: 1, method: 'initialize', params: { clientInfo: { name: 'remote-agent:ai-code-gen' } } };
   assert.equal(g.check(req({ path: '/mcp', body })).blocked, true);
-  const ok = { ...body, params: { clientInfo: { name: 'remote-brain:peer-host' } } };
+  const ok = { ...body, params: { clientInfo: { name: 'remote-agent:peer-host' } } };
   assert.equal(g.check(req({ path: '/mcp', body: ok })).blocked, false);
 });
 
-test('blocks MCP register_agent declaring a blocked agent name or brain', () => {
+test('blocks MCP register_agent declaring a blocked agent name or agent', () => {
   const g = new ClientGuard(CFG);
   const call = (args: unknown) => ({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'register_agent', arguments: args } });
   assert.equal(g.check(req({ path: '/mcp', body: call({ platform: 'claude', agent_name: 'ai-code-gen' }) })).blocked, true);
-  assert.equal(g.check(req({ path: '/mcp', body: call({ platform: 'claude', agent_name: 'x', brains: [{ id: 'remote-ai-code-gen-cc-opus-5-5' }] }) })).blocked, true);
+  assert.equal(g.check(req({ path: '/mcp', body: call({ platform: 'claude', agent_name: 'x', agents: [{ id: 'remote-ai-code-gen-cc-opus-5-5' }] }) })).blocked, true);
   assert.equal(g.check(req({ path: '/mcp', body: call({ platform: 'claude', agent_name: 'x', capabilities: ['remote-ai-code-gen-cc-fable-5-1'] }) })).blocked, true);
   assert.equal(g.check(req({ path: '/mcp', body: [call({ platform: 'claude', agent_name: 'ok' }), call({ platform: 'claude', agent_name: 'ai-code-gen' })] })).blocked, true);
   assert.equal(g.check(req({ path: '/mcp', body: call({ platform: 'claude', agent_name: 'peer-host' }) })).blocked, false);
 });
 
 test('blocks tool calls carrying a blocked agent_id (live roster or registry owner)', () => {
-  const g = new ClientGuard(CFG, () => [{ id: 'a1', agentName: 'ai-code-gen' }, { id: 'a2', agentName: 'ok', capabilities: ['local-x'] }]);
+  const g = new ClientGuard(CFG, () => [{ id: 'a1', workerName: 'ai-code-gen' }, { id: 'a2', workerName: 'ok', capabilities: ['local-x'] }]);
   const call = (name: string, args: unknown) => ({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name, arguments: args } });
   assert.equal(g.check(req({ path: '/mcp', body: call('heartbeat', { agent_id: 'a1' }) })).blocked, true);
   assert.equal(g.check(req({ path: '/mcp', body: call('claim_task', { task_id: 't', agent_id: 'a2' }) })).blocked, false);
-  // An agent no longer on the roster but recorded as owner of a blocked brain.
-  const owners = g.blockedAgentIds({ 'remote-ai-code-gen-cc-opus-5-5': { registeredBy: 'gone' }, 'local-x': { registeredBy: 'a2' } });
+  // An agent no longer on the roster but recorded as owner of a blocked agent.
+  const owners = g.blockedWorkerIds({ 'remote-ai-code-gen-cc-opus-5-5': { registeredBy: 'gone' }, 'local-x': { registeredBy: 'a2' } });
   assert.deepEqual([...owners], ['gone']);
   assert.equal(g.check(req({ path: '/mcp', body: call('complete_task', { task_id: 't', agent_id: 'gone' }) }), owners).blocked, true);
 });
@@ -69,14 +69,14 @@ test('free-text task fields that mention the name are NOT blocked', () => {
   assert.equal(g.check(req({ path: '/api/tasks', body: { title: 'ai-code-gen' } })).blocked, false);
 });
 
-test('disableBlockedBrains marks matching brains disabled only', () => {
+test('disableBlockedAgents marks matching agents disabled only', () => {
   const g = new ClientGuard(CFG);
-  const brains: Record<string, { disabled?: boolean; host?: string }> = {
+  const agents: Record<string, { disabled?: boolean; host?: string }> = {
     'remote-ai-code-gen-cc-opus-5-5': {}, 'remote-x': { host: 'ai-code-gen' }, 'local-cc-opus-5-5': {}
   };
-  assert.deepEqual(g.disableBlockedBrains(brains).sort(), ['remote-ai-code-gen-cc-opus-5-5', 'remote-x']);
-  assert.equal(brains['local-cc-opus-5-5'].disabled, undefined);
-  assert.deepEqual(g.disableBlockedBrains(brains), []);
+  assert.deepEqual(g.disableBlockedAgents(agents).sort(), ['remote-ai-code-gen-cc-opus-5-5', 'remote-x']);
+  assert.equal(agents['local-cc-opus-5-5'].disabled, undefined);
+  assert.deepEqual(g.disableBlockedAgents(agents), []);
 });
 
 test('middleware returns 403 (JSON-RPC error on /mcp) and passes others', async () => {
@@ -92,7 +92,7 @@ test('middleware returns 403 (JSON-RPC error on /mcp) and passes others', async 
   try {
     const init = (name: string) => fetch(`${base}/mcp`, { method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'initialize', params: { clientInfo: { name } } }) });
-    const bad = await init('remote-brain:ai-code-gen');
+    const bad = await init('remote-agent:ai-code-gen');
     assert.equal(bad.status, 403);
     const j = await bad.json();
     assert.equal(j.id, 7);

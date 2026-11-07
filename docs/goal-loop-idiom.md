@@ -97,8 +97,7 @@ default budget (24) is fine. The loop is event-driven: one phase emitted → aud
   (`wayne/<repo>`), branch, ready PR with a Conventional Commits title, a PASS verdict
   on the current head SHA from an agent that did not write the code, squash merge,
   read-back as merged, then fast-forward main and push to every remote. GitHub stays a
-  push mirror because the user declined `gh` for GitHub (see
-  `docs/research/pstack-integration-report.md` §B).
+  push mirror because the user declined `gh` for GitHub (see).
 - `goal-templates.test.ts` guards both: every served template carries its driver and
   every pstack rule; every code-producing template carries `FORGE_LANDING` and a
   Forgejo landing phase; no template tells the loop to use `gh`.
@@ -139,8 +138,8 @@ curl -s -X POST $COWORK/api/goals -H 'content-type: application/json' -d '{
     {"key":"review","title":"Review what moved the number and choose the next lever"}
   ],
   "stepBudget": 200,
-  "achieverBrainChain": ["local-cc-opus-5-5"],
-  "judgerBrainChain": ["local-cc-opus-5-5"]
+  "achieverAgentChain": ["local-cc-opus-5-5"],
+  "judgerAgentChain": ["local-cc-opus-5-5"]
 }'
 
 # 3. Start the /loop — the dispatcher drives it 24/7 until met

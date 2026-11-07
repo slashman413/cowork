@@ -16,10 +16,10 @@ test('sharpenPending: defers only while a fresh sharpen has not written acceptan
 
 test('dispatcher tick: a task mid-sharpen is held pending with a reason, not executed', async () => {
   const h = pstackHarness({ enabled: true });
-  const t = h.mk({ agent: 'engineer', sharpenStartedAt: new Date().toISOString() });
+  const t = h.mk({ persona: 'engineer', sharpenStartedAt: new Date().toISOString() });
   let executed = 0;
   (h.dispatcher as any).execute = async () => { executed++; };
-  (h.dispatcher as any).agentId = 'disp';
+  (h.dispatcher as any).workerId = 'disp';
   await (h.dispatcher as any).tick();
   const after = h.store.getTask(t.id)!;
   assert.equal(executed, 0);
@@ -29,7 +29,7 @@ test('dispatcher tick: a task mid-sharpen is held pending with a reason, not exe
 
 test('buildPrompt sees acceptance written after the claim (re-read before prompt)', () => {
   const h = pstackHarness();
-  const t = h.mk({ agent: 'engineer' });
+  const t = h.mk({ persona: 'engineer' });
   const stale = structuredClone(t);
   const fresh = h.store.getTask(t.id)!;
   fresh.context = { ...fresh.context, acceptance: ['sharpened criterion ZZQ'], acceptanceSource: 'sharpened' };
@@ -37,6 +37,6 @@ test('buildPrompt sees acceptance written after the claim (re-read before prompt
   // execute() re-reads the task right before buildPrompt; emulate that step.
   const latest = h.store.getTask(stale.id)!;
   stale.context = { ...latest.context };
-  const prompt = (h.dispatcher as any).buildPrompt(stale, { agent: 'engineer', isRoster: false, exec: 'claude', brainId: 'local-cc-opus-5-5' });
+  const prompt = (h.dispatcher as any).buildPrompt(stale, { persona: 'engineer', isRoster: false, exec: 'claude', agentId: 'local-cc-opus-5-5' });
   assert.match(prompt, /sharpened criterion ZZQ/);
 });

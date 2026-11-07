@@ -8,7 +8,7 @@ import { VideoStudio, VIDEO_STUDIO_TAG } from './video-studio.js';
 /**
  * The Video Studio page trusts this module for three things: a clean style
  * list (library + the user's own styles), a poster lookup that can't escape
- * its roots, and ONE fixed brief that always tells the brain to drop the
+ * its roots, and ONE fixed brief that always tells the agent to drop the
  * deliverables at the artifacts root under fixed names.
  */
 
@@ -26,7 +26,7 @@ function fixture() {
   fs.mkdirSync(path.join(my, 'my-ink'), { recursive: true });
   fs.writeFileSync(path.join(my, 'my-ink', 'style.json'), JSON.stringify({ slug: 'my-ink', en: 'My Ink', cn: '我的墨', size: '1080x1440' }));
   fs.writeFileSync(path.join(root, 'secret.jpg'), 'secret');
-  return { root, studio: new VideoStudio({ libDir: lib, myStylesDir: my, brains: ['b-sonnet', 'b-opus'], defaultBrain: 'b-sonnet' }) };
+  return { root, studio: new VideoStudio({ libDir: lib, myStylesDir: my, agents: ['b-sonnet', 'b-opus'], defaultAgent: 'b-sonnet' }) };
 }
 
 test('styles: my styles first, bad slugs dropped, non-string uses filtered', () => {
@@ -50,22 +50,22 @@ test('parseBrief: validates style + topic, clamps the rest to known values', () 
   const { studio } = fixture();
   assert.throws(() => studio.parseBrief({ slug: 'nope', topic: 'bees' }), /unknown style/);
   assert.throws(() => studio.parseBrief({ slug: 'watercolor', topic: ' ' }), /topic/);
-  const b = studio.parseBrief({ slug: 'watercolor', topic: 'Bees in Taipei', seconds: 7, aspect: '1:1', voice: 'fr', brain: 'evil-brain' });
+  const b = studio.parseBrief({ slug: 'watercolor', topic: 'Bees in Taipei', seconds: 7, aspect: '1:1', voice: 'fr', agent: 'evil-agent' });
   assert.equal(b.seconds, 45);
   assert.equal(b.aspect, '16:9');
   assert.equal(b.voice, 'none');
-  assert.equal(b.brain, 'b-sonnet');
+  assert.equal(b.agent, 'b-sonnet');
   assert.equal(b.music, true);
   assert.equal(b.storyboard, false);
-  assert.equal(studio.parseBrief({ slug: 'watercolor', topic: 'x y z', brain: 'b-opus' }).brain, 'b-opus');
+  assert.equal(studio.parseBrief({ slug: 'watercolor', topic: 'x y z', agent: 'b-opus' }).agent, 'b-opus');
 });
 
-test('buildTask: pinned brain, tag, fixed deliverable names, storyboard gate only when asked', () => {
+test('buildTask: pinned agent, tag, fixed deliverable names, storyboard gate only when asked', () => {
   const { studio } = fixture();
   const brief = studio.parseBrief({ slug: 'watercolor', topic: 'Rain over Taipei', seconds: 30, aspect: '9:16', voice: 'zh' });
   const t = studio.buildTask(brief, ['logo.png']);
   assert.deepEqual(t.tags, [VIDEO_STUDIO_TAG]);
-  assert.equal(t.context.brain, 'b-sonnet');
+  assert.equal(t.context.agent, 'b-sonnet');
   assert.equal(t.context.videoStudio.slug, 'watercolor');
   for (const s of ['1080×1920', '--size 1080x1920', 'film.mp4', 'poster.jpg', 'film.vtt', 'contact.jpg', 'RENDER_SLOTS=1', 'logo.png', 'zh-TW']) {
     assert.ok(t.description.includes(s), `description mentions ${s}`);

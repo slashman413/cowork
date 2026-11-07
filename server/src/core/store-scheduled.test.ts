@@ -26,7 +26,7 @@ function makeStore(): { store: Store; root: string } {
     agencyAgents: path.join(root, 'agency-agents'),
   };
   for (const p of Object.values(paths)) fs.mkdirSync(p, { recursive: true });
-  const config = { paths, platforms: {}, orchestration: { brains: {} } } as unknown as Config;
+  const config = { paths, platforms: {}, orchestration: { agents: {} } } as unknown as Config;
   return { store: new Store(config, new EventBus()), root };
 }
 
@@ -40,9 +40,9 @@ test('a future scheduledAt parks the task on `scheduled` and blocks claiming', (
   } as any);
 
   assert.equal(task.status, 'scheduled', 'parked, not pending');
-  assert.equal(store.claimTask({ taskId: task.id, agentId: 'w', internal: true }), null,
+  assert.equal(store.claimTask({ taskId: task.id, workerId: 'w', internal: true }), null,
     'the dispatcher cannot claim a scheduled task');
-  assert.equal(store.claimTask({ taskId: task.id, agentId: 'remote' }), null,
+  assert.equal(store.claimTask({ taskId: task.id, workerId: 'remote' }), null,
     'a remote client cannot claim it either');
   assert.equal(store.listTasks({ status: 'pending' }).length, 0, 'absent from the pending pool');
   assert.equal(store.listTasks({ status: 'scheduled' })[0]?.id, task.id, 'listed under the scheduled category');
@@ -94,7 +94,7 @@ test('releaseDueScheduled launches due tasks and leaves future ones parked', () 
   assert.equal(store.getTask(due.id)?.status, 'pending', 'released into the pending pool');
   assert.equal(store.getTask(notYet.id)?.status, 'scheduled', 'the other stays parked');
 
-  const claimed = store.claimTask({ taskId: due.id, agentId: 'w', internal: true });
+  const claimed = store.claimTask({ taskId: due.id, workerId: 'w', internal: true });
   assert.equal(claimed?.status, 'in-progress', 'claimable once released');
 });
 
@@ -179,7 +179,7 @@ test('runScheduledNow releases a parked task immediately and clears scheduledAt'
   assert.equal(released?.status, 'pending', 'released straight into the pending pool');
   assert.equal(released?.scheduledAt, undefined, 'the future time is dropped so nothing re-parks it');
 
-  const claimed = store.claimTask({ taskId: task.id, agentId: 'w', internal: true });
+  const claimed = store.claimTask({ taskId: task.id, workerId: 'w', internal: true });
   assert.equal(claimed?.status, 'in-progress', 'claimable now, without waiting for its time');
 });
 

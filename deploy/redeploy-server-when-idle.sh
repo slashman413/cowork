@@ -5,15 +5,15 @@
 # WHY THIS EXISTS (the trap that kept shipping "fixed but not live"):
 #   The server runs from `server/dist/` and `dist/` is .gitignored, so pushing to
 #   `main` changes nothing until the running node process is restarted. But the
-#   `cowork-mcp` systemd unit has KillMode=control-group and it runs LOCAL-brain
-#   tasks as its own child processes. A goal/task executing on a local brain is
+#   `cowork-mcp` systemd unit has KillMode=control-group and it runs LOCAL-agent
+#   tasks as its own child processes. A goal/task executing on a local agent is
 #   therefore a child of the very service it needs to restart — so a plain
 #   `systemctl --user restart cowork-mcp` SIGKILLs the task mid-deploy, the result
 #   is never written, and the restart is aborted with it. That is exactly why the
 #   `blocked`-goal resume fix (05f1636) sat committed-and-built but never live: the
 #   task that would deploy it could not restart its own parent.
 #
-#   `restart-brain-when-idle.sh` solves the same problem for remote-brain CLIENTS;
+#   `restart-agent-when-idle.sh` solves the same problem for remote-agent CLIENTS;
 #   this is its sibling for the SERVER itself.
 #
 # WHAT IT DOES:
@@ -58,7 +58,7 @@ if [ -z "$MAIN_PID" ] || [ "$MAIN_PID" = "0" ]; then
 fi
 
 echo "Waiting for $SERVICE (pid $MAIN_PID) to go idle (no task children)…"
-# The server spawns children only to run local-brain tasks (claude/codex/agy/…
+# The server spawns children only to run local-agent tasks (claude/codex/agy/…
 # CLIs), so "no children" == no task in flight. `pgrep -P` exits 1 when none.
 start="$(date +%s)"
 while pgrep -P "$MAIN_PID" >/dev/null 2>&1; do

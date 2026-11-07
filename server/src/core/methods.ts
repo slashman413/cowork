@@ -4,7 +4,7 @@ import type { MethodsConfig } from '../types.js';
 
 /**
  * Mapping of method playbook keys to their corresponding vendored pstack skill.
- * Local brains receive this path as optional reading (CONVENTIONS §6).
+ * Local agents receive this path as optional reading (CONVENTIONS §6).
  */
 export const VENDORED_SKILL_MAP: Record<string, string> = {
   'investigation': 'vendor/pstack/skills/how/SKILL.md',
@@ -59,8 +59,8 @@ export function loadMethodCard(methodsDir: string, playbook: string): string | n
 
 /**
  * Render the prompt lines for `# Method`.
- * Local brains get the path to the full vendored skill as optional reading;
- * remote brains get only the inline card (CONVENTIONS §6).
+ * Local agents get the path to the full vendored skill as optional reading;
+ * remote agents get only the inline card (CONVENTIONS §6).
  */
 export function renderMethodPrompt(options: {
   repoRoot: string;

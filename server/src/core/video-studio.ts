@@ -6,12 +6,12 @@ import type { VideoStudioConfig } from '../types.js';
 /**
  * Video Studio — the server side of /video-studio.html.
  *
- * A film is made by an ordinary cowork task: a Claude brain directs and renders
+ * A film is made by an ordinary cowork task: a Claude agent directs and renders
  * it with the lemo-opuscar style library (a plain git clone, default
  * ~/lemo-opuscar — https://github.com/lemomo-ai/lemo-opuscar). This module only
  *  (a) exposes the library's style catalog + poster frames to the page, and
  *  (b) turns the page's brief form into one fixed task description, so every
- *      brain gets the same instructions and the deliverables always land at the
+ *      agent gets the same instructions and the deliverables always land at the
  *      artifacts ROOT under fixed names (GET /api/artifacts/:id lists top-level
  *      files only).
  *
@@ -24,8 +24,8 @@ export const VIDEO_STUDIO_TAG = 'video-studio';
 export const DEFAULT_VIDEO_STUDIO: Required<VideoStudioConfig> = {
   libDir: '~/lemo-opuscar',
   myStylesDir: '~/lemo-my-styles',
-  defaultBrain: 'local-cc-sonnet-5-5',
-  brains: ['local-cc-sonnet-5-5', 'local-cc-opus-5-5'],
+  defaultAgent: 'local-cc-sonnet-5-5',
+  agents: ['local-cc-sonnet-5-5', 'local-cc-opus-5-5'],
   renderSlots: 1,
 };
 
@@ -57,7 +57,7 @@ export interface FilmBrief {
   voiceHint?: string;
   music: boolean;
   storyboard: boolean;
-  brain: string;
+  agent: string;
   notes?: string;
 }
 
@@ -77,7 +77,7 @@ export function resolveStudioConfig(cfg?: VideoStudioConfig): Required<VideoStud
     ...merged,
     libDir: expand(merged.libDir),
     myStylesDir: expand(merged.myStylesDir),
-    brains: Array.isArray(merged.brains) && merged.brains.length ? merged.brains : DEFAULT_VIDEO_STUDIO.brains,
+    agents: Array.isArray(merged.agents) && merged.agents.length ? merged.agents : DEFAULT_VIDEO_STUDIO.agents,
   };
 }
 
@@ -169,9 +169,9 @@ export class VideoStudio {
     const seconds = LENGTHS.includes(Number(b.seconds)) ? Number(b.seconds) : 45;
     const aspect = (Object.keys(ASPECTS) as FilmBrief['aspect'][]).includes(b.aspect) ? b.aspect : '16:9';
     const voice = ['none', 'en', 'zh'].includes(b.voice) ? b.voice : 'none';
-    const brain = this.cfg.brains.includes(b.brain) ? b.brain : this.cfg.defaultBrain;
+    const agent = this.cfg.agents.includes(b.agent) ? b.agent : this.cfg.defaultAgent;
     return {
-      slug, topic, seconds, aspect, voice, brain,
+      slug, topic, seconds, aspect, voice, agent,
       voiceHint: str(b.voiceHint).trim().slice(0, 200) || undefined,
       music: b.music !== false,
       storyboard: b.storyboard === true,
@@ -179,7 +179,7 @@ export class VideoStudio {
     };
   }
 
-  /** The fixed task the dispatcher hands to the brain. */
+  /** The fixed task the dispatcher hands to the agent. */
   buildTask(brief: FilmBrief, inputNames: string[] = []) {
     const style = this.getStyle(brief.slug)!;
     const { w, h } = ASPECTS[brief.aspect];
@@ -227,7 +227,7 @@ export class VideoStudio {
       title: `🎬 ${style.en}: ${titleTopic}`,
       description: lines.join('\n'),
       tags: [VIDEO_STUDIO_TAG],
-      context: { brain: brief.brain, videoStudio: { ...brief, styleName: style.en } },
+      context: { agent: brief.agent, videoStudio: { ...brief, styleName: style.en } },
     };
   }
 }

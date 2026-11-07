@@ -5,7 +5,7 @@ import type { Config, Task } from '../types.js';
 
 /**
  * Regression: a result that is a genuine QUESTION back to the user must be parked
- * on `wait-input`, NOT handed to the next brain — EVEN when the optional LLM
+ * on `wait-input`, NOT handed to the next agent — EVEN when the optional LLM
  * quality verifier is enabled.
  *
  * The LLM verifier is contractually told to FAIL any result that "does not
@@ -27,18 +27,18 @@ function harness(stubLlmFail: boolean) {
   const store = {
     getTask: (id: string) => tasks.get(id) || null,
     saveTask: (t: Task) => { tasks.set(t.id, t); },
-    getAgentPersona: () => null,
-    brainCooldownUntil: () => undefined,
-    noteBrainRateLimited: () => '',
-    clearBrainRateLimited: () => {}
+    getPersona: () => null,
+    agentCooldownUntil: () => undefined,
+    noteAgentRateLimited: () => '',
+    clearAgentRateLimited: () => {}
   };
   const config = {
     inbox: { maxRetries: 3 },
     orchestration: {
       // LLM gate "enabled" — but we stub the method so no process is spawned.
       verifier: { enabled: true, llm: { enabled: true } },
-      agents: { engineer: { description: '', brains: CHAIN } },
-      brains: {
+      roleChains: { engineer: { description: '', agents: CHAIN } },
+      agents: {
         'remote-examplehost-cc-opus': { location: 'remote' },
         'remote-examplehost-cc-fable': { location: 'remote' },
         'local-cc-opus': { location: 'local' }
@@ -58,7 +58,7 @@ function harness(stubLlmFail: boolean) {
 
 function chainRung(id: string, attempt = 0): Partial<Task> & { id: string } {
   return { id, title: 'ship it', description: '', status: 'in-progress',
-    context: { agent: 'engineer', brain: CHAIN[attempt], brainAuto: true, attempts: attempt } };
+    context: { persona: 'engineer', agent: CHAIN[attempt], agentAuto: true, attempts: attempt } };
 }
 
 test('a reported NEEDS_INPUT question parks on wait-input even when the LLM verifier would fail it', async () => {
@@ -69,7 +69,7 @@ test('a reported NEEDS_INPUT question parks on wait-input even when the LLM veri
     'I started but cannot finish.\nNEEDS_INPUT: Which cloud provider should I target — AWS or GCP?'
   );
 
-  assert.equal(decision.action, 'wait-input', 'a question must NOT be handed to the next brain');
+  assert.equal(decision.action, 'wait-input', 'a question must NOT be handed to the next agent');
   assert.ok(Array.isArray(decision.questions) && decision.questions.length >= 1);
   assert.match(decision.questions[0], /cloud provider/i);
 });

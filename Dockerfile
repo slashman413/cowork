@@ -1,5 +1,5 @@
-# Cowork hub: MCP server + dashboard + task inbox. Brains join from their own machines
-# with deploy/remote-brain-client.mjs, so the image ships no agent CLIs and starts with
+# Cowork hub: MCP server + dashboard + task inbox. Agents join from their own machines
+# with deploy/remote-agent-client.mjs, so the image ships no agent CLIs and starts with
 # local orchestration off. State (config, inbox, artifacts, goals …) lives in /data.
 #
 #   docker run -p 6868:6868 -v cowork-data:/data ghcr.io/slashman413/cowork
@@ -24,11 +24,11 @@ LABEL org.opencontainers.image.source="https://github.com/slashman413/cowork" \
 WORKDIR /app
 COPY --from=build /app/server/node_modules ./server/node_modules
 COPY --from=build /app/server/dist ./server/dist
-COPY server/package.json ./server/
+COPY server/package.json server/legacy-aliases.json ./server/
 COPY server/public ./server/public
 COPY agency-agents ./agency-agents
 COPY workflows ./workflows
-COPY config.json PROTOCOL.md CONVENTIONS.md JOIN-AS-A-BRAIN.md LICENSE ./
+COPY config.json PROTOCOL.md CONVENTIONS.md JOIN-AS-AN-AGENT.md LICENSE ./
 # Container template: runtime dirs under /data, no Obsidian vault, no local dispatcher.
 # It is seeded to $COWORK_CONFIG on first start, after which /data/config.json is yours;
 # the bundled workflows are copied to /data/workflows the same way (runs go beside them).

@@ -21,8 +21,12 @@ export function createApiRouter(store: Store, eventBus: EventBus): Router {
     res.json(store.getDashboard());
   });
 
-  router.get('/agents', (req, res) => {
-    res.json(store.getActiveAgents({
+  /** rerun / reassign / continue take an optional { thinking } for the coming run. */
+  const withThinking = (task: any, body: any) =>
+    task && typeof body?.thinking === 'string' ? store.updateTask(task.id, { thinking: body.thinking }) ?? task : task;
+
+  router.get('/workers', (req, res) => {
+    res.json(store.getActiveWorkers({
       platform: req.query.platform as string,
       status: req.query.status as string
     }));
@@ -65,7 +69,7 @@ export function createApiRouter(store: Store, eventBus: EventBus): Router {
     res.json(boundTaskArtifacts(task));
   });
 
-  // Live progress log for a running task — the tail of the brain's stdout/stderr the
+  // Live progress log for a running task — the tail of the agent's stdout/stderr the
   // dispatcher streams to artifacts/<id>/progress.log. The dashboard polls this on
   // an in-progress card to show "what it is doing right now". Always 200 (empty log
   // when nothing has been written yet); never 404 so a card can poll optimistically.
@@ -132,7 +136,7 @@ export function createApiRouter(store: Store, eventBus: EventBus): Router {
         // Validated + normalized in the store; an invalid spec 400s below.
         recurrence: body.recurrence != null ? body.recurrence : undefined
       }, {
-        // Staged input uploads (from POST /api/uploads) the brain should read.
+        // Staged input uploads (from POST /api/uploads) the agent should read.
         inputs: Array.isArray(body.inputs) ? body.inputs : undefined
       });
       // Intake brief sharpener (PS-1): runs in the background — awaiting it here
@@ -148,16 +152,16 @@ export function createApiRouter(store: Store, eventBus: EventBus): Router {
   router.patch('/inbox/:id', async (req, res) => {
     try {
       const taskId = req.params.id;
-      const { action, agentId, result } = req.body;
+      const { action, workerId, result } = req.body;
       let task = null;
 
       if (action === 'claim') {
-        if (!agentId) throw new Error('agentId is required for claim');
-        task = store.claimTask({ taskId, agentId });
+        if (!workerId) throw new Error('workerId is required for claim');
+        task = store.claimTask({ taskId, workerId });
       } else if (action === 'complete') {
-        // completeTask runs the completion guard: a remote brain that reports a
+        // completeTask runs the completion guard: a remote agent that reports a
         // soft failure (rate limit / session limit / empty) is handed to the next
-        // fallback brain and the task stays pending instead of being marked done.
+        // fallback agent and the task stays pending instead of being marked done.
         task = await store.completeTask({ taskId, result });
       } else {
         throw new Error('Invalid action');
@@ -190,12 +194,12 @@ export function createApiRouter(store: Store, eventBus: EventBus): Router {
   // this behind an explicit user confirmation (categorize-failed → confirm re-run).
   router.post('/inbox/:id/rerun', (req, res) => {
     try {
-      // Optional { brain }: '' → route via the agent's chain, '<id>' → pin that
-      // brain, absent → keep the task's existing brain targeting (default).
-      const brain = typeof req.body?.brain === 'string' ? req.body.brain : undefined;
+      // Optional { agent }: '' → route via the role's agent chain, '<id>' → pin that
+      // agent, absent → keep the task's existing agent targeting (default).
+      const agent = typeof req.body?.agent === 'string' ? req.body.agent : undefined;
       const scheduledAt = typeof req.body?.scheduledAt === 'string' ? req.body.scheduledAt
         : typeof req.body?.scheduled_at === 'string' ? req.body.scheduled_at : undefined;
-      const task = store.rerunTask(req.params.id, brain, { scheduledAt });
+      const task = withThinking(store.rerunTask(req.params.id, agent, { scheduledAt }), req.body);
       if (!task) return res.status(404).json({ error: 'Task not found or not in a re-runnable (failed) state' });
       res.json(task);
     } catch (e: any) {
@@ -203,13 +207,13 @@ export function createApiRouter(store: Store, eventBus: EventBus): Router {
     }
   });
 
-  // Reassign a task that hasn't started (pending / scheduled) to another brain —
-  // e.g. one held while its brain cools down on a rate limit. Body { brain }:
-  // '' → route via the agent's chain, '<id>' → pin that brain.
+  // Reassign a task that hasn't started (pending / scheduled) to another agent —
+  // e.g. one held while its agent cools down on a rate limit. Body { agent }:
+  // '' → route via the role's agent chain, '<id>' → pin that agent.
   router.post('/inbox/:id/reassign', (req, res) => {
     try {
-      const brain = typeof req.body?.brain === 'string' ? req.body.brain : '';
-      const task = store.reassignTask(req.params.id, brain);
+      const agent = typeof req.body?.agent === 'string' ? req.body.agent : '';
+      const task = withThinking(store.reassignTask(req.params.id, agent), req.body);
       if (!task) return res.status(409).json({ error: 'Task not found or already started — only pending/scheduled tasks can be reassigned (re-run a failed one instead)' });
       res.json(task);
     } catch (e: any) {
@@ -235,7 +239,7 @@ export function createApiRouter(store: Store, eventBus: EventBus): Router {
   // task composer, but with the task's fields loaded and saved back). Only tasks
   // that are NOT running or pending are editable (scheduled / wait-input / done /
   // rejected / failed); the store rejects the rest. Body mirrors POST /inbox:
-  // { title?, description?, priority?, tags?, context?:{agent,division,brain},
+  // { title?, description?, priority?, tags?, context?:{agent,division,agent},
   //   scheduledAt?, loopIntervalHours? }. Returns the updated task.
   router.post('/inbox/:id/edit', (req, res) => {
     try {
@@ -248,9 +252,10 @@ export function createApiRouter(store: Store, eventBus: EventBus): Router {
       if (Array.isArray(b.tags)) patch.tags = b.tags;
       // Routing pins: accept both a flat body and a { context } object. A key set
       // to '' (or null) clears that pin (back to Auto); omitting it leaves it as-is.
-      if ('agent' in c) patch.agent = c.agent;
+      if ('persona' in c) patch.persona = c.persona;
+      if ('thinking' in c) patch.thinking = c.thinking;
       if ('division' in c) patch.division = c.division;
-      if ('brain' in c) patch.brain = c.brain;
+      if ('agent' in c) patch.agent = c.agent;
       if ('acceptance' in b) patch.acceptance = b.acceptance;
       else if ('acceptance' in c) patch.acceptance = c.acceptance;
       // Scheduling. Accept scheduledAt/scheduled_at; '' or null clears it.
@@ -278,9 +283,9 @@ export function createApiRouter(store: Store, eventBus: EventBus): Router {
   // on done cards. 201 + the new task (so the UI can jump to it).
   router.post('/inbox/:id/continue', (req, res) => {
     try {
-      // Optional { brain }: '' → route via the agent's chain, '<id>' → pin that
-      // brain to claim the follow-up, absent → same brain as the original (default).
-      const brain = typeof req.body?.brain === 'string' ? req.body.brain : undefined;
+      // Optional { agent }: '' → route via the role's agent chain, '<id>' → pin that
+      // agent to claim the follow-up, absent → same agent as the original (default).
+      const agent = typeof req.body?.agent === 'string' ? req.body.agent : undefined;
       // Optional extra steer from the Continue dialog: a { prompt } appended to
       // the follow-up's brief, and { inputs } ([{token,name}] staged uploads)
       // attached alongside the prior run's outputs.
@@ -288,7 +293,7 @@ export function createApiRouter(store: Store, eventBus: EventBus): Router {
       const inputs = Array.isArray(req.body?.inputs) ? req.body.inputs : undefined;
       const scheduledAt = typeof req.body?.scheduledAt === 'string' ? req.body.scheduledAt
         : typeof req.body?.scheduled_at === 'string' ? req.body.scheduled_at : undefined;
-      const task = store.continueTask(req.params.id, brain, { prompt, inputs, scheduledAt });
+      const task = withThinking(store.continueTask(req.params.id, agent, { prompt, inputs, scheduledAt }), req.body);
       if (!task) return res.status(400).json({ error: 'Task not found or not in a continuable (finished-success) state' });
       res.status(201).json(task);
     } catch (e: any) {
@@ -297,7 +302,7 @@ export function createApiRouter(store: Store, eventBus: EventBus): Router {
   });
 
   // Attach staged input uploads to an EXISTING task (union onto context.inputFiles
-  // so the brain reads them). Body: { inputs: [{ token, name }] } — tokens come
+  // so the agent reads them). Body: { inputs: [{ token, name }] } — tokens come
   // from POST /api/uploads.
   router.post('/inbox/:id/inputs', (req, res) => {
     try {

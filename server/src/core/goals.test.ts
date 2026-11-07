@@ -109,7 +109,7 @@ test('block always carries a resume contract, even when the caller omits one', (
 test('resume clears the block contract and re-arms the goal (circuit-breaker HALF-OPEN)', () => {
   const { goals } = makeGoals();
   const g = goals.create(seed); goals.activate(g.goalId);
-  goals.block(g.goalId, 'transient brain fault', 'brain reachable, then resume');
+  goals.block(g.goalId, 'transient agent fault', 'agent reachable, then resume');
   const r = goals.resume(g.goalId);
   assert.equal(r.status, 'active');
   assert.equal(r.blockReason, undefined);
@@ -131,7 +131,7 @@ test('block schedules an automatic retry (self-healing) — the goal is not huma
   const { goals } = makeGoals();
   const g = goals.create(seed); goals.activate(g.goalId);
   const before = Date.now();
-  const b = goals.block(g.goalId, 'transient brain fault');
+  const b = goals.block(g.goalId, 'transient agent fault');
   assert.equal(b.blockCount, 1);
   assert.ok(b.blockedAt, 'records when the hold began');
   assert.ok(b.nextRetryAt, 'schedules an auto-retry — recovery does not wait on a human');
@@ -315,7 +315,7 @@ test('plan appends a phase; emit refuses when no phase is workable', () => {
 
 test('completing the terminal task wakes the Judger; the Judger audits the phase', () => {
   const { goals, store } = makeGoals();
-  const g = goals.create({ ...seed, phases: [{ key: 'research', title: 'Research' }], judgerBrainChain: ['local-judge'] });
+  const g = goals.create({ ...seed, phases: [{ key: 'research', title: 'Research' }], judgerAgentChain: ['local-judge'] });
   goals.activate(g.goalId);
   goals.applyAchieverDecision(g.goalId, { kind: 'emit', tasks: [{ title: 'Gather data' }] });
 
@@ -327,7 +327,7 @@ test('completing the terminal task wakes the Judger; the Judger audits the phase
   assert.equal(goals.get(g.goalId)!.phases[0].status, 'completing');
   const judger = goals.generatedTasks(g.goalId).find(t => t.context!.role === 'goal-judger');
   assert.ok(judger, 'a Judger task was generated');
-  assert.equal(judger!.context!.brain, 'local-judge');
+  assert.equal(judger!.context!.agent, 'local-judge');
   assert.equal(judger!.context!.completesPhase, undefined, 'Judger tasks never re-trigger a phase');
 
   // Judger completes → phase audited + minutes pointer recorded.

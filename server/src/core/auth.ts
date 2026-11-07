@@ -6,7 +6,7 @@ import path from 'path';
  * API-key resolution for /api and /mcp.
  *
  * A server bound to a non-loopback address must not run open: anyone who can
- * reach the port could create tasks that brains (full permissions) then claim
+ * reach the port could create tasks that agents (full permissions) then claim
  * and run. So when the host is not loopback and no key is configured, a random
  * key is generated once, saved beside the config (mode 0600) and printed once.
  * Running open on a network address needs an explicit opt-out:

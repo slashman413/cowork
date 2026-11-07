@@ -492,7 +492,7 @@ a { color: inherit; text-decoration: none; }
   margin-right: 3px;
 }
 
-/* Brain rate-limit meters on Connections cards (metered brains only). */
+/* Agent rate-limit meters on Connections cards (metered agents only). */
 .usage-panel {
   display: flex;
   flex-direction: column;
@@ -503,11 +503,11 @@ a { color: inherit; text-decoration: none; }
   border-radius: var(--radius-sm);
   padding: 10px 12px;
 }
-.usage-brain + .usage-brain {
+.usage-agent + .usage-agent {
   border-top: 1px solid var(--border-color, rgba(148, 163, 184, 0.14));
   padding-top: 10px;
 }
-.usage-brain-head {
+.usage-agent-head {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -578,7 +578,7 @@ a { color: inherit; text-decoration: none; }
   margin-top: 1px;
 }
 
-/* ===== Connections: local-brain cards (stacked vertically, flexible height) ===== */
+/* ===== Connections: local-agent cards (stacked vertically, flexible height) ===== */
 .conn-section-label {
   font-size: 0.72rem;
   font-weight: 600;
@@ -593,7 +593,7 @@ a { color: inherit; text-decoration: none; }
   text-transform: none;
   color: var(--text-muted);
 }
-/* Brains are piled vertically (one card per exec, single column at every
+/* Agents are piled vertically (one card per exec, single column at every
    breakpoint). The stack stays fluid — full width on mobile/tablet — but is
    capped on wide PC monitors so the per-model quota bars keep a readable
    measure instead of stretching edge-to-edge. */

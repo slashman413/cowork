@@ -17,7 +17,7 @@ const base = {
     { key: 'store', label: 'Store', type: 'choice', options: ['gumroad', 'itch'], default: 'gumroad' },
     { key: 'month', label: 'Month', type: 'text' },
   ],
-  carry: { agent: 'analyst', brain: 'local-cc-opus-5-5', brainMode: 'suggest', acceptance: ['table of products'], timeboxMin: 30, inputs: [] },
+  carry: { persona: 'analyst', agent: 'local-cc-opus-5-5', agentMode: 'suggest', acceptance: ['table of products'], timeboxMin: 30, inputs: [] },
 };
 
 function task(p: Partial<Task>): Task {
@@ -54,27 +54,27 @@ test('instantiate: suggest mode auto-routes, lock pins, override wins', () => {
   assert.match(t.description, /^Audit the gumroad catalog for Oct\./);
   assert.match(t.description, /Known pitfalls[\s\S]*- skip hidden products/);
   assert.match(t.description, /Additional instructions\nBe brief\./);
-  assert.equal(t.context!.brain, undefined);
+  assert.equal(t.context!.agent, undefined);
   assert.deepEqual(t.context!.acceptance, ['table of products']);
   assert.equal(t.context!.timeboxMin, 30);
   assert.deepEqual(t.context!.recipe, { id: r.id, version: 1, name: 'Catalog audit', values: { store: 'gumroad', month: 'Oct' } });
   assert.equal(t.to.agent, 'analyst');
   assert.ok(t.tags!.includes(`recipe:${r.id}`));
 
-  const locked = normalizeRecipe({ ...base, carry: { ...base.carry, brainMode: 'lock' } });
-  assert.equal(instantiate(locked, { values: { month: 'Oct' } }).context!.brain, 'local-cc-opus-5-5');
-  assert.equal(instantiate(locked, { values: { month: 'Oct' }, brain: '' }).context!.brain, undefined);
-  assert.equal(instantiate(r, { values: { month: 'Oct' }, brain: 'b2' }).context!.brain, 'b2');
+  const locked = normalizeRecipe({ ...base, carry: { ...base.carry, agentMode: 'lock' } });
+  assert.equal(instantiate(locked, { values: { month: 'Oct' } }).context!.agent, 'local-cc-opus-5-5');
+  assert.equal(instantiate(locked, { values: { month: 'Oct' }, agent: '' }).context!.agent, undefined);
+  assert.equal(instantiate(r, { values: { month: 'Oct' }, agent: 'b2' }).context!.agent, 'b2');
 });
 
 test('draftFromTask keeps the brief, strips continuation scaffolding and stray braces', () => {
   const d = draftFromTask(task({
     id: 'abc', title: 'Audit', description: 'Do {{x}} thing\n---\nThis task CONTINUES a previous run ("…")',
-    result: 'ok', to: { agent: 'analyst' }, context: { ranBrain: 'b1', acceptance: ['a'], inputFiles: ['f.txt'] },
+    result: 'ok', to: { agent: 'analyst' }, context: { ranAgent: 'b1', acceptance: ['a'], inputFiles: ['f.txt'] },
   }));
   assert.equal(d.brief, 'Do x thing');
-  assert.equal(d.carry.brain, 'b1');
-  assert.equal(d.carry.brainMode, 'suggest');
+  assert.equal(d.carry.agent, 'b1');
+  assert.equal(d.carry.agentMode, 'suggest');
   assert.deepEqual(d.carry.inputs, ['f.txt']);
   assert.equal(d.origin!.taskId, 'abc');
 });

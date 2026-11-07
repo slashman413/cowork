@@ -7,7 +7,7 @@
 
 1. **Goal tokens go to execution tasks, not to the goal loop.** Of 57.0M tokens measured across goal work, execution tasks used 82%, Judgers 15%, Achiever turns 2%, and Attention reviews 1%. A plan that only shrinks the Achiever prompt would save under 1%.
 2. **Nothing records goal tokens today.** Every number here came from reading transcripts by hand. Telemetry comes first, because every later claim depends on it.
-3. **The Achiever loop has four bugs that waste turns and stall goals.** It never receives the Judger's minutes, only a relative path, so it ran `find /` to locate them. It treats a rate-limit message as bad JSON. It never falls through its brain chain. It also throws away the reason a move was rejected. One goal blocked 14 times in 23 hours over a single rate limit.
+3. **The Achiever loop has four bugs that waste turns and stall goals.** It never receives the Judger's minutes, only a relative path, so it ran `find /` to locate them. It treats a rate-limit message as bad JSON. It never falls through its agent chain. It also throws away the reason a move was rejected. One goal blocked 14 times in 23 hours over a single rate limit.
 4. **The page hides the state the CEO needs most.** Three "active" goals are actually asleep until 11-14, 11-15, and 12-18, and the page does not say so. Budget use is not shown. A rate-limit pause looks the same as a real blocker. `Raise the budget` is the suggested fix, but the page has no edit control.
 5. **Recommendation:** ship in six phases: measure, fix the loop, compact the schema, cut execution context, restructure the page, then finish the flows. Each phase has a numeric gate and a flag or revert path.
 
@@ -15,7 +15,7 @@ Expected result, to be proven in phases 0 to 3:
 
 | Metric | Today | Target | Confidence |
 |---|---|---|---|
-| Goal tasks with recorded token usage | 0% | 100% of metered brains | High |
+| Goal tasks with recorded token usage | 0% | 100% of metered agents | High |
 | Achiever first-turn context | 26.5k to 28.8k tokens | ≤ 6k | High, measured |
 | Failed Achiever turns during a known rate limit | 24 of 32 sessions | 0 | High |
 | `GET /api/goals` size | 90 KB | ≤ 3 KB (summary view) | High, prototyped |
@@ -32,7 +32,7 @@ Expected result, to be proven in phases 0 to 3:
 
 **This plan is wrong if any of these hold:**
 
-- Phase 0 telemetry shows execution tasks under 50% of goal tokens once non-Claude brains are counted.
+- Phase 0 telemetry shows execution tasks under 50% of goal tokens once non-Claude agents are counted.
 - The tool-less Achiever disagrees with the current Achiever on more than 15% of replayed decisions, or makes any unsupported `met:true`.
 - Turning off auto-memory lowers the first-pass verification rate by more than 5 points.
 
@@ -40,7 +40,7 @@ Expected result, to be proven in phases 0 to 3:
 
 ### 3.1 Where the tokens go
 
-Sample: every goal-generated task in `inbox/` with a Claude transcript. That is 34 of 52 tasks, plus 32 Achiever sessions. The other 18 tasks ran on non-Claude brains and have no usage data, so Attention is undercounted (1 of 7 metered).
+Sample: every goal-generated task in `inbox/` with a Claude transcript. That is 34 of 52 tasks, plus 32 Achiever sessions. The other 18 tasks ran on non-Claude agents and have no usage data, so Attention is undercounted (1 of 7 metered).
 
 Source: `scripts/measure_usage.py`.
 
@@ -89,10 +89,10 @@ The Achiever's prompt is about 2.9k tokens (cl100k estimate), of which 1.1k is a
 |---|---|---|
 | The prompt sends the minutes **path**, then says "the minutes above" | `server/src/core/goals.ts:482` sets `latestMinutes` to `minutes[...].artifact`; `server/src/core/dispatcher.ts:1085` prints it | 8 of the 13 Bash calls in real turns were for that file, several using `find / -path ...`. The instruction to act on the Judger depends on the agent finding it |
 | Rate-limit text counts as unparseable JSON | 24 of 32 sessions were `<synthetic>` "You've hit your weekly limit". They used 0 tokens but each counted as a failure | `goal-6710dc94`: 14 blocks in 23 hours, 10-21 08:22 to 10-22 07:19 UTC |
-| Only the first local brain in the chain is tried | `execForChain` returns one brain; `askExecutor` has no fallback or cooldown check, while `store.brainCooldownUntil` and `isRateLimitFailure` already exist | The goal's second brain, local Qwen, was never tried |
+| Only the first local agent in the chain is tried | `execForChain` returns one agent; `askExecutor` has no fallback or cooldown check, while `store.agentCooldownUntil` and `isRateLimitFailure` already exist | The goal's second agent, local Qwen, was never tried |
 | Half-open probes pay for a full turn | 3 Opus `block` turns on 10-22 and 10-23, about 65.8k tokens of context each (before the lean profile), each confirming the same expired LINE login | About 197k tokens of context for one repeated answer. The same turn would start near 27k today |
 | The reason for a rejected move is lost | Logs on 11-06: `emit rejected — no workable phase`, then more failed turns | `goal-39dbfa70` has 3 of 3 phases audited, a criterion not yet marked met, and no phase to work on. It has blocked 10 times since 11-05 and is still looping |
-| Raw Achiever output is discarded on failure | The log only says "timeout or unparseable JSON" | The cause on `goal-39dbfa70` (default router brain) **cannot be determined today** |
+| Raw Achiever output is discarded on failure | The log only says "timeout or unparseable JSON" | The cause on `goal-39dbfa70` (default router agent) **cannot be determined today** |
 | `emit` cannot set `tier`, `acceptance`, or `verify` | No goal task carries `tier`; 22 of 52 tasks went through the sharpener, 22 got a spec verdict | Extra LLM calls per task, and 22 of 34 execution tasks ran on Opus |
 | Full Bash on text from untrusted sources | The prompt embeds task results, and the Achiever runs with `--dangerously-skip-permissions` | The judge path already avoids this with `--tools ''` (`server/src/core/dispatcher.ts:1796`) |
 
@@ -206,8 +206,8 @@ Commit `b7d5353e0130`. It has 119 UX guidelines and a searchable database. I ran
 | Mechanism | Change | Measured basis | Expected effect |
 |---|---|---|---|
 | Tool-less Achiever | New `reasonArgv`: `--tools ''`, empty MCP, auto-memory off, empty scratch cwd, no `--dangerously-skip-permissions`. Applies to Claude; other execs unchanged | Matrix E to H | 26.9k to 2.9k before the prompt |
-| Zero-token probes | A block records a typed check: `brain-available`, `file-exists`, `http-200`, or `after-time`. The server runs it, and a turn fires only when it passes | 3 repeated `block` turns at ~65.8k each | No LLM turn per failed probe. No free-form commands: this text comes from an LLM. A login check like the LINE one has no typed form, so those goals keep the capped LLM probe, which emits a mechanical task to run the check |
-| Rate-limit awareness | Use `isRateLimitFailure` and `brainCooldownUntil`; walk the chain; if all are cooling, set `nextRetryAt` to the reset, with no failure counted and no block row | 24 of 32 sessions | Removes the false-block storm |
+| Zero-token probes | A block records a typed check: `agent-available`, `file-exists`, `http-200`, or `after-time`. The server runs it, and a turn fires only when it passes | 3 repeated `block` turns at ~65.8k each | No LLM turn per failed probe. No free-form commands: this text comes from an LLM. A login check like the LINE one has no typed form, so those goals keep the capped LLM probe, which emits a mechanical task to run the check |
+| Rate-limit awareness | Use `isRateLimitFailure` and `agentCooldownUntil`; walk the chain; if all are cooling, set `nextRetryAt` to the reset, with no failure counted and no block row | 24 of 32 sessions | Removes the false-block storm |
 | Auto-memory off for goal tasks | `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`, behind a flag, A/B first | Matrix: −7,643 per run | About 6% of weighted execution tokens |
 | Trim `MEMORY.md` | Bring the 2,422-character LINE sticker line back to a one-line pointer. It breaks the index's own rule | Longest line is 16% of the file | Helps all runs, and is the fallback if the A/B fails |
 | Judger digest | Give the Judger each task's evidence block and artifact list, and cap report and minutes length | Lean Judgers: 20 messages, about 26k output tokens each | Hypothesis: −30% per Judger |
@@ -252,7 +252,7 @@ You have no tools. To read or measure something, emit a task.
 ```jsonc
 // Before: history row, about 560 chars, repeated 34 times on one goal
 {"kind":"block","reason":"Achiever made no usable progress after 5 turns (...)",
- "unblockCriteria":"The Achiever brain is reachable and returns a parseable...","at":"..."}
+ "unblockCriteria":"The Achiever agent is reachable and returns a parseable...","at":"..."}
 
 // After: same-cause cycles coalesce; display text is rendered from the code
 {"kind":"block","code":"achiever_no_progress","count":14,"firstAt":"...","lastAt":"..."}
@@ -271,9 +271,9 @@ You have no tools. To read or measure something, emit a task.
 
 ## 6. Telemetry, the prerequisite
 
-- **Tasks:** the stream parser already sees `total_cost_usd` and `num_turns` (`server/src/core/progress-stream.ts:111-115`). Save `{input, cacheRead, cacheWrite, output, turns, costUsd, brain}` to `task.context.usage`.
+- **Tasks:** the stream parser already sees `total_cost_usd` and `num_turns` (`server/src/core/progress-stream.ts:111-115`). Save `{input, cacheRead, cacheWrite, output, turns, costUsd, agent}` to `task.context.usage`.
 - **Achiever turns:** use `--output-format json` for Claude and append one row per turn to `goals/<id>/achiever-turns.jsonl`, with the raw reply on any parse failure.
-- **Rollup:** per goal and per phase, in `goal-view`. Show unmetered brains as "not metered", never as 0. Whether `agy` reports usage is unknown and is checked in phase 0.
+- **Rollup:** per goal and per phase, in `goal-view`. Show unmetered agents as "not metered", never as 0. Whether `agy` reports usage is unknown and is checked in phase 0.
 
 ## 7. UX enhancements
 
@@ -317,9 +317,9 @@ Desktop (≥1024 px)                                       Mobile (<1024 px)
 ```
 
 - **Level 1, the page:** goals and filters. The explainer moves to a `?` popover. The create form moves to `#goals/new`, so no re-render can touch it.
-- **Level 2, the row:** state, title, next event, phase segments, budget. About 96 px tall, with no log, IDs, or brain chips.
+- **Level 2, the row:** state, title, next event, phase segments, budget. About 96 px tall, with no log, IDs, or agent chips.
 - **Level 3, the detail:** the state line and its one primary action, then the criterion, the latest brief, and progress.
-- **Level 4, the tabs:** Phases (tasks, report, minutes, attention count), Decisions (coalesced, newest first), Files, and Settings (brains, budget, tokens).
+- **Level 4, the tabs:** Phases (tasks, report, minutes, attention count), Decisions (coalesced, newest first), Files, and Settings (agents, budget, tokens).
 - **Sort:** Needs you, Stuck, Running, Retrying, Sleeping by next event, Draft, Paused, then Achieved, collapsed.
 - **Progress:** segments by phase state with a text count. Never a solid "100%" while the goal is unmet.
 
@@ -361,8 +361,8 @@ Rate-limit handling and chain fallback; inline `NEXT MOVE`; rejected-move feedba
 
 | Check | Pass |
 |---|---|
-| Unit test: rate-limit reply on the first brain | Next brain is tried, no failure counted, no block row |
-| Unit test: all brains cooling | `nextRetryAt` equals the reset, 0 spawns until then |
+| Unit test: rate-limit reply on the first agent | Next agent is tried, no failure counted, no block row |
+| Unit test: all agents cooling | `nextRetryAt` equals the reset, 0 spawns until then |
 | Replay about 15 historical contexts, old vs new prompt, on one model | `kind` agrees ≥ 85%; 0 unsupported `met:true`; each disagreement reviewed by hand. The sample is small, so treat it as a smoke test |
 | One real Claude Achiever turn | First-turn context ≤ 6k from `usage` |
 | Prompt budget test on fixtures | ≤ 3k tokens, enforced in CI |

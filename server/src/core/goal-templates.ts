@@ -3,7 +3,7 @@ import type { GoalTemplate } from '../types.js';
 /** Where code lands. pstack's shipping process (opening-a-pr + shipping playbooks)
  *  runs on the LOCAL Forgejo, never `gh`: the user declined `gh` for GitHub, and the
  *  forge-side approve/squash-merge/read-back loop is verified only on Forgejo
- *  (docs/research/pstack-integration-report.md §B). GitHub stays a push mirror. */
+ *. GitHub stays a push mirror. */
 export const FORGE_LANDING = 'Land code through the local Forgejo (http://localhost:3001), never `gh`: create the repo there if it is missing (wayne/<repo>, add it as the `forgejo` remote), push a branch, open a ready PR titled `type(scope): subject`, get a PASS verdict on the current head SHA from an agent that did not write the code, squash-merge, read the PR back as merged, then fast-forward local main and push it to every remote (`git remote` lists them).';
 
 /** pstack's autonomous-run loop (poteto-mode playbooks/autonomous-run.md), made

@@ -1,9 +1,9 @@
 import { readdirSync, readFileSync } from 'node:fs';
 
 /**
- * Kill a brain process AND everything it started.
+ * Kill an agent process AND everything it started.
  *
- * `child.kill()` only signals the direct child. Brains are process trees — the
+ * `child.kill()` only signals the direct child. Agents are process trees — the
  * `env` wrapper exec()s into `dsh`/`claude`/`codex`, which in turn run tool
  * shells, curl loops, python scripts… — so killing the top pid (or nothing at
  * all, as task delete used to do) left the tree running, still hammering the
@@ -12,7 +12,7 @@ import { readdirSync, readFileSync } from 'node:fs';
  * Strategy (Linux):
  *   1. snapshot the descendant tree from /proc (pid + start time, so a recycled
  *      pid is never signalled later);
- *   2. SIGTERM the process group (the brain is spawned `detached`, so its pgid is
+ *   2. SIGTERM the process group (the agent is spawned `detached`, so its pgid is
  *      its own pid) and every snapshotted descendant — this also catches tool
  *      shells that moved to their own group/session;
  *   3. after `graceMs`, SIGKILL whatever of the group / snapshot is still alive.

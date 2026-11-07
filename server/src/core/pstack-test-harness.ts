@@ -7,10 +7,10 @@ import { Store } from './store.js';
 import { EventBus } from './events.js';
 import type { Config, Task } from '../types.js';
 
-export const BRAINS: Record<string, any> = {
+export const AGENTS: Record<string, any> = {
   'local-cc-opus-5-5': { location: 'local', exec: 'claude', model: 'claude-opus-5-5' },
-  'local-agy-gemini-4-argon-medium': { location: 'local', exec: 'agy', model: 'gemini-4-argon-medium' },
-  'local-agy-gemini-3.8-flash-high': { location: 'local', exec: 'agy', model: 'gemini-3.8-flash-high' },
+  'local-agy-gemini-4-argon': { location: 'local', exec: 'agy', model: 'gemini-4-argon-medium' },
+  'local-agy-gemini-3.8-flash': { location: 'local', exec: 'agy', model: 'gemini-3.8-flash-high' },
   'local-dsh-qwen3-8-27b': { location: 'local', exec: 'dsh', model: 'qwen3.8-27b' },
 };
 
@@ -25,10 +25,10 @@ export function pstackHarness(orchExtra: Record<string, any> = {}) {
     server: { port: 6868, host: '127.0.0.1' }, paths, platforms: {}, inbox: { maxRetries: 3 },
     orchestration: {
       maxConcurrent: 2,
-      verifier: { enabled: true, llm: { enabled: true }, spec: { enabled: false, judges: { default: ['local-agy-gemini-4-argon-medium'] } }, panel: { enabled: true, size: 2 } },
-      tiers: { judgment: ['local-cc-opus-5-5'], standard: ['local-agy-gemini-4-argon-medium'], mechanical: ['local-dsh-qwen3-8-27b', 'local-agy-gemini-3.8-flash-high'] },
-      agents: { engineer: { description: '', brains: ['local-cc-opus-5-5'] } },
-      brains: BRAINS,
+      verifier: { enabled: true, llm: { enabled: true }, spec: { enabled: false, judges: { default: ['local-agy-gemini-4-argon'] } }, panel: { enabled: true, size: 2 } },
+      tiers: { judgment: ['local-cc-opus-5-5'], standard: ['local-agy-gemini-4-argon'], mechanical: ['local-dsh-qwen3-8-27b', 'local-agy-gemini-3.8-flash'] },
+      roleChains: { engineer: { description: '', agents: ['local-cc-opus-5-5'] } },
+      agents: AGENTS,
       ...orchExtra,
     },
   } as unknown as Config;

@@ -15,7 +15,7 @@ import type { Task } from '../types.js';
 const T0 = Date.parse('2026-10-13T00:00:00Z');
 const at = (min: number) => new Date(T0 + min * 60_000).toISOString();
 const lesson = (p: Partial<Lesson>): Lesson => ({
-  at: at(0), kind: 'verify-fail', task: 't', titleSlug: '', agent: '', brain: 'b1', brainFamily: 'b', attempt: 1, reason: '', requiresGuess: [], ...p,
+  at: at(0), kind: 'verify-fail', task: 't', titleSlug: '', persona: '', agent: 'b1', agentFamily: 'b', attempt: 1, reason: '', requiresGuess: [], ...p,
 } as Lesson);
 
 test('classifyRejection buckets the ledger reason shapes', () => {
@@ -43,8 +43,8 @@ test('classifyWaitInput: human-only wins over a permission phrasing', () => {
 test('computeQualityMetrics: classes, repeat rate-limit share, wait-input mix, timeouts/week', () => {
   const lessons = [
     lesson({ at: at(0), reason: "You've hit your session limit · resets 6:10am (Asia/Taipei)" }),
-    lesson({ at: at(1), reason: "You've hit your session limit · resets 6:10am (Asia/Taipei)" }),   // repeat <30m, same brain
-    lesson({ at: at(2), brain: 'b2', reason: 'rate limit reached' }),                                  // other brain → not a repeat
+    lesson({ at: at(1), reason: "You've hit your session limit · resets 6:10am (Asia/Taipei)" }),   // repeat <30m, same agent
+    lesson({ at: at(2), agent: 'b2', reason: 'rate limit reached' }),                                  // other agent → not a repeat
     lesson({ at: at(60), reason: 'rate limit reached' }),                                              // >30m after → not a repeat
     lesson({ at: at(70), reason: 'TIMEOUT after 3000000ms' }),
     lesson({ at: at(80), reason: 'exit code 1' }),
@@ -56,7 +56,7 @@ test('computeQualityMetrics: classes, repeat rate-limit share, wait-input mix, t
   const tasks = [
     { id: 'a', status: 'done', createdAt: at(0), completedAt: at(5), context: { dispatched: true, hasEvidence: true, acceptance: ['x'] } },
     { id: 'b', status: 'done', createdAt: at(0), completedAt: at(6), context: { dispatched: true, hasEvidence: false, resultStatus: 'DONE_WITH_CONCERNS' } },
-    { id: 'c', status: 'pending', createdAt: at(0), context: { dispatched: true, tier: 'mechanical', ranBrain: 'local-cc-opus-5-5', failedBrains: [{ brain: 'local-dsh-qwen3-8-27b' }] } },
+    { id: 'c', status: 'pending', createdAt: at(0), context: { dispatched: true, tier: 'mechanical', ranAgent: 'local-cc-opus-5-5', failedAgents: [{ agent: 'local-dsh-qwen3-8-27b' }] } },
     { id: 'd', status: 'scheduled', createdAt: at(0), context: {} },                                        // never dispatched → not in acceptance %
   ] as unknown as Task[];
   const m = computeQualityMetrics(lessons, tasks, T0 - 60_000, T0 + 7 * 86_400_000);
@@ -169,7 +169,7 @@ test('shadow gate counts only APPROVED + CHANGES_REQUESTED; UNVERIFIABLE never r
     ({ id, status: 'done', createdAt: at(min), completedAt: at(min), context: { specVerdict: { verdict, at: at(min), ...extra } } });
   const tasks = [
     // 9 UNVERIFIABLE (the 2026-10-20 window had 8/14) …
-    ...Array.from({ length: 7 }, (_, i) => sv(`nj${i}`, 'UNVERIFIABLE', i, { summary: 'UNVERIFIABLE — no judge brain available (disabled or cooling)' })),
+    ...Array.from({ length: 7 }, (_, i) => sv(`nj${i}`, 'UNVERIFIABLE', i, { summary: 'UNVERIFIABLE — no judge agent available (disabled or cooling)' })),
     sv('cr0', 'UNVERIFIABLE', 10, { crashed: true, summary: 'UNVERIFIABLE — judge crashed or timed out (fail-open)' }),
     sv('ju0', 'UNVERIFIABLE', 11, { cause: 'judge-unverifiable', summary: 'all criteria unverifiable' }),
     // … and only 5 decisive verdicts.
@@ -208,7 +208,7 @@ test('shadow gate honours minDecisive / maxFalseRejectRate overrides and the win
 
 test('unverifiableCause: explicit cause wins; legacy records classified from summary / crashed', () => {
   assert.equal(unverifiableCause({ cause: 'judge-crashed' }), 'judge-crashed');
-  assert.equal(unverifiableCause({ summary: 'UNVERIFIABLE — no judge brain available (disabled or cooling)' }), 'no-judge');
+  assert.equal(unverifiableCause({ summary: 'UNVERIFIABLE — no judge agent available (disabled or cooling)' }), 'no-judge');
   assert.equal(unverifiableCause({ crashed: true, summary: 'judge crashed' }), 'judge-crashed');
   assert.equal(unverifiableCause({ summary: 'criteria could not be checked' }), 'judge-unverifiable');
 });

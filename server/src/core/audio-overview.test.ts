@@ -34,17 +34,17 @@ test('voiceFor maps language + speaker', () => {
 });
 
 test('parseBrief validates sources and falls back to defaults', () => {
-  const ao = new AudioOverview({ defaultBrain: 'b1', brains: ['b1', 'b2'] });
+  const ao = new AudioOverview({ defaultAgent: 'b1', agents: ['b1', 'b2'] });
   assert.throws(() => ao.parseBrief({ source: { kind: 'text', text: 'short' } }), /too short/);
   assert.throws(() => ao.parseBrief({ source: { kind: 'x' } }), /unknown source/);
   assert.throws(() => ao.parseBrief({ source: { kind: 'note' } }), /note/);
-  const b = ao.parseBrief({ source: { kind: 'task', taskId: '../abc', file: 'outputs/r.md' }, style: 'dialogue', lang: 'en', length: 'medium', brain: 'nope' });
-  assert.deepEqual([b.style, b.lang, b.length, b.brain], ['dialogue', 'en', 'medium', 'b1']);
+  const b = ao.parseBrief({ source: { kind: 'task', taskId: '../abc', file: 'outputs/r.md' }, style: 'dialogue', lang: 'en', length: 'medium', agent: 'nope' });
+  assert.deepEqual([b.style, b.lang, b.length, b.agent], ['dialogue', 'en', 'medium', 'b1']);
   assert.equal((b.source as any).taskId, 'abc');
   assert.equal(ao.parseBrief({ source: { kind: 'text', text: 'x'.repeat(30) } }).lang, 'zh-TW');
 });
 
-test('buildTask: tagged, tells the brain to use the render script and tag turns', () => {
+test('buildTask: tagged, tells the agent to use the render script and tag turns', () => {
   const ao = new AudioOverview();
   const t = ao.buildTask(ao.parseBrief({ source: { kind: 'text', text: 'y'.repeat(50) }, style: 'dialogue', lang: 'en' }), 'SRC BODY', 'pasted text');
   assert.deepEqual(t.tags, [AUDIO_OVERVIEW_TAG]);

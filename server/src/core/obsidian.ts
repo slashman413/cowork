@@ -4,19 +4,19 @@ import os from 'os';
 import type { ObsidianConfig } from '../types.js';
 
 /**
- * Read/search access to a shared Obsidian Vault, exposed to every brain as a
+ * Read/search access to a shared Obsidian Vault, exposed to every agent as a
  * common knowledge base.
  *
  * WHY THIS LIVES IN THE SERVER: the vault is a plain folder of Markdown on the
- * server host. A LOCAL brain (same machine) could read it straight off disk at
- * `vaultPath`, but a REMOTE brain can't — so the server owns one read path and
+ * server host. A LOCAL agent (same machine) could read it straight off disk at
+ * `vaultPath`, but a REMOTE agent can't — so the server owns one read path and
  * offers it two ways over the network: the /api/obsidian/* REST endpoints and
- * the obsidian_* MCP tools (both back onto this class). Local brains may still
+ * the obsidian_* MCP tools (both back onto this class). Local agents may still
  * hit the filesystem directly; `root` is reported to them via obsidian_info so
  * they know where it is.
  *
  * READ-ONLY BY DESIGN: nothing here writes to the vault. It is a knowledge base
- * the brains consult, not a scratch space — task output belongs in the task's
+ * the agents consult, not a scratch space — task output belongs in the task's
  * artifacts dir (see Cowork Operating Rules §1).
  */
 

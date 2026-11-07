@@ -15,7 +15,7 @@ import { sanitizeCheck, type Goals } from '../core/goals.js';
  *   GET    /goals/:id                 one goal + derived state, usage, task rows
  *   GET    /goals/:id/history         the complete audit trail (oldest first)
  *   GET    /goals/:id/turns           Achiever turn log (usage, raw failed replies)
- *   PATCH  /goals/:id                 edit criteria/phases/brains/budget
+ *   PATCH  /goals/:id                 edit criteria/phases/agents/budget
  *   POST   /goals/:id/activate        draft/paused/blocked → active (resume)
  *   POST   /goals/:id/pause           active → paused
  *   POST   /goals/:id/block           recoverable hold, with reason + unblockCriteria
@@ -38,8 +38,8 @@ export function createGoalRouter(goals: Goals): Router {
         successCriteria: b.successCriteria,
         reportBrief: b.reportBrief,
         phases: Array.isArray(b.phases) ? b.phases : [],
-        achieverBrainChain: b.achieverBrainChain,
-        judgerBrainChain: b.judgerBrainChain,
+        achieverAgentChain: b.achieverAgentChain,
+        judgerAgentChain: b.judgerAgentChain,
         stepBudget: b.stepBudget,
         tokenBudget: b.tokenBudget
       });

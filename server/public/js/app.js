@@ -61,20 +61,20 @@ function resetsInLong(iso) {
 
 // "remote-ai-code-gen-cc-fable" → "cc-fable"; "local-cc-opus-5-5" → "cc-opus".
 // Falls back to the raw id when no exec marker is present.
-function shortBrain(id) {
+function shortAgent(id) {
   const m = String(id).match(/(cc|agy|codex|ollama|hermes|dsh|ha)-[^]*$/);
   return m ? m[0] : String(id);
 }
 
-// Usage meters for the metered brains among `brainIds` (rate-limit % + reset).
-// Brains with no usage snapshot (hermes/ollama/script — no quota) simply don't
-// appear. Brains sharing one account (e.g. all cc-* on a host) produce identical
-// snapshots, so meters are grouped per exec instead of repeated per brain. The
-// brain names themselves aren't repeated here — the card already lists them in
+// Usage meters for the metered agents among `agentIds` (rate-limit % + reset).
+// Agents with no usage snapshot (hermes/ollama/script — no quota) simply don't
+// appear. Agents sharing one account (e.g. all cc-* on a host) produce identical
+// snapshots, so meters are grouped per exec instead of repeated per agent. The
+// agent names themselves aren't repeated here — the card already lists them in
 // its capabilities section, so the rate-limit block shows only the meters.
-function usageMeters(brainIds, usage) {
+function usageMeters(agentIds, usage) {
   const byExec = new Map();
-  for (const id of brainIds || []) {
+  for (const id of agentIds || []) {
     const u = usage?.[id];
     if (!u?.windows?.length) continue;
     const existing = byExec.get(u.exec);
@@ -94,8 +94,8 @@ function usageMeters(brainIds, usage) {
   if (!byExec.size) return '';
   const blocks = [...byExec.entries()].map(([exec, { u }]) => {
     const stale = Date.now() - new Date(u.at).getTime() > 1800000;
-    return `<div class="usage-brain">
-      <div class="usage-brain-head">
+    return `<div class="usage-agent">
+      <div class="usage-agent-head">
         ${badge(exec, '#7C3AED')}
         <span class="usage-at"${stale ? ' style="color:#EAB308"' : ''} title="${esc(new Date(u.at).toLocaleString())}">measured ${timeAgo(u.at)}</span>
       </div>
@@ -109,19 +109,19 @@ function usageMeters(brainIds, usage) {
 const EXEC_TITLES = { agy: 'Antigravity', claude: 'Claude Code', codex: 'Codex', hermes: 'Hermes', ollama: 'Ollama' };
 
 // One full-width card per LOCAL metered exec (claude / codex / antigravity),
-// stacked vertically. Brains sharing one account produce one snapshot, so they
-// collapse to a single card listing all their brain names. Cards have flexible
+// stacked vertically. Agents sharing one account produce one snapshot, so they
+// collapse to a single card listing all their agent names. Cards have flexible
 // height so the grouped Antigravity quota renders in full.
-function localBrainCards(localBrains, usage) {
+function localAgentCards(localAgents, usage) {
   const byExec = new Map();
-  for (const id of localBrains || []) {
+  for (const id of localAgents || []) {
     const u = usage?.[id];
     if (!u?.windows?.length) continue;
     const existing = byExec.get(u.exec);
     if (!existing) {
-      byExec.set(u.exec, { u: { ...u, windows: [...(u.windows || [])] }, names: [shortBrain(id)] });
+      byExec.set(u.exec, { u: { ...u, windows: [...(u.windows || [])] }, names: [shortAgent(id)] });
     } else {
-      existing.names.push(shortBrain(id));
+      existing.names.push(shortAgent(id));
       for (const w of u.windows || []) {
         if (!existing.u.windows.some(ew => ew.label === w.label && ew.group === w.group && ew.title === w.title)) {
           existing.u.windows.push(w);
@@ -277,7 +277,7 @@ function isTaskFailed(t) {
     || (t.status === 'done' && typeof t.result === 'string' && /^FAILED\b/i.test(t.result.trim()));
 }
 
-// A `done` task CLOSED administratively without ever running a brain (a
+// A `done` task CLOSED administratively without ever running an agent (a
 // superseded scheduled duplicate, a pre-empted cancel). It has no artifacts dir
 // and no result.md because it never entered the dispatcher's run path, so a
 // plain green "done" card with an empty artifacts list looks like a silent
@@ -323,7 +323,7 @@ function isoToLocalInput(iso) {
 
 /**
  * Recurrence editor — a compact "Repeat" widget shared by the New-task composer,
- * the Edit modal and the brain-dispatch schedule sheet. It renders a cadence
+ * the Edit modal and the agent-dispatch schedule sheet. It renders a cadence
  * <select> (none / minutes / hours / daily / weekly / monthly / cron) plus the
  * fields each cadence needs, and reads back a `recurrence` object matching the
  * server's core/recurrence.ts schema. Wall-clock times are the browser's local
@@ -546,21 +546,21 @@ function artifactChips(taskId, files, fontSize = '0.9rem', kind = 'artifacts', t
     + (more > 0 ? `<span style="font-size:${fontSize}; color:var(--text-muted); padding:0 4px">+${more.toLocaleString()} more on disk</span>` : '');
 }
 
-/** Brain chip accent (translucent bg / border / text share one hue). */
-const BRAIN_COLOR = '#F97316';        // orange
-const BRAIN_BAD_COLOR = '#EF4444';    // unknown / deregistered brain
+/** Agent chip accent (translucent bg / border / text share one hue). */
+const AGENT_COLOR = '#F97316';        // orange
+const AGENT_BAD_COLOR = '#EF4444';    // unknown / deregistered agent
 
 /**
- * Sorted brain ids that may be PICKED to run a task. Disabled brains are
+ * Sorted agent ids that may be PICKED to run a task. Disabled agents are
  * excluded everywhere a task is dispatched or scheduled (new-task, continue/
- * re-run, edit-task) so a disabled brain can never be assigned — mirroring the
- * dispatcher, which strips disabled brains from every chain and pin. The Brains
- * management page still lists disabled brains (with the Enable toggle); it uses
- * the raw /api/brains map directly, not this helper.
+ * re-run, edit-task) so a disabled agent can never be assigned — mirroring the
+ * dispatcher, which strips disabled agents from every chain and pin. The Agents
+ * management page still lists disabled agents (with the Enable toggle); it uses
+ * the raw /api/agents map directly, not this helper.
  */
-function agyWindowMatchesModel(modelOrBrainId, w) {
+function agyWindowMatchesModel(modelOrAgentId, w) {
   if (!w?.group) return true;
-  const target = (modelOrBrainId || '').toLowerCase();
+  const target = (modelOrAgentId || '').toLowerCase();
   const group = (w.group || '').toLowerCase();
   const title = (w.title || '').toLowerCase();
   const note = (w.groupNote || '').toLowerCase();
@@ -584,14 +584,14 @@ function agyWindowMatchesModel(modelOrBrainId, w) {
   return group.includes(target) || target.includes(group);
 }
 
-/** Reset time (Date) of a brain's rate limit window — prefers an exhausted (≥100%)
+/** Reset time (Date) of an agent's rate limit window — prefers an exhausted (≥100%)
  *  window that is actively cooling down, or falls back to the rate limit reset time
- *  for metered brains so rate limits remain visible in pickers — or null. */
-function brainCooldownUntil(u, brainId) {
+ *  for metered agents so rate limits remain visible in pickers — or null. */
+function agentCooldownUntil(u, agentId) {
   let until = 0;
   let futureReset = 0;
   for (const w of (u && Array.isArray(u.windows)) ? u.windows : []) {
-    if (brainId && u?.exec === 'agy' && !agyWindowMatchesModel(brainId, w)) continue;
+    if (agentId && u?.exec === 'agy' && !agyWindowMatchesModel(agentId, w)) continue;
     const used = typeof w.usedPct === 'number' ? w.usedPct : (typeof w.remainingPct === 'number' ? 100 - w.remainingPct : 0);
     const at = w.resetsAt ? Date.parse(w.resetsAt) : NaN;
     if (Number.isFinite(at) && at > Date.now()) {
@@ -603,23 +603,31 @@ function brainCooldownUntil(u, brainId) {
   return chosen ? new Date(chosen) : null;
 }
 
-function selectableBrainIds(brains) {
-  return Object.keys(brains || {}).filter(id => !brains[id]?.disabled).sort();
+// Thinking level picker: a run parameter, separate from which agent runs.
+// `inherit` names what an empty choice falls back to.
+const THINKING_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
+function thinkingOptions(current = '', inherit = 'agent default, else medium') {
+  return [`<option value=""${current ? '' : ' selected'}>Default (${esc(inherit)})</option>`]
+    .concat(THINKING_LEVELS.map(l => `<option value="${l}"${l === current ? ' selected' : ''}>${l}</option>`)).join('');
+}
+
+function selectableAgentIds(agents) {
+  return Object.keys(agents || {}).filter(id => !agents[id]?.disabled).sort();
 }
 
 /**
- * One rung of a brain fallback chain: draggable, in the translucent chip style.
- * Used by both the Brains default chain and every Agents chain so reordering
+ * One rung of an agent fallback chain: draggable, in the translucent chip style.
+ * Used by both the Agents default chain and every Agents chain so reordering
  * looks and behaves the same everywhere.
  */
-function chainChip(brain, i, total, known) {
-  const c = known ? BRAIN_COLOR : BRAIN_BAD_COLOR;
-  return `<span class="dchip" draggable="true" data-brain="${esc(brain)}"
-    title="${known ? `rung ${i + 1} of ${total} — drag to reorder` : 'unknown brain (deregistered)'}"
+function chainChip(agent, i, total, known) {
+  const c = known ? AGENT_COLOR : AGENT_BAD_COLOR;
+  return `<span class="dchip" draggable="true" data-agent="${esc(agent)}"
+    title="${known ? `rung ${i + 1} of ${total} — drag to reorder` : 'unknown agent (deregistered)'}"
     style="display:inline-flex;align-items:center;gap:6px;cursor:grab;background:${c}18;border:1px solid ${c}40;color:${c};padding:4px 9px;border-radius:8px;font-size:0.8rem;margin:3px">
     <i data-lucide="grip-vertical" style="width:12px;height:12px;opacity:.5"></i>
-    <b style="opacity:.6">${i + 1}</b> ${esc(brain)}${known ? '' : ' ⚠'}
-    <a data-rm="${esc(brain)}" title="remove" style="cursor:pointer">✕</a></span>`;
+    <b style="opacity:.6">${i + 1}</b> ${esc(agent)}${known ? '' : ' ⚠'}
+    <a data-rm="${esc(agent)}" title="remove" style="cursor:pointer">✕</a></span>`;
 }
 
 /**
@@ -653,7 +661,7 @@ class App {
     this.inboxLimit = 50;
     this.openTasks = new Set();  // retained (task cards no longer expand); harmless legacy state
     this.taskFilesOpen = new Set();  // inbox task ids whose RESULT / ARTIFACTS / INPUTS / INTERACTION block is expanded (collapsed by default)
-    this.agents = new Map();   // agent UUID → { name, platform } for human-readable labels
+    this.workers = new Map();   // worker UUID → { name, platform } for human-readable labels
 
     this.contentEl = document.getElementById('content');
     this.viewTitleEl = document.getElementById('view-title');
@@ -787,7 +795,7 @@ class App {
       // Mirrors the repo layout.json, so an older server without /api/layout
       // (or a failed fetch) still gets the familiar nav.
       const app = { tasks: ['Tasks', 'inbox'], recipes: ['Recipes', 'chef-hat'], calendar: ['Calendar', 'calendar-days'],
-        goals: ['Goals', 'target'], routing: ['Routing', 'bot'], brains: ['Brains', 'cpu'], personas: ['Personas', 'users-round'],
+        goals: ['Goals', 'target'], routing: ['Routing', 'bot'], agents: ['Agents', 'cpu'], personas: ['Personas', 'users-round'],
         workers: ['Workers', 'plug'], config: ['Configuration', 'settings'] };
       const pages = {
         overview: { id: 'overview', type: 'dashboard', label: 'Overview', icon: 'layout-dashboard',
@@ -798,7 +806,7 @@ class App {
       for (const [id, [label, icon]] of Object.entries(app)) pages[id] = { id, type: id, label, icon };
       this.layout = { brand: { title: 'Cowork', icon: 'zap', footer: 'Cowork Server' }, defaultPage: 'overview', pages,
         sections: [{ label: 'Operations', pages: ['overview', 'portal', 'tasks', 'recipes', 'calendar', 'goals'] },
-                   { label: 'AI Fleet', pages: ['routing', 'brains', 'personas'] },
+                   { label: 'AI Fleet', pages: ['routing', 'agents', 'personas'] },
                    { label: 'System', pages: ['workers', 'config'] }],
         errors: [], fallback: e.message };
       console.warn('layout.json unavailable, using built-in default:', e.message);
@@ -870,7 +878,7 @@ class App {
     if (data.type !== 'heartbeat') {
       // Only toast events the operator actually acts on; claim/handover chatter
       // still lands in the Live Activity feed without stealing attention.
-      if (['taskCreated', 'taskCompleted', 'reportFiled', 'agentRegistered'].includes(data.type)) {
+      if (['taskCreated', 'taskCompleted', 'reportFiled', 'workerRegistered'].includes(data.type)) {
         this.toast(data.type, this.describeEvent(data));
       }
       // A full re-render replaces the view's DOM, which would wipe whatever the
@@ -906,34 +914,34 @@ class App {
   }
 
   // Map an agent UUID to its human-readable name (falls back to a short id).
-  agentLabel(id) {
+  workerLabel(id) {
     if (!id) return '';
-    const a = this.agents.get(id);
+    const a = this.workers.get(id);
     return a ? a.name : id.slice(0, 8);
   }
 
-  // Refresh the UUID→name map from the full active-agent list (includes the
+  // Refresh the UUID→name map from the full active-worker list (includes the
   // internal dispatcher/orchestrator, unlike /connections). Call before
   // rendering views that show agent ids: dashboard, inbox, connections.
-  async refreshAgents() {
+  async refreshWorkers() {
     try {
-      const agents = await this.api.get('/agents');
-      (Array.isArray(agents) ? agents : []).forEach(a => this.agents.set(a.id, { name: a.agentName, platform: a.platform }));
+      const workers = await this.api.get('/workers');
+      (Array.isArray(workers) ? workers : []).forEach(a => this.workers.set(a.id, { name: a.workerName, platform: a.platform }));
     } catch { /* keep whatever we have */ }
   }
 
   describeEvent(e) {
     const p = e.payload || {};
     switch (e.type) {
-      case 'agentRegistered':
-        if (p.agent?.id) this.agents.set(p.agent.id, { name: p.agent.agentName, platform: p.agent.platform });
-        return `${p.agent?.agentName} (${p.agent?.platform}) joined`;
+      case 'workerRegistered':
+        if (p.worker?.id) this.workers.set(p.worker.id, { name: p.worker.workerName, platform: p.worker.platform });
+        return `${p.worker?.workerName} (${p.worker?.platform}) joined`;
       case 'taskCreated': return p.task?.title;
-      case 'taskClaimed': return `claimed by ${this.agentLabel(p.task?.claimedBy || p.agentId)}: ${p.task?.title}`;
+      case 'taskClaimed': return `claimed by ${this.workerLabel(p.task?.claimedBy || p.workerId)}: ${p.task?.title}`;
       case 'taskCompleted': return `done: ${p.task?.title}`;
       case 'reportFiled': return p.report?.title;
-      case 'heartbeat': return `${this.agentLabel(p.agentId)} → ${p.status}`;
-      default: return p.task?.title || p.agent?.agentName || humanizeKey(e.type);
+      case 'heartbeat': return `${this.workerLabel(p.workerId)} → ${p.status}`;
+      default: return p.task?.title || p.worker?.workerName || humanizeKey(e.type);
     }
   }
 
@@ -1145,72 +1153,76 @@ class App {
   }
 
   /**
-   * Confirm a continue/re-run AND let the user choose which brain claims the
-   * task. Renders the shared #modal-container with a brain <select> (populated
-   * from /api/brains, "Auto" = route via the agent's chain). Resolves to
-   * { brain, prompt, files } — brain '' meaning Auto — or null if the user
-   * cancels. `defaultBrain` pre-selects the brain the task would otherwise use.
+   * Confirm a continue/re-run AND let the user choose which agent claims the
+   * task. Renders the shared #modal-container with an agent <select> (populated
+   * from /api/agents, "Auto" = route via the role's agent chain). Resolves to
+   * { agent, prompt, files } — agent '' meaning Auto — or null if the user
+   * cancels. `defaultAgent` pre-selects the agent the task would otherwise use.
    *
    * With `withInputs: true` the dialog also offers an extra-prompt textarea and
    * a file-attach control (mirrors the New task composer): `prompt` is the typed
    * steer and `files` the staged File[] the caller uploads on confirm. Callers
-   * that omit `withInputs` (e.g. re-run) get the same `{ brain }` as before —
-   * `prompt` is '' and `files` is empty, so reading only `.brain` is safe.
+   * that omit `withInputs` (e.g. re-run) get the same `{ agent }` as before —
+   * `prompt` is '' and `files` is empty, so reading only `.agent` is safe.
    */
-  async pickBrain({ title, body, defaultBrain = '', confirmLabel = 'Confirm', confirmColor = '#22C55E', withInputs = false, withSchedule = true }) {
+  async pickAgent({ title, body, defaultAgent = '', confirmLabel = 'Confirm', confirmColor = '#22C55E', withInputs = false, withSchedule = true }) {
     const container = document.getElementById('modal-container');
     const content = document.getElementById('modal-content');
     if (!container || !content) {   // no modal markup → degrade to a plain confirm
-      return window.confirm(`${title}\n\n${body.replace(/<[^>]+>/g, '')}`) ? { brain: defaultBrain, prompt: '', files: [], scheduledAt: '' } : null;
+      return window.confirm(`${title}\n\n${body.replace(/<[^>]+>/g, '')}`) ? { agent: defaultAgent, prompt: '', files: [], scheduledAt: '' } : null;
     }
-    let brains = {}, usage = {};
+    let agents = {}, usage = {};
     await Promise.all([
-      this.api.get('/brains').then(r => { brains = r || {}; }).catch(() => { /* registry unreachable → Auto only */ }),
+      this.api.get('/agents').then(r => { agents = r || {}; }).catch(() => { /* registry unreachable → Auto only */ }),
       this.api.get('/connections').then(r => { usage = r?.usage || {}; }).catch(() => { /* meters unavailable → no cooldown labels */ })
     ]);
-    const ids = selectableBrainIds(brains);
-    const opts = [`<option value="">🧠 Auto — route via the agent's brain chain</option>`]
+    const ids = selectableAgentIds(agents);
+    const opts = [`<option value="">🤖 Auto — route via the role's agent chain</option>`]
       .concat(ids.map(b => {
-        const until = brainCooldownUntil(usage[b], brains[b]?.model || b);
+        const until = agentCooldownUntil(usage[b], agents[b]?.model || b);
         const note = until ? ` — ⏳ rate-limited until ${until.toLocaleString()}` : '';
-        return `<option value="${esc(b)}"${b === defaultBrain ? ' selected' : ''}>${esc(b + note)}</option>`;
+        return `<option value="${esc(b)}"${b === defaultAgent ? ' selected' : ''}>${esc(b + note)}</option>`;
       })).join('');
     const fieldStyle = 'width:100%; padding:9px 10px; background:var(--bg-tertiary); border:1px solid var(--border-color); border-radius:8px; color:inherit; font:inherit; font-size:0.9rem';
     const labelStyle = 'display:block; font-size:0.72rem; text-transform:uppercase; letter-spacing:.04em; color:var(--text-muted); margin-bottom:6px';
     // Optional extra-steer block — appended to the follow-up's brief and inputs.
+    const thinkingBlock = `
+      <label style="${labelStyle}" for="agent-thinking">Thinking</label>
+      <select id="agent-thinking" style="${fieldStyle}; margin-bottom:12px">${thinkingOptions()}</select>`;
     const inputsBlock = withInputs ? `
       <label style="${labelStyle}">Additional prompt <span style="text-transform:none; letter-spacing:0">(optional — extra instructions for this continuation)</span></label>
-      <textarea id="brain-prompt" rows="4" style="${fieldStyle}; margin-bottom:16px; resize:vertical" placeholder="e.g. Now add unit tests and a migration guide."></textarea>
+      <textarea id="agent-prompt" rows="4" style="${fieldStyle}; margin-bottom:16px; resize:vertical" placeholder="e.g. Now add unit tests and a migration guide."></textarea>
       <label style="${labelStyle}">Extra input files <span style="text-transform:none; letter-spacing:0">(optional — attached alongside the prior run's outputs)</span></label>
-      <div id="brain-attachments" style="display:none; flex-wrap:wrap; gap:6px; margin-bottom:8px"></div>
-      <input type="file" id="brain-files" multiple style="display:none">
-      <button class="btn" id="brain-attach" type="button" style="font-size:0.8rem; margin:0 0 20px; display:inline-flex; align-items:center; gap:6px"><i data-lucide="paperclip" style="width:14px;height:14px"></i> Attach files</button>` : '';
+      <div id="agent-attachments" style="display:none; flex-wrap:wrap; gap:6px; margin-bottom:8px"></div>
+      <input type="file" id="agent-files" multiple style="display:none">
+      <button class="btn" id="agent-attach" type="button" style="font-size:0.8rem; margin:0 0 20px; display:inline-flex; align-items:center; gap:6px"><i data-lucide="paperclip" style="width:14px;height:14px"></i> Attach files</button>` : '';
     const scheduleBlock = withSchedule ? `
       <label style="${labelStyle}">Run scheduled <span style="text-transform:none; letter-spacing:0">(optional — leave blank to run now)</span></label>
-      <input id="brain-when" type="datetime-local" style="${fieldStyle}; margin-bottom:12px">
+      <input id="agent-when" type="datetime-local" style="${fieldStyle}; margin-bottom:12px">
       <label style="${labelStyle}">Loop interval <span style="text-transform:none; letter-spacing:0">(optional — hours to wait before recurring)</span></label>
-      <input id="brain-loop" type="number" min="1" step="any" style="${fieldStyle}; margin-bottom:16px" placeholder="e.g. 1 for every hour">` : '';
+      <input id="agent-loop" type="number" min="1" step="any" style="${fieldStyle}; margin-bottom:16px" placeholder="e.g. 1 for every hour">` : '';
     content.innerHTML = `
       <h3 style="margin:0 0 8px; font-size:1.05rem">${esc(title)}</h3>
       <p style="font-size:0.85rem; color:var(--text-secondary); margin:0 0 16px; line-height:1.5">${body}</p>
-      <label style="${labelStyle}">Brain to claim this task</label>
-      <select id="brain-pick" style="${fieldStyle}; margin-bottom:${withInputs || withSchedule ? '16px' : '20px'}">${opts}</select>
+      <label style="${labelStyle}">Agent to claim this task</label>
+      <select id="agent-pick" style="${fieldStyle}; margin-bottom:${withInputs || withSchedule ? '16px' : '20px'}">${opts}</select>
+      ${thinkingBlock}
       ${inputsBlock}
       ${scheduleBlock}
       <div style="display:flex; gap:8px; justify-content:flex-end">
-        <button class="btn" id="brain-cancel" style="font-size:0.85rem">Cancel</button>
-        <button class="btn" id="brain-ok" style="font-size:0.85rem; color:${confirmColor}; border-color:${confirmColor}66">${esc(confirmLabel)}</button>
+        <button class="btn" id="agent-cancel" style="font-size:0.85rem">Cancel</button>
+        <button class="btn" id="agent-ok" style="font-size:0.85rem; color:${confirmColor}; border-color:${confirmColor}66">${esc(confirmLabel)}</button>
       </div>`;
     container.classList.remove('hidden');
     if (withInputs) createIcons();
-    content.querySelector('#brain-pick').focus();
+    content.querySelector('#agent-pick').focus();
 
     // Files stage client-side and upload only on confirm (mirrors createTaskModal),
     // so a cancelled dialog leaves no orphaned uploads.
     const staged = [];
     if (withInputs) {
-      const attBox = content.querySelector('#brain-attachments');
-      const fileEl = content.querySelector('#brain-files');
+      const attBox = content.querySelector('#agent-attachments');
+      const fileEl = content.querySelector('#agent-files');
       const renderStaged = () => {
         if (!staged.length) { attBox.style.display = 'none'; attBox.innerHTML = ''; return; }
         attBox.style.display = 'flex';
@@ -1227,7 +1239,7 @@ class App {
         }));
         createIcons();
       };
-      content.querySelector('#brain-attach').onclick = () => fileEl.click();
+      content.querySelector('#agent-attach').onclick = () => fileEl.click();
       fileEl.onchange = () => { staged.push(...Array.from(fileEl.files || [])); fileEl.value = ''; renderStaged(); };
     }
 
@@ -1240,24 +1252,25 @@ class App {
       };
       const onKey = (ev) => { if (ev.key === 'Escape') close(null); };
       document.addEventListener('keydown', onKey);
-      content.querySelector('#brain-ok').onclick = () => {
+      content.querySelector('#agent-ok').onclick = () => {
         let when = '';
         let loopHours = undefined;
         if (withSchedule) {
-          const val = content.querySelector('#brain-when').value;
+          const val = content.querySelector('#agent-when').value;
           if (val) when = new Date(val).toISOString();
-          const loopVal = content.querySelector('#brain-loop').value;
+          const loopVal = content.querySelector('#agent-loop').value;
           if (loopVal) loopHours = parseFloat(loopVal);
         }
         close({
-          brain: content.querySelector('#brain-pick').value,
-          prompt: withInputs ? content.querySelector('#brain-prompt').value.trim() : '',
+          agent: content.querySelector('#agent-pick').value,
+          thinking: content.querySelector('#agent-thinking').value,
+          prompt: withInputs ? content.querySelector('#agent-prompt').value.trim() : '',
           files: staged.slice(),
           scheduledAt: when,
           loopIntervalHours: loopHours
         });
       };
-      content.querySelector('#brain-cancel').onclick = () => close(null);
+      content.querySelector('#agent-cancel').onclick = () => close(null);
       container.querySelector('.modal-backdrop').onclick = () => close(null);
     });
   }
@@ -1266,22 +1279,22 @@ class App {
    * "＋ New task" modal — create and dispatch a task from the Inbox without the
    * Chat detour. Same POST /inbox contract as Chat: an agent pick from the
    * roster stamps context.agent (the dispatcher runs that persona on its
-   * division's brain chain), attached files upload to task inputs the brain
-   * reads, and brain pinning mirrors pickBrain ('' = auto-route via the chain).
+   * division's agent chain), attached files upload to task inputs the agent
+   * reads, and agent pinning mirrors pickAgent ('' = auto-route via the chain).
    */
   // prefill.scheduledAt (ISO) pre-fills Run at — the Calendar opens this on an empty slot.
   async createTaskModal(prefill = {}) {
     const container = document.getElementById('modal-container');
     const content = document.getElementById('modal-content');
     if (!container || !content) return;
-    let brains = {};
+    let agents = {};
     let divisions = {};
     let usage = {};
     let pstack = { playbooks: ['investigation', 'bug-fix', 'feature', 'research-report', 'content', 'ops-change',
       'technical-writing', 'perf-issue', 'refactoring', 'prototype', 'runtime-forensics', 'eval', 'opening-a-pr', 'babysit'], skills: [] };
     // Feeds are optional — missing registry/roster degrades to Auto.
     await Promise.all([
-      this.api.get('/brains').then(r => { brains = r || {}; }).catch(() => {}),
+      this.api.get('/agents').then(r => { agents = r || {}; }).catch(() => {}),
       this.api.get('/roster-divisions').then(r => { divisions = r || {}; }).catch(() => {}),
       this.api.get('/connections').then(r => { usage = r?.usage || {}; }).catch(() => {}),
       this.api.get('/pstack').then(r => { pstack = r || pstack; }).catch(() => {})
@@ -1293,14 +1306,14 @@ class App {
     // rendered differently from every other picker in this dialog).
     const skillOpts = [`<option value="">${(pstack.skills || []).length ? 'none' : 'none (no skills under vendor/pstack/skills)'}</option>`]
       .concat((pstack.skills || []).map(k => `<option value="${esc(k)}">${esc(k)}</option>`)).join('');
-    const opts = [`<option value="">🧠 Auto — route via the agent's brain chain</option>`]
-      .concat(selectableBrainIds(brains).map(b => {
-        const until = brainCooldownUntil(usage[b], brains[b]?.model || b);
+    const opts = [`<option value="">🤖 Auto — route via the role's agent chain</option>`]
+      .concat(selectableAgentIds(agents).map(b => {
+        const until = agentCooldownUntil(usage[b], agents[b]?.model || b);
         const note = until ? ` — ⏳ rate-limited until ${until.toLocaleString()}` : '';
         return `<option value="${esc(b)}">${esc(b + note)}</option>`;
       })).join('');
-    const divOpts = [`<option value="">🤖 Auto — let the router pick the agent</option>`]
-      .concat(Object.entries(divisions).sort().map(([d, i]) => `<option value="${esc(d)}">${esc(i.label || d)} (${i.agents.length})</option>`)).join('');
+    const divOpts = [`<option value="">🎭 Auto — let the router pick the persona</option>`]
+      .concat(Object.entries(divisions).sort().map(([d, i]) => `<option value="${esc(d)}">${esc(i.label || d)} (${i.personas.length})</option>`)).join('');
     const fieldStyle = 'width:100%; padding:9px 10px; background:var(--bg-tertiary); border:1px solid var(--border-color); border-radius:8px; color:inherit; font:inherit; font-size:0.9rem';
     const labelStyle = 'display:block; font-size:0.72rem; text-transform:uppercase; letter-spacing:.04em; color:var(--text-muted); margin:0 0 6px';
     content.innerHTML = `
@@ -1310,10 +1323,10 @@ class App {
       <input id="nt-title" style="${fieldStyle}; margin-bottom:12px" placeholder="Short imperative title…" autocomplete="off">
       <label style="${labelStyle}" for="nt-desc">Brief (markdown) <span style="color:#EF4444">*</span></label>
       <textarea id="nt-desc" rows="6" style="${fieldStyle}; margin-bottom:12px; resize:vertical" placeholder="What should the agent do? Include acceptance criteria."></textarea>
-      <label style="${labelStyle}">Agent <span style="text-transform:none; letter-spacing:0">(optional — pick a division, then the agent that studies the files & does the work)</span></label>
+      <label style="${labelStyle}">Persona <span style="text-transform:none; letter-spacing:0">(optional — pick a division, then the persona that studies the files & does the work)</span></label>
       <div class="modal-row" style="margin-bottom:12px">
         <div><select id="nt-div" style="${fieldStyle}">${divOpts}</select></div>
-        <div><select id="nt-agent" style="${fieldStyle}" disabled><option value="">— none —</option></select></div>
+        <div><select id="nt-persona" style="${fieldStyle}" disabled><option value="">— none —</option></select></div>
       </div>
       <div class="modal-row" style="margin-bottom:12px">
         <div>
@@ -1346,9 +1359,11 @@ class App {
       </div>
       <label style="${labelStyle}" for="nt-skill" title="The executor reads vendor/pstack/skills/&lt;name&gt;/SKILL.md">pstack skill <span style="text-transform:none; letter-spacing:0">(optional)</span></label>
       <select id="nt-skill" style="${fieldStyle}; margin-bottom:12px" title="The executor reads vendor/pstack/skills/&lt;name&gt;/SKILL.md"${(pstack.skills || []).length ? '' : ' disabled'}>${skillOpts}</select>
-      <label style="${labelStyle}" for="nt-brain">Brain to claim this task</label>
-      <select id="nt-brain" style="${fieldStyle}; margin-bottom:12px">${opts}</select>
-      <label style="${labelStyle}">Input files <span style="text-transform:none; letter-spacing:0">(optional — attached for the agent/brain to study)</span></label>
+      <label style="${labelStyle}" for="nt-agent">Agent to claim this task</label>
+      <select id="nt-agent" style="${fieldStyle}; margin-bottom:12px">${opts}</select>
+      <label style="${labelStyle}" for="nt-thinking">Thinking</label>
+      <select id="nt-thinking" style="${fieldStyle}; margin-bottom:12px">${thinkingOptions()}</select>
+      <label style="${labelStyle}">Input files <span style="text-transform:none; letter-spacing:0">(optional — attached for the persona/agent to study)</span></label>
       <div id="nt-attachments" style="display:none; flex-wrap:wrap; gap:6px; margin-bottom:8px"></div>
       <input type="file" id="nt-files" multiple style="display:none">
       <button class="btn" id="nt-attach" type="button" style="font-size:0.8rem; display:inline-flex; align-items:center; gap:6px"><i data-lucide="paperclip" style="width:14px;height:14px"></i> Attach files</button>
@@ -1400,13 +1415,13 @@ class App {
     // Division → agent: the agent list is scoped to the chosen division, matching
     // the two-stage roster picker in Chat. Empty division = auto-route.
     const divEl = content.querySelector('#nt-div');
-    const agentEl = content.querySelector('#nt-agent');
+    const personaEl = content.querySelector('#nt-persona');
     divEl.onchange = () => {
       const info = divEl.value ? divisions[divEl.value] : null;
-      const agentOpts = info ? info.agents.slice().sort((a, b) => a.name.localeCompare(b.name))
+      const personaOpts = info ? info.personas.slice().sort((a, b) => a.name.localeCompare(b.name))
         .map(a => `<option value="${esc(a.slug)}">${esc(a.name)}</option>`).join('') : '';
-      agentEl.innerHTML = `<option value="">— any agent in this division —</option>${agentOpts}`;
-      agentEl.disabled = !info;
+      personaEl.innerHTML = `<option value="">— any persona in this division —</option>${personaOpts}`;
+      personaEl.disabled = !info;
     };
 
     // Files are staged client-side and uploaded on Create (mirrors the Chat
@@ -1441,18 +1456,20 @@ class App {
       const description = descEl.value.trim();
       if (!title) { showError('Title is required.', titleEl); return; }
       if (!description) { showError('Brief is required — tell the agent what to do.', descEl); return; }
-      const brain = content.querySelector('#nt-brain').value;
+      const agent = content.querySelector('#nt-agent').value;
+      const thinking = content.querySelector('#nt-thinking').value;
       const division = divEl.value;
-      const agent = agentEl.value;
+      const persona = personaEl.value;
       // datetime-local gives a LOCAL wall-clock string; toISOString converts it
       // to the UTC instant the server schedules on. Empty = run now (default).
       const when = content.querySelector('#nt-when').value;
       const recurrence = readRecurrence(content, 'nt-rec');
       // Context mirrors Chat: a named agent wins (dispatcher derives its division
-      // + persona); otherwise a bare division scopes the router. Brain pins on top.
+      // + persona); otherwise a bare division scopes the router. Agent pins on top.
       const context = {};
-      if (brain) context.brain = brain;
-      if (agent) context.agent = agent; else if (division) context.division = division;
+      if (agent) context.agent = agent;
+      if (thinking) context.thinking = thinking;
+      if (persona) context.persona = persona; else if (division) context.division = division;
       // pstack triggers (G9): playbook card, review gate, explicit skill.
       const method = content.querySelector('#nt-method').value;
       const review = content.querySelector('#nt-review').value;
@@ -1482,8 +1499,8 @@ class App {
         await this.api.post('/inbox', body);
         submitting = false;
         close();
-        const target = agent ? `agent ${agent}` : division ? `${divisions[division]?.label || division} division` : null;
-        const routeNote = brain ? `pinned to ${brain}` : target ? `routed to ${target}` : 'auto-routed via the brain chain';
+        const target = persona ? `persona ${persona}` : division ? `${divisions[division]?.label || division} division` : null;
+        const routeNote = agent ? `pinned to ${agent}` : target ? `routed to ${target}` : 'auto-routed via the agent chain';
         const fileNote = inputs.length ? ` · ${inputs.length} file(s) attached` : '';
         this.toast('task created', `${when ? `Scheduled for ${new Date(when).toLocaleString()}` : 'Queued'} — ${routeNote}${fileNote}.`);
         if (this.currentView === 'tasks') this.renderInbox();
@@ -1515,27 +1532,27 @@ class App {
     catch (err) { this.toast('error', err.message); return; }
     if (!task) { this.toast('error', 'Task not found'); return; }
     if (!isTaskEditable(task)) { this.toast('cannot edit', `Task is ${task.status} — only tasks that are not running or pending can be edited.`); return; }
-    let brains = {}, divisions = {}, usage = {};
+    let agents = {}, divisions = {}, usage = {};
     await Promise.all([
-      this.api.get('/brains').then(r => { brains = r || {}; }).catch(() => {}),
+      this.api.get('/agents').then(r => { agents = r || {}; }).catch(() => {}),
       this.api.get('/roster-divisions').then(r => { divisions = r || {}; }).catch(() => {}),
       this.api.get('/connections').then(r => { usage = r?.usage || {}; }).catch(() => {})
     ]);
     const ctx = task.context || {};
-    const curBrain = ctx.brainAuto ? '' : (ctx.brain || '');
+    const curAgent = ctx.agentAuto ? '' : (ctx.agent || '');
     const curDivision = ctx.division || '';
-    const curAgent = ctx.agent || '';
-    // A pin to a now-disabled brain resolves to Auto at dispatch (the dispatcher
+    const curPersona = ctx.persona || '';
+    // A pin to a now-disabled agent resolves to Auto at dispatch (the dispatcher
     // treats a disabled pin as absent), so it's not offered here either.
-    const curBrainSelectable = curBrain && !brains[curBrain]?.disabled;
-    const brainOpts = [`<option value=""${curBrainSelectable ? '' : ' selected'}>🧠 Auto — route via the agent's brain chain</option>`]
-      .concat(selectableBrainIds(brains).map(b => {
-        const until = brainCooldownUntil(usage[b], brains[b]?.model || b);
+    const curAgentSelectable = curAgent && !agents[curAgent]?.disabled;
+    const agentOpts = [`<option value=""${curAgentSelectable ? '' : ' selected'}>🤖 Auto — route via the role's agent chain</option>`]
+      .concat(selectableAgentIds(agents).map(b => {
+        const until = agentCooldownUntil(usage[b], agents[b]?.model || b);
         const note = until ? ` — ⏳ rate-limited until ${until.toLocaleString()}` : '';
-        return `<option value="${esc(b)}"${b === curBrain ? ' selected' : ''}>${esc(b + note)}</option>`;
+        return `<option value="${esc(b)}"${b === curAgent ? ' selected' : ''}>${esc(b + note)}</option>`;
       })).join('');
-    const divOpts = [`<option value=""${curDivision ? '' : ' selected'}>🤖 Auto — let the router pick the agent</option>`]
-      .concat(Object.entries(divisions).sort().map(([d, i]) => `<option value="${esc(d)}"${d === curDivision ? ' selected' : ''}>${esc(i.label || d)} (${i.agents.length})</option>`)).join('');
+    const divOpts = [`<option value=""${curDivision ? '' : ' selected'}>🎭 Auto — let the router pick the persona</option>`]
+      .concat(Object.entries(divisions).sort().map(([d, i]) => `<option value="${esc(d)}"${d === curDivision ? ' selected' : ''}>${esc(i.label || d)} (${i.personas.length})</option>`)).join('');
     const prioOpts = ['normal', 'low', 'high', 'urgent']
       .map(p => `<option value="${p}"${(task.priority || 'normal') === p ? ' selected' : ''}>${p}</option>`).join('');
     const fieldStyle = 'width:100%; padding:9px 10px; background:var(--bg-tertiary); border:1px solid var(--border-color); border-radius:8px; color:inherit; font:inherit; font-size:0.9rem';
@@ -1553,18 +1570,20 @@ class App {
       ${(ctx.acceptance && Array.isArray(ctx.acceptance)) ? `
       <label style="${labelStyle}">Acceptance criteria (one per line) ${ctx.acceptanceSource === 'sharpened' ? '<span class="badge" style="background:#0EA5E918; color:#0EA5E9; border:1px solid #0EA5E940; font-size:0.65rem; text-transform:none">sharpened</span>' : ''}</label>
       <textarea id="et-acceptance" rows="4" style="${fieldStyle}; margin-bottom:12px; resize:vertical">${esc(ctx.acceptance.join('\n'))}</textarea>` : ''}
-      <label style="${labelStyle}">Agent <span style="text-transform:none; letter-spacing:0">(optional — division, then agent)</span></label>
+      <label style="${labelStyle}">Persona <span style="text-transform:none; letter-spacing:0">(optional — division, then persona)</span></label>
       <div style="display:flex; gap:8px; margin-bottom:12px">
         <select id="et-div" style="${fieldStyle}; flex:1">${divOpts}</select>
-        <select id="et-agent" style="${fieldStyle}; flex:1"><option value="">— none —</option></select>
+        <select id="et-persona" style="${fieldStyle}; flex:1"><option value="">— none —</option></select>
       </div>
       <label style="${labelStyle}">Priority</label>
       <select id="et-priority" style="${fieldStyle}; margin-bottom:12px">${prioOpts}</select>
       <label style="${labelStyle}">Run at <span style="text-transform:none; letter-spacing:0">(optional — ${finished ? 'set a future time to re-run; ' : ''}leave empty to run now)</span></label>
       <input id="et-when" type="datetime-local" style="${fieldStyle}; margin-bottom:12px" value="${esc(isoToLocalInput(task.scheduledAt))}">
       ${recurrenceEditorHTML('et-rec', fieldStyle, labelStyle, task.recurrence || (task.loopIntervalHours ? { type: 'hours', interval: task.loopIntervalHours } : null))}
-      <label style="${labelStyle}">Brain to claim this task</label>
-      <select id="et-brain" style="${fieldStyle}; margin-bottom:20px">${brainOpts}</select>
+      <label style="${labelStyle}">Agent to claim this task</label>
+      <select id="et-agent" style="${fieldStyle}; margin-bottom:12px">${agentOpts}</select>
+      <label style="${labelStyle}" for="et-thinking">Thinking</label>
+      <select id="et-thinking" style="${fieldStyle}; margin-bottom:20px">${thinkingOptions(ctx.thinking || '')}</select>
       <div style="display:flex; gap:8px; justify-content:flex-end">
         <button class="btn" id="et-cancel" style="font-size:0.85rem">Cancel</button>
         <button class="btn" id="et-ok" style="font-size:0.85rem; color:#0EA5E9; border-color:#0EA5E966">💾 Save</button>
@@ -1585,25 +1604,26 @@ class App {
 
     // Division → agent (scoped list), pre-selecting the task's current agent.
     const divEl = content.querySelector('#et-div');
-    const agentEl = content.querySelector('#et-agent');
-    const fillAgents = (selectSlug) => {
+    const personaEl = content.querySelector('#et-persona');
+    const fillPersonas = (selectSlug) => {
       const info = divEl.value ? divisions[divEl.value] : null;
-      const agentOpts = info ? info.agents.slice().sort((a, b) => a.name.localeCompare(b.name))
+      const personaOpts = info ? info.personas.slice().sort((a, b) => a.name.localeCompare(b.name))
         .map(a => `<option value="${esc(a.slug)}"${a.slug === selectSlug ? ' selected' : ''}>${esc(a.name)}</option>`).join('') : '';
-      agentEl.innerHTML = `<option value="">— any agent in this division —</option>${agentOpts}`;
-      agentEl.disabled = !info;
+      personaEl.innerHTML = `<option value="">— any persona in this division —</option>${personaOpts}`;
+      personaEl.disabled = !info;
     };
-    fillAgents(curAgent);
-    divEl.onchange = () => fillAgents('');
+    fillPersonas(curPersona);
+    divEl.onchange = () => fillPersonas('');
 
     content.querySelector('#et-ok').onclick = async () => {
       const title = content.querySelector('#et-title').value.trim();
       const description = content.querySelector('#et-desc').value.trim();
       if (!title) { content.querySelector('#et-title').style.borderColor = '#EF4444'; return; }
       if (!description) { content.querySelector('#et-desc').style.borderColor = '#EF4444'; return; }
-      const brain = content.querySelector('#et-brain').value;
+      const agent = content.querySelector('#et-agent').value;
+      const thinking = content.querySelector('#et-thinking').value;
       const division = divEl.value;
-      const agent = agentEl.value;
+      const persona = personaEl.value;
       const when = content.querySelector('#et-when').value;
       const recurrence = readRecurrence(content, 'et-rec');
       const accEl = content.querySelector('#et-acceptance');
@@ -1612,7 +1632,7 @@ class App {
       okBtn.disabled = true;
       // context mirrors createTask: a named agent wins (dispatcher derives its
       // division); otherwise a bare division scopes the router. '' clears a pin.
-      const context = { brain, agent: agent || '', division: agent ? '' : division };
+      const context = { agent, thinking, persona: persona || '', division: persona ? '' : division };
       const body = {
         title, description,
         priority: content.querySelector('#et-priority').value,
@@ -1703,7 +1723,7 @@ class App {
         case 'calendar': await this.renderCalendar(); break;
         case 'goals': await this.renderGoals(); break;
         case 'routing': await this.renderTeam(); break;
-        case 'brains': await this.renderBrains(); break;
+        case 'agents': await this.renderAgents(); break;
         case 'personas': await this.renderRoster(); break;
         case 'config': await this.renderConfig(); break;
         default: await this.renderDashboard(this.currentPage); break;
@@ -1735,7 +1755,7 @@ class App {
       (has('stats') || has('platforms')) ? this.api.get('/status') : null,
       has('dispatcher') ? this.api.get('/dispatcher').catch(() => null) : null,
       has('services') ? this.api.get('/portal').catch(() => null) : null,
-      has('activity') ? this.refreshAgents() : null,
+      has('activity') ? this.refreshWorkers() : null,
       qw ? this.api.get(`/metrics/quality?days=${qw.days || 7}`).catch(() => null) : null,
       rw ? this.api.get(`/rulings?days=${rw.days || 7}`).catch(() => null) : null,
     ]);
@@ -1790,7 +1810,7 @@ class App {
           return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
         };
         const defs = {
-          workers: ['bot', s.activeAgents, 'Active Workers'],
+          workers: ['bot', s.activeWorkers, 'Active Workers'],
           openTasks: ['inbox', (sum.pending || 0) + (sum.inProgress || 0),
             `Open Tasks (${(sum.completed || 0) - (sum.failed || 0)} done${sum.failed ? `, ${sum.failed} failed` : ''}${sum.scheduled ? `, ${sum.scheduled} scheduled` : ''}${sum.waitingInput ? `, ${sum.waitingInput} wait input` : ''})`],
           personas: ['users', s.rosterCount, 'Personas'],
@@ -1833,14 +1853,14 @@ class App {
         const rows = list.slice(0, w.limit || 15).map(r => `<p style="margin:6px 0; font-size:0.85rem">
             ${badge(r.ruling.startsWith('AUTO-ANSWER: ') ? 'auto-answer' : 'ruling', r.ruling.startsWith('AUTO-ANSWER: ') ? '#F59E0B' : '#7C3AED')}
             ${esc(r.ruling.replace(/^AUTO-ANSWER: /, ''))}
-            <span style="color:var(--text-muted)">${esc(r.task.slice(0, 8))} · ${esc(r.agent || '—')} · ${esc(r.brain || '—')} · ${timeAgo(r.date)}</span></p>`).join('');
+            <span style="color:var(--text-muted)">${esc(r.task.slice(0, 8))} · ${esc(r.persona || '—')} · ${esc(r.agent || '—')} · ${timeAgo(r.date)}</span></p>`).join('');
         return `<div class="card">${head('gavel', w.title || `Rulings · last ${w.days || 7} days (${list.length})`)}<div style="max-height:340px; overflow-y:auto">${rows || '<p style="color:var(--text-muted); font-size:0.85rem">No rulings in this window</p>'}</div></div>`;
       }
 
       case 'dispatcher': {
         const roles = dispatcher
-          ? Object.entries(dispatcher.agents || {}).map(([name, a]) =>
-              `<tr><td style="padding:3px 12px 3px 0">${badge(name, '#7C3AED')}</td><td style="color:var(--text-secondary); font-size:0.85rem">${esc((a.brains || []).join(' → '))}</td></tr>`).join('')
+          ? Object.entries(dispatcher.roleChains || {}).map(([name, a]) =>
+              `<tr><td style="padding:3px 12px 3px 0">${badge(name, '#7C3AED')}</td><td style="color:var(--text-secondary); font-size:0.85rem">${esc((a.agents || []).join(' → '))}</td></tr>`).join('')
           : '';
         const running = dispatcher?.running?.length
           ? dispatcher.running.map(r =>
@@ -2190,11 +2210,11 @@ class App {
   }
 
   async renderConnectionsInner() {
-    const { clients, counters, usage = {}, localBrains = [] } = await this.api.get('/connections');
+    const { clients, counters, usage = {}, localAgents = [] } = await this.api.get('/connections');
     const clientCards = clients.map(a => `
       <div class="card agent-card conn-local-card">
         <div class="agent-header">
-          <span class="agent-title">${esc(a.agentName)}</span>
+          <span class="agent-title">${esc(a.workerName)}</span>
           ${badge(a.live ? 'live' : 'stale', a.live ? '#22C55E' : '#94A3B8')}
         </div>
         <p style="margin:6px 0">${badge(a.platform, '#D97757')} ${badge(a.status, STATUS_COLORS[a.status] || '#94A3B8')}</p>
@@ -2206,15 +2226,15 @@ class App {
         </div>
       </div>`);
 
-    // The cowork host's own metered brains (local claude/codex/antigravity) don't
+    // The cowork host's own metered agents (local claude/codex/antigravity) don't
     // belong to any MCP client, but their quota matters just as much when picking
-    // a brain. Give each exec its OWN full-width card, stacked vertically, so the
+    // an agent. Give each exec its OWN full-width card, stacked vertically, so the
     // taller ones (Antigravity's grouped per-model quota) have room to breathe
     // instead of being crammed into a grid column.
-    const localCards = localBrainCards(localBrains, usage);
+    const localCards = localAgentCards(localAgents, usage);
     const localHtml = localCards.length ? `
       <div class="conn-section-label" style="display:flex;justify-content:space-between;align-items:center">
-        <div>Local brains <span>· run by the dispatcher on this host</span></div>
+        <div>Local agents <span>· run by the dispatcher on this host</span></div>
         <button id="btn-refresh-usage" class="btn btn-sm" style="display:inline-flex;align-items:center;gap:4px;font-size:0.75rem;padding:2px 8px;cursor:pointer" title="Refresh rate limits">
           <i data-lucide="refresh-cw" style="width:12px;height:12px"></i> Refresh
         </button>
@@ -2225,19 +2245,19 @@ class App {
       : `<div class="empty-state"><div class="empty-state-icon"><i data-lucide="plug"></i></div><h3>No live MCP clients</h3><p>External clients appear here when they register + heartbeat.</p></div>`;
     const cardsHtml = `${localHtml}${localHtml && clientCards.length ? `<div class="conn-section-label" style="margin-top:var(--space-lg)">MCP clients <span>· external agents that register + heartbeat</span></div>` : ''}${clientsHtml}`;
 
-    // Invocation counters: per client × per brain (ran / submitted)
+    // Invocation counters: per client × per agent (ran / submitted)
     const clientsSet = new Set([...Object.keys(counters.ran || {}), ...Object.keys(counters.submitted || {})]);
     const counterRows = [...clientsSet].map(cl => {
       const ran = counters.ran?.[cl] || {}, sub = counters.submitted?.[cl] || {};
-      const brains = [...new Set([...Object.keys(ran), ...Object.keys(sub)])];
-      return brains.map(b => `<tr><td style="padding:2px 10px 2px 0">${esc(cl)}</td><td style="padding:2px 10px 2px 0">${badge(b, '#7C3AED')}</td><td style="text-align:right;padding-right:12px">${ran[b] || 0}</td><td style="text-align:right">${sub[b] || 0}</td></tr>`).join('');
+      const agents = [...new Set([...Object.keys(ran), ...Object.keys(sub)])];
+      return agents.map(b => `<tr><td style="padding:2px 10px 2px 0">${esc(cl)}</td><td style="padding:2px 10px 2px 0">${badge(b, '#7C3AED')}</td><td style="text-align:right;padding-right:12px">${ran[b] || 0}</td><td style="text-align:right">${sub[b] || 0}</td></tr>`).join('');
     }).join('');
 
     this.contentEl.innerHTML = `
       ${cardsHtml}
       <div class="card" style="margin-top:var(--space-lg)">
-        <h3 style="font-size:0.95rem; margin-bottom:8px">Brain invocations <span style="font-size:0.72rem;color:var(--text-muted);font-weight:400">(this session · resets on restart)</span></h3>
-        ${counterRows ? `<table style="font-size:0.83rem"><thead><tr style="color:var(--text-muted);font-size:0.75rem"><th style="text-align:left">client</th><th style="text-align:left">brain</th><th style="text-align:right;padding-right:12px">ran</th><th style="text-align:right">submitted</th></tr></thead><tbody>${counterRows}</tbody></table>` : '<p style="color:var(--text-muted);font-size:0.85rem">No invocations yet.</p>'}
+        <h3 style="font-size:0.95rem; margin-bottom:8px">Agent invocations <span style="font-size:0.72rem;color:var(--text-muted);font-weight:400">(this session · resets on restart)</span></h3>
+        ${counterRows ? `<table style="font-size:0.83rem"><thead><tr style="color:var(--text-muted);font-size:0.75rem"><th style="text-align:left">client</th><th style="text-align:left">agent</th><th style="text-align:right;padding-right:12px">ran</th><th style="text-align:right">submitted</th></tr></thead><tbody>${counterRows}</tbody></table>` : '<p style="color:var(--text-muted);font-size:0.85rem">No invocations yet.</p>'}
       </div>`;
 
     const btnRefresh = this.contentEl.querySelector('#btn-refresh-usage');
@@ -2262,13 +2282,13 @@ class App {
   // ── Inbox ──────────────────────────────────────────────────────────────
 
   /**
-   * Make one chain container drag-sortable. `save(orderedBrainIds)` is called on
-   * drop and on ✕ removal. Shared by the Brains default chain and every Agents
+   * Make one chain container drag-sortable. `save(orderedAgentIds)` is called on
+   * drop and on ✕ removal. Shared by the Agents default chain and every Agents
    * chain so reordering behaves identically everywhere.
    */
   wireChainDnd(container, save) {
     if (!container) return;
-    const ids = () => [...container.querySelectorAll('.dchip')].map(c => c.dataset.brain);
+    const ids = () => [...container.querySelectorAll('.dchip')].map(c => c.dataset.agent);
     let dragged = null;
     container.querySelectorAll('.dchip').forEach(c => {
       c.addEventListener('dragstart', () => { dragged = c; c.style.opacity = '.4'; });
@@ -2370,12 +2390,12 @@ class App {
   // (SSE: redraw just the card an event names).
   taskCardHTML(t) {
     const c = t.context || {};
-    // Which agent + brain ran it (item 5), or the requested assignment.
-    const agentLabel = c.ranAgent ? (c.ranDivision ? `${c.ranDivision} / ${c.ranAgent}` : c.ranAgent)
-      : (c.division ? `${c.division} / ${c.agent || '?'}` : (c.agent || c.role || ''));
-    const brainLabel = c.ranBrain || c.brain || '';
-    // Fallback trail: brains that failed verification and were handed over.
-    const failedBrains = Array.isArray(c.failedBrains) ? c.failedBrains : [];
+    // Which persona + agent ran it (item 5), or the requested assignment.
+    const personaLabel = c.ranPersona ? (c.ranDivision ? `${c.ranDivision} / ${c.ranPersona}` : c.ranPersona)
+      : (c.division ? `${c.division} / ${c.persona || '?'}` : (c.persona || c.role || ''));
+    const agentLabel = c.ranAgent || c.agent || '';
+    // Fallback trail: agents that failed verification and were handed over.
+    const failedAgents = Array.isArray(c.failedAgents) ? c.failedAgents : [];
     const failed = isTaskFailed(t);
     // done, but closed administratively without ever running (superseded copy,
     // pre-empted cancel) — badged distinctly so its empty artifacts list is not
@@ -2411,28 +2431,28 @@ class App {
     // Files can be attached while a task is still schedulable, or to a failed one
     // (attach context, then re-run).
     const canAttach = ['pending', 'wait-input', 'scheduled'].includes(t.status) || failed;
-    // Vertical brain fallback chain — brains in the order they were tried, the
+    // Vertical agent fallback chain — agents in the order they were tried, the
     // last one at the bottom. Failed rungs are red with their reason; the final
-    // (running / successful) brain sits at the end.
-    const chain = failedBrains.map(f => ({
-      brain: f.brain, reason: f.reason || 'failed', ok: false
+    // (running / successful) agent sits at the end.
+    const chain = failedAgents.map(f => ({
+      agent: f.agent, reason: f.reason || 'failed', ok: false
     }));
-    const lastFailed = failedBrains.length ? failedBrains[failedBrains.length - 1].brain : null;
-    if (brainLabel && brainLabel !== lastFailed) chain.push({ brain: brainLabel, ok: !failed, final: true });
-    const chainHtml = chain.length ? `<div class="task-brain-chain" style="display:flex; flex-direction:column; gap:3px; padding:2px 0 6px">
+    const lastFailed = failedAgents.length ? failedAgents[failedAgents.length - 1].agent : null;
+    if (agentLabel && agentLabel !== lastFailed) chain.push({ agent: agentLabel, ok: !failed, final: true });
+    const chainHtml = chain.length ? `<div class="task-agent-chain" style="display:flex; flex-direction:column; gap:3px; padding:2px 0 6px">
       ${chain.map((r, i) => {
-        const col = r.ok ? '#22C55E' : (r.final ? BRAIN_COLOR : '#EF4444');
+        const col = r.ok ? '#22C55E' : (r.final ? AGENT_COLOR : '#EF4444');
         const icon = r.ok ? '✓' : (r.final ? '●' : '✗');
         return `<div style="display:flex; align-items:center; gap:6px; font-size:0.8rem">
           <span style="width:14px; text-align:right; color:var(--text-muted); font-size:0.7rem">${i + 1}</span>
-          <span class="badge" style="background:${col}18; color:${col}; border:1px solid ${col}40">${icon} ${esc(r.brain)}</span>
+          <span class="badge" style="background:${col}18; color:${col}; border:1px solid ${col}40">${icon} ${esc(r.agent)}</span>
           ${r.reason ? `<span style="color:var(--text-muted); font-size:0.74rem">${esc(r.reason)}</span>` : ''}
         </div>`;
       }).join('')}
     </div>` : '';
 
     // (2) PENDING — why is this task still waiting? The dispatcher annotates each
-    // pending task with context.pendingReason (free slot / brain at capacity /
+    // pending task with context.pendingReason (free slot / agent at capacity /
     // routing / remote-unclaimed / deps / held-manual). Shown only while pending.
     const pendingReason = (t.status === 'pending' && c.pendingReason) ? String(c.pendingReason) : '';
     const pendingHtml = pendingReason ? `<div class="task-pending-why" style="display:flex; align-items:flex-start; gap:6px; margin:2px 0 6px; padding:6px 9px; border-radius:8px; background:#EAB30814; border:1px solid #EAB30833; color:var(--text-secondary); font-size:0.8rem">
@@ -2440,7 +2460,7 @@ class App {
       <span>${esc(pendingReason)}${c.pendingReasonAt ? ` <span style="color:var(--text-muted)">· ${esc(timeAgo(c.pendingReasonAt))}</span>` : ''}</span>
     </div>` : '';
 
-    // (1) IN-PROGRESS — a live progress-log window streaming what the brain is
+    // (1) IN-PROGRESS — a live progress-log window streaming what the agent is
     // doing right now. Filled + auto-scrolled by pollInboxProgress() polling
     // GET /inbox/:id/progress (the tail of artifacts/<id>/progress.log).
     const isRunning = t.status === 'in-progress' || t.status === 'claimed';
@@ -2462,8 +2482,8 @@ class App {
         <input type="checkbox" data-autorerun="${esc(t.id)}" ${c.autoRerunOnReset !== false ? 'checked' : ''} style="width:15px;height:15px;cursor:pointer;accent-color:#F97316">
         <span><i data-lucide="refresh-cw" style="width:12px;height:12px;vertical-align:-1px;margin-right:3px"></i>Auto re-run when the rate limit resets${rlResetOk ? ` <span style="color:var(--text-muted)">(≈ ${esc(rlReset.toLocaleString())})</span>` : ''}</span>
       </label>
-      <button class="btn" data-rerun-task="${esc(t.id)}" data-brain="" title="Don't wait for the cooldown — re-run now on another brain"
-        style="font-size:0.72rem;margin:6px 0 0 23px;padding:2px 7px;color:#F97316;border-color:#F9731666">⇄ Assign to another brain now</button>
+      <button class="btn" data-rerun-task="${esc(t.id)}" data-agent="" title="Don't wait for the cooldown — re-run now on another agent"
+        style="font-size:0.72rem;margin:6px 0 0 23px;padding:2px 7px;color:#F97316;border-color:#F9731666">⇄ Assign to another agent now</button>
       <div style="font-size:0.72rem; color:var(--text-muted); margin-top:3px; padding-left:23px">Failed on a rate limit. On by default — Cowork re-queues this task automatically once the usage window resets${rlResetOk ? '' : ' (re-checked hourly until a reset time is known)'}. Untick to leave it failed.${c.autoRerunCount ? ` Auto re-runs so far: ${esc(String(c.autoRerunCount))}.` : ''}</div>
     </div>` : '';
 
@@ -2471,7 +2491,7 @@ class App {
     <div class="card task-card" style="margin-bottom: var(--space-md)${failed ? ';border-left:3px solid #EF4444' : ''}" data-task="${esc(t.id)}" data-created="${esc(t.createdAt || '')}" data-title="${esc((t.title || '').toLowerCase())}">
       <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap">
         ${failed ? badge('failed', '#EF4444')
-          : closedNoRun ? `<span class="badge" title="Done, but closed administratively without ever running a brain — so it has no artifacts and no result.md. The full explanation is in this task's result field below." style="background:#94A3B818; color:#94A3B8; border:1px solid #94A3B840">done · closed (never ran)</span>`
+          : closedNoRun ? `<span class="badge" title="Done, but closed administratively without ever running an agent — so it has no artifacts and no result.md. The full explanation is in this task's result field below." style="background:#94A3B818; color:#94A3B8; border:1px solid #94A3B840">done · closed (never ran)</span>`
           : badge(t.status, STATUS_COLORS[t.status] || '#94A3B8')}
         ${!failed && c.qualityFlag === 'concerns' ? `<span class="badge" title="${esc('Done with concerns: ' + (c.concerns || '(no CONCERNS text)'))}" style="background:#F59E0B18; color:#F59E0B; border:1px solid #F59E0B40">⚠ concerns</span>` : ''}
         ${c.specVerdict && c.specVerdict.verdict ? (() => {
@@ -2480,13 +2500,13 @@ class App {
           const col = v === 'APPROVED' ? '#22C55E' : v === 'CHANGES_REQUESTED' ? '#EF4444' : '#94A3B8';
           const icon = v === 'APPROVED' ? '✓' : v === 'CHANGES_REQUESTED' ? '✗' : '?';
           const lbl = v === 'APPROVED' ? 'spec: approved' : v === 'CHANGES_REQUESTED' ? 'spec: changes' : 'spec: unverifiable';
-          const tip = `Spec verifier (${sv.mode || 'shadow'}, judge: ${sv.judgeBrain || 'none'}): ${sv.summary || v}`;
+          const tip = `Spec verifier (${sv.mode || 'shadow'}, judge: ${sv.judgeAgent || 'none'}): ${sv.summary || v}`;
           return `<span class="badge" title="${esc(tip)}" style="background:${col}18; color:${col}; border:1px solid ${col}40">${icon} ${lbl}</span>`;
         })() : ''}
         ${t.status === 'scheduled' && t.scheduledAt ? badge(`⏰ ${new Date(t.scheduledAt).toLocaleString()}`, '#6366F1') : ''}
         ${t.recurrence ? badge(`🔁 ${describeRecurrence(t.recurrence)}`, '#3B82F6')
           : t.loopIntervalHours ? badge(`🔁 every ${t.loopIntervalHours}h`, '#3B82F6') : ''}
-        ${agentLabel ? badge(agentLabel, '#7C3AED') : ''}
+        ${personaLabel ? badge(personaLabel, '#7C3AED') : ''}${agentLabel ? badge(agentLabel, '#0EA5E9') : ''}${c.thinking ? badge(`thinking: ${c.thinking}`, '#64748B') : ''}
         ${t.interaction && t.interaction.status !== 'submitted' ? badge('⌛ awaiting input', '#EAB308') : ''}
         ${t.interaction && t.interaction.status === 'submitted' ? badge('✓ input received', '#22C55E') : ''}
         ${inputsRaw.length ? badge(`📎 ${inputsRaw.length}`, '#0EA5E9') : ''}
@@ -2501,26 +2521,26 @@ class App {
       ${progressHtml}
       ${autoRerunHtml}
       <div class="task-meta" style="display:block; margin:2px 0 4px">${esc(t.from?.platform || '?')}/${esc(t.from?.agent || '?')} · <span title="${esc(t.createdAt || '')}">${timeAgo(t.createdAt)}</span>
-        ${failed ? `<button class="btn" data-rerun-task="${esc(t.id)}" data-brain="${esc(c.brainAuto ? '' : (c.brain || ''))}" title="Re-run this task — pick which brain claims it"
+        ${failed ? `<button class="btn" data-rerun-task="${esc(t.id)}" data-agent="${esc(c.agentAuto ? '' : (c.agent || ''))}" title="Re-run this task — pick which agent claims it"
           style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#EF4444;border-color:#EF444466">↻ Re-run</button>` : ''}
         ${t.status === 'pending' || t.status === 'scheduled' ? (() => {
           const cooling = /^Rate-limited\b/.test(pendingReason);
           const col = cooling ? '#F97316' : '#64748B';
-          return `<button class="btn" data-reassign-task="${esc(t.id)}" data-brain="${esc(c.brainAuto ? '' : (c.brain || ''))}" title="Reassign — move this not-yet-started task to another brain"
-          style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:${col};border-color:${col}66">⇄ Reassign${cooling ? ' brain' : ''}</button>`;
+          return `<button class="btn" data-reassign-task="${esc(t.id)}" data-agent="${esc(c.agentAuto ? '' : (c.agent || ''))}" title="Reassign — move this not-yet-started task to another agent"
+          style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:${col};border-color:${col}66">⇄ Reassign${cooling ? ' agent' : ''}</button>`;
         })() : ''}
         ${t.status === 'scheduled' ? `<button class="btn" data-run-now-task="${esc(t.id)}" title="Run now — release this scheduled task immediately instead of waiting for its run time"
           style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#6366F1;border-color:#6366F166">▶ Run now</button>` : ''}
         ${t.status === 'done' && !failed ? (t.context?.continuedInto
           ? `<button class="btn" disabled title="Already continued — a follow-up task was spawned from this run"
           style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#22C55E99;border-color:#22C55E33;opacity:.6;cursor:default">✓ Continued</button>`
-          : `<button class="btn" data-continue-task="${esc(t.id)}" data-brain="${esc(brainLabel)}" title="Continue this task — spawn a follow-up seeded with this run's outputs; pick which brain claims it"
+          : `<button class="btn" data-continue-task="${esc(t.id)}" data-agent="${esc(agentLabel)}" title="Continue this task — spawn a follow-up seeded with this run's outputs; pick which agent claims it"
           style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#22C55E;border-color:#22C55E66">▸ Continue</button>`) : ''}
         ${(t.worktree && !t.worktree.merged && !t.worktree.discarded) ? `<button class="btn" data-worktree-merge="${esc(t.id)}" title="Merge branch ${esc(t.worktree.branch)} into the main checkout's current branch (refused on conflicts or a dirty main checkout)"
           style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#22C55E;border-color:#22C55E66">⑂ Merge</button>
         <button class="btn" data-worktree-discard="${esc(t.id)}" title="Discard this task's worktree and delete branch ${esc(t.worktree.branch)}"
           style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#EF4444;border-color:#EF444466">🗑 Discard</button>` : ''}
-        ${isTaskEditable(t) ? `<button class="btn" data-edit-task="${esc(t.id)}" title="Edit this task — change its title, brief, agent/brain, schedule and loop interval, then save"
+        ${isTaskEditable(t) ? `<button class="btn" data-edit-task="${esc(t.id)}" title="Edit this task — change its title, brief, persona/agent, schedule and loop interval, then save"
           style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#0EA5E9;border-color:#0EA5E966">✎ Edit</button>` : ''}</div>
       ${this.recipeTaskCardHTML ? this.recipeTaskCardHTML(t, failed) : ''}
       ${parentLink ? `<div style="padding:4px 0 2px; font-size:0.72rem">${parentLink}</div>` : ''}
@@ -2558,7 +2578,7 @@ class App {
         const outsHtml = outs.length ? `<div class="task-outputs" style="${sectionStyle}">${sectionLabel('Outputs', '0.85rem')}${artifactChips(t.id, outs, '0.9rem', 'outputs')}</div>` : '';
         const artsHtml = arts.length ? `<div class="task-artifacts" style="${sectionStyle}">${sectionLabel('Artifacts', '0.85rem')}${artifactChips(t.id, arts, '0.9rem', 'artifacts', t.artifactsTotal)}</div>` : '';
         const inputsHtml = (inputs.length || canAttach) ? `<div class="task-inputs" style="${sectionStyle}">${sectionLabel('Inputs', '0.72rem')}${inputs.map(f => artifactChip(t.id, f, '0.78rem', 'inputs')).join('')}${canAttach ? `<input type="file" data-attach-files="${esc(t.id)}" multiple style="display:none">
-        <button class="btn" data-attach-input="${esc(t.id)}" title="Attach files for the brain to read" style="font-size:0.75rem;margin:0">＋ Attach files</button>` : ''}</div>` : '';
+        <button class="btn" data-attach-input="${esc(t.id)}" title="Attach files for the agent to read" style="font-size:0.75rem;margin:0">＋ Attach files</button>` : ''}</div>` : '';
         // The interaction form (if any) is the LAST section inside the block.
         const interactionHtml = this.interactionBlock(t);
         const filesOpen = this.taskFilesOpen ? this.taskFilesOpen.has(t.id) : false;
@@ -2583,7 +2603,7 @@ class App {
           ${interactionHtml}
         </div>`;
       })()}
-      ${t.claimedBy ? `<p style="font-size:0.8rem; color:var(--text-muted); margin-top:8px">Claimed by ${esc(this.agentLabel(t.claimedBy))}${t.completedAt ? ` · completed <span title="${esc(t.completedAt)}">${timeAgo(t.completedAt)}</span>` : ''}</p>` : ''}
+      ${t.claimedBy ? `<p style="font-size:0.8rem; color:var(--text-muted); margin-top:8px">Claimed by ${esc(this.workerLabel(t.claimedBy))}${t.completedAt ? ` · completed <span title="${esc(t.completedAt)}">${timeAgo(t.completedAt)}</span>` : ''}</p>` : ''}
     </div>`;
   }
 
@@ -2604,41 +2624,42 @@ class App {
         } catch (err) { this.toast('error', err.message); }
       }));
 
-    // Re-run a failed task — pick which brain claims it, then reset to pending.
+    // Re-run a failed task — pick which agent claims it, then reset to pending.
     root.querySelectorAll('[data-rerun-task]').forEach(b =>
       b.addEventListener('click', async (e) => {
         e.stopPropagation();
         const id = b.dataset.rerunTask;
         const title = b.closest('[data-task]')?.dataset.title || id.slice(0, 8);
-        const choice = await this.pickBrain({
+        const choice = await this.pickAgent({
           title: 'Re-run this failed task',
-          body: `<strong>${esc(title)}</strong> is reset to pending and dispatched again. Choose which brain should claim it — pick <em>Auto</em> to route from the top of the agent's brain chain.`,
-          defaultBrain: b.dataset.brain || '',
+          body: `<strong>${esc(title)}</strong> is reset to pending and dispatched again. Choose which agent should claim it — pick <em>Auto</em> to route from the top of the role's agent chain.`,
+          defaultAgent: b.dataset.agent || '',
           confirmLabel: '↻ Re-run',
           confirmColor: '#EF4444'
         });
         if (!choice) return;
         b.disabled = true;
         try {
-          const body = { brain: choice.brain };
+          const body = { agent: choice.agent };
+          if (choice.thinking) body.thinking = choice.thinking;
           if (choice.scheduledAt) body.scheduledAt = choice.scheduledAt;
           await this.api.post(`/inbox/${encodeURIComponent(id)}/rerun`, body);
-          const routeNote = choice.brain ? `pinned to ${choice.brain}` : 'auto-routed via the brain chain';
+          const routeNote = choice.agent ? `pinned to ${choice.agent}` : 'auto-routed via the agent chain';
           this.toast('re-running', choice.scheduledAt ? `Scheduled for ${new Date(choice.scheduledAt).toLocaleString()} — ${routeNote}.` : `Reset to pending — ${routeNote}.`);
           this.renderInbox();
         } catch (err) { this.toast('error', err.message); b.disabled = false; }
       }));
 
-    // Reassign a pending/scheduled task (e.g. held on a rate-limited brain) to another brain.
+    // Reassign a pending/scheduled task (e.g. held on a rate-limited agent) to another agent.
     root.querySelectorAll('[data-reassign-task]').forEach(b =>
       b.addEventListener('click', async (e) => {
         e.stopPropagation();
         const id = b.dataset.reassignTask;
         const title = b.closest('[data-task]')?.dataset.title || id.slice(0, 8);
-        const choice = await this.pickBrain({
-          title: 'Reassign to another brain',
-          body: `<strong>${esc(title)}</strong> hasn't started yet. Choose which brain should claim it instead — pick <em>Auto</em> to route from the top of the agent's brain chain. Brains cooling down on a rate limit are marked ⏳.`,
-          defaultBrain: '',
+        const choice = await this.pickAgent({
+          title: 'Reassign to another agent',
+          body: `<strong>${esc(title)}</strong> hasn't started yet. Choose which agent should claim it instead — pick <em>Auto</em> to route from the top of the role's agent chain. Agents cooling down on a rate limit are marked ⏳.`,
+          defaultAgent: '',
           confirmLabel: '⇄ Reassign',
           confirmColor: '#F97316',
           withSchedule: false
@@ -2646,8 +2667,8 @@ class App {
         if (!choice) return;
         b.disabled = true;
         try {
-          await this.api.post(`/inbox/${encodeURIComponent(id)}/reassign`, { brain: choice.brain });
-          this.toast('reassigned', choice.brain ? `Pinned to ${choice.brain} — dispatched by the next tick.` : 'Auto-routed via the brain chain — dispatched by the next tick.');
+          await this.api.post(`/inbox/${encodeURIComponent(id)}/reassign`, { agent: choice.agent, ...(choice.thinking ? { thinking: choice.thinking } : {}) });
+          this.toast('reassigned', choice.agent ? `Pinned to ${choice.agent} — dispatched by the next tick.` : 'Auto-routed via the agent chain — dispatched by the next tick.');
           this.renderInbox();
         } catch (err) { this.toast('error', err.message); b.disabled = false; }
       }));
@@ -2679,16 +2700,16 @@ class App {
     // Recipes: "★ Save as recipe" + 👍/👎 on recipe-made tasks (public/js/recipes.js).
     this.bindRecipeTaskCards?.(root);
 
-    // Continue a done task — pick which brain claims the follow-up.
+    // Continue a done task — pick which agent claims the follow-up.
     root.querySelectorAll('[data-continue-task]').forEach(b =>
       b.addEventListener('click', async (e) => {
         e.stopPropagation();
         const id = b.dataset.continueTask;
         const title = b.closest('[data-task]')?.dataset.title || id.slice(0, 8);
-        const choice = await this.pickBrain({
+        const choice = await this.pickAgent({
           title: 'Continue this task',
-          body: `A follow-up to <strong>${esc(title)}</strong> is created with this run's output files and result attached as inputs. Add an optional prompt or extra files to steer it, then choose which brain claims it — <em>Auto</em> routes via the agent's brain chain.`,
-          defaultBrain: b.dataset.brain || '',
+          body: `A follow-up to <strong>${esc(title)}</strong> is created with this run's output files and result attached as inputs. Add an optional prompt or extra files to steer it, then choose which agent claims it — <em>Auto</em> routes via the role's agent chain.`,
+          defaultAgent: b.dataset.agent || '',
           confirmLabel: '▸ Continue',
           confirmColor: '#22C55E',
           withInputs: true
@@ -2698,13 +2719,14 @@ class App {
         try {
           // Upload the staged extras first so the follow-up carries them as inputs.
           const inputs = choice.files?.length ? await this.uploadInputFiles(choice.files) : [];
-          const body = { brain: choice.brain };
+          const body = { agent: choice.agent };
+          if (choice.thinking) body.thinking = choice.thinking;
           if (choice.prompt) body.prompt = choice.prompt;
           if (inputs.length) body.inputs = inputs;
           if (choice.scheduledAt) body.scheduledAt = choice.scheduledAt;
           await this.api.post(`/inbox/${encodeURIComponent(id)}/continue`, body);
           const extras = [choice.prompt ? 'prompt' : null, inputs.length ? `${inputs.length} file(s)` : null].filter(Boolean).join(' + ');
-          const routeNote = choice.brain ? `pinned to ${choice.brain}` : 'auto-routed via the brain chain';
+          const routeNote = choice.agent ? `pinned to ${choice.agent}` : 'auto-routed via the agent chain';
           const timingNote = choice.scheduledAt ? `Scheduled for ${new Date(choice.scheduledAt).toLocaleString()}` : 'Follow-up queued';
           this.toast('continuing', `${timingNote} — ${routeNote}${extras ? ` · added ${extras}` : ''}.`);
           this.renderInbox();
@@ -2745,7 +2767,7 @@ class App {
         try {
           const attached = await this.uploadInputFiles(files);
           await this.api.post(`/inbox/${encodeURIComponent(id)}/inputs`, { inputs: attached });
-          this.toast('files attached', `${attached.length} file(s) added — the brain will read them.`);
+          this.toast('files attached', `${attached.length} file(s) added — the agent will read them.`);
           this.renderInbox();
         } catch (err) { this.toast('error', err.message); }
       }));
@@ -2820,7 +2842,7 @@ class App {
     let [tasks, status] = await Promise.all([
       this.api.get(`/inbox${q}`),
       this.api.get('/status').catch(() => null),
-      this.refreshAgents()
+      this.refreshWorkers()
     ]);
 
     let hasMore = false;
@@ -2978,7 +3000,7 @@ class App {
     const statusP = this.api.get('/status').catch(() => null);
     const fetched = await Promise.all(ids.map(id => this.api.get(`/inbox/${encodeURIComponent(id)}`)
       .then(t => ({ id, t }), err => ({ id, t: null, gone: /not found|404/i.test(err.message || '') }))));
-    if (fetched.some(f => f.t?.claimedBy && !this.agents.has(f.t.claimedBy))) await this.refreshAgents();
+    if (fetched.some(f => f.t?.claimedBy && !this.workers.has(f.t.claimedBy))) await this.refreshWorkers();
     if (!onInbox()) return;   // navigated away while fetching
     let full = false;
     for (const { id, t, gone } of fetched) {
@@ -3153,15 +3175,15 @@ class App {
     for (const a of roster) (byDivision[a.divisionLabel || a.division || 'other'] ||= []).push(a);
 
     this.contentEl.innerHTML = `
-      <input id="roster-search" class="roster-search" placeholder="Search ${roster.length} agents…">
+      <input id="roster-search" class="roster-search" placeholder="Search ${roster.length} personas…">
       <div id="roster-list"></div>`;
 
     const listEl = this.contentEl.querySelector('#roster-list');
     const render = (filter) => {
       const f = (filter || '').toLowerCase();
-      listEl.innerHTML = Object.entries(byDivision).map(([div, agents]) => {
-        const hits = f ? agents.filter(a =>
-          a.name.toLowerCase().includes(f) || (a.description || '').toLowerCase().includes(f)) : agents;
+      listEl.innerHTML = Object.entries(byDivision).map(([div, personas]) => {
+        const hits = f ? personas.filter(a =>
+          a.name.toLowerCase().includes(f) || (a.description || '').toLowerCase().includes(f)) : personas;
         if (!hits.length) return '';
         return `<h3 style="margin: var(--space-lg) 0 var(--space-md); font-size:0.95rem">${esc(div)} <span style="color:var(--text-muted); font-size:0.8rem; font-weight:400">(${hits.length})</span></h3>
           <div class="grid-3">` + hits.map(a => `
@@ -3172,65 +3194,65 @@ class App {
             <p style="font-size:0.83rem; color:var(--text-secondary); margin-top:6px">${esc((a.description || '').slice(0, 140))}</p>
             ${a.vibe ? `<p style="font-size:0.8rem; font-style:italic; color:var(--text-muted); margin-top:6px">${esc(a.vibe)}</p>` : ''}
           </div>`).join('') + `</div>`;
-      }).join('') || `<div class="empty-state"><p>No agents match.</p></div>`;
+      }).join('') || `<div class="empty-state"><p>No personas match.</p></div>`;
       createIcons();
     };
     render('');
     this.contentEl.querySelector('#roster-search').addEventListener('input', (e) => render(e.target.value));
   }
 
-  // ── Agents: special executors + roster divisions (with brain chains) ───────
+  // ── Agents: special executors + roster divisions (with agent chains) ───────
 
   async renderTeam() {
-    const [special, brains, chains, divisions] = await Promise.all([
-      this.api.get('/agents-config'), this.api.get('/brains'), this.api.get('/chains'), this.api.get('/roster-divisions')
+    const [special, agents, chains, divisions] = await Promise.all([
+      this.api.get('/roles-config'), this.api.get('/agents'), this.api.get('/chains'), this.api.get('/roster-divisions')
     ]);
-    const opts = Object.keys(brains).map(b => `<option value="${esc(b)}">${esc(b)}</option>`).join('');
-    // Same drag-to-reorder chain UI as the Brains view's default chain.
+    const opts = Object.keys(agents).map(b => `<option value="${esc(b)}">${esc(b)}</option>`).join('');
+    // Same drag-to-reorder chain UI as the Agents view's default chain.
     const chainRow = (arr, ctx) => {
       const list = arr || [];
       return `<div class="chain-row" data-ctx="${ctx}" style="margin:4px 0;min-height:30px">${
-        list.map((b, i) => chainChip(b, i, list.length, !!brains[b])).join('')
-        || '<span style="color:var(--text-muted);font-size:0.8rem">none — add a brain →</span>'}</div>
-      <select data-add="${ctx}" style="padding:4px;background:var(--bg-tertiary);border:1px solid var(--bg-tertiary);border-radius:8px;color:inherit;font-size:0.78rem"><option value="">+ add brain…</option>${opts}</select>`;
+        list.map((b, i) => chainChip(b, i, list.length, !!agents[b])).join('')
+        || '<span style="color:var(--text-muted);font-size:0.8rem">none — add an agent →</span>'}</div>
+      <select data-add="${ctx}" style="padding:4px;background:var(--bg-tertiary);border:1px solid var(--bg-tertiary);border-radius:8px;color:inherit;font-size:0.78rem"><option value="">+ add agent…</option>${opts}</select>`;
     };
 
     const specialCards = Object.entries(special).map(([n, a]) => `
       <div class="card" style="margin-bottom:var(--space-md)">
         <div style="display:flex;justify-content:space-between;align-items:center"><strong>${esc(n)}</strong>${badge('special', '#0EA5E9')}</div>
         <p style="font-size:0.8rem;color:var(--text-muted);margin:4px 0">${esc(a.description || '')}</p>
-        ${chainRow(a.brains, 'agent:' + n)}
+        ${chainRow(a.agents, 'role:' + n)}
       </div>`).join('');
 
-    // One roster agent's row: an explicit per-agent chain override wins over the
+    // One persona's row: an explicit per-persona chain override wins over the
     // division chain and the global default. With no override the agent inherits
     // (shown muted) and offers a one-click "+ override with…" starter.
-    const agentRow = (a) => {
-      const own = chains.agentChains?.[a.slug];
+    const personaRow = (a) => {
+      const own = chains.personaChains?.[a.slug];
       const inherits = (chains.divisionChains?.[a.division] && 'division chain') || 'default chain';
       return `<div style="padding:6px 0;border-top:1px solid var(--bg-tertiary)">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
           <span style="font-size:0.82rem">${a.emoji ? esc(a.emoji) + ' ' : ''}${esc(a.name || a.slug)}</span>
           <span style="font-size:0.7rem;color:var(--text-muted)">${own ? 'own chain' : 'inherits ' + inherits}</span>
         </div>
-        ${own ? chainRow(own, 'roster:' + a.slug) + `<a data-reset-agent="${esc(a.slug)}" style="cursor:pointer;font-size:0.72rem;color:var(--text-muted)">↺ reset to inherited</a>`
+        ${own ? chainRow(own, 'roster:' + a.slug) + `<a data-reset-persona="${esc(a.slug)}" style="cursor:pointer;font-size:0.72rem;color:var(--text-muted)">↺ reset to inherited</a>`
           : `<select data-add="roster:${esc(a.slug)}" style="margin-top:4px;padding:4px;background:var(--bg-tertiary);border:1px solid var(--bg-tertiary);border-radius:8px;color:inherit;font-size:0.78rem"><option value="">+ override with…</option>${opts}</select>`}
       </div>`;
     };
 
     const divCards = Object.entries(divisions).sort().map(([d, info]) => {
       const override = chains.divisionChains?.[d];
-      const agentList = (info.agents || []).map(a => agentRow({ ...a, division: d })).join('');
+      const personaList = (info.personas || []).map(a => personaRow({ ...a, division: d })).join('');
       return `<div class="card" style="margin-bottom:var(--space-md)">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
           <strong>${esc(info.label || d)}</strong>
-          <span style="font-size:0.75rem;color:var(--text-muted)">${info.agents.length} agents${override ? '' : ' · uses default chain'}</span>
+          <span style="font-size:0.75rem;color:var(--text-muted)">${info.personas.length} personas${override ? '' : ' · uses default chain'}</span>
         </div>
         ${override ? chainRow(override, 'div:' + d) + `<a data-reset="${esc(d)}" style="cursor:pointer;font-size:0.72rem;color:var(--text-muted)">↺ reset to default</a>`
           : `<div style="margin:4px 0;font-size:0.8rem;color:var(--text-muted)">${(chains.defaultChain || []).join(' → ') || '(no default)'}</div>
              <select data-add="div:${esc(d)}" style="padding:4px;background:var(--bg-tertiary);border:1px solid var(--bg-tertiary);border-radius:8px;color:inherit;font-size:0.78rem"><option value="">+ override with…</option>${opts}</select>`}
-        <details style="margin-top:8px"><summary style="cursor:pointer;font-size:0.75rem;color:var(--text-muted)">Per-agent overrides (${info.agents.length})</summary>
-          ${agentList || '<div style="font-size:0.78rem;color:var(--text-muted);padding:6px 0">no agents</div>'}
+        <details style="margin-top:8px"><summary style="cursor:pointer;font-size:0.75rem;color:var(--text-muted)">Per-persona overrides (${info.personas.length})</summary>
+          ${personaList || '<div style="font-size:0.78rem;color:var(--text-muted);padding:6px 0">no personas</div>'}
         </details>
       </div>`;
     }).join('');
@@ -3238,19 +3260,19 @@ class App {
     this.contentEl.innerHTML = `
       <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:var(--space-md)">The orchestrator routes each task to a specialist in one of these divisions; the specialist runs on its division's chain (or the global default). Special executors run directly. Changes save instantly.</p>
       <h3 style="font-size:0.9rem;margin:var(--space-md) 0 6px">Special executors</h3>${specialCards}
-      <h3 style="font-size:0.9rem;margin:var(--space-lg) 0 6px">Divisions <span style="font-size:0.72rem;color:var(--text-muted);font-weight:400">(brain chain override per division)</span></h3>${divCards}`;
+      <h3 style="font-size:0.9rem;margin:var(--space-lg) 0 6px">Divisions <span style="font-size:0.72rem;color:var(--text-muted);font-weight:400">(agent chain override per division)</span></h3>${divCards}`;
 
     const save = async (ctx, arr) => {
-      if (ctx.startsWith('agent:')) { const n = ctx.slice(6); await this.api.put(`/agents-config/${encodeURIComponent(n)}`, { description: special[n].description, brains: arr }); }
-      else if (ctx.startsWith('roster:')) { const s = ctx.slice(7); await this.api.put(`/chains/agent/${encodeURIComponent(s)}`, { brains: arr }); }
-      else { const dv = ctx.slice(4); await this.api.put(`/chains/division/${encodeURIComponent(dv)}`, { brains: arr }); }
+      if (ctx.startsWith('role:')) { const n = ctx.slice(6); await this.api.put(`/roles-config/${encodeURIComponent(n)}`, { description: special[n].description, agents: arr }); }
+      else if (ctx.startsWith('roster:')) { const s = ctx.slice(7); await this.api.put(`/chains/persona/${encodeURIComponent(s)}`, { agents: arr }); }
+      else { const dv = ctx.slice(4); await this.api.put(`/chains/division/${encodeURIComponent(dv)}`, { agents: arr }); }
       await this.renderTeam();
     };
-    const chainOf = (ctx) => ctx.startsWith('agent:') ? (special[ctx.slice(6)].brains || []).slice()
-      : ctx.startsWith('roster:') ? (chains.agentChains?.[ctx.slice(7)] || []).slice()
+    const chainOf = (ctx) => ctx.startsWith('role:') ? (special[ctx.slice(6)].agents || []).slice()
+      : ctx.startsWith('roster:') ? (chains.personaChains?.[ctx.slice(7)] || []).slice()
       : (chains.divisionChains?.[ctx.slice(4)] || []).slice();
 
-    // Drag to reorder / ✕ to remove — identical to the Brains default chain.
+    // Drag to reorder / ✕ to remove — identical to the Agents default chain.
     this.contentEl.querySelectorAll('.chain-row').forEach(row =>
       this.wireChainDnd(row, (arr) => save(row.dataset.ctx, arr)));
     if (window.lucide) window.lucide.createIcons();
@@ -3260,18 +3282,19 @@ class App {
       save(ctx, arr);
     }));
     this.contentEl.querySelectorAll('[data-reset]').forEach(a => a.addEventListener('click', () => save('div:' + a.dataset.reset, [])));
-    this.contentEl.querySelectorAll('[data-reset-agent]').forEach(a => a.addEventListener('click', () => save('roster:' + a.dataset.resetAgent, [])));
+    this.contentEl.querySelectorAll('[data-reset-persona]').forEach(a => a.addEventListener('click', () => save('roster:' + a.dataset.resetPersona, [])));
   }
 
-  // ── Brains (model × platform × location registry) ──────────────────────
+  // ── Agents (model × platform × location registry) ──────────────────────
 
-  async renderBrains() {
-    const [brains, chains] = await Promise.all([this.api.get('/brains'), this.api.get('/chains')]);
+  async renderAgents() {
+    const [agents, chains, dispatcherInfo] = await Promise.all([this.api.get('/agents'), this.api.get('/chains'), this.api.get('/dispatcher').catch(() => ({}))]);
+    const defaultThinking = dispatcherInfo.defaultThinking || 'medium';
     // Default fallback chain — drag to reorder; saves on drop.
     const dchain = chains.defaultChain || [];
-    const chainChips = dchain.map((b, i) => chainChip(b, i, dchain.length, !!brains[b])).join('')
-      || '<span style="color:var(--text-muted);font-size:0.8rem">empty — add a brain below</span>';
-    const notInChain = Object.keys(brains).filter(b => !(chains.defaultChain || []).includes(b));
+    const chainChips = dchain.map((b, i) => chainChip(b, i, dchain.length, !!agents[b])).join('')
+      || '<span style="color:var(--text-muted);font-size:0.8rem">empty — add an agent below</span>';
+    const notInChain = Object.keys(agents).filter(b => !(chains.defaultChain || []).includes(b));
     const defaultChainCard = `
       <div class="card" style="margin-bottom:var(--space-lg)">
         <div style="font-size:0.9rem;font-weight:600">Default fallback chain <span style="font-size:0.72rem;color:var(--text-muted);font-weight:400">— drag to reorder; agents use this unless their division overrides it</span></div>
@@ -3285,34 +3308,38 @@ class App {
           ${badge(b.location, b.location === 'remote' ? '#EAB308' : '#22C55E')}
           ${b.dynamic ? badge('auto', '#0EA5E9') : ''}
           ${b.disabled ? badge('disabled', '#EF4444') : ''}
-          <button class="btn" data-act="toggle-brain" data-id="${esc(id)}" data-disabled="${b.disabled ? '1' : ''}" style="font-size:0.75rem;margin-left:auto;${b.disabled ? 'color:#22C55E;border-color:#22C55E66' : 'color:#EAB308;border-color:#EAB30866'}">${b.disabled ? 'Enable' : 'Disable'}</button>
-          <button class="btn" data-act="del-brain" data-id="${esc(id)}" style="font-size:0.75rem">Deregister</button>
+          <button class="btn" data-act="toggle-agent" data-id="${esc(id)}" data-disabled="${b.disabled ? '1' : ''}" style="font-size:0.75rem;margin-left:auto;${b.disabled ? 'color:#22C55E;border-color:#22C55E66' : 'color:#EAB308;border-color:#EAB30866'}">${b.disabled ? 'Enable' : 'Disable'}</button>
+          <button class="btn" data-act="del-agent" data-id="${esc(id)}" style="font-size:0.75rem">Deregister</button>
         </div>
         <p style="font-size:0.82rem;color:var(--text-secondary);margin:4px 0">${esc(b.description || '')}</p>
         <div style="font-size:0.78rem;color:var(--text-muted)">${esc(b.exec || '')}${b.model ? ' · ' + esc(b.model) : ''}${b.host ? ' · host ' + esc(b.host) : ''}</div>
+        <label style="display:flex;align-items:center;gap:6px;font-size:0.78rem;color:var(--text-muted);margin-top:6px">Thinking
+          <select data-act="set-thinking" data-id="${esc(id)}" style="padding:3px 6px;background:var(--bg-tertiary);border:1px solid var(--bg-tertiary);border-radius:6px;color:inherit;font-size:0.78rem">${thinkingOptions(b.thinking || '', defaultThinking)}</select>
+        </label>
       </div>`;
     const fld = (id, ph) => `<input id="nb-${id}" placeholder="${ph}" style="padding:6px 8px;background:var(--bg-tertiary);border:1px solid var(--bg-tertiary);border-radius:8px;color:inherit;font-size:0.8rem">`;
     this.contentEl.innerHTML = `
       <div class="card" style="margin-bottom:var(--space-lg)">
-        <div style="font-size:0.85rem;font-weight:600;margin-bottom:6px">Register / update a brain</div>
+        <div style="font-size:0.85rem;font-weight:600;margin-bottom:6px">Register / update an agent</div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:6px">
           ${fld('id', 'id (e.g. remote-laptop-cc-sonnet)')}
           <select id="nb-location" style="padding:6px;background:var(--bg-tertiary);border:1px solid var(--bg-tertiary);border-radius:8px;color:inherit;font-size:0.8rem"><option value="local">local</option><option value="remote">remote</option></select>
           <select id="nb-exec" style="padding:6px;background:var(--bg-tertiary);border:1px solid var(--bg-tertiary);border-radius:8px;color:inherit;font-size:0.8rem"><option value="claude">claude</option><option value="hermes">hermes</option><option value="agy">agy</option><option value="script">script</option></select>
           ${fld('model', 'model id')}
+          <select id="nb-thinking" aria-label="Thinking" style="padding:6px;background:var(--bg-tertiary);border:1px solid var(--bg-tertiary);border-radius:8px;color:inherit;font-size:0.8rem">${thinkingOptions('', defaultThinking)}</select>
           ${fld('host', 'host (remote only)')}
           ${fld('desc', 'description')}
         </div>
-        <button class="btn btn-primary" id="nb-save" style="margin-top:8px;font-size:0.8rem">Save brain</button>
+        <button class="btn btn-primary" id="nb-save" style="margin-top:8px;font-size:0.8rem">Save agent</button>
       </div>
       ${defaultChainCard}
-      ${Object.entries(brains).map(([id, b]) => row(id, b)).join('') || '<div class="empty-state"><p>No brains registered.</p></div>'}`;
+      ${Object.entries(agents).map(([id, b]) => row(id, b)).join('') || '<div class="empty-state"><p>No agents registered.</p></div>'}`;
 
     if (window.lucide) window.lucide.createIcons();
 
     // ── Default chain: drag-to-reorder + add/remove, persisted on change ──────
     const saveDefault = async (arr) => {
-      try { await this.api.put('/chains/default', { brains: arr }); this.renderBrains(); }
+      try { await this.api.put('/chains/default', { agents: arr }); this.renderAgents(); }
       catch (e) { this.toast('error', e.message); }
     };
     this.wireChainDnd(this.contentEl.querySelector('#dchain'), saveDefault);
@@ -3323,30 +3350,37 @@ class App {
 
     this.contentEl.querySelector('#nb-save').addEventListener('click', async () => {
       const g = id => this.contentEl.querySelector(`#nb-${id}`).value.trim();
-      const id = g('id'); if (!id) { this.toast('error', 'brain id required'); return; }
+      const id = g('id'); if (!id) { this.toast('error', 'agent id required'); return; }
       try {
-        await this.api.put(`/brains/${encodeURIComponent(id)}`, {
+        await this.api.put(`/agents/${encodeURIComponent(id)}`, {
           description: g('desc') || id, location: this.contentEl.querySelector('#nb-location').value,
-          exec: this.contentEl.querySelector('#nb-exec').value, model: g('model'), host: g('host') || undefined
+          exec: this.contentEl.querySelector('#nb-exec').value, model: g('model'), host: g('host') || undefined,
+          thinking: this.contentEl.querySelector('#nb-thinking').value || undefined
         });
-        this.toast('brain saved', id); this.renderBrains();
+        this.toast('agent saved', id); this.renderAgents();
       } catch (e) { this.toast('error', e.message); }
     });
-    this.contentEl.querySelectorAll('[data-act="del-brain"]').forEach(b => b.addEventListener('click', async () => {
-      const id = b.dataset.id;
-      if (!confirm(`Deregister brain "${id}"? It will be removed from every agent's chain.`)) return;
-      const r = await this.api.del(`/brains/${encodeURIComponent(id)}`);
-      this.toast('brain removed', `${id} (scrubbed from ${r.agents_scrubbed} agent chain(s))`);
-      this.renderBrains();
+    this.contentEl.querySelectorAll('[data-act="set-thinking"]').forEach(s => s.addEventListener('change', async () => {
+      try {
+        await this.api.patch(`/agents/${encodeURIComponent(s.dataset.id)}/thinking`, { thinking: s.value });
+        this.toast('thinking updated', `${s.dataset.id}: ${s.value || `default (${defaultThinking})`}`);
+      } catch (e) { this.toast('error', e.message); }
     }));
-    this.contentEl.querySelectorAll('[data-act="toggle-brain"]').forEach(b => b.addEventListener('click', async () => {
+    this.contentEl.querySelectorAll('[data-act="del-agent"]').forEach(b => b.addEventListener('click', async () => {
+      const id = b.dataset.id;
+      if (!confirm(`Deregister agent "${id}"? It will be removed from every chain.`)) return;
+      const r = await this.api.del(`/agents/${encodeURIComponent(id)}`);
+      this.toast('agent removed', `${id} (scrubbed from ${r.agents_scrubbed} chain(s))`);
+      this.renderAgents();
+    }));
+    this.contentEl.querySelectorAll('[data-act="toggle-agent"]').forEach(b => b.addEventListener('click', async () => {
       const id = b.dataset.id;
       const isDisabled = b.dataset.disabled === '1';
       const action = isDisabled ? 'enable' : 'disable';
       try {
-        await this.api.patch(`/brains/${encodeURIComponent(id)}/${action}`);
-        this.toast(isDisabled ? 'brain enabled' : 'brain disabled', id);
-        this.renderBrains();
+        await this.api.patch(`/agents/${encodeURIComponent(id)}/${action}`);
+        this.toast(isDisabled ? 'agent enabled' : 'agent disabled', id);
+        this.renderAgents();
       } catch (e) { this.toast('error', e.message); }
     }));
   }

@@ -6,7 +6,7 @@ import type { Task } from '../types.js';
 /**
  * Recipes — reusable tasks. A task that came back with a good result is saved as
  * a Recipe: its brief with the variable parts pulled out as {{fields}}, plus what
- * made the run work (agent, brain, tier, acceptance, timebox, input files).
+ * made the run work (agent, agent, tier, acceptance, timebox, input files).
  * Running a recipe fills the fields and creates an ORDINARY task — no new
  * execution engine; dispatcher, verifier and handover treat it like any other.
  *
@@ -35,12 +35,12 @@ export interface RecipeField {
 }
 
 export interface RecipeCarry {
-  agent?: string;
+  persona?: string;
   division?: string;
-  brain?: string;
-  /** lock = always pin carry.brain; suggest = let the router pick (default) —
-   *  the run sheet still offers carry.brain as a one-tap choice. */
-  brainMode: 'lock' | 'suggest';
+  agent?: string;
+  /** lock = always pin carry.agent; suggest = let the router pick (default) —
+   *  the run sheet still offers carry.agent as a one-tap choice. */
+  agentMode: 'lock' | 'suggest';
   tier?: string;
   acceptance?: string[];
   timeboxMin?: number;
@@ -273,8 +273,8 @@ export function normalizeRecipe(input: any, now = new Date().toISOString()): Rec
   const c = input.carry && typeof input.carry === 'object' ? input.carry : {};
   const str = (v: any) => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
   const carry: RecipeCarry = {
-    agent: str(c.agent), division: str(c.division), brain: str(c.brain),
-    brainMode: c.brainMode === 'lock' ? 'lock' : 'suggest',
+    persona: str(c.persona), division: str(c.division), agent: str(c.agent),
+    agentMode: c.agentMode === 'lock' ? 'lock' : 'suggest',
     tier: str(c.tier),
     acceptance: Array.isArray(c.acceptance) ? c.acceptance.map((s: any) => String(s).trim()).filter(Boolean) : undefined,
     timeboxMin: Number.isFinite(Number(c.timeboxMin)) && Number(c.timeboxMin) > 0 ? Math.round(Number(c.timeboxMin)) : undefined,
@@ -324,8 +324,8 @@ export interface InstantiateOptions {
   values?: Record<string, any>;
   /** Extra instructions appended to the brief. */
   extra?: string;
-  /** '' = auto-route, '<id>' = pin that brain, undefined = follow the recipe's brainMode. */
-  brain?: string;
+  /** '' = auto-route, '<id>' = pin that agent, undefined = follow the recipe's agentMode. */
+  agent?: string;
   /** 👎 notes from earlier runs, newest first — injected as "Known pitfalls". */
   pitfalls?: string[];
   scheduledAt?: string;
@@ -341,13 +341,13 @@ export function instantiate(recipe: Recipe, opts: InstantiateOptions = {}): Omit
   if (pitfalls.length) description += `\n\n## Known pitfalls (from earlier runs of this recipe)\n${pitfalls.map(p => `- ${p}`).join('\n')}`;
   if (opts.extra && opts.extra.trim()) description += `\n\n## Additional instructions\n${opts.extra.trim()}`;
 
-  const brain = opts.brain !== undefined ? (opts.brain || undefined)
-    : c.brainMode === 'lock' ? c.brain : undefined;
+  const agent = opts.agent !== undefined ? (opts.agent || undefined)
+    : c.agentMode === 'lock' ? c.agent : undefined;
   const context: Record<string, any> = {
     recipe: { id: recipe.id, version: recipe.version, name: recipe.name, values },
   };
   if (c.division) context.division = c.division;
-  if (brain) context.brain = brain;
+  if (agent) context.agent = agent;
   if (c.tier) context.tier = c.tier;
   if (c.acceptance?.length) context.acceptance = c.acceptance;
   if (c.timeboxMin) context.timeboxMin = c.timeboxMin;
@@ -356,7 +356,7 @@ export function instantiate(recipe: Recipe, opts: InstantiateOptions = {}): Omit
     title: renderTemplate(recipe.title, values).slice(0, 200) || recipe.name,
     description,
     from: { platform: 'dashboard', agent: 'recipe' },
-    to: c.agent ? { agent: c.agent } : {},
+    to: c.persona ? { agent: c.persona } : {},
     priority: c.priority || 'normal',
     context,
     tags: [...new Set([...(c.tags || []), `recipe:${recipe.id}`])],
@@ -390,8 +390,8 @@ export function draftFromTask(
     brief: brief.replace(VAR_RE, (m) => m.replace(/[{}]/g, '')),
     fields: [],
     carry: {
-      agent: task.to?.agent, division: ctx.division,
-      brain: ctx.ranBrain || ctx.brain, brainMode: 'suggest',
+      persona: task.to?.agent, division: ctx.division,
+      agent: ctx.ranAgent || ctx.agent, agentMode: 'suggest',
       tier: ctx.tier, acceptance: ctx.acceptance, timeboxMin: ctx.timeboxMin,
       priority: task.priority,
       tags: (task.tags || []).filter(t => !t.startsWith('recipe:')),

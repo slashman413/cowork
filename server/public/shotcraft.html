@@ -6,7 +6,7 @@
 
   Served by the cowork server itself (like video-studio.html) and launched from
   the Portal card. A thin client over:
-    GET  /api/shotcraft              skill status, brains, aspects, lengths, BGM list
+    GET  /api/shotcraft              skill status, agents, aspects, lengths, BGM list
     GET  /api/shotcraft/shots        the 124 shot cards (Gallery index) + categories
     GET  /api/shotcraft/bgm/:name    bundled BGM preview
     POST /api/shotcraft/create       brief → task | recurring task | goal
@@ -269,9 +269,9 @@
         <div class="box" id="box-goal" hidden>
           <div class="checks"><label><input type="checkbox" id="activate" checked><span>Activate now<small>Phases: capture → storyboard → produce → review. Done when an independent review passes. Guided modes run as Autonomous here.</small></span></label></div>
         </div>
-        <div class="step">7 · Brain &amp; notes</div>
+        <div class="step">7 · Agent &amp; notes</div>
         <div class="row">
-          <div><label class="f" for="brain">Brain</label><select id="brain"></select></div>
+          <div><label class="f" for="agent">Agent</label><select id="agent"></select></div>
           <div id="files-wrap"><label class="f" for="files">Attachments</label><input type="file" id="files" multiple style="font-size:.74rem;max-width:100%"></div>
         </div>
         <div class="files" id="filelist"></div>
@@ -493,7 +493,7 @@
         kind, mode, shots: picked,
         product: $('#product').value.trim(), source: $('#source').value.trim(), message: $('#message').value.trim(),
         aspect: segVal('aspect'), seconds: +segVal('seconds'), language: $('#language').value, music: $('#music').value,
-        jianying: $('#jianying').checked, autoAnswer: $('#autoAnswer').checked, brain: $('#brain').value, notes: $('#notes').value.trim(),
+        jianying: $('#jianying').checked, autoAnswer: $('#autoAnswer').checked, agent: $('#agent').value, notes: $('#notes').value.trim(),
         ...(kind === 'recurring' ? { firstNow: $('#firstNow').checked, recurrence: { type: segVal('cadence'), atTime: $('#at').value || '10:00', ...(segVal('cadence') === 'weekly' ? { weekdays } : {}) } } : {}),
         ...(kind === 'goal' ? { activate: $('#activate').checked } : {}),
       };
@@ -528,7 +528,7 @@
 
     // Settings (not product content) persist as the next form's defaults.
     function saveLast(b) {
-      localStorage.setItem(LS.last, JSON.stringify({ kind: b.kind, mode: b.mode, aspect: b.aspect, seconds: b.seconds, language: b.language, music: b.music, brain: b.brain, jianying: b.jianying }));
+      localStorage.setItem(LS.last, JSON.stringify({ kind: b.kind, mode: b.mode, aspect: b.aspect, seconds: b.seconds, language: b.language, music: b.music, agent: b.agent, jianying: b.jianying }));
     }
     function applySettings(s) {
       if (!s) return;
@@ -536,7 +536,7 @@
       if (s.seconds) setSeg('seconds', s.seconds);
       if (s.language) $('#language').value = s.language;
       if (s.music && [...$('#music').options].some(o => o.value === s.music)) $('#music').value = s.music;
-      if (s.brain && info.brains.includes(s.brain)) $('#brain').value = s.brain;
+      if (s.agent && info.agents.includes(s.agent)) $('#agent').value = s.agent;
       $('#jianying').checked = !!s.jianying;
       $('#music').onchange();
       setMode(s.mode || 'auto');
@@ -596,7 +596,7 @@
         return { id: t.id, playing: playing.has(t.id), html: `
           <div class="film" id="film-${esc(t.id)}">
             <div class="top"><span class="ttl" title="${esc(t.title)}">${esc(sc.product || t.title)}</span><span class="st ${cls}">${esc(label)}</span></div>
-            <div class="meta">${esc(sc.mode || '')} · ${esc(sc.mode === 'template' ? '16:9 · 36s' : `${sc.aspect || ''}${sc.mode === 'shot' ? '' : ` · ${sc.seconds || '?'}s`}`)} · ${esc(sc.music === 'none' ? 'SFX only' : sc.music || '')} · ${esc((t.context?.brain || '').replace(/^local-cc-/, ''))} · ${new Date(t.createdAt).toLocaleString()}</div>
+            <div class="meta">${esc(sc.mode || '')} · ${esc(sc.mode === 'template' ? '16:9 · 36s' : `${sc.aspect || ''}${sc.mode === 'shot' ? '' : ` · ${sc.seconds || '?'}s`}`)} · ${esc(sc.music === 'none' ? 'SFX only' : sc.music || '')} · ${esc((t.context?.agent || '').replace(/^local-cc-/, ''))} · ${new Date(t.createdAt).toLocaleString()}</div>
             ${sc.shots?.length ? `<div class="meta">🎞 ${sc.shots.map(esc).join(', ')}</div>` : ''}
             ${media}
             ${cls === 'run' ? `<pre data-progress="${esc(t.id)}">…</pre>` : ''}
@@ -629,7 +629,7 @@
         try {
           const p = await api(`/inbox/${encodeURIComponent(pre.dataset.progress)}/progress`);
           const lines = (p.log || '').trim().split('\n').filter(Boolean);
-          pre.textContent = lines.slice(-6).join('\n') || 'Waiting for the brain to start…';
+          pre.textContent = lines.slice(-6).join('\n') || 'Waiting for the agent to start…';
           pre.scrollTop = pre.scrollHeight;
         } catch {}
       }
@@ -666,8 +666,8 @@
         ['aspect', 'seconds', 'cadence'].forEach(bindSeg);
         $('#music').innerHTML = `<option value="auto">Agent picks (library BGM or SFX-only)</option><option value="none">No BGM: SFX only</option><option value="attached">My attached track</option>`
           + info.bgm.map(b => `<option value="${esc(b)}">♪ ${esc(b.replace(/\.mp3$/, ''))}</option>`).join('');
-        $('#brain').innerHTML = info.brains.map(b => `<option value="${esc(b)}">${esc(b.replace(/^local-cc-/, ''))}${b === info.defaultBrain ? ' (default)' : ''}</option>`).join('');
-        $('#brain').value = info.defaultBrain;
+        $('#agent').innerHTML = info.agents.map(b => `<option value="${esc(b)}">${esc(b.replace(/^local-cc-/, ''))}${b === info.defaultAgent ? ' (default)' : ''}</option>`).join('');
+        $('#agent').value = info.defaultAgent;
         $('#gallery-link').href = info.galleryUrl + 'library.html';
         $('#ver').textContent = info.version ? `Skill @ ${info.version} · ${info.skillDir}` : '';
         renderDays();

@@ -1,4 +1,5 @@
 import fs from 'fs';
+import { splitThinkingSuffix } from './core/thinking.js';
 import path from 'path';
 import os from 'os';
 import { fileURLToPath } from 'url';
@@ -12,7 +13,7 @@ const rootDir = path.resolve(__dirname, '../../');
 
 // The repo's config.json is a sanitized TEMPLATE only. The real per-server config
 // lives outside the repo at ~/.cowork/config.json (override with COWORK_CONFIG), so
-// personal host/brain settings are never committed and the server's live edits don't
+// personal host/agent settings are never committed and the server's live edits don't
 // churn the repo. On first run we seed the user config from the repo template.
 const REPO_TEMPLATE = path.resolve(rootDir, 'config.json');
 export function activeConfigPath(): string {
@@ -70,9 +71,10 @@ const defaultConfig: Config = {
     pollIntervalMs: 5000,
     taskTimeoutMs: 3000000,
     defaultRole: 'generalist',
-    agents: {},
+    roleChains: {},
+    defaultThinking: 'medium',
     roles: {},
-    brains: {},
+    agents: {},
     classifier: {
       enabled: false,
       exec: 'hermes',
@@ -89,7 +91,7 @@ const defaultConfig: Config = {
     sharpener: {
       enabled: true,
       mode: 'shadow',
-      brain: 'local-agy-gemini-3.8-flash-high'
+      agent: 'local-agy-gemini-3.8-flash'
     }
   }
 };
@@ -111,8 +113,8 @@ export const PS_DEFAULTS = {
     } as Record<string, 'shadow' | 'on'>
   },
   tiers: {
-    mechanical: ['local-dsh-qwen3-8-27b', 'local-agy-gemini-3.8-flash-high', 'local-agy-gemini-3.8-flash-medium'],
-    standard: ['local-agy-gemini-4-argon-medium', 'local-agy-claude-opus-5-5-medium'],
+    mechanical: ['local-dsh-qwen3-8-27b', 'local-agy-gemini-3.8-flash', 'local-agy-gemini-3.8-flash'],
+    standard: ['local-agy-gemini-4-argon', 'local-agy-claude-opus-5-5'],
     judgment: ['local-cc-opus-5-5', 'remote-ai-code-gen-cc-opus-5-5']
   } as Record<string, string[]>,
   spec: {
@@ -122,10 +124,10 @@ export const PS_DEFAULTS = {
     minDecisiveVerdicts: 30,
     timeoutMs: 300000,
     judges: {
-      claude: ['local-agy-gemini-4-argon-medium', 'local-agy-gemini-3.8-flash-high'],
-      gemini: ['local-agy-claude-opus-5-5-medium', 'local-cc-opus-5-5'],
-      qwen: ['local-agy-claude-opus-5-5-medium', 'local-cc-opus-5-5'],
-      default: ['local-agy-claude-opus-5-5-medium', 'local-cc-opus-5-5']
+      claude: ['local-agy-gemini-4-argon', 'local-agy-gemini-3.8-flash'],
+      gemini: ['local-agy-claude-opus-5-5', 'local-cc-opus-5-5'],
+      qwen: ['local-agy-claude-opus-5-5', 'local-cc-opus-5-5'],
+      default: ['local-agy-claude-opus-5-5', 'local-cc-opus-5-5']
     }
   },
   panel: { enabled: true, size: 2, judgmentTier: false },
@@ -201,12 +203,12 @@ export function loadConfig(): Config {
     orchestration: {
       ...defaultConfig.orchestration,
       ...(loadedConfig.orchestration || {}),
-      agents: loadedConfig.orchestration?.agents || {},
+      roleChains: loadedConfig.orchestration?.roleChains || {},
       roles: loadedConfig.orchestration?.roles || {},
-      brains: loadedConfig.orchestration?.brains || {},
+      agents: loadedConfig.orchestration?.agents || {},
       defaultChain: loadedConfig.orchestration?.defaultChain || [],
       divisionChains: loadedConfig.orchestration?.divisionChains || {},
-      agentChains: loadedConfig.orchestration?.agentChains || {},
+      personaChains: loadedConfig.orchestration?.personaChains || {},
       remoteGraceMs: loadedConfig.orchestration?.remoteGraceMs ?? 60000,
       classifier: {
         ...defaultConfig.orchestration.classifier!,
@@ -219,26 +221,26 @@ export function loadConfig(): Config {
       sharpener: loadedConfig.orchestration?.sharpener || {
         enabled: true,
         mode: 'shadow',
-        brain: 'local-agy-gemini-3.8-flash-high'
+        agent: 'local-agy-gemini-3.8-flash'
       }
     }
   };
 
-  // Scrub any denylisted (retired) brains that lingered in the on-disk registry
-  // or its chains — the disk config may have been written before the brain was
+  // Scrub any denylisted (retired) agents that lingered in the on-disk registry
+  // or its chains — the disk config may have been written before the agent was
   // retired, or by an older server that lacked the denylist. Doing it at load
-  // time guarantees a retired brain can never come back across a restart, not
+  // time guarantees a retired agent can never come back across a restart, not
   // just be blocked from new registration.
   const psFilled = applyPsDefaults(config.orchestration);
   const om = config.orchestration;
   console.log(`[pstack] sharpener=${om.sharpener?.enabled ? om.sharpener.mode : 'off'} methods=${om.methods?.enabled ? 'on' : 'off'} spec=${om.verifier?.spec?.enabled ? om.verifier.spec.mode : 'off'} panel=${om.verifier?.panel?.enabled ? 'on' : 'off'} prAutomation=${om.prAutomation?.enabled ? om.prAutomation.mode : 'off'}` + (psFilled.length ? ` (defaults filled: ${psFilled.join(', ')})` : ''));
 
-  scrubDenylistedBrains(config);
+  scrubDenylistedAgents(config);
 
-  // Rename brains that still carry a retired id (BRAIN_ID_ALIASES) — registry
+  // Rename agents that still carry a retired id (AGENT_ID_ALIASES) — registry
   // keys and every chain — and write the result back once so the on-disk config
   // converges on the canonical ids. Idempotent: a clean config changes nothing.
-  if (migrateBrainAliases(config).length) persistRegistries(config);
+  if (migrateAgentAliases(config).length) persistRegistries(config);
 
   // COWORK_API_KEY env var overrides config (keeps the secret out of git)
   if (process.env.COWORK_API_KEY) {
@@ -271,9 +273,9 @@ export function loadConfig(): Config {
 }
 
 /**
- * Persist edits to the live agents/brains registries: mutate the in-memory
+ * Persist edits to the live roles/agents registries: mutate the in-memory
  * config (so the dispatcher sees changes on its next tick) AND write them back
- * to the per-server config's orchestration.agents/brains. Writes to
+ * to the per-server config's orchestration.roleChains/agents. Writes to
  * ~/.cowork/config.json (or COWORK_CONFIG) — never the repo template. Other
  * config fields are left exactly as they are on disk.
  */
@@ -283,24 +285,24 @@ export function persistRegistries(config: Config): void {
   try { disk = JSON.parse(fs.readFileSync(configPath, 'utf-8')); } catch { /* start fresh */ }
   try { fs.mkdirSync(path.dirname(configPath), { recursive: true }); } catch { /* dir exists */ }
   disk.orchestration = disk.orchestration || {};
+  disk.orchestration.roleChains = config.orchestration.roleChains;
   disk.orchestration.agents = config.orchestration.agents;
-  disk.orchestration.brains = config.orchestration.brains;
   disk.orchestration.defaultChain = config.orchestration.defaultChain;
   disk.orchestration.divisionChains = config.orchestration.divisionChains;
-  disk.orchestration.agentChains = config.orchestration.agentChains;
+  disk.orchestration.personaChains = config.orchestration.personaChains;
   fs.writeFileSync(configPath, JSON.stringify(disk, null, 2));
 }
 
-/** Remove a brain from the registry AND scrub it from every agent's chain so no
- *  agent points at a brain that no longer exists. Returns #agents changed. */
-export function removeBrainCascade(config: Config, id: string): number {
+/** Remove an agent from the registry AND scrub it from every chain so no
+ *  agent points at an agent that no longer exists. Returns #agents changed. */
+export function removeAgentCascade(config: Config, id: string): number {
   const orch = config.orchestration;
-  delete (orch.brains || {})[id];
+  delete (orch.agents || {})[id];
   let scrubbed = 0;
-  for (const a of Object.values(orch.agents || {})) {
-    const before = a.brains.length;
-    a.brains = a.brains.filter(b => b !== id);
-    if (a.brains.length !== before) scrubbed++;
+  for (const a of Object.values(orch.roleChains || {})) {
+    const before = a.agents.length;
+    a.agents = a.agents.filter(b => b !== id);
+    if (a.agents.length !== before) scrubbed++;
   }
   // Also scrub the global default chain and any division overrides.
   if (Array.isArray(orch.defaultChain)) {
@@ -314,12 +316,12 @@ export function removeBrainCascade(config: Config, id: string): number {
     if (next.length !== before) { orch.divisionChains![div] = next; scrubbed++; }
   }
   // And every per-roster-agent override.
-  for (const [agent, chain] of Object.entries(orch.agentChains || {})) {
+  for (const [agent, chain] of Object.entries(orch.personaChains || {})) {
     const before = chain.length;
     const next = chain.filter(b => b !== id);
     if (next.length !== before) {
-      if (next.length) orch.agentChains![agent] = next;
-      else delete orch.agentChains![agent];   // emptied → fall back to division/default
+      if (next.length) orch.personaChains![agent] = next;
+      else delete orch.personaChains![agent];   // emptied → fall back to division/default
       scrubbed++;
     }
   }
@@ -328,51 +330,51 @@ export function removeBrainCascade(config: Config, id: string): number {
 }
 
 /**
- * Brain ids that are permanently retired: the server refuses to (re)register
+ * Agent ids that are permanently retired: the server refuses to (re)register
  * them and never restores them from a client's persisted capabilities, so a
  * client that still declares one is simply ignored rather than resurrecting a
- * decommissioned model. Matched against the brain id (case-insensitive).
- * DeepSeek was pulled from the fleet — see removeBrainCascade callers.
+ * decommissioned model. Matched against the agent id (case-insensitive).
+ * DeepSeek was pulled from the fleet — see removeAgentCascade callers.
  */
-export const DENYLISTED_BRAIN_RE = /deepseek/i;
+export const DENYLISTED_AGENT_RE = /deepseek/i;
 
-/** True when a brain id must never enter (or re-enter) the registry. */
-export function isDenylistedBrain(id: string): boolean {
-  return DENYLISTED_BRAIN_RE.test(id);
+/** True when an agent id must never enter (or re-enter) the registry. */
+export function isDenylistedAgent(id: string): boolean {
+  return DENYLISTED_AGENT_RE.test(id);
 }
 
 /**
- * Strip every denylisted brain from an in-memory config: the registry itself and
- * every chain that references one (defaultChain, division/agent chains, each
- * agent's brains list). Mutates in place and returns the ids removed. Used at
- * load time so a retired brain can't survive a restart via the on-disk config.
+ * Strip every denylisted agent from an in-memory config: the registry itself and
+ * every chain that references one (defaultChain, division/role chains, each
+ * role's agents list). Mutates in place and returns the ids removed. Used at
+ * load time so a retired agent can't survive a restart via the on-disk config.
  */
-export function scrubDenylistedBrains(config: Config): string[] {
+export function scrubDenylistedAgents(config: Config): string[] {
   const orch = config.orchestration;
-  const brains = orch.brains || {};
-  const removed = Object.keys(brains).filter(isDenylistedBrain);
+  const agents = orch.agents || {};
+  const removed = Object.keys(agents).filter(isDenylistedAgent);
   if (!removed.length) return [];
-  for (const id of removed) delete brains[id];
-  const clean = (arr?: string[]) => (arr || []).filter(id => !isDenylistedBrain(id));
+  for (const id of removed) delete agents[id];
+  const clean = (arr?: string[]) => (arr || []).filter(id => !isDenylistedAgent(id));
   if (Array.isArray(orch.defaultChain)) orch.defaultChain = clean(orch.defaultChain);
   for (const div of Object.keys(orch.divisionChains || {})) orch.divisionChains![div] = clean(orch.divisionChains![div]);
-  for (const agent of Object.keys(orch.agentChains || {})) {
-    const next = clean(orch.agentChains![agent]);
-    if (next.length) orch.agentChains![agent] = next; else delete orch.agentChains![agent];
+  for (const agent of Object.keys(orch.personaChains || {})) {
+    const next = clean(orch.personaChains![agent]);
+    if (next.length) orch.personaChains![agent] = next; else delete orch.personaChains![agent];
   }
-  for (const a of Object.values(orch.agents || {})) a.brains = clean(a.brains);
+  for (const a of Object.values(orch.roleChains || {})) a.agents = clean(a.agents);
   return removed;
 }
 
 /**
- * Retired brain id → canonical brain id. A renamed brain keeps resolving under
- * its old id everywhere an id enters the server: task pins (context.brain),
+ * Retired agent id → canonical agent id. A renamed agent keeps resolving under
+ * its old id everywhere an id enters the server: task pins (context.agent),
  * client registration, restored client capabilities, and chains in an older
- * on-disk config. Extend per server via orchestration.brainAliases.
- * Never alias to an id containing "deepseek" — DENYLISTED_BRAIN_RE drops it.
+ * on-disk config. Extend per server via orchestration.agentAliases.
+ * Never alias to an id containing "deepseek" — DENYLISTED_AGENT_RE drops it.
  */
-export const BRAIN_ID_ALIASES: Readonly<Record<string, string>> = {
-  // The id prefix names the MACHINE a brain runs on (local- = this host), not
+export const AGENT_ID_ALIASES: Readonly<Record<string, string>> = {
+  // The id prefix names the MACHINE an agent runs on (local- = this host), not
   // its `location`. Codex runs on this host, so local-codex-*, even though the
   // codex client claims its tasks (location "remote"). Reverses the 2026-10-07
   // local-codex-* → remote-codex-* rename (2026-11-03).
@@ -384,83 +386,87 @@ export const BRAIN_ID_ALIASES: Readonly<Record<string, string>> = {
   'remote-ai-code-gen-cc-opus': 'remote-ai-code-gen-cc-opus-4-8',
   'remote-ai-code-gen-cc-sonnet': 'remote-ai-code-gen-cc-sonnet-5',
   'remote-ai-code-gen-cc-fable': 'remote-ai-code-gen-cc-fable-5',
-  // one canonical id for the Hermes qwen3.8 brain ("ha" read as Home Assistant).
+  // one canonical id for the Hermes qwen3.8 agent ("ha" read as Home Assistant).
   'local-ha-qwen3-8-27b': 'local-hermes-qwen3.8-27b',
   'local-ha-qwen38-27b': 'local-hermes-qwen3.8-27b',
   'local-ha-qwen3.8-27b': 'local-hermes-qwen3.8-27b',
   // agy models retired upstream (no longer in `agy models`) → nearest live slug,
   // so old task pins and stale client registrations don't fail "not recognized".
-  'local-agy-gemini-3.1-pro-high': 'local-agy-gemini-3.8-flash-high',
-  'local-agy-gemini-3.1-pro-low': 'local-agy-gemini-3.8-flash-low',
-  'local-agy-gemini-3.5-flash-high': 'local-agy-gemini-3.8-flash-high',
-  'local-agy-gemini-3.5-flash-medium': 'local-agy-gemini-3.8-flash-medium',
-  'local-agy-gemini-3.5-flash-low': 'local-agy-gemini-3.8-flash-low',
-  'local-agy-gemini-3.6-flash-high': 'local-agy-gemini-3.8-flash-high',
-  'local-agy-gemini-3.6-flash-medium': 'local-agy-gemini-3.8-flash-medium',
-  'local-agy-gemini-3.6-flash-low': 'local-agy-gemini-3.8-flash-low',
-  'local-agy-gemini-3.7-flash-high': 'local-agy-gemini-3.8-flash-high',
-  'local-agy-gemini-3.7-flash-medium': 'local-agy-gemini-3.8-flash-medium',
-  'local-agy-gemini-3.7-flash-low': 'local-agy-gemini-3.8-flash-low',
-  'local-agy-claude-sonnet-4-6': 'local-agy-claude-sonnet-5-5-medium',
-  'local-agy-claude-opus-4-6-thinking': 'local-agy-claude-opus-5-5-high'
+  'local-agy-gemini-3.1-pro-high': 'local-agy-gemini-3.8-flash',
+  'local-agy-gemini-3.1-pro-low': 'local-agy-gemini-3.8-flash',
+  'local-agy-gemini-3.5-flash-high': 'local-agy-gemini-3.8-flash',
+  'local-agy-gemini-3.5-flash-medium': 'local-agy-gemini-3.8-flash',
+  'local-agy-gemini-3.5-flash-low': 'local-agy-gemini-3.8-flash',
+  'local-agy-gemini-3.6-flash-high': 'local-agy-gemini-3.8-flash',
+  'local-agy-gemini-3.6-flash-medium': 'local-agy-gemini-3.8-flash',
+  'local-agy-gemini-3.6-flash-low': 'local-agy-gemini-3.8-flash',
+  'local-agy-gemini-3.7-flash-high': 'local-agy-gemini-3.8-flash',
+  'local-agy-gemini-3.7-flash-medium': 'local-agy-gemini-3.8-flash',
+  'local-agy-gemini-3.7-flash-low': 'local-agy-gemini-3.8-flash',
+  'local-agy-claude-sonnet-4-6': 'local-agy-claude-sonnet-5-5',
+  'local-agy-claude-opus-4-6-thinking': 'local-agy-claude-opus-5-5'
 };
 
-/** Resolve a (possibly retired) brain id to its canonical id. Follows chained
+/** Resolve a (possibly retired) agent id to its canonical id. Follows chained
  *  aliases with a hop limit so a misconfigured cycle cannot hang. */
-export function canonicalBrainId(config: Config | undefined, id: string): string {
-  const aliases = { ...BRAIN_ID_ALIASES, ...(config?.orchestration?.brainAliases || {}) };
-  let cur = id;
-  for (let hop = 0; hop < 8 && aliases[cur] && aliases[cur] !== cur; hop++) cur = aliases[cur];
-  return cur;
+export function canonicalAgentId(config: Config | undefined, id: string): string {
+  const aliases = { ...AGENT_ID_ALIASES, ...(config?.orchestration?.agentAliases || {}) };
+  const follow = (start: string) => {
+    let cur = start;
+    for (let hop = 0; hop < 8 && aliases[cur] && aliases[cur] !== cur; hop++) cur = aliases[cur];
+    return cur;
+  };
+  // A thinking level is not part of an id: `x-high` is agent `x` (see core/thinking.ts).
+  return follow(splitThinkingSuffix(follow(id)).base);
 }
 
 /**
- * The task as a brain CLIENT should see it: when the pinned brain is held under
+ * The task as an agent CLIENT should see it: when the pinned agent is held under
  * a canonical id but its owning client still declared a retired one
- * (`clientId`), report context.brain as that declared id — a client only claims
- * tasks whose context.brain is one of its own ids. Returns a shallow copy and
+ * (`clientId`), report context.agent as that declared id — a client only claims
+ * tasks whose context.agent is one of its own ids. Returns a shallow copy and
  * never touches the stored task; unaffected tasks are returned as-is.
  */
 export function clientTaskView<T extends { context?: Record<string, any> }>(config: Config, task: T): T {
-  const id = task?.context?.brain;
+  const id = task?.context?.agent;
   if (typeof id !== 'string') return task;
   // A task stored before a rename may still carry the retired id: resolve it, so
   // the client that now declares the canonical id still finds it.
-  const canon = canonicalBrainId(config, id);
-  const want = config.orchestration.brains?.[canon]?.clientId || canon;
+  const canon = canonicalAgentId(config, id);
+  const want = config.orchestration.agents?.[canon]?.clientId || canon;
   if (want === id) return task;
-  return { ...task, context: { ...task.context, brain: want } };
+  return { ...task, context: { ...task.context, agent: want } };
 }
 
 /**
- * Rename every retired brain id in an in-memory config to its canonical id: the
- * registry keys and every chain (defaultChain, division/agent chains, each
- * special agent's brains), de-duplicating chains where old and new both appear.
- * A dynamic brain moved this way remembers the id its client declared
+ * Rename every retired agent id in an in-memory config to its canonical id: the
+ * registry keys and every chain (defaultChain, division/role chains, each
+ * special role's agents), de-duplicating chains where old and new both appear.
+ * A dynamic agent moved this way remembers the id its client declared
  * (`clientId`) until that client re-registers. Mutates in place; returns the
  * retired ids that were rewritten.
  */
-export function migrateBrainAliases(config: Config): string[] {
+export function migrateAgentAliases(config: Config): string[] {
   const orch = config.orchestration;
-  const brains = orch.brains || {};
+  const agents = orch.agents || {};
   const renamed = new Set<string>();
-  for (const id of Object.keys(brains)) {
-    const canon = canonicalBrainId(config, id);
+  for (const id of Object.keys(agents)) {
+    const canon = canonicalAgentId(config, id);
     if (canon === id) continue;
-    if (!brains[canon]) {
-      brains[canon] = { ...brains[id], ...(brains[id].dynamic ? { clientId: brains[id].clientId || id } : {}) };
-      // An agy brain id IS its model slug — a renamed (retired) one must not
+    if (!agents[canon]) {
+      agents[canon] = { ...agents[id], ...(agents[id].dynamic ? { clientId: agents[id].clientId || id } : {}) };
+      // An agy agent id IS its model slug — a renamed (retired) one must not
       // keep forwarding the old `--model` agy no longer recognises.
-      if (brains[canon].exec === 'agy' && canon.startsWith('local-agy-')) brains[canon].model = canon.slice('local-agy-'.length);
+      if (agents[canon].exec === 'agy' && canon.startsWith('local-agy-')) agents[canon].model = canon.slice('local-agy-'.length);
     }
-    delete brains[id];
+    delete agents[id];
     renamed.add(id);
   }
   const fix = (arr: string[] | undefined): string[] | undefined => {
     if (!Array.isArray(arr)) return arr;
     const out: string[] = [];
     for (const id of arr) {
-      const canon = canonicalBrainId(config, id);
+      const canon = canonicalAgentId(config, id);
       if (canon !== id) renamed.add(id);
       if (!out.includes(canon)) out.push(canon);
     }
@@ -468,43 +474,43 @@ export function migrateBrainAliases(config: Config): string[] {
   };
   if (Array.isArray(orch.defaultChain)) orch.defaultChain = fix(orch.defaultChain);
   for (const div of Object.keys(orch.divisionChains || {})) orch.divisionChains![div] = fix(orch.divisionChains![div])!;
-  for (const agent of Object.keys(orch.agentChains || {})) orch.agentChains![agent] = fix(orch.agentChains![agent])!;
-  for (const a of Object.values(orch.agents || {})) a.brains = fix(a.brains) || [];
+  for (const agent of Object.keys(orch.personaChains || {})) orch.personaChains![agent] = fix(orch.personaChains![agent])!;
+  for (const a of Object.values(orch.roleChains || {})) a.agents = fix(a.agents) || [];
   return [...renamed];
 }
 
 /**
- * Merge a client-declared brain into the registry (auto-registration).
+ * Merge a client-declared agent into the registry (auto-registration).
  *
  * Two invariants are enforced here because this is the single choke point every
  * register_agent handshake flows through:
  *  1. Denylisted ids (DeepSeek) are dropped — a reconnecting client can never
- *     resurrect a retired brain.
+ *     resurrect a retired agent.
  *  2. The server-owned `disabled` flag is PRESERVED across re-registration. A
- *     client re-declares its brains verbatim every time it reconnects; without
+ *     client re-declares its agents verbatim every time it reconnects; without
  *     this merge that handshake would silently clear a manual disable and the
- *     brain would start taking tasks again ("disabled brains re-enable
+ *     agent would start taking tasks again ("disabled agents re-enable
  *     themselves"). Disabling is a server-side decision and outlives the client.
  */
-export function registerBrain(config: Config, id: string, brain: import('./types.js').BrainConfig): string {
-  const canon = canonicalBrainId(config, id);
-  if (isDenylistedBrain(id) || isDenylistedBrain(canon)) return canon;
-  config.orchestration.brains = config.orchestration.brains || {};
-  const prev = config.orchestration.brains[canon];
-  const { clientId: _stale, ...rest } = brain;
-  config.orchestration.brains[canon] = {
+export function registerAgent(config: Config, id: string, agent: import('./types.js').AgentConfig): string {
+  const canon = canonicalAgentId(config, id);
+  if (isDenylistedAgent(id) || isDenylistedAgent(canon)) return canon;
+  config.orchestration.agents = config.orchestration.agents || {};
+  const prev = config.orchestration.agents[canon];
+  const { clientId: _stale, ...rest } = agent;
+  config.orchestration.agents[canon] = {
     ...rest,
     ...(prev?.disabled ? { disabled: true } : {}),
     // A client still declaring a retired id is registered under the canonical
-    // id; remember what it calls the brain so its task views can be translated.
+    // id; remember what it calls the agent so its task views can be translated.
     ...(canon !== id ? { clientId: id } : {})
   };
   persistRegistries(config);
   return canon;
 }
 
-/** Client platforms whose capabilities are brain ids, and the exec each implies. */
-const CLIENT_PLATFORM_EXEC: Record<string, NonNullable<import('./types.js').BrainConfig['exec']>> = {
+/** Client platforms whose capabilities are agent ids, and the exec each implies. */
+const CLIENT_PLATFORM_EXEC: Record<string, NonNullable<import('./types.js').AgentConfig['exec']>> = {
   claude: 'claude',
   antigravity: 'agy',
   codex: 'codex',
@@ -512,43 +518,43 @@ const CLIENT_PLATFORM_EXEC: Record<string, NonNullable<import('./types.js').Brai
   ollama: 'ollama'
 };
 
-/** Brain-shaped capability ids use the `local-*` / `remote-*` alias convention. */
-const BRAIN_ID_RE = /^(local|remote)-/;
+/** Agent-shaped capability ids use the `local-*` / `remote-*` alias convention. */
+const AGENT_ID_RE = /^(local|remote)-/;
 
-/** Client platforms whose brains are always claimed by the client (location
+/** Client platforms whose agents are always claimed by the client (location
  *  "remote") whatever the id prefix says — e.g. local-codex-* runs on this host
  *  but the dispatcher must never spawn it itself. */
 const CLIENT_CLAIMED_PLATFORMS = new Set(['codex']);
 
 /**
- * Rebuild dynamic brains from the last known CLIENT declarations (the persisted
- * agent roster in .status/agents.json) whenever the registry lost them — a
+ * Rebuild dynamic agents from the last known CLIENT declarations (the persisted
+ * agent roster in .status/workers.json) whenever the registry lost them — a
  * full-config UI save, a template reseed, or a manual cleanup can wipe
- * auto-registered entries, and clients only re-declare their brains when THEY
+ * auto-registered entries, and clients only re-declare their agents when THEY
  * restart, not when the server restarts. Client capabilities are the source of
  * truth for what a connected client can actually run, so a capability that is
  * missing from the registry must be restored or the UI shows the client with
- * its brains while the brain dropdown cannot select them.
+ * its agents while the agent dropdown cannot select them.
  *
  * Idempotent and fail-soft: existing registry entries (static or dynamic) are
  * never overwritten; platforms without a known exec (dispatcher/orchestrator
- * internals) and non-brain capabilities are skipped. Returns the ids restored.
+ * internals) and non-agent capabilities are skipped. Returns the ids restored.
  */
-export function restoreClientBrains(
+export function restoreClientAgents(
   config: Config,
-  agents: Array<{ id: string; platform: string; capabilities?: string[] }>
+  workers: Array<{ id: string; platform: string; capabilities?: string[] }>
 ): string[] {
   const restored: string[] = [];
-  config.orchestration.brains = config.orchestration.brains || {};
-  for (const a of agents) {
+  config.orchestration.agents = config.orchestration.agents || {};
+  for (const a of workers) {
     const exec = CLIENT_PLATFORM_EXEC[a.platform];
     if (!exec) continue;
     for (const cap of a.capabilities || []) {
-      if (!BRAIN_ID_RE.test(cap)) continue;
-      const id = canonicalBrainId(config, cap);
-      if (isDenylistedBrain(cap) || isDenylistedBrain(id)) continue;   // retired brain — never restore
-      if (config.orchestration.brains[id]) continue;
-      config.orchestration.brains[id] = {
+      if (!AGENT_ID_RE.test(cap)) continue;
+      const id = canonicalAgentId(config, cap);
+      if (isDenylistedAgent(cap) || isDenylistedAgent(id)) continue;   // retired agent — never restore
+      if (config.orchestration.agents[id]) continue;
+      config.orchestration.agents[id] = {
         description: `${id} (declared by client ${a.id.slice(0, 8)}; restored from persisted registration)`,
         location: id.startsWith('local-') && !CLIENT_CLAIMED_PLATFORMS.has(a.platform) ? 'local' : 'remote',
         exec,

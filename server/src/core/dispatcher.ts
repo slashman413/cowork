@@ -17,13 +17,14 @@ import { buildPanelReviewerPrompt, buildLeadJudgmentPrompt, parseLeadJudgment } 
 import { describeAutoAnswer, logAutoAnswer } from './rulings.js';
 import { BRIEF_KEYS, parseBrief, renderBriefSections } from './brief.js';
 import { renderMethodPrompt } from './methods.js';
-import { sharpenPending, renderSkillPrompt, reviewMode, panelFallbackAcceptance, parseArena, pickArenaBrains, arenaPlan } from './pstack-gates.js';
+import { sharpenPending, renderSkillPrompt, reviewMode, panelFallbackAcceptance, parseArena, pickArenaAgents, arenaPlan } from './pstack-gates.js';
 import { extractPrUrls, openedPrUrls, prInScope, prWatchTaskSpec } from './pr-automation.js';
 import { shouldSharpenTask, sharpenTask, mergeSharpenedContext } from './sharpener.js';
-import { taskTier, mergeTierChain, reviewChain, brainFamily, type TierName } from './tiers.js';
-import { canonicalBrainId } from '../config.js';
+import { taskTier, mergeTierChain, reviewChain, agentFamily, type TierName } from './tiers.js';
+import { canonicalAgentId } from '../config.js';
 import { STREAMING_EXECS, streamArgs, createStreamRenderer, claudeUsage, flatUsage, lastAssistantText } from './progress-stream.js';
 import { briefPersona } from './persona-brief.js';
+import { agyModelSlug, DEFAULT_THINKING, normalizeThinking, splitThinkingSuffix, thinkingArgs, type ThinkingLevel } from './thinking.js';
 import { ClaudeProfile } from './claude-profile.js';
 import { killProcessTree } from './proc-tree.js';
 import { codeTaskRepo, ensureWorktree, writeWorktreeDiff, pruneStaleWorktrees } from './worktree.js';
@@ -50,18 +51,18 @@ export function isConversational(task: { context?: Record<string, any> }): boole
 
 /** A fully-resolved execution plan for one attempt of one task. */
 interface ExecPlan {
-  agent: string;                // special agent name or roster agent slug
-  division?: string;            // division for roster agents (chain + display)
+  persona: string;                // special role name or persona slug
+  division?: string;            // division for personas (chain + display)
   isRoster: boolean;            // true → run the roster .md persona
-  brainId: string;             // brain used this attempt
-  attempt: number;             // 0-based index into the resolved brain chain
+  agentId: string;             // agent used this attempt
+  attempt: number;             // 0-based index into the resolved agent chain
   chainLen: number;            // length of the chain (0 if pinned)
-  pinned: boolean;             // context.brain override (retry same brain)
+  pinned: boolean;             // context.agent override (retry same agent)
   label: string;                // worker display + logs
-  platform: string;             // active-agent platform bucket
+  platform: string;             // active-worker platform bucket
   exec: 'claude' | 'hermes' | 'agy' | 'script' | 'codex' | 'ollama' | 'dsh';
   model: string;
-  effort?: string;
+  thinking?: ThinkingLevel;
   command?: string[];
 }
 
@@ -110,12 +111,12 @@ export class Dispatcher {
   private store: Store;
   private eventBus: EventBus;
   private goals?: Goals;
-  private running = new Map<string, { role: string; startedAt: number; workerAgentId?: string; brainId?: string }>();
-  /** Live brain process per running task — killed (whole tree) when the task is deleted. */
+  private running = new Map<string, { role: string; startedAt: number; workerId?: string; agentId?: string }>();
+  /** Live agent process per running task — killed (whole tree) when the task is deleted. */
   private children = new Map<string, ChildProcess>();
-  /** Tasks deleted while their brain was running: their run is discarded, never verified/handed over. */
+  /** Tasks deleted while their agent was running: their run is discarded, never verified/handed over. */
   private cancelled = new Set<string>();
-  private agentId: string | null = null;
+  private workerId: string | null = null;
   private timer: NodeJS.Timeout | null = null;
   private stopped = false;
   private classifying = new Set<string>();
@@ -138,8 +139,8 @@ export class Dispatcher {
     this.store = store;
     this.eventBus = eventBus;
     this.goals = goals;
-    // Deleting a task must stop its brain. Store.deleteTask only removes files;
-    // without this the brain (e.g. a dsh run on the local SGLang engine) kept
+    // Deleting a task must stop its agent. Store.deleteTask only removes files;
+    // without this the agent (e.g. a dsh run on the local SGLang engine) kept
     // running — and burning GPU — with nobody left to collect its result.
     if (typeof eventBus?.on === 'function') {
       eventBus.on('taskDeleted', (evt: any) => {
@@ -150,7 +151,7 @@ export class Dispatcher {
   }
 
   /**
-   * Stop a task's running brain: SIGTERM its whole process tree, SIGKILL after a
+   * Stop a task's running agent: SIGTERM its whole process tree, SIGKILL after a
    * grace period. The run is marked cancelled so execute() discards its output
    * instead of verifying / handing it over (which could resurrect the task).
    * Returns false when this dispatcher is not running the task.
@@ -160,7 +161,7 @@ export class Dispatcher {
     if (!this.running.has(taskId) && !child) return false;
     this.cancelled.add(taskId);
     if (child?.pid && child.exitCode === null && child.signalCode === null) {
-      console.log(`Dispatcher: ${reason} — killing brain process tree (pid ${child.pid}) of task ${taskId}`);
+      console.log(`Dispatcher: ${reason} — killing agent process tree (pid ${child.pid}) of task ${taskId}`);
       void killProcessTree(child.pid, { graceMs: this.config.orchestration?.killGraceMs ?? 5000 });
     }
     return true;
@@ -175,15 +176,15 @@ export class Dispatcher {
     // Drop ghost registrations from previous service runs — there is exactly
     // one coordinator per server process. Sweep the old "dispatcher" name too
     // so a rename doesn't leave a stale card.
-    for (const a of this.store.getActiveAgents()) {
-      const isCoordinator = a.platform === 'cowork' && (a.agentName === Dispatcher.COORDINATOR_NAME || a.agentName === 'dispatcher');
+    for (const a of this.store.getActiveWorkers()) {
+      const isCoordinator = a.platform === 'cowork' && (a.workerName === Dispatcher.COORDINATOR_NAME || a.workerName === 'dispatcher');
       if (isCoordinator || a.sessionId === 'dispatcher-worker') {
-        this.store.removeAgent(a.id);
+        this.store.removeWorker(a.id);
       }
     }
     // Handover: reclaim tasks a previous dispatcher run claimed but never
     // finished (service restart / crash mid-execution). context.dispatched
-    // marks dispatcher-owned claims, so live interactive agents' claims are
+    // marks dispatcher-owned claims, so live interactive workers' claims are
     // never touched.
     for (const t of this.store.listTasks()) {
       if ((t.status === 'in-progress' || t.status === 'claimed') && t.context?.dispatched) {
@@ -194,17 +195,17 @@ export class Dispatcher {
         console.log(`Dispatcher: handover — reclaimed orphaned task ${t.id} (${t.title})`);
       }
     }
-    const agentNames = Object.keys(this.specialAgents());
-    const agent = this.store.registerAgent({
+    const roleNames = Object.keys(this.specialRoles());
+    const worker = this.store.registerWorker({
       platform: 'cowork',
-      agentName: Dispatcher.COORDINATOR_NAME,
-      capabilities: agentNames
+      workerName: Dispatcher.COORDINATOR_NAME,
+      capabilities: roleNames
     });
-    this.agentId = agent.id;
-    // Verify EXTERNALLY reported results too: a remote brain (e.g. a
+    this.workerId = worker.id;
+    // Verify EXTERNALLY reported results too: a remote agent (e.g. a
     // remote-examplehost-cc-* client) can report a rate-limit / "session limit"
     // notice as its result and it would otherwise be marked done. The guard runs
-    // the same verifier and hands such results to the next fallback brain.
+    // the same verifier and hands such results to the next fallback agent.
     this.store.setCompletionGuard((t, r) => this.verifyReportedCompletion(t, r));
     this.timer = setInterval(() => this.tick(), orch.pollIntervalMs);
     // Catch-up tick right now instead of waiting a full pollIntervalMs. Server
@@ -216,7 +217,7 @@ export class Dispatcher {
     // straight away. Deferred to the next microtask so `start()` finishes first.
     queueMicrotask(() => this.tick());
     const clsMsg = orch.classifier?.enabled ? `classifier ${orch.classifier.model}` : 'classifier off';
-    console.log(`Dispatcher: started (agents: ${agentNames.join(', ')}; max ${orch.maxConcurrent} concurrent; ${clsMsg}; staleClaim ${orch.staleClaimMs ?? 0}ms)`);
+    console.log(`Dispatcher: started (agents: ${roleNames.join(', ')}; max ${orch.maxConcurrent} concurrent; ${clsMsg}; staleClaim ${orch.staleClaimMs ?? 0}ms)`);
   }
 
   /** Run a dispatch pass soon instead of waiting up to pollIntervalMs — used by
@@ -238,34 +239,34 @@ export class Dispatcher {
   }
 
   /** Special (non-roster) executor agents: orchestrator, generalist, video. */
-  private specialAgents(): Record<string, { description: string; brains: string[] }> {
-    return this.config.orchestration.agents || {};
+  private specialRoles(): Record<string, { description: string; agents: string[] }> {
+    return this.config.orchestration.roleChains || {};
   }
   private isSpecial(name: string): boolean {
-    return !!this.specialAgents()[name];
+    return !!this.specialRoles()[name];
   }
 
-  /** Resolve the brain fallback chain for an agent. Precedence:
-   *   special agent      → its own agents[name].brains
-   *   roster agent       → its own agentChains[slug] override, else its
+  /** Resolve the agent fallback chain for an agent. Precedence:
+   *   special role      → its own agents[name].agents
+   *   persona       → its own personaChains[slug] override, else its
    *                        division's override, else the global default chain.
-   *   Disabled brains are silently stripped from the resolved chain so they are
+   *   Disabled agents are silently stripped from the resolved chain so they are
    *   never dispatched. */
-  private chainFor(agent: string, division?: string, ctx?: Record<string, any>): string[] {
+  private chainFor(persona: string, division?: string, ctx?: Record<string, any>): string[] {
     const orch = this.config.orchestration;
-    const brains = orch.brains || {};
+    const agents = orch.agents || {};
     let raw: string[];
     const tier = taskTier(ctx);
-    if (this.isSpecial(agent)) {
-      raw = orch.agents[agent].brains || [];
-      // P1-2: when a gated step escalates to `judgment` tier at round >= escalateBrainAt,
-      // prepend the judgment tier brains even for special agents (e.g. orchestrator).
+    if (this.isSpecial(persona)) {
+      raw = orch.roleChains[persona].agents || [];
+      // P1-2: when a gated step escalates to `judgment` tier at round >= escalateAgentAt,
+      // prepend the judgment tier agents even for special roles (e.g. orchestrator).
       if (ctx?.escalated && tier === 'judgment') {
         raw = mergeTierChain(this.tierList('judgment', ctx), raw);
       }
     } else {
-      // A roster agent's own override wins over its division and the global default.
-      const own = orch.agentChains && orch.agentChains[agent];
+      // A persona's own override wins over its division and the global default.
+      const own = orch.personaChains && orch.personaChains[persona];
       if (own && own.length) {
         raw = own;
         if (ctx?.escalated && tier === 'judgment') {
@@ -274,26 +275,26 @@ export class Dispatcher {
       } else {
         const div = division || '';
         raw = (orch.divisionChains && orch.divisionChains[div]) || orch.defaultChain || [];
-        // P1-4: a tier-tagged task tries its tier's brains first, then the normal chain.
+        // P1-4: a tier-tagged task tries its tier's agents first, then the normal chain.
         if (tier) raw = mergeTierChain(this.tierList(tier, ctx), raw);
       }
     }
-    // Strip disabled brains so the dispatcher never schedules them.
-    return raw.filter(id => !brains[id]?.disabled);
+    // Strip disabled agents so the dispatcher never schedules them.
+    return raw.filter(id => !agents[id]?.disabled);
   }
 
-  /** Brains of a tier. `review` = a different family than context.reviewOf
-   *  (the executor brain being judged), else the judgment list. */
+  /** Agents of a tier. `review` = a different family than context.reviewOf
+   *  (the executor agent being judged), else the judgment list. */
   private tierList(tier: TierName, ctx?: Record<string, any>): string[] {
     const orch = this.config.orchestration;
     if (tier === 'review') {
-      const of = typeof ctx?.reviewOf === 'string' ? canonicalBrainId(this.config, ctx.reviewOf) : '';
+      const of = typeof ctx?.reviewOf === 'string' ? canonicalAgentId(this.config, ctx.reviewOf) : '';
       if (of) {
-        const fromTiers = reviewChain(of, orch.tiers, orch.brains || {});
+        const fromTiers = reviewChain(of, orch.tiers, orch.agents || {});
         const judges = orch.verifier?.spec?.judges
           ? { ...DEFAULT_SPEC_JUDGES, ...orch.verifier.spec.judges }
           : DEFAULT_SPEC_JUDGES;
-        const fromJudges = selectSpecJudges(of, { judges, brains: orch.brains || {} });
+        const fromJudges = selectSpecJudges(of, { judges, agents: orch.agents || {} });
         return mergeTierChain(fromTiers, fromJudges);
       }
       return orch.tiers?.judgment || [];
@@ -301,31 +302,31 @@ export class Dispatcher {
     return orch.tiers?.[tier] || [];
   }
 
-  /** The chosen agent for a task: a special agent name, or a roster agent slug. */
-  private resolveAgent(task: Task): string | null {
+  /** The chosen agent for a task: a special role name, or a persona slug. */
+  private resolvePersona(task: Task): string | null {
     if (task.tags?.includes('manual')) return null;
     const ctx = task.context || {};
-    const named = typeof ctx.agent === 'string' ? ctx.agent : typeof ctx.role === 'string' ? ctx.role : undefined;
-    if (named && (this.isSpecial(named) || this.store.getAgentPersona(named))) return named;
-    for (const tag of task.tags || []) if (this.isSpecial(tag) || this.store.getAgentPersona(tag)) return tag;
-    if (task.skill && (this.isSpecial(task.skill) || this.store.getAgentPersona(task.skill))) return task.skill;
+    const named = typeof ctx.persona === 'string' ? ctx.persona : typeof ctx.role === 'string' ? ctx.role : undefined;
+    if (named && (this.isSpecial(named) || this.store.getPersona(named))) return named;
+    for (const tag of task.tags || []) if (this.isSpecial(tag) || this.store.getPersona(tag)) return tag;
+    if (task.skill && (this.isSpecial(task.skill) || this.store.getPersona(task.skill))) return task.skill;
     return null;
   }
 
-  /** How many local runs this ONE brain instance may serve at once. Per-brain
-   *  {@link BrainConfig.maxConcurrent}, else orchestration.defaultBrainConcurrency,
-   *  else 1. Never returns < 1. Remote brains are governed by their own client, so
+  /** How many local runs this ONE agent instance may serve at once. Per-agent
+   *  {@link AgentConfig.maxConcurrent}, else orchestration.defaultAgentConcurrency,
+   *  else 1. Never returns < 1. Remote agents are governed by their own client, so
    *  this only bounds locally-spawned runs. */
-  private brainCap(brainId: string): number {
-    const b = this.config.orchestration.brains?.[brainId];
-    const cap = b?.maxConcurrent ?? this.config.orchestration.defaultBrainConcurrency ?? 1;
+  private agentCap(agentId: string): number {
+    const b = this.config.orchestration.agents?.[agentId];
+    const cap = b?.maxConcurrent ?? this.config.orchestration.defaultAgentConcurrency ?? 1;
     return cap > 0 ? cap : 1;
   }
 
-  /** How many locally-spawned runs are in flight on `brainId` right now. */
-  private brainLoad(brainId: string): number {
+  /** How many locally-spawned runs are in flight on `agentId` right now. */
+  private agentLoad(agentId: string): number {
     let n = 0;
-    for (const r of this.running.values()) if (r.brainId === brainId) n++;
+    for (const r of this.running.values()) if (r.agentId === agentId) n++;
     return n;
   }
 
@@ -391,7 +392,7 @@ export class Dispatcher {
       if (!due) continue;
       // A failed run of a recurring task is stale once a NEWER cycle has spawned:
       // re-running it would duplicate that cycle's work on the same scarce
-      // brains. Disarm it once (so it isn't re-checked every tick) instead.
+      // agents. Disarm it once (so it isn't re-checked every tick) instead.
       if (this.store.isSupersededScheduledRun(t)) {
         t.context = { ...ctx, autoRerunOnReset: false, autoRerunSkipped: 'superseded by a newer run of its recurring task' };
         this.store.saveTask(t);
@@ -409,40 +410,40 @@ export class Dispatcher {
    * Pick which rung of a fallback chain to run for a FRESH (unpinned) dispatch,
    * with preference-preserving load balancing.
    *
-   * The chain is an ordered PREFERENCE list (best brain first), so the preferred
+   * The chain is an ordered PREFERENCE list (best agent first), so the preferred
    * rung `chain[attempt]` wins whenever it has spare capacity — under no contention
    * this returns `chain[attempt]` unchanged, exactly as before. Only when the
-   * preferred rung is a LOCAL brain that is SATURATED (at its maxConcurrent) do we
+   * preferred rung is a LOCAL agent that is SATURATED (at its maxConcurrent) do we
    * scan the rest of the chain and hand the overflow to the local rung with the most
-   * spare capacity. That is what stops one reliable workhorse brain (e.g.
+   * spare capacity. That is what stops one reliable workhorse agent (e.g.
    * `local-ha-qwen3-8-27b`) from absorbing every concurrent task while its
    * peers sit idle.
    *
-   * Remote rungs and unrunnable/missing brains are left to the caller's existing
+   * Remote rungs and unrunnable/missing agents are left to the caller's existing
    * index-based handling (the remote claim/grace protocol keys on `chain[attempt]`),
-   * so this only ever redirects among LOCAL, runnable brains.
+   * so this only ever redirects among LOCAL, runnable agents.
    */
   private selectRung(
     chain: string[], attempt: number,
-    brains: Record<string, { location: string; exec?: string; maxConcurrent?: number }>
-  ): { brainId: string; index: number } {
+    agents: Record<string, { location: string; exec?: string; maxConcurrent?: number }>
+  ): { agentId: string; index: number } {
     const head = chain[attempt];
-    const hb = brains[head];
+    const hb = agents[head];
     // Only load-balance a local, runnable preferred rung; anything else keeps the
     // index so remote/skip handling upstream is untouched.
-    if (!hb || hb.location !== 'local' || !hb.exec) return { brainId: head, index: attempt };
-    const cooling = (id: string) => !!this.store.brainCooldownUntil(id);
-    if (this.brainLoad(head) < this.brainCap(head) && !cooling(head)) return { brainId: head, index: attempt };
+    if (!hb || hb.location !== 'local' || !hb.exec) return { agentId: head, index: attempt };
+    const cooling = (id: string) => !!this.store.agentCooldownUntil(id);
+    if (this.agentLoad(head) < this.agentCap(head) && !cooling(head)) return { agentId: head, index: attempt };
     // Preferred rung saturated or cooling down on a rate limit → least-loaded local
     // rung with room that isn't cooling (ties: earliest).
     let bestIdx = -1, bestSlack = 0;
     for (let i = attempt; i < chain.length; i++) {
-      const b = brains[chain[i]];
+      const b = agents[chain[i]];
       if (!b || b.location !== 'local' || !b.exec || cooling(chain[i])) continue;
-      const slack = this.brainCap(chain[i]) - this.brainLoad(chain[i]);
+      const slack = this.agentCap(chain[i]) - this.agentLoad(chain[i]);
       if (slack > bestSlack) { bestSlack = slack; bestIdx = i; }
     }
-    return bestIdx >= 0 ? { brainId: chain[bestIdx], index: bestIdx } : { brainId: head, index: attempt };
+    return bestIdx >= 0 ? { agentId: chain[bestIdx], index: bestIdx } : { agentId: head, index: attempt };
   }
 
   /** Persistent per-task artifacts dir (survives reboot — under the repo, gitignored). */
@@ -498,18 +499,18 @@ export class Dispatcher {
   private lastWorktreePrune = 0;
 
   private tick(): void {
-    if (this.stopped || !this.agentId) return;
+    if (this.stopped || !this.workerId) return;
     const orch = this.config.orchestration;
 
     // heartbeat keeps the dispatcher and its live workers visible on the dashboard
     this.store.updateHeartbeat({
-      agentId: this.agentId,
+      workerId: this.workerId,
       status: this.running.size > 0 ? 'working' : 'idle',
       currentTask: Array.from(this.running.keys()).join(', ') || undefined
     });
     for (const r of this.running.values()) {
-      if (r.workerAgentId) {
-        this.store.updateHeartbeat({ agentId: r.workerAgentId, status: 'working' });
+      if (r.workerId) {
+        this.store.updateHeartbeat({ workerId: r.workerId, status: 'working' });
       }
     }
 
@@ -544,7 +545,7 @@ export class Dispatcher {
     catch (e) { console.error('Dispatcher: reclaimStaleClaims failed this tick:', e); }
 
     // Advance any active Goals: for each goal whose work has finished (quiescent),
-    // the Achiever brain takes one evaluate/plan/emit turn toward the criterion.
+    // the Achiever agent takes one evaluate/plan/emit turn toward the criterion.
     // Auto-prune worktrees of tasks finished > 7 days ago that were never merged
     // (branch kept). Throttled to hourly.
     try {
@@ -601,16 +602,16 @@ export class Dispatcher {
           case 'skip':                         // manual, or unknown target
             this.markPending(task, task.tags?.includes('manual')
               ? 'Held — tagged `manual`, so it never auto-runs. Use “Run now”, or drop the manual tag, to dispatch it.'
-              : 'No eligible brain to run this — its agent’s brain chain is empty, exhausted, or every rung is disabled. Edit its agent/brain targeting.');
+              : 'No eligible agent to run this — its agent chain is empty, exhausted, or every rung is disabled. Edit its persona/agent targeting.');
             continue;
           case 'remote': {
             this.handleRemoteRung(task, plan.exec);
-            const cooling = plan.exec?.brainId ? this.store.brainCooldownUntil(plan.exec.brainId) : undefined;
+            const cooling = plan.exec?.agentId ? this.store.agentCooldownUntil(plan.exec.agentId) : undefined;
             this.markPending(task, cooling
-              ? this.coolingReason(plan.exec!.brainId, cooling)
-              : plan.exec?.brainId
-              ? `Offered to remote brain \`${plan.exec.brainId}\` — waiting for that machine’s client to connect and claim it.`
-              : 'Waiting for a remote brain’s client to connect and claim it.');
+              ? this.coolingReason(plan.exec!.agentId, cooling)
+              : plan.exec?.agentId
+              ? `Offered to remote agent \`${plan.exec.agentId}\` — waiting for that machine’s client to connect and claim it.`
+              : 'Waiting for a remote agent’s client to connect and claim it.');
             continue;
           }
           case 'route':
@@ -633,21 +634,21 @@ export class Dispatcher {
               this.markPending(task, 'Waiting on an upstream task it depends on to finish first.');
               continue;
             }
-            // Per-brain concurrency: if this brain is already at its capacity, skip
-            // THIS task (don't break) so a task bound to a different, free brain can
-            // still launch this tick. A brain with spare room runs the task
+            // Per-agent concurrency: if this agent is already at its capacity, skip
+            // THIS task (don't break) so a task bound to a different, free agent can
+            // still launch this tick. An agent with spare room runs the task
             // concurrently on the same instance. selectRung already steered fresh
             // dispatches toward free rungs; this backstops a pinned task or a fully
             // saturated chain.
-            // A task PINNED to a brain that is cooling down on a rate limit is held
+            // A task PINNED to an agent that is cooling down on a rate limit is held
             // (running it now would only fail) until the window resets — or until
-            // someone reassigns it to another brain from the dashboard.
+            // someone reassigns it to another agent from the dashboard.
             if (plan.exec.pinned) {
-              const cooling = this.store.brainCooldownUntil(plan.exec.brainId);
-              if (cooling) { this.markPending(task, this.coolingReason(plan.exec.brainId, cooling)); continue; }
+              const cooling = this.store.agentCooldownUntil(plan.exec.agentId);
+              if (cooling) { this.markPending(task, this.coolingReason(plan.exec.agentId, cooling)); continue; }
             }
-            if (this.brainLoad(plan.exec.brainId) >= this.brainCap(plan.exec.brainId)) {
-              this.markPending(task, `Queued — brain \`${plan.exec.brainId}\` is at capacity (${this.brainLoad(plan.exec.brainId)}/${this.brainCap(plan.exec.brainId)} slots). Runs as soon as a slot frees.`);
+            if (this.agentLoad(plan.exec.agentId) >= this.agentCap(plan.exec.agentId)) {
+              this.markPending(task, `Queued — agent \`${plan.exec.agentId}\` is at capacity (${this.agentLoad(plan.exec.agentId)}/${this.agentCap(plan.exec.agentId)} slots). Runs as soon as a slot frees.`);
               continue;
             }
             this.clearPending(task.id);
@@ -657,22 +658,22 @@ export class Dispatcher {
     }
   }
 
-  /** Pending-card note for a task held on a rate-limited brain. The dashboard keys
+  /** Pending-card note for a task held on a rate-limited agent. The dashboard keys
    *  its "Reassign" call-to-action off `context.pendingReason`, so keep the prefix. */
-  private coolingReason(brainId: string, until: string): string {
+  private coolingReason(agentId: string, until: string): string {
     // until is a UTC ISO-8601 string; render it in the viewer's local time so the
     // pending card matches the dashboard's other rate-limit timestamps (toLocaleString).
     const localUntil = new Date(until).toLocaleString();
-    return `Rate-limited — brain \`${brainId}\` is cooling down until ${localUntil}. It runs then, or use ⇄ Reassign to move it to another brain now.`;
+    return `Rate-limited — agent \`${agentId}\` is cooling down until ${localUntil}. It runs then, or use ⇄ Reassign to move it to another agent now.`;
   }
 
-  /** A remote brain in a chain is left pending for that machine's client to
-   *  claim. We PUBLISH the target brain onto `context.brain` (flagged
-   *  `brainAuto` so planFor doesn't treat it as a permanent user pin) — that is
-   *  the field the remote-brain client filters on to discover its tasks. If no
-   *  client claims it within remoteGraceMs, advance to the next brain so a
-   *  clientless remote rung can't stall the task. A pinned remote brain waits
-   *  indefinitely (the CEO asked for that exact brain). */
+  /** A remote agent in a chain is left pending for that machine's client to
+   *  claim. We PUBLISH the target agent onto `context.agent` (flagged
+   *  `agentAuto` so planFor doesn't treat it as a permanent user pin) — that is
+   *  the field the remote-agent client filters on to discover its tasks. If no
+   *  client claims it within remoteGraceMs, advance to the next agent so a
+   *  clientless remote rung can't stall the task. A pinned remote agent waits
+   *  indefinitely (the CEO asked for that exact agent). */
   private handleRemoteRung(task: Task, plan?: ExecPlan): void {
     if (!plan) return;
     this.stampPersona(task, plan);   // so the remote client runs the roster persona too
@@ -681,40 +682,40 @@ export class Dispatcher {
     const ctx = task.context || {};
     const since = Number(ctx.remoteWaitSince) || 0;
     const now = Date.now();
-    // First offer: publish the target brain id so its client can find + claim it.
-    if (!since || ctx.brain !== plan.brainId) {
+    // First offer: publish the target agent id so its client can find + claim it.
+    if (!since || ctx.agent !== plan.agentId) {
       const t = this.store.getTask(task.id);
       if (t) {
         // attempts = the rung actually offered (cooling rungs may have been skipped),
         // so a later handover advances from THIS rung.
-        t.context = { ...(t.context || {}), brain: plan.brainId, brainAuto: true, remoteWaitSince: now, attempts: plan.attempt };
+        t.context = { ...(t.context || {}), agent: plan.agentId, agentAuto: true, remoteWaitSince: now, attempts: plan.attempt };
         this.store.saveTask(t);
       }
       return;
     }
-    // Unclaimed past the grace window → advance to the next brain in the chain.
+    // Unclaimed past the grace window → advance to the next agent in the chain.
     if (grace > 0 && now - since > grace) {
       const t = this.store.getTask(task.id);
       if (t) {
         const attempts = plan.attempt + 1;
-        t.context = { ...(t.context || {}), attempts, remoteWaitSince: undefined, brain: undefined, brainAuto: undefined };
+        t.context = { ...(t.context || {}), attempts, remoteWaitSince: undefined, agent: undefined, agentAuto: undefined };
         this.store.saveTask(t);
-        console.log(`Dispatcher: remote rung ${plan.brainId} unclaimed ${grace}ms — advancing task ${task.id} to next brain`);
+        console.log(`Dispatcher: remote rung ${plan.agentId} unclaimed ${grace}ms — advancing task ${task.id} to next agent`);
       }
     }
   }
 
-  /** Persist the roster agent's full .md persona onto context.persona so a REMOTE
+  /** Persist the persona's full .md persona onto context.persona so a REMOTE
    *  client — which builds its own prompt from the task — runs the persona too,
    *  not just the task text. Local runs inject the persona directly (buildPrompt),
    *  so only remote rungs need this. Idempotent: skips if already current. */
   private stampPersona(task: Task, plan: ExecPlan): void {
-    if (!plan.isRoster || !plan.agent) return;
-    const persona = this.store.getAgentPersona(plan.agent)?.persona;
-    if (!persona || task.context?.persona === persona) return;
+    if (!plan.isRoster || !plan.persona) return;
+    const persona = this.store.getPersona(plan.persona)?.persona;
+    if (!persona || task.context?.personaPrompt === persona) return;
     const t = this.store.getTask(task.id);
     if (t) {
-      t.context = { ...(t.context || {}), persona, agentName: plan.agent, division: plan.division };
+      t.context = { ...(t.context || {}), personaPrompt: persona, personaName: plan.persona, division: plan.division };
       this.store.saveTask(t);
       task.context = t.context;
     }
@@ -723,60 +724,60 @@ export class Dispatcher {
   /**
    * Decide how a pending task should run.
    *   1. `manual` tag                 -> skip
-   *   2. explicit `context.brain` pin -> run on exactly that brain (retries it)
-   *   3. an agent (context.agent/role / tag / skill) -> run on the agent's brain
+   *   2. explicit `context.agent` pin -> run on exactly that agent (retries it)
+   *   3. an agent (context.agent/role / tag / skill) -> run on its agent chain
    *      CHAIN at index context.attempts; on failure the handover advances to
-   *      the next brain in the list. Brains registry says local (spawn here) or
+   *      the next agent in the list. Agents registry says local (spawn here) or
    *      remote (leave in inbox for that client).
    *   4. nothing -> classify (LLM assigns an agent)
    */
   private planFor(task: Task): { action: 'skip' } | { action: 'remote'; exec?: ExecPlan } | { action: 'route' } | { action: 'execute'; exec: ExecPlan } {
     if (task.tags?.includes('manual')) return { action: 'skip' };
-    const brains = this.config.orchestration.brains || {};
-    const agentName = this.resolveAgent(task) || '';
+    const agents = this.config.orchestration.agents || {};
+    const personaName = this.resolvePersona(task) || '';
     const division = typeof task.context?.division === 'string' ? task.context.division
-      : (agentName && !this.isSpecial(agentName) ? this.store.getAgentPersona(agentName)?.division : undefined);
+      : (personaName && !this.isSpecial(personaName) ? this.store.getPersona(personaName)?.division : undefined);
     const attempt = Number(task.context?.attempts) || 0;
 
-    // (2) explicit brain pin — overrides the chain, retries the same brain.
-    //     `brainAuto` marks a brain the dispatcher itself published for a remote
+    // (2) explicit agent pin — overrides the chain, retries the same agent.
+    //     `agentAuto` marks an agent the dispatcher itself published for a remote
     //     chain rung (see handleRemoteRung); that is NOT a user pin, so let it
     //     fall through to the chain logic below (which manages grace/handover).
-    //     A disabled brain pin is treated as absent so the task falls through.
-    // Canonicalised so a task pinned to a retired brain id before a rename still runs on it.
-    const ctxBrain = typeof task.context?.brain === 'string' ? canonicalBrainId(this.config, task.context.brain) : undefined;
-    if (ctxBrain && brains[ctxBrain] && !brains[ctxBrain].disabled && !task.context?.brainAuto) {
-      return this.brainPlan(agentName, division, ctxBrain, brains[ctxBrain], { pinned: true, attempt, chainLen: 0 });
+    //     A disabled agent pin is treated as absent so the task falls through.
+    // Canonicalised so a task pinned to a retired agent id before a rename still runs on it.
+    const ctxAgent = typeof task.context?.agent === 'string' ? canonicalAgentId(this.config, task.context.agent) : undefined;
+    if (ctxAgent && agents[ctxAgent] && !agents[ctxAgent].disabled && !task.context?.agentAuto) {
+      return this.agentPlan(personaName, division, ctxAgent, agents[ctxAgent], { pinned: true, attempt, chainLen: 0 });
     }
 
-    // (3) an agent (special or roster) → run on its resolved brain chain. The
+    // (3) an agent (special or roster) → run on its resolved agent chain. The
     //     preferred rung is chain[attempt]; selectRung keeps it unless it is a
-    //     saturated LOCAL brain, in which case the overflow is load-balanced onto
+    //     saturated LOCAL agent, in which case the overflow is load-balanced onto
     //     the next local rung with spare capacity.
-    if (agentName) {
-      const chain = this.chainFor(agentName, division, task.context);
+    if (personaName) {
+      const chain = this.chainFor(personaName, division, task.context);
       if (!chain.length || attempt >= chain.length) return { action: 'skip' };  // exhausted / misconfigured
-      const { brainId, index } = this.selectRung(chain, attempt, brains);
-      const b = brains[brainId];
+      const { agentId, index } = this.selectRung(chain, attempt, agents);
+      const b = agents[agentId];
       if (!b) return { action: 'skip' };
-      return this.brainPlan(agentName, division, brainId, b, { pinned: false, attempt: index, chainLen: chain.length });
+      return this.agentPlan(personaName, division, agentId, b, { pinned: false, attempt: index, chainLen: chain.length });
     }
 
-    // (4) unassigned → two-stage router picks division + roster agent.
+    // (4) unassigned → two-stage router picks division + persona.
     return { action: 'route' };
   }
 
-  private brainPlan(
-    agent: string, division: string | undefined, brainId: string,
-    b: { location: string; exec?: string; model?: string; effort?: string; command?: string[] },
+  private agentPlan(
+    persona: string, division: string | undefined, agentId: string,
+    b: { location: string; exec?: string; model?: string; thinking?: ThinkingLevel; command?: string[] },
     meta: { pinned: boolean; attempt: number; chainLen: number }
   ): { action: 'remote'; exec?: ExecPlan } | { action: 'skip' } | { action: 'execute'; exec: ExecPlan } {
-    const isRoster = !!agent && !this.isSpecial(agent);
-    const label = isRoster ? `${division || '?'} / ${this.store.getAgentPersona(agent)?.name || agent} · ${brainId}` : `${agent || 'task'} · ${brainId}`;
+    const isRoster = !!persona && !this.isSpecial(persona);
+    const label = isRoster ? `${division || '?'} / ${this.store.getPersona(persona)?.name || persona} · ${agentId}` : `${persona || 'task'} · ${agentId}`;
     const exec: ExecPlan = {
-      agent, division, isRoster, brainId, attempt: meta.attempt, chainLen: meta.chainLen, pinned: meta.pinned,
+      persona, division, isRoster, agentId, attempt: meta.attempt, chainLen: meta.chainLen, pinned: meta.pinned,
       label, platform: this.platformOf(b.exec || 'hermes'),
-      exec: (b.exec || 'hermes') as ExecPlan['exec'], model: b.model || '', effort: b.effort, command: b.command
+      exec: (b.exec || 'hermes') as ExecPlan['exec'], model: b.model || '', thinking: b.thinking, command: b.command
     };
     if (b.location === 'remote') return { action: 'remote', exec };   // that machine's client claims it
     if (!b.exec) return { action: 'skip' };
@@ -788,22 +789,22 @@ export class Dispatcher {
     return map[exec] || 'hermes';
   }
 
-  /** Orchestrator-facing description of the brain registry (disabled brains excluded). */
-  private brainsPromptBlock(): string {
-    const brains = this.config.orchestration.brains || {};
-    const ids = Object.keys(brains).filter(id => !brains[id].disabled);
+  /** Orchestrator-facing description of the agent registry (disabled agents excluded). */
+  private agentsPromptBlock(): string {
+    const agents = this.config.orchestration.agents || {};
+    const ids = Object.keys(agents).filter(id => !agents[id].disabled);
     if (!ids.length) return '';
     const lines = ids.map(id => {
-      const b = brains[id];
+      const b = agents[id];
       return `  - ${id} [${b.location}]: ${b.description}`;
     });
-    return `Optionally target a specific BRAIN (a model on a specific instance) by adding "brain":"<id>" to a subtask's context — e.g. {"role":"engineer","brain":"remote-aicodegen-cc-fable"}. LOCAL brains run here automatically; REMOTE brains are left in the inbox for that machine's client to claim. Available brains:\n${lines.join('\n')}`;
+    return `Optionally target a specific AGENT (a model on a specific instance) by adding "agent":"<id>" to a subtask's context — e.g. {"role":"engineer","agent":"remote-aicodegen-cc-fable"}. LOCAL agents run here automatically; REMOTE agents are left in the inbox for that machine's client to claim. Available agents:\n${lines.join('\n')}`;
   }
 
   /**
    * Reclaim in-progress/claimed tasks that are no longer actually being worked.
    *
-   * A local/remote brain CLIENT heartbeats continuously (keep-alive) whether or
+   * A local/remote agent CLIENT heartbeats continuously (keep-alive) whether or
    * not its claimed execution is still alive — so the old "claimer gone from the
    * roster" test never fired for the common failure: a client whose child CLI
    * crashed / OOM'd / finished without a complete_task call, leaving the task
@@ -829,7 +830,7 @@ export class Dispatcher {
     const staleMs = orch.staleClaimMs ?? 0;
     if (staleMs <= 0) return;
     const hardMs = orch.hardClaimMs && orch.hardClaimMs > 0 ? orch.hardClaimMs : Infinity;
-    const active = new Map(this.store.getActiveAgents().map(a => [a.id, a]));
+    const active = new Map(this.store.getActiveWorkers().map(a => [a.id, a]));
     for (const t of this.store.listTasks({ status: 'in-progress' })) {
       if (this.running.has(t.id)) continue;   // this dispatcher (and its workers) owns it
       const claimAge = t.claimedAt ? Date.now() - new Date(t.claimedAt).getTime() : Infinity;
@@ -851,15 +852,15 @@ export class Dispatcher {
     }
   }
 
-  /** The brain the router LLM runs on. Prefer the classifier config (a reliable
-   *  local model dedicated to routing); otherwise the first LOCAL, runnable brain
-   *  in the orchestrator/default chain. Never a remote brain (can't spawn here). */
+  /** The agent the router LLM runs on. Prefer the classifier config (a reliable
+   *  local model dedicated to routing); otherwise the first LOCAL, runnable agent
+   *  in the orchestrator/default chain. Never a remote agent (can't spawn here). */
   private routerModel(): { exec: string; model: string } {
     const orch = this.config.orchestration;
     const cls = orch.classifier;
     if (cls?.exec) return { exec: cls.exec, model: cls.model || '' };
-    for (const id of [...(orch.agents.orchestrator?.brains || []), ...(orch.defaultChain || [])]) {
-      const b = orch.brains?.[id];
+    for (const id of [...(orch.roleChains.orchestrator?.agents || []), ...(orch.defaultChain || [])]) {
+      const b = orch.agents?.[id];
       if (b?.location === 'local' && b.exec) return { exec: b.exec, model: b.model || '' };
     }
     return { exec: 'hermes', model: '' };
@@ -878,14 +879,14 @@ export class Dispatcher {
   }
 
   /**
-   * Two-stage router: the orchestrator's brain picks a DIVISION from the roster,
+   * Two-stage router: the orchestrator's agent picks a DIVISION from the roster,
    * then a specific AGENT within it. Writes context.agent (roster slug) +
-   * context.division so the next tick executes it on the division's brain chain.
-   * Falls back to the `generalist` special agent on any failure.
+   * context.division so the next tick executes it on the division's agent chain.
+   * Falls back to the `generalist` special role on any failure.
    */
   private route(task: Task): void {
     const cls = this.config.orchestration.classifier;
-    if (cls && cls.enabled === false) { this.assignAgent(task, 'generalist', undefined); return; }
+    if (cls && cls.enabled === false) { this.assignPersona(task, 'generalist', undefined); return; }
     if (this.classifying.has(task.id)) return;
     this.classifying.add(task.id);
     const timeout = cls?.timeoutMs || 300000;
@@ -894,7 +895,7 @@ export class Dispatcher {
 
     (async () => {
       try {
-        if (!divisions.length) { this.assignAgent(task, 'generalist', undefined); return; }
+        if (!divisions.length) { this.assignPersona(task, 'generalist', undefined); return; }
         const divPrompt =
           `You route work in a multi-agent company. Pick the ONE best division for this task.\n\n` +
           `Task: ${task.title}\n${task.description}\n\n` +
@@ -903,19 +904,19 @@ export class Dispatcher {
         const divOut = await this.askRouter(divPrompt, timeout);
         const division = this.pickLast(divisions, divOut) || divisions[0];
 
-        const agentsIn = this.store.agentsInDivision(division);
-        if (!agentsIn.length) { this.assignAgent(task, 'generalist', undefined); return; }
+        const personasIn = this.store.personasInDivision(division);
+        if (!personasIn.length) { this.assignPersona(task, 'generalist', undefined); return; }
         const agPrompt =
           `Pick the ONE best agent in the "${division}" division for this task.\n\n` +
           `Task: ${task.title}\n${task.description}\n\n` +
           `Agents (reply with the exact slug):\n` +
-          agentsIn.map(a => `- ${a.slug}: ${a.name} — ${(a.description || '').slice(0, 120)}`).join('\n') +
+          personasIn.map(a => `- ${a.slug}: ${a.name} — ${(a.description || '').slice(0, 120)}`).join('\n') +
           `\n\nReply with ONLY the slug.`;
         const agOut = await this.askRouter(agPrompt, timeout);
-        const chosenSlug = this.pickLast(agentsIn.map(a => a.slug), agOut) || agentsIn[0].slug;
-        this.assignAgent(task, chosenSlug, division);
+        const chosenSlug = this.pickLast(personasIn.map(a => a.slug), agOut) || personasIn[0].slug;
+        this.assignPersona(task, chosenSlug, division);
       } catch {
-        this.assignAgent(task, 'generalist', undefined);
+        this.assignPersona(task, 'generalist', undefined);
       } finally {
         this.classifying.delete(task.id);
       }
@@ -936,12 +937,12 @@ export class Dispatcher {
     return best;
   }
 
-  private assignAgent(task: Task, agent: string, division: string | undefined): void {
+  private assignPersona(task: Task, persona: string, division: string | undefined): void {
     const fresh = this.store.getTask(task.id);
     if (fresh && fresh.status === 'pending') {
-      fresh.context = { ...(fresh.context || {}), agent, ...(division ? { division } : {}), routedBy: this.routerModel().model };
+      fresh.context = { ...(fresh.context || {}), persona, ...(division ? { division } : {}), routedBy: this.routerModel().model };
       this.store.saveTask(fresh);
-      console.log(`Dispatcher: routed task ${task.id} -> ${division ? division + '/' : ''}${agent}`);
+      console.log(`Dispatcher: routed task ${task.id} -> ${division ? division + '/' : ''}${persona}`);
     }
   }
 
@@ -949,7 +950,7 @@ export class Dispatcher {
 
   /**
    * Drive active Goals. For each goal whose generated work has finished
-   * (quiescent), the Achiever brain takes ONE structured turn — evaluate the
+   * (quiescent), the Achiever agent takes ONE structured turn — evaluate the
    * binary success criterion, plan the next phase, or emit a phase's worth of
    * real work — and we materialise that decision via the Goals aggregate.
    * Edge-triggered on work completing, a per-goal
@@ -991,10 +992,10 @@ export class Dispatcher {
       if (rec.unblockCheck) {
         const check = rec.unblockCheck;
         this.decidingGoals.add(rec.goalId);
-        // An unknown brain can never become available, so that check must not hold the goal.
-        runUnblockCheck(check, { brainAvailable: id => {
-          const known = canonicalBrainId(this.config, id);
-          return !this.config.orchestration.brains?.[known] || !this.store.brainCooldownUntil?.(known);
+        // An unknown agent can never become available, so that check must not hold the goal.
+        runUnblockCheck(check, { agentAvailable: id => {
+          const known = canonicalAgentId(this.config, id);
+          return !this.config.orchestration.agents?.[known] || !this.store.agentCooldownUntil?.(known);
         } })
           .then(passed => {
             if (passed) {
@@ -1051,18 +1052,18 @@ export class Dispatcher {
 
       (async () => {
         try {
-          const turn = await this.achieverTurn(goalId, rec.achieverBrainChain, prompt, timeout);
-          if (turn.held) return;   // every brain rate limited: not a failure
+          const turn = await this.achieverTurn(goalId, rec.achieverAgentChain, prompt, timeout);
+          if (turn.held) return;   // every agent rate limited: not a failure
           // Paused, blocked or deleted during the turn: its answer no longer applies.
           if (this.goals!.get(goalId)?.status !== 'active') {
-            this.goals!.logAchieverTurn(goalId, { at: new Date().toISOString(), brain: turn.brain, exec: turn.exec, mode, outcome: 'rejected',
+            this.goals!.logAchieverTurn(goalId, { at: new Date().toISOString(), agent: turn.agent, exec: turn.exec, mode, outcome: 'rejected',
               kind: turn.decision?.kind, reason: 'goal no longer active', usage: turn.usage, durationMs: turn.durationMs });
             return;
           }
           const decision = turn.decision;
           if (!decision) { this.registerGoalFailure(goalId, turn.why || 'no usable decision from the Achiever'); return; }
           const applied = this.goals!.applyAchieverDecision(goalId, decision);
-          this.goals!.logAchieverTurn(goalId, { at: new Date().toISOString(), brain: turn.brain, exec: turn.exec, mode,
+          this.goals!.logAchieverTurn(goalId, { at: new Date().toISOString(), agent: turn.agent, exec: turn.exec, mode,
             outcome: applied.rejected ? 'rejected' : 'applied', kind: decision.kind, reason: applied.rejected, usage: turn.usage, durationMs: turn.durationMs });
           // Progress = the goal ended (achieved), the Achiever declared an honest
           // block (loop resolved, recoverable), a phase was planned, or work was
@@ -1084,7 +1085,7 @@ export class Dispatcher {
   /** Count a non-progressing Achiever turn; BLOCK the goal (honest reason + a
    *  concrete resume contract) once the consecutive-failure ceiling is hit. This
    *  ceiling most often trips on TRANSIENT infrastructure faults (the Achiever
-   *  brain offline, overloaded, or returning unparseable output), so the goal is
+   *  agent offline, overloaded, or returning unparseable output), so the goal is
    *  held recoverably — not abandoned — and the drive loop AUTOMATICALLY resumes
    *  it on a backoff for a clean HALF-OPEN retry (circuit-breaker OPEN → HALF-OPEN,
    *  ADR-008): a transient blip self-heals in minutes with no human. */
@@ -1100,19 +1101,19 @@ export class Dispatcher {
 
   /** Add one run's usage to task.context.usage (retries sum). A run that reported
    *  nothing is marked not metered, so it is never mistaken for zero tokens. */
-  private recordRunUsage(taskId: string, brainId: string | undefined, usage: RunUsage | null, arm?: string): void {
+  private recordRunUsage(taskId: string, agentId: string | undefined, usage: RunUsage | null, arm?: string): void {
     try {
       const t = this.store.getTask?.(taskId);
       if (!t) return;
       const prior = t.context?.usage;
       const merged = !usage
-        ? (prior?.input !== undefined ? prior : { metered: false, brain: brainId })
+        ? (prior?.input !== undefined ? prior : { metered: false, agent: agentId })
         : {
             input: usage.input + (prior?.input || 0), cacheRead: usage.cacheRead + (prior?.cacheRead || 0),
             cacheWrite: usage.cacheWrite + (prior?.cacheWrite || 0), output: usage.output + (prior?.output || 0),
             turns: (usage.turns || 0) + (prior?.turns || 0),
             ...(usage.costUsd !== undefined || prior?.costUsd !== undefined ? { costUsd: (usage.costUsd || 0) + (prior?.costUsd || 0) } : {}),
-            brain: brainId, runs: (prior?.runs || 0) + 1
+            agent: agentId, runs: (prior?.runs || 0) + 1
           };
       t.context = { ...(t.context || {}), usage: merged, ...(arm ? { usageArm: arm } : {}) };
       this.store.saveTask(t);
@@ -1130,53 +1131,53 @@ export class Dispatcher {
     return this.config.orchestration.goals?.achieverMode === 'legacy' ? 'legacy' : 'toolless';
   }
 
-  /** The brains an Achiever turn may use, in order: the chain's local, runnable
-   *  members. With no chain, a default-chain claude brain and then the router brain:
+  /** The agents an Achiever turn may use, in order: the chain's local, runnable
+   *  members. With no chain, a default-chain claude agent and then the router agent:
    *  the prompt embeds untrusted task results, claude is the one exec that can run it
-   *  with no tools at all, and one broken brain must not stall every unpinned goal.
-   *  Remote brains execute tasks, not this. */
-  private achieverBrains(chain?: string[]): { id?: string; exec: string; model: string }[] {
+   *  with no tools at all, and one broken agent must not stall every unpinned goal.
+   *  Remote agents execute tasks, not this. */
+  private achieverAgents(chain?: string[]): { id?: string; exec: string; model: string }[] {
     const orch = this.config.orchestration;
-    const brains = orch.brains || {};
-    const runnable = (ids: string[]) => ids.map(id => canonicalBrainId(this.config, id)).filter(id => {
-      const b = brains[id];
+    const agents = orch.agents || {};
+    const runnable = (ids: string[]) => ids.map(id => canonicalAgentId(this.config, id)).filter(id => {
+      const b = agents[id];
       return b?.location === 'local' && b.exec && !b.disabled;
-    }).map(id => ({ id, exec: brains[id].exec as string, model: brains[id].model || '' }));
+    }).map(id => ({ id, exec: agents[id].exec as string, model: agents[id].model || '' }));
     const pinned = runnable(chain || []);
     if (pinned.length) return pinned;
     const router = this.routerModel();
-    if (chain?.length) return [router];   // pinned to brains that cannot run here
+    if (chain?.length) return [router];   // pinned to agents that cannot run here
     return [...runnable(orch.defaultChain || []).filter(b => b.exec === 'claude').slice(0, 1), router];
   }
 
   /**
-   * One Achiever turn. Walks the chain past cooling and rate-limited brains. A
+   * One Achiever turn. Walks the chain past cooling and rate-limited agents. A
    * rate-limit reply is not a bad decision, so it counts as nothing: if the whole
    * chain is cooling the goal is held until the earliest reset with no spawn, no
-   * failure and no block row. An empty or unusable reply moves on to the next brain
+   * failure and no block row. An empty or unusable reply moves on to the next agent
    * too, and counts as a failure only once the chain is exhausted. Every attempt is
    * logged, with the raw reply when it could not be used, because a failure cannot be
    * diagnosed from a log line alone.
    */
   private async achieverTurn(goalId: string, chain: string[] | undefined, prompt: string, timeoutMs: number): Promise<{
-    decision?: AchieverDecision | null; held?: boolean; why?: string; brain?: string; exec?: string; usage?: RunUsage | null; durationMs?: number;
+    decision?: AchieverDecision | null; held?: boolean; why?: string; agent?: string; exec?: string; usage?: RunUsage | null; durationMs?: number;
   }> {
     const log = (t: Omit<AchieverTurn, 'at' | 'mode'>) => this.goals!.logAchieverTurn(goalId, { at: new Date().toISOString(), mode: this.achieverMode(), ...t });
     const resets: string[] = [];
-    let failed: { why: string; brain?: string; exec?: string; usage?: RunUsage | null; durationMs?: number } | undefined;
-    for (const brain of this.achieverBrains(chain)) {
-      const cooling = brain.id ? this.store.brainCooldownUntil?.(brain.id) : undefined;
+    let failed: { why: string; agent?: string; exec?: string; usage?: RunUsage | null; durationMs?: number } | undefined;
+    for (const agent of this.achieverAgents(chain)) {
+      const cooling = agent.id ? this.store.agentCooldownUntil?.(agent.id) : undefined;
       if (cooling) { resets.push(cooling); continue; }
       const started = Date.now();
-      const reply = await this.askAchieverBrain(brain, prompt, timeoutMs);
+      const reply = await this.askAchieverAgent(agent, prompt, timeoutMs);
       const durationMs = Date.now() - started;
       const decision = this.parseAchieverDecision(reply.text);
-      const base = { brain: brain.id || brain.model, exec: brain.exec, usage: reply.usage, durationMs };
+      const base = { agent: agent.id || agent.model, exec: agent.exec, usage: reply.usage, durationMs };
       if (decision) return { decision, ...base };
       // Checked only after parsing, so a real decision that mentions a rate limit counts as a decision.
       // Some CLIs report a 429 only on stderr.
       if (isRateLimitFailure(reply.text.trim() ? reply.text : reply.stderr || '')) {
-        const until = brain.id ? this.store.noteBrainRateLimited?.(brain.id) : undefined;
+        const until = agent.id ? this.store.noteAgentRateLimited?.(agent.id) : undefined;
         resets.push(until || new Date(Date.now() + 15 * 60_000).toISOString());
         log({ ...base, outcome: 'rate-limited', raw: reply.text });
         continue;
@@ -1191,26 +1192,26 @@ export class Dispatcher {
       this.goals!.holdForRateLimit(goalId, until);
       return { held: true };
     }
-    return { why: 'no Achiever brain available' };
+    return { why: 'no Achiever agent available' };
   }
 
   /** argv for one Achiever turn. Only claude is truly tool-free. hermes gets its
    *  narrowest toolset and a usage report, but it has no flag that removes MCP tools
    *  (--safe-mode also drops its provider), so its turn can still call those. */
-  private achieverArgv(brain: { exec: string; model: string }, prompt: string, usageFile: string | null): string[] {
+  private achieverArgv(agent: { exec: string; model: string }, prompt: string, usageFile: string | null): string[] {
     if (this.achieverMode() === 'toolless') {
-      if (brain.exec === 'claude') return this.reasonArgv(brain.model, prompt);
-      if (brain.exec === 'hermes') return ['hermes', ...(brain.model ? ['-m', brain.model] : []), '-z', prompt, '-t', 'clarify', ...(usageFile ? ['--usage-file', usageFile] : [])];
+      if (agent.exec === 'claude') return this.reasonArgv(agent.model, prompt);
+      if (agent.exec === 'hermes') return ['hermes', ...(agent.model ? ['-m', agent.model] : []), '-z', prompt, '-t', 'clarify', ...(usageFile ? ['--usage-file', usageFile] : [])];
     }
-    return this.buildArgv({ exec: brain.exec as RoleConfig['exec'], model: brain.model }, prompt);
+    return this.buildArgv({ exec: agent.exec as RoleConfig['exec'], model: agent.model }, prompt);
   }
 
-  /** Run one reasoning call for the Achiever on a specific brain. */
-  private askAchieverBrain(brain: { exec: string; model: string }, prompt: string, timeoutMs: number): Promise<{ text: string; usage?: RunUsage | null; timedOut?: boolean; stderr?: string }> {
-    const lean = this.achieverMode() === 'toolless' && (brain.exec === 'claude' || brain.exec === 'hermes');
-    const toolless = lean && brain.exec === 'claude';
-    const usageFile = lean && brain.exec === 'hermes' ? join(tmpdir(), `cowork-achiever-usage-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`) : null;
-    const argv = this.achieverArgv(brain, prompt, usageFile);
+  /** Run one reasoning call for the Achiever on a specific agent. */
+  private askAchieverAgent(agent: { exec: string; model: string }, prompt: string, timeoutMs: number): Promise<{ text: string; usage?: RunUsage | null; timedOut?: boolean; stderr?: string }> {
+    const lean = this.achieverMode() === 'toolless' && (agent.exec === 'claude' || agent.exec === 'hermes');
+    const toolless = lean && agent.exec === 'claude';
+    const usageFile = lean && agent.exec === 'hermes' ? join(tmpdir(), `cowork-achiever-usage-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`) : null;
+    const argv = this.achieverArgv(agent, prompt, usageFile);
     const graceMs = this.config.orchestration?.killGraceMs ?? 5000;
     // A fresh empty cwd per turn: no project CLAUDE.md loads, and no earlier run can
     // leave settings or hooks there for this one to pick up.
@@ -1289,7 +1290,7 @@ export class Dispatcher {
   }
 
 
-  /** The prompt the Achiever brain answers each turn. It frames the criterion as
+  /** The prompt the Achiever agent answers each turn. It frames the criterion as
    *  a strict Yes/No gate and constrains the reply to a single fenced-JSON
    *  decision (evaluate | plan | emit). */
   private achieverPrompt(ctx: NonNullable<ReturnType<Goals['achieverContext']>>): string {
@@ -1362,7 +1363,7 @@ export class Dispatcher {
 
   /**
    * Autonomous human-input handling (ADR-009). The sibling of driveGoals(): for
-   * each task parked on `wait-input`, the orchestrator brain answers the pending
+   * each task parked on `wait-input`, the orchestrator agent answers the pending
    * questions ON THE CEO's BEHALF and submits them via store.submitInteraction —
    * releasing the task back to `pending` without a person filling in the Inbox
    * card. A per-task re-entrancy guard prevents overlapping turns, and a per-task
@@ -1382,9 +1383,9 @@ export class Dispatcher {
     const cfg = this.config.orchestration.autoAnswer;
     if (!cfg?.enabled) return;
     const maxAttempts = cfg.maxAttempts ?? Dispatcher.MAX_AUTO_ANSWERS;
-    const chain = (cfg.brains && cfg.brains.length)
-      ? cfg.brains
-      : this.config.orchestration.agents?.orchestrator?.brains;
+    const chain = (cfg.agents && cfg.agents.length)
+      ? cfg.agents
+      : this.config.orchestration.roleChains?.orchestrator?.agents;
     const timeout = cfg.timeoutMs || this.config.orchestration.classifier?.timeoutMs || 300000;
 
     let parked: Task[];
@@ -1536,10 +1537,10 @@ export class Dispatcher {
     return null;
   }
 
-  /** Run a named brain CHAIN's first LOCAL, spawnable brain for a reasoning call
+  /** Run a named agent CHAIN's first LOCAL, spawnable agent for a reasoning call
    *  (the Achiever's turn). Generalises askRouter, which is pinned to the router
-   *  brain; falls back to the router brain if the chain has no local member (its
-   *  remote brains are for executing generated tasks, not reasoning here). */
+   *  agent; falls back to the router agent if the chain has no local member (its
+   *  remote agents are for executing generated tasks, not reasoning here). */
   private askExecutor(chain: string[] | undefined, prompt: string, timeoutMs: number): Promise<string> {
     const { exec, model } = this.execForChain(chain);
     const argv = this.buildArgv({ exec: exec as RoleConfig['exec'], model }, prompt);
@@ -1553,11 +1554,11 @@ export class Dispatcher {
     });
   }
 
-  /** First LOCAL, runnable, enabled brain in the given chain; else the router brain. */
+  /** First LOCAL, runnable, enabled agent in the given chain; else the router agent. */
   private execForChain(chain?: string[]): { exec: string; model: string } {
     const orch = this.config.orchestration;
     for (const id of chain || []) {
-      const b = orch.brains?.[id];
+      const b = orch.agents?.[id];
       if (b?.location === 'local' && b.exec && !b.disabled) return { exec: b.exec, model: b.model || '' };
     }
     return this.routerModel();
@@ -1568,10 +1569,10 @@ export class Dispatcher {
   private spawnArena(task: Task): boolean {
     const spec = parseArena(task.context?.arena);
     if (!spec || task.context?.arenaChildren) return false;
-    const brains = this.config.orchestration.brains || {};
-    const runnerBrains = pickArenaBrains(spec.runners, this.config.orchestration.tiers, brains, id => brainFamily(brains[id], id));
-    if (runnerBrains.length < 2) return false;     // not enough brains: run as a normal task
-    const plan = arenaPlan(task, spec, runnerBrains);
+    const agents = this.config.orchestration.agents || {};
+    const runnerAgents = pickArenaAgents(spec.runners, this.config.orchestration.tiers, agents, id => agentFamily(agents[id], id));
+    if (runnerAgents.length < 2) return false;     // not enough agents: run as a normal task
+    const plan = arenaPlan(task, spec, runnerAgents);
     const from = task.from;
     const runners = plan.runners.map(r => this.store.createTask({ ...r, from, priority: task.priority } as any));
     const judge = this.store.createTask({ ...plan.judge, from, priority: task.priority, context: { ...plan.judge.context, dependsOn: runners.map(r => r.id) } } as any);
@@ -1628,7 +1629,7 @@ export class Dispatcher {
 
   /** The operating rules every executing agent must follow (CONVENTIONS.md at the
    *  repo root). Read once and cached — injected into every dispatched prompt so a
-   *  brain cannot run without them. */
+   *  agent cannot run without them. */
   private conventionsCache: string | null = null;
   private claudeProfile = new ClaudeProfile();
   private conventions(): string {
@@ -1639,7 +1640,7 @@ export class Dispatcher {
     return this.conventionsCache;
   }
 
-  private buildPrompt(task: Task, plan: { agent: string; division?: string; isRoster: boolean; exec?: string; brainId?: string }): string {
+  private buildPrompt(task: Task, plan: { persona: string; division?: string; isRoster: boolean; exec?: string; agentId?: string }): string {
     const port = this.config.server.port;
     // Self-referential API base for orchestrator subtask dispatch. Loopback
     // calls to localhost run over plain HTTP (handled by the multiplexed server),
@@ -1650,20 +1651,20 @@ export class Dispatcher {
     // the curl references the variable, so the key never lands in the prompt.
     const curlFlags = '-s'
       + (this.config.server.apiKey ? ' -H "Authorization: Bearer $COWORK_API_KEY"' : '');
-    const role = plan.agent;
+    const role = plan.persona;
     const artifactsDir = this.artifactsDir(task.id);
     const lines: string[] = [];
     const rules = this.conventions();
     if (rules) lines.push(rules, ``, `---`, ``);
     if (plan.isRoster) {
-      // Run the roster agent's full .md persona as the system prompt.
-      const p = this.store.getAgentPersona(plan.agent);
-      // ollama brains have no file tools, so they could not follow the brief's
+      // Run the persona's full .md persona as the system prompt.
+      const p = this.store.getPersona(plan.persona);
+      // ollama agents have no file tools, so they could not follow the brief's
       // pointer to the rest of the persona: give them the full text.
       const persona = p && this.config.orchestration.personaMode !== 'full' && plan.exec !== 'ollama'
         ? briefPersona(p.persona, p.sourcePath).text
         : p?.persona;
-      lines.push(persona || `You are the "${plan.agent}" specialist.`, ``, `---`, ``);
+      lines.push(persona || `You are the "${plan.persona}" specialist.`, ``, `---`, ``);
       lines.push(`You have been assigned the following task. Work autonomously and produce your final deliverable as plain text (markdown allowed).`, ``);
     } else {
       lines.push(`You are the "${role}" agent in a multi-agent company. Work autonomously and produce your final deliverable as plain text output.`, ``);
@@ -1674,7 +1675,7 @@ export class Dispatcher {
     // humanInput as a dedicated "answers" section (below), and the brief fields
     // as their own sections — drop them from the raw context dump so they aren't
     // duplicated or lost as noise in the JSON blob.
-    for (const k of ['persona', 'brainAuto', 'remoteWaitSince', 'dispatched', 'attempts', 'agentName', 'ranAgent', 'ranDivision', 'ranBrain', 'isRoster', 'inputFiles', 'humanInput', 'awaitingInput', 'inputQuestions', 'backgroundWait', 'specVerdict', 'specFindings', 'gate', 'gateFindings', 'gateReviewFor', 'gateStepKey', 'gateRound', 'gateMaxRounds', 'judgeFamily', 'judgeBrain', 'escalated', 'escalatedAtRound', 'escalatedBrain', 'acceptanceSource', 'outsideCheck', 'deliverable', 'playbook', 'openChoices', 'sharpen', 'usage', 'usageArm', ...BRIEF_KEYS]) delete shownCtx[k];
+    for (const k of ['personaPrompt', 'agentAuto', 'remoteWaitSince', 'dispatched', 'attempts', 'personaName', 'ranPersona', 'ranDivision', 'ranAgent', 'isRoster', 'inputFiles', 'humanInput', 'awaitingInput', 'inputQuestions', 'backgroundWait', 'specVerdict', 'specFindings', 'gate', 'gateFindings', 'gateReviewFor', 'gateStepKey', 'gateRound', 'gateMaxRounds', 'judgeFamily', 'judgeAgent', 'escalated', 'escalatedAtRound', 'escalatedAgent', 'acceptanceSource', 'outsideCheck', 'deliverable', 'playbook', 'openChoices', 'sharpen', 'usage', 'usageArm', ...BRIEF_KEYS]) delete shownCtx[k];
     // The brief contract (P0-3 / P1-3) gets its own sections right under the task text.
     // Default timeboxMin = taskTimeoutMs / 60000 - 5 (e.g. 50 min cap → 45 min timebox).
     const timeoutMs = Number(this.config.orchestration?.taskTimeoutMs) || 3_000_000;
@@ -1684,7 +1685,7 @@ export class Dispatcher {
     // PS-4: Method injection from context.playbook behind orchestration.methods
     const repoRoot = resolve(this.config.paths?.artifacts || 'artifacts', '..');
     const methodsDir = join(repoRoot, 'methods');
-    const isLocal = !plan.brainId || (this.config.orchestration?.brains?.[plan.brainId]?.location !== 'remote' && !plan.brainId.startsWith('remote-'));
+    const isLocal = !plan.agentId || (this.config.orchestration?.agents?.[plan.agentId]?.location !== 'remote' && !plan.agentId.startsWith('remote-'));
     const methodLines = renderMethodPrompt({
       repoRoot,
       methodsDir,
@@ -1766,13 +1767,13 @@ export class Dispatcher {
     if (role === 'orchestrator') {
       lines.push(
         `# Orchestrator instructions`,
-        `Decompose this request into concrete subtasks and dispatch them to the company via the Cowork REST API — one POST per subtask. Leave the agent UNASSIGNED and the company's router will pick the best specialist from its 250-agent Agencies automatically (or set context.division/context.agent yourself if you know exactly who should do it):`,
+        `Decompose this request into concrete subtasks and dispatch them to the company via the Cowork REST API — one POST per subtask. Leave the agent UNASSIGNED and the company's router will pick the best specialist from its 250-agent Agencies automatically (or set context.division/context.persona yourself if you know exactly who should do it):`,
         '```bash',
         `curl ${curlFlags} -X POST ${selfBase}/api/inbox -H 'Content-Type: application/json' -d '{"title":"...","description":"...(goal + full standalone instructions)...","from":{"platform":"claude","agent":"orchestrator"},"to":{},"priority":"normal","context":{"acceptance":["<checkable criterion: artifact name, command, URL>"],"verify":["<command or check that proves it>"],"tier":"standard"}}'`,
         '```',
         `Each subtask description must be fully standalone — the executing specialist sees ONLY that description.`,
         `Every subtask POST must carry the brief: the goal (in the description) plus context.acceptance (2-5 concrete, checkable criteria) and context.verify (the commands/URLs/checks that prove them). Optional: context.timeboxMin (minutes) and context.scope {"write":[...],"forbid":[...]}. A subtask you cannot write acceptance for is not scoped yet — scope it further before dispatching it.`,
-        `Tag every subtask with context.tier so it runs on the right class of brain: "mechanical" (formatting, file moves, scripted renders, data copying — cheap local brains), "standard" (most building and writing), "judgment" (design decisions, ambiguous briefs, final whole-run review — opus-class), or "review" (judging another subtask's output; add context.reviewOf = the brain id that produced it, and a brain of a different model family is picked). Default to the lowest tier that can do the job.`,
+        `Tag every subtask with context.tier so it runs on the right class of agent: "mechanical" (formatting, file moves, scripted renders, data copying — cheap local agents), "standard" (most building and writing), "judgment" (design decisions, ambiguous briefs, final whole-run review — opus-class), or "review" (judging another subtask's output; add context.reviewOf = the agent id that produced it, and an agent of a different model family is picked). Default to the lowest tier that can do the job.`,
         `To make a subtask wait for others (e.g. a final synthesis step), add their task ids to its context: {"dependsOn":["<id1>","<id2>"]} — the API response to each POST gives the created task's id; dependencies' results are shown to the dependent agent.`,
         `Rollup rule: before the final summary, dispatch a synthesis subtask whose context.dependsOn lists EVERY child you dispatched. Its result must account for every child by id as done, failed, or absorbed (its work folded into another named task), and report PASS / ISSUES / BLOCKED per slice. A gap is not a pass. Silently redoing a missing child's work hides the coverage gap. A synthesis that reports STATUS: DONE without naming a failed child's id is downgraded to DONE_WITH_CONCERNS by the server.`,
         `After dispatching, output a summary of the plan. Check existing tasks first: curl ${curlFlags} ${selfBase}/api/inbox?limit=20`,
@@ -1803,18 +1804,23 @@ export class Dispatcher {
    *  MCP servers, or the full profile when it asks for skills/subagents); omit it
    *  for internal reasoning calls (router, verifier, achiever), which run lean
    *  with no MCP servers. */
+  /** The level a run uses when nothing more specific was asked for. */
+  private thinkingFor(level?: ThinkingLevel): ThinkingLevel {
+    return level || normalizeThinking(this.config.orchestration.defaultThinking) || DEFAULT_THINKING;
+  }
+
   private buildArgv(roleCfg: RoleConfig, prompt: string, taskText: string | null = null, fullProfile = false): string[] {
     switch (roleCfg.exec) {
       case 'claude': {
         const lean = fullProfile || this.config.orchestration.claudeProfile === 'full' ? []
           : this.claudeProfile.args(taskText, this.config.orchestration.claudeMcp);
         return ['claude', '-p', prompt, '--model', roleCfg.model,
-          ...(roleCfg.effort ? ['--effort', roleCfg.effort] : []), '--dangerously-skip-permissions', ...lean];
+          ...thinkingArgs('claude', this.thinkingFor(roleCfg.thinking)), '--dangerously-skip-permissions', ...lean];
       }
       case 'hermes':
         return roleCfg.model
-          ? ['hermes', '-m', roleCfg.model, '-z', prompt]
-          : ['hermes', '-z', prompt];
+          ? ['hermes', '-m', roleCfg.model, ...thinkingArgs('hermes', roleCfg.thinking), '-z', prompt]
+          : ['hermes', ...thinkingArgs('hermes', roleCfg.thinking), '-z', prompt];
       case 'agy':
         // agy (Antigravity CLI) print mode defaults to --print-timeout 5m0s and
         // self-aborts there — long before cowork's own taskTimeoutMs kill. That
@@ -1823,16 +1829,15 @@ export class Dispatcher {
         // it). Pin agy's print timeout to cowork's task budget so the dispatcher's
         // SIGTERM at taskTimeoutMs stays the single authority.
         //
-        // --model: pin the model the brain ID names. Without it, EVERY local-agy-*
-        // brain ran on agy's default model regardless of its configured `model`
-        // (e.g. local-agy-gemini-3.8-flash-high and local-agy-claude-opus-5-5-high
-        // both silently executed on the same default). The brain IDs already carry
-        // the exact agy model slug (effort baked in, e.g. `gemini-3.8-flash-high`;
-        // see `agy models`),
-        // so we forward it verbatim. Only pass the flag when set — an empty model
+        // --model: pin the model the agent ID names. Without it, EVERY local-agy-*
+        // agent ran on agy's default model regardless of its configured `model`
+        // (e.g. local-agy-gemini-3.8-flash and local-agy-claude-opus-5-5
+        // both silently executed on the same default). The agent IDs already carry
+        // the exact agy model slug (with the thinking level as its last part, e.g. `gemini-3.8-flash-high`;
+        // see `agy models`), built from the model + level by agyModelSlug. Only pass the flag when set — an empty model
         // would make agy reject `--model ''` instead of falling back to its default.
         return ['agy', '-p', prompt, '--print-timeout', `${this.config.orchestration.taskTimeoutMs}ms`,
-          ...(roleCfg.model ? ['--model', roleCfg.model] : []), '--dangerously-skip-permissions'];
+          ...(roleCfg.model ? ['--model', agyModelSlug(roleCfg.model, roleCfg.thinking || (splitThinkingSuffix(roleCfg.model).level ? undefined : this.thinkingFor()))] : []), '--dangerously-skip-permissions'];
       case 'codex':
         // OpenAI Codex CLI, non-interactive.
         //  --skip-git-repo-check: we spawn codex with cwd = the task's artifacts
@@ -1840,31 +1845,31 @@ export class Dispatcher {
         //    aborts with "Not inside a trusted directory and --skip-git-repo-check
         //    was not specified." before producing any output.
         //  --dangerously-bypass-approvals-and-sandbox: the codex parallel of the
-        //    --dangerously-skip-permissions that the claude/agy brains use — runs
+        //    --dangerously-skip-permissions that the claude/agy agents use — runs
         //    fully autonomously (never prompts for approval) and lets codex write
         //    its artifacts. Cowork agents run with full permissions by design.
         //  `--` ends option parsing so a prompt starting with a dash isn't
         //    mistaken for a flag.
         return ['codex', 'exec', '--skip-git-repo-check', '--dangerously-bypass-approvals-and-sandbox',
-          ...(roleCfg.model ? ['-m', roleCfg.model] : []), '--', prompt];
+          ...(roleCfg.model ? ['-m', roleCfg.model] : []), ...thinkingArgs('codex', this.thinkingFor(roleCfg.thinking)), '--', prompt];
       case 'ollama':
         // Local Ollama chat model (model required).
         if (!roleCfg.model) throw new Error('exec:ollama needs a model');
         return ['ollama', 'run', roleCfg.model, prompt];
       case 'dsh': {
         // DeepSeek Harness, headless profile: "answer one task, print the result,
-        // and exit" — the non-interactive shape a brain needs. dsh is NOT a model
+        // and exit" — the non-interactive shape an agent needs. dsh is NOT a model
         // server; it talks to a local OpenAI-compatible endpoint (here the SGLang
         // Qwen3.8-27B engine on :30000) via the `local-sglang` provider wired in
         // $DSH_HOME/settings.yaml, which also pins agent-default-model. The model
         // is therefore chosen by that settings file, not a CLI flag, so roleCfg.model
         // is documentation only.
         //
-        // Hermetic env is essential: execute() spawns brains with cwd = the task's
+        // Hermetic env is essential: execute() spawns agents with cwd = the task's
         // artifacts dir and a bare env, but dsh resolves its settings.yaml + the
         // `headless` profile from $DSH_HOME (default is the launch cwd — wrong here),
         // and the provider needs its apiKeyEnv present (SGLang ignores the value).
-        // env(1) sets both regardless of spawn cwd so the brain is self-contained.
+        // env(1) sets both regardless of spawn cwd so the agent is self-contained.
         // The dsh-cowork-progress patch overlay streams turn-by-turn tool executions
         // and live compaction status/progress to stderr -> progress.log.
         const patch = this.ensureDshPatch();
@@ -1886,22 +1891,22 @@ export class Dispatcher {
    * Verify a finished attempt actually succeeded. `spawnOk` is the raw exit-code
    * result. A deterministic pattern/emptiness check runs first (catches the
    * rate-limit-that-exited-0 masquerade); if that passes and the LLM verifier is
-   * enabled, a verifier brain judges whether the output truly completes the task.
-   * A bad verdict makes execute() hand the task to the next brain in the chain.
+   * enabled, a verifier agent judges whether the output truly completes the task.
+   * A bad verdict makes execute() hand the task to the next agent in the chain.
    *
    * NOTE on ordering: callers MUST run {@link detectInputRequest} on an
    * otherwise-ok result BEFORE the LLM gate (see execute / verifyReportedCompletion).
    * The LLM verifier is told to FAIL anything that "does not actually address the
    * task" — which is exactly what a genuine QUESTION back to the user looks like.
-   * Letting it run first would turn a request-for-input into a brain handover and
+   * Letting it run first would turn a request-for-input into an agent handover and
    * strand the question, never parking it on wait-input. This method is the
    * composition of the two gates for callers that have already ruled out an input
    * request (or don't care).
    */
-  private async verifyResult(task: Task, output: { ok: boolean; text: string }, executorBrainId = ''): Promise<VerifyVerdict> {
+  private async verifyResult(task: Task, output: { ok: boolean; text: string }, executorAgentId = ''): Promise<VerifyVerdict> {
     const det = this.deterministicVerdict(output);
     if (!det.ok) return det;
-    return this.qualityGateVerdict(task, output.text, executorBrainId, (Number(task.context?.attempts) || 0) + 1);
+    return this.qualityGateVerdict(task, output.text, executorAgentId, (Number(task.context?.attempts) || 0) + 1);
   }
 
   /** Gate 1 — cheap, deterministic exit-code + pattern/emptiness check. Catches
@@ -1982,9 +1987,9 @@ export class Dispatcher {
     return out;
   }
 
-  /** Spawn a single spec-judge brain through the normal exec path with a short timeout. */
+  /** Spawn a single spec-judge agent through the normal exec path with a short timeout. */
   private runSpecJudge(judgeId: string, prompt: string, timeoutMs: number): Promise<{ ok: boolean; text: string }> {
-    const b = this.config.orchestration.brains?.[judgeId];
+    const b = this.config.orchestration.agents?.[judgeId];
     const exec = (b?.exec || 'hermes') as RoleConfig['exec'];
     const model = b?.model || '';
     const argv = this.judgeArgv({ exec, model, command: b?.command }, prompt);
@@ -2038,7 +2043,7 @@ export class Dispatcher {
   private appendSpecFindingsToBrief(task: Task, record: SpecVerdictRecord, attemptNumber: number): void {
     const items = record.failedCriteria.length ? record.failedCriteria : [record.summary || 'CHANGES_REQUESTED'];
     const block = [
-      `# Spec verifier findings (attempt ${attemptNumber} rejected by ${record.judgeBrain || 'spec-verifier'} — fix these failing criteria)`,
+      `# Spec verifier findings (attempt ${attemptNumber} rejected by ${record.judgeAgent || 'spec-verifier'} — fix these failing criteria)`,
       ...items.map(f => `- ${f}`),
     ].join('\n');
     const appendTo = (desc: string | undefined) => {
@@ -2061,7 +2066,7 @@ export class Dispatcher {
    *     is true run the cross-family spec-compliance verifier (P1-1).
    *   - Legacy tasks (no `acceptance`) keep today's behaviour (`llmVerdict`).
    */
-  private async qualityGateVerdict(task: Task, text: string, executorBrainId: string, attemptNumber: number): Promise<VerifyVerdict> {
+  private async qualityGateVerdict(task: Task, text: string, executorAgentId: string, attemptNumber: number): Promise<VerifyVerdict> {
     let acceptance = this.taskAcceptance(task);
     const specCfg = this.config.orchestration.verifier?.spec;
     // G5: task-level review gate (context.review = none | llm | panel).
@@ -2070,13 +2075,13 @@ export class Dispatcher {
     if (review === 'llm') return this.llmVerdict(task, text);
     if (review === 'panel' && acceptance.length === 0) acceptance = panelFallbackAcceptance(task);
     if (acceptance.length > 0 && (specCfg?.enabled || review === 'panel')) {
-      return this.specVerdict(task, text, executorBrainId, attemptNumber, acceptance);
+      return this.specVerdict(task, text, executorAgentId, attemptNumber, acceptance);
     }
     return this.llmVerdict(task, text);
   }
 
   /**
-   * P1-1 spec-compliance verifier. Selects a cross-family judge brain, runs the
+   * P1-1 spec-compliance verifier. Selects a cross-family judge agent, runs the
    * spec prompt, and records `context.specVerdict`.
    *   - shadow mode: appends `lessons.jsonl` `kind: "quality-shadow"` and never rejects.
    *   - enforce mode: rejects `CHANGES_REQUESTED` and appends failing criteria to the brief.
@@ -2085,7 +2090,7 @@ export class Dispatcher {
   private async specVerdict(
     task: Task,
     text: string,
-    executorBrainId: string,
+    executorAgentId: string,
     attemptNumber: number,
     acceptance: string[]
   ): Promise<VerifyVerdict> {
@@ -2098,41 +2103,41 @@ export class Dispatcher {
     }
     // G5: an explicitly requested panel review (context.review = "panel") enforces.
     if (task.context?.review === 'panel') mode = 'enforce';
-    const agent = this.resolveAgent(task)
-      || (typeof task.context?.agentName === 'string' ? task.context.agentName : '')
-      || executorBrainId;
+    const persona = this.resolvePersona(task)
+      || (typeof task.context?.personaName === 'string' ? task.context.personaName : '')
+      || executorAgentId;
     const artifacts = this.collectArtifactsWithSizes(task);
     const evidence = extractEvidenceBlock(text);
     const prompt = buildVerifierPrompt(task, text, { acceptance, artifacts, evidence });
 
     const judgeOpts = {
-      brains: this.config.orchestration.brains,
+      agents: this.config.orchestration.agents,
       judges: specCfg.judges,
-      isCooling: (id: string) => !!this.store.brainCooldownUntil(id),
+      isCooling: (id: string) => !!this.store.agentCooldownUntil(id),
       fallbackPool: this.specJudgeFallbackPool(),
     };
-    const candidates = selectSpecJudges(executorBrainId, { ...judgeOpts, result: text, acceptance });
+    const candidates = selectSpecJudges(executorAgentId, { ...judgeOpts, result: text, acceptance });
 
     if (candidates.length === 0) {
-      const skipped = explainSpecJudgeSkips(executorBrainId, judgeOpts);
+      const skipped = explainSpecJudgeSkips(executorAgentId, judgeOpts);
       const why = skipped.map(s => `${s.id}: ${s.why}`).join('; ') || 'no candidates configured';
       const record: SpecVerdictRecord = {
         verdict: 'UNVERIFIABLE',
         mode,
-        judgeBrain: null,
-        executorBrain: executorBrainId,
-        criteria: acceptance.map(c => ({ criterion: c, status: 'UNVERIFIABLE', reason: 'no judge brain available' })),
+        judgeAgent: null,
+        executorAgent: executorAgentId,
+        criteria: acceptance.map(c => ({ criterion: c, status: 'UNVERIFIABLE', reason: 'no judge agent available' })),
         failedCriteria: [],
-        summary: `UNVERIFIABLE — no judge brain available (${why})`.slice(0, 600),
+        summary: `UNVERIFIABLE — no judge agent available (${why})`.slice(0, 600),
         at: new Date().toISOString(),
         cause: 'no-judge',
         skippedJudges: skipped,
       };
-      console.warn(`Dispatcher: spec verifier has no judge for task ${task.id} (executor ${executorBrainId}) — ${why}`);
+      console.warn(`Dispatcher: spec verifier has no judge for task ${task.id} (executor ${executorAgentId}) — ${why}`);
       this.persistSpecVerdict(task, record);
       if (mode === 'shadow') {
         this.recordLesson(task.id, {
-          kind: 'quality-shadow', brain: executorBrainId, agent, attempt: attemptNumber,
+          kind: 'quality-shadow', agent: executorAgentId, persona, attempt: attemptNumber,
           reason: `UNVERIFIABLE (judge=none, cause=no-judge): ${record.summary}`, resultText: text,
         });
       }
@@ -2147,15 +2152,15 @@ export class Dispatcher {
     const panelCfg = this.config.orchestration.verifier?.panel;
     if (reviewMode(task, panelCfg) === 'panel' || (panelCfg?.enabled !== false && panelCfg?.judgmentTier && taskTier(task.context) === 'judgment')) {
       const tiers = this.config.orchestration.tiers || {};
-      const panelJudges = selectSpecJudges(executorBrainId, {
-        brains: this.config.orchestration.brains,
+      const panelJudges = selectSpecJudges(executorAgentId, {
+        agents: this.config.orchestration.agents,
         judges: specCfg.judges,
-        isCooling: id => !!this.store.brainCooldownUntil(id),
+        isCooling: id => !!this.store.agentCooldownUntil(id),
         panel: panelCfg?.size ?? 2,
         panelPool: [...(tiers.judgment || []), ...(tiers.standard || []), ...(tiers.mechanical || [])],
       });
       if (panelJudges.length >= 2) {
-        const out = await this.panelSpecVerdict(task, prompt, panelJudges, acceptance, timeoutMs, executorBrainId, agent, attemptNumber);
+        const out = await this.panelSpecVerdict(task, prompt, panelJudges, acceptance, timeoutMs, executorAgentId, persona, attemptNumber);
         if (out) { usedJudgeId = out.judgeId; parsed = out.parsed; }
       }
     }
@@ -2170,7 +2175,7 @@ export class Dispatcher {
       }
       const soft = verifyOutput(judgeOut.text, judgeOut.ok);
       if (!judgeOut.ok || !soft.ok) {
-        if (isCliRateLimitSignal({ gateFailed: !soft.ok, gateReason: soft.reason })) this.store.noteBrainRateLimited(judgeId);
+        if (isCliRateLimitSignal({ gateFailed: !soft.ok, gateReason: soft.reason })) this.store.noteAgentRateLimited(judgeId);
         continue;
       }
       const p = parseSpecVerdict(judgeOut.text, acceptance, false);
@@ -2184,8 +2189,8 @@ export class Dispatcher {
       const record: SpecVerdictRecord = {
         verdict: 'UNVERIFIABLE',
         mode,
-        judgeBrain: candidates[0] || null,
-        executorBrain: executorBrainId,
+        judgeAgent: candidates[0] || null,
+        executorAgent: executorAgentId,
         criteria: acceptance.map(c => ({ criterion: c, status: 'UNVERIFIABLE', reason: 'judge crashed or timed out (fail-open)' })),
         failedCriteria: [],
         summary: 'UNVERIFIABLE — judge crashed or timed out (fail-open)',
@@ -2196,8 +2201,8 @@ export class Dispatcher {
       this.persistSpecVerdict(task, record);
       if (mode === 'shadow') {
         this.recordLesson(task.id, {
-          kind: 'quality-shadow', brain: executorBrainId, agent, attempt: attemptNumber,
-          reason: `UNVERIFIABLE (judge=${record.judgeBrain || 'none'}, cause=judge-crashed): ${record.summary}`, resultText: text,
+          kind: 'quality-shadow', agent: executorAgentId, persona, attempt: attemptNumber,
+          reason: `UNVERIFIABLE (judge=${record.judgeAgent || 'none'}, cause=judge-crashed): ${record.summary}`, resultText: text,
         });
       }
       return { ok: true };
@@ -2206,8 +2211,8 @@ export class Dispatcher {
     const record: SpecVerdictRecord = {
       verdict: parsed.verdict,
       mode,
-      judgeBrain: usedJudgeId,
-      executorBrain: executorBrainId,
+      judgeAgent: usedJudgeId,
+      executorAgent: executorAgentId,
       criteria: parsed.criteria,
       failedCriteria: parsed.failedCriteria,
       summary: parsed.summary,
@@ -2218,7 +2223,7 @@ export class Dispatcher {
 
     if (mode === 'shadow') {
       this.recordLesson(task.id, {
-        kind: 'quality-shadow', brain: executorBrainId, agent, attempt: attemptNumber,
+        kind: 'quality-shadow', agent: executorAgentId, persona, attempt: attemptNumber,
         reason: `${record.verdict} (judge=${usedJudgeId}): ${record.summary}`, resultText: text,
       });
       return { ok: true };
@@ -2234,7 +2239,7 @@ export class Dispatcher {
     return { ok: true };
   }
 
-  /** Brains the spec verifier may fall back to when the executor family's
+  /** Agents the spec verifier may fall back to when the executor family's
    *  configured judges are all unavailable: the tier lists (judgment, standard,
    *  mechanical) then every family's judge chain. Other-family only (enforced in
    *  selectSpecJudges). */
@@ -2256,25 +2261,25 @@ export class Dispatcher {
    */
   private async panelSpecVerdict(
     task: Task, prompt: string, judges: string[], acceptance: string[], timeoutMs: number,
-    executorBrainId: string, agent: string, attemptNumber: number
+    executorAgentId: string, persona: string, attemptNumber: number
   ): Promise<{ judgeId: string; parsed: ReturnType<typeof parseSpecVerdict> } | null> {
-    const brains = this.config.orchestration.brains || {};
+    const agents = this.config.orchestration.agents || {};
     const replies = await Promise.all(judges.map(async id => {
       try { return { id, ...(await this.runSpecJudge(id, buildPanelReviewerPrompt(prompt), timeoutMs)) }; }
       catch (e: any) { return { id, ok: false, text: `JUDGE ERROR: ${e?.message || e}` }; }
     }));
     const reviews = replies.map(r => {
       const soft = verifyOutput(r.text, r.ok);
-      if (isCliRateLimitSignal({ gateFailed: !soft.ok, gateReason: soft.reason })) this.store.noteBrainRateLimited(r.id);
+      if (isCliRateLimitSignal({ gateFailed: !soft.ok, gateReason: soft.reason })) this.store.noteAgentRateLimited(r.id);
       const p = r.ok && soft.ok ? parseSpecVerdict(r.text, acceptance, false) : null;
-      return { id: r.id, family: brainFamily(brains[r.id], r.id), text: r.text, parsed: p && !p.crashed ? p : null };
+      return { id: r.id, family: agentFamily(agents[r.id], r.id), text: r.text, parsed: p && !p.crashed ? p : null };
     });
     const usable = reviews.filter(r => r.parsed);
     if (!usable.length) return null;
     const changes = usable.filter(r => r.parsed!.verdict === 'CHANGES_REQUESTED');
     const lesson = (verdict: string, buckets = { actOn: 0, consider: 0, noted: 0, dismissed: 0 }, leadParsed = true) =>
       this.recordLesson(task.id, {
-        kind: 'gate-panel', brain: executorBrainId, agent, attempt: attemptNumber,
+        kind: 'gate-panel', agent: executorAgentId, persona, attempt: attemptNumber,
         reason: `${verdict} spec panel [${usable.map(r => r.family).join('+')}]: act_on=${buckets.actOn} consider=${buckets.consider} noted=${buckets.noted} dismissed=${buckets.dismissed}${leadParsed ? '' : ' (lead unavailable)'}`,
         panel: { gate: task.id, round: attemptNumber, families: usable.map(r => r.family), buckets, verdict, leadParsed },
       });
@@ -2284,17 +2289,17 @@ export class Dispatcher {
     }
 
     const tiers = this.config.orchestration.tiers || {};
-    const leadBrain = (tiers.judgment || []).find(id => brains[id] && !brains[id].disabled && brains[id].location !== 'remote' && !this.store.brainCooldownUntil(id));
+    const leadAgent = (tiers.judgment || []).find(id => agents[id] && !agents[id].disabled && agents[id].location !== 'remote' && !this.store.agentCooldownUntil(id));
     let lj: ReturnType<typeof parseLeadJudgment> | null = null;
-    if (leadBrain) {
+    if (leadAgent) {
       try {
-        const out = await this.runSpecJudge(leadBrain, buildLeadJudgmentPrompt({
+        const out = await this.runSpecJudge(leadAgent, buildLeadJudgmentPrompt({
           title: task.title, description: task.description, acceptance,
-          reviews: usable.map(r => ({ family: r.family, brain: r.id, text: r.text })),
+          reviews: usable.map(r => ({ family: r.family, agent: r.id, text: r.text })),
         }), timeoutMs);
         if (out.ok) lj = parseLeadJudgment(out.text);
       } catch (e: any) {
-        console.error(`Dispatcher: panel lead ${leadBrain} threw (strict fallback):`, e);
+        console.error(`Dispatcher: panel lead ${leadAgent} threw (strict fallback):`, e);
       }
     }
     if (!lj || !lj.parsed) {
@@ -2303,7 +2308,7 @@ export class Dispatcher {
       return { judgeId: changes[0].id, parsed: changes[0].parsed! };
     }
     lesson(lj.verdict, lj.counts);
-    const judgeId = `${usable.map(r => r.id).join('+')}>${leadBrain}`;
+    const judgeId = `${usable.map(r => r.id).join('+')}>${leadAgent}`;
     if (lj.verdict === 'APPROVED') {
       return { judgeId, parsed: {
         ok: true, verdict: 'APPROVED',
@@ -2466,27 +2471,27 @@ export class Dispatcher {
   }
 
   /** A STATUS: BLOCKED result finalises as FAILED (isFailedTask keys on the
-   *  prefix) WITHOUT a handover — the blocker is not a brain problem. */
+   *  prefix) WITHOUT a handover — the blocker is not an agent problem. */
   private blockedResult(f: StatusFooter, text: string): string {
     return `FAILED (blocked): ${f.reason}\n\n${text.length > 2000 ? text.slice(0, 2000) + '\n…' : text}`;
   }
 
-  /** Append a failed-brain record to the task's inbox entry so the fallback trail
-   *  is visible on the dashboard: which brains failed, in order, and why. */
-  private recordFailedBrain(taskId: string, entry: { brain: string; agent: string; attempt: number; reason: string }, rateLimited = false): void {
+  /** Append a failed-agent record to the task's inbox entry so the fallback trail
+   *  is visible on the dashboard: which agents failed, in order, and why. */
+  private recordFailedAgent(taskId: string, entry: { agent: string; persona: string; attempt: number; reason: string }, rateLimited = false): void {
     const t = this.store.getTask(taskId);
     if (!t) return;
-    const failedBrains = Array.isArray(t.context?.failedBrains) ? t.context!.failedBrains : [];
-    failedBrains.push({ ...entry, at: new Date().toISOString() });
-    t.context = { ...(t.context || {}), failedBrains };
+    const failedAgents = Array.isArray(t.context?.failedAgents) ? t.context!.failedAgents : [];
+    failedAgents.push({ ...entry, at: new Date().toISOString() });
+    t.context = { ...(t.context || {}), failedAgents };
     this.store.saveTask(t);
-    // A rate-limit refusal means that brain is cooling down: hold tasks pinned to it
-    // and steer chain routing past it until it resets (Store.brainCooldownUntil).
+    // A rate-limit refusal means that agent is cooling down: hold tasks pinned to it
+    // and steer chain routing past it until it resets (Store.agentCooldownUntil).
     // `rateLimited` comes from the CLI's own signals (isCliRateLimitSignal), never
     // from `entry.reason`, which may be the LLM verifier's free text.
-    if (entry.brain && rateLimited) {
-      const until = this.store.noteBrainRateLimited(entry.brain);
-      console.log(`Dispatcher: brain ${entry.brain} hit a rate limit — treated as cooling down until ${until}`);
+    if (entry.agent && rateLimited) {
+      const until = this.store.noteAgentRateLimited(entry.agent);
+      console.log(`Dispatcher: agent ${entry.agent} hit a rate limit — treated as cooling down until ${until}`);
     }
   }
 
@@ -2499,8 +2504,8 @@ export class Dispatcher {
    */
   private recordLesson(taskId: string, input: {
     kind: 'verify-fail' | 'wait-input' | 'blocked' | 'quality-shadow' | 'gate-panel';
-    brain: string;
     agent: string;
+    persona: string;
     attempt: number;
     title?: string;
     reason?: string;
@@ -2515,8 +2520,8 @@ export class Dispatcher {
         kind: input.kind,
         task: taskId,
         title: t?.title || input.title || '',
+        persona: input.persona,
         agent: input.agent,
-        brain: input.brain,
         attempt: input.attempt,
         reason: input.reason,
         resultText: input.resultText,
@@ -2535,29 +2540,29 @@ export class Dispatcher {
   }
 
   /**
-   * Completion guard for EXTERNALLY reported results — a remote brain's client
+   * Completion guard for EXTERNALLY reported results — a remote agent's client
    * calls complete_task / PATCH inbox with its output. That output can itself be
    * a soft failure ("you've hit your session limit", a rate-limit / quota notice,
    * a refusal, or nothing), which the raw complete path would mark done. This
    * verifies the reported result with the same gate as a local run and, on a bad
-   * verdict, hands the task to the NEXT brain in the fallback chain (or retries a
-   * user-pinned brain), recording the failed brain. Only when the chain is
+   * verdict, hands the task to the NEXT agent in the fallback chain (or retries a
+   * user-pinned agent), recording the failed agent. Only when the chain is
    * exhausted does it allow completion — as a FAILED summary. Results not
-   * attributable to a configured brain (human / pipeline completions) pass through.
+   * attributable to a configured agent (human / pipeline completions) pass through.
    */
   private verifyReportedCompletion = async (task: Task, result?: string): Promise<CompletionDecision> => {
     const text = result || '';
-    const brains = this.config.orchestration.brains || {};
-    const brainId = typeof task.context?.brain === 'string' ? canonicalBrainId(this.config, task.context.brain) : undefined;
+    const agents = this.config.orchestration.agents || {};
+    const agentId = typeof task.context?.agent === 'string' ? canonicalAgentId(this.config, task.context.agent) : undefined;
 
-    // Results not attributable to a configured brain (human / pipeline
+    // Results not attributable to a configured agent (human / pipeline
     // completions) skip the failure/fallback gate, but a QUESTION back to the
     // user is still parked so it isn't silently marked done.
-    if (!brainId || !brains[brainId]) {
+    if (!agentId || !agents[agentId]) {
       const req = detectInputRequest(text, this.inputOpts());
       if (req.needsInput) {
         this.recordLesson(task.id, {
-          kind: 'wait-input', brain: brainId || '', agent: this.resolveAgent(task) || brainId || '',
+          kind: 'wait-input', agent: agentId || '', persona: this.resolvePersona(task) || agentId || '',
           attempt: (Number(task.context?.attempts) || 0) + 1, questions: req.questions, resultText: text
         });
         return { action: 'wait-input', questions: req.questions };
@@ -2567,7 +2572,7 @@ export class Dispatcher {
       const footer = parseStatusFooter(text);
       if (footer.status === 'BLOCKED') {
         this.recordLesson(task.id, {
-          kind: 'blocked', brain: brainId || '', agent: this.resolveAgent(task) || brainId || '',
+          kind: 'blocked', agent: agentId || '', persona: this.resolvePersona(task) || agentId || '',
           attempt: (Number(task.context?.attempts) || 0) + 1, reason: footer.reason, resultText: text
         });
         return { action: 'complete', result: this.blockedResult(footer, text), context: this.footerContext(footer) };
@@ -2592,31 +2597,31 @@ export class Dispatcher {
       const req = detectInputRequest(text, this.inputOpts());
       if (req.needsInput) {
         this.recordLesson(task.id, {
-          kind: 'wait-input', brain: brainId,
-          agent: this.resolveAgent(task) || (typeof task.context?.agentName === 'string' ? task.context.agentName : '') || brainId,
+          kind: 'wait-input', agent: agentId,
+          persona: this.resolvePersona(task) || (typeof task.context?.personaName === 'string' ? task.context.personaName : '') || agentId,
           attempt: (Number(task.context?.attempts) || 0) + 1, questions: req.questions, resultText: text
         });
-        console.log(`Dispatcher: reported result for task ${task.id} on ${brainId} is a QUESTION → wait-input (${req.matched || 'phrase'})`);
+        console.log(`Dispatcher: reported result for task ${task.id} on ${agentId} is a QUESTION → wait-input (${req.matched || 'phrase'})`);
         return { action: 'wait-input', questions: req.questions };
       }
       const bg = this.backgroundDecision(task, text);
       if (bg) {
-        console.log(`Dispatcher: reported result for task ${task.id} on ${brainId} is still WAITING on background work → defer (${bg.note || 'phrase'})`);
+        console.log(`Dispatcher: reported result for task ${task.id} on ${agentId} is still WAITING on background work → defer (${bg.note || 'phrase'})`);
         return bg;
       }
       // (2.75) STATUS footer — BLOCKED fails the task without a handover (not a
-      //        brain problem) and skips the LLM gate; other values are recorded.
+      //        agent problem) and skips the LLM gate; other values are recorded.
       const footer = parseStatusFooter(text);
       if (footer.status === 'BLOCKED') {
         this.recordLesson(task.id, {
-          kind: 'blocked', brain: brainId,
-          agent: this.resolveAgent(task) || (typeof task.context?.agentName === 'string' ? task.context.agentName : '') || brainId,
+          kind: 'blocked', agent: agentId,
+          persona: this.resolvePersona(task) || (typeof task.context?.personaName === 'string' ? task.context.personaName : '') || agentId,
           attempt: (Number(task.context?.attempts) || 0) + 1, reason: footer.reason, resultText: text
         });
-        console.log(`Dispatcher: reported result for task ${task.id} on ${brainId} is STATUS: BLOCKED → failed, no handover (${(footer.reason || '').slice(0, 80)})`);
+        console.log(`Dispatcher: reported result for task ${task.id} on ${agentId} is STATUS: BLOCKED → failed, no handover (${(footer.reason || '').slice(0, 80)})`);
         return { action: 'complete', result: this.blockedResult(footer, text), context: this.footerContext(footer) };
       }
-      verdict = await this.qualityGateVerdict(task, text, brainId, (Number(task.context?.attempts) || 0) + 1);
+      verdict = await this.qualityGateVerdict(task, text, agentId, (Number(task.context?.attempts) || 0) + 1);
       if (verdict.ok) {
         return {
           action: 'complete',
@@ -2635,25 +2640,25 @@ export class Dispatcher {
     }
     const progText = (/^\s*TIMEOUT\b/i.test(failReason) || /^\s*TIMEOUT\b/i.test(text)) ? this.readProgressLedger(task.id) : null;
     const attempt = Number(task.context?.attempts) || 0;
-    const agent = this.resolveAgent(task)
-      || (typeof task.context?.agentName === 'string' ? task.context.agentName : '') || brainId;
+    const persona = this.resolvePersona(task)
+      || (typeof task.context?.personaName === 'string' ? task.context.personaName : '') || agentId;
     const division = typeof task.context?.division === 'string' ? task.context.division : undefined;
     const rateLimited = isCliRateLimitSignal({ gateFailed: !detVerdict.ok, gateReason: detVerdict.reason });
-    this.recordFailedBrain(task.id, { brain: brainId, agent, attempt: attempt + 1, reason: failReason }, rateLimited);
-    this.recordLesson(task.id, { kind: 'verify-fail', brain: brainId, agent, attempt: attempt + 1, reason: failReason, resultText: progText ? `${text}\n${progText}` : text });
-    console.log(`Dispatcher: verifier REJECTED reported result for task ${task.id} on ${brainId} — ${failReason.slice(0, 80)}`);
+    this.recordFailedAgent(task.id, { agent: agentId, persona, attempt: attempt + 1, reason: failReason }, rateLimited);
+    this.recordLesson(task.id, { kind: 'verify-fail', agent: agentId, persona, attempt: attempt + 1, reason: failReason, resultText: progText ? `${text}\n${progText}` : text });
+    console.log(`Dispatcher: verifier REJECTED reported result for task ${task.id} on ${agentId} — ${failReason.slice(0, 80)}`);
 
-    // A user-pinned brain (context.brain WITHOUT brainAuto) retries itself up to
-    // inbox.maxRetries; a chain rung (brainAuto) advances to the next brain.
-    const pinned = !task.context?.brainAuto;
-    const chain = pinned ? [] : this.chainFor(agent, division, task.context);
+    // A user-pinned agent (context.agent WITHOUT agentAuto) retries itself up to
+    // inbox.maxRetries; a chain rung (agentAuto) advances to the next agent.
+    const pinned = !task.context?.agentAuto;
+    const chain = pinned ? [] : this.chainFor(persona, division, task.context);
     const bound = pinned ? this.config.inbox.maxRetries : chain.length;
     const nextAttempt = attempt + 1;
 
     if (nextAttempt < bound) {
       const t = this.store.getTask(task.id);
       if (t) {
-        const nextBrain = pinned ? brainId : (chain[nextAttempt] || '?');
+        const nextAgent = pinned ? agentId : (chain[nextAttempt] || '?');
         t.status = 'pending';
         delete t.claimedAt;
         delete t.claimedBy;
@@ -2662,35 +2667,35 @@ export class Dispatcher {
           attempts: nextAttempt,
           dispatched: false,
           remoteWaitSince: undefined,
-          // chain rung: drop the auto brain pin so planFor selects the next rung;
-          // user pin: keep the brain so the same one is retried.
-          brain: pinned ? brainId : undefined,
-          brainAuto: undefined
+          // chain rung: drop the auto agent pin so planFor selects the next rung;
+          // user pin: keep the agent so the same one is retried.
+          agent: pinned ? agentId : undefined,
+          agentAuto: undefined
         };
-        t.result = `attempt ${nextAttempt}/${bound} failed on ${brainId}${pinned ? ' — retrying' : ` — handing over to ${nextBrain}`}: ${failReason}`;
+        t.result = `attempt ${nextAttempt}/${bound} failed on ${agentId}${pinned ? ' — retrying' : ` — handing over to ${nextAgent}`}: ${failReason}`;
         this.store.saveTask(t);
-        console.log(`Dispatcher: remote handover — task ${task.id} attempt ${nextAttempt} on ${brainId} failed, next → ${nextBrain}`);
+        console.log(`Dispatcher: remote handover — task ${task.id} attempt ${nextAttempt} on ${agentId} failed, next → ${nextAgent}`);
       }
       return { action: 'handover' };
     }
 
-    // Chain exhausted — complete as FAILED, summarising which brains were tried.
-    const failed = Array.isArray(this.store.getTask(task.id)?.context?.failedBrains)
-      ? this.store.getTask(task.id)!.context!.failedBrains as Array<{ brain: string; reason: string }>
+    // Chain exhausted — complete as FAILED, summarising which agents were tried.
+    const failed = Array.isArray(this.store.getTask(task.id)?.context?.failedAgents)
+      ? this.store.getTask(task.id)!.context!.failedAgents as Array<{ agent: string; reason: string }>
       : [];
-    const failedList = failed.map(f => `${f.brain} (${f.reason})`).join('; ');
+    const failedList = failed.map(f => `${f.agent} (${f.reason})`).join('; ');
     return {
       action: 'complete',
-      result: `FAILED after ${bound} attempt(s) (chain exhausted). Brains that failed: ${failedList || brainId}. Last output: ${(result || '').slice(0, 800)}`
+      result: `FAILED after ${bound} attempt(s) (chain exhausted). Agents that failed: ${failedList || agentId}. Last output: ${(result || '').slice(0, 800)}`
     };
   };
 
   private async execute(task: Task, plan: ExecPlan): Promise<void> {
     const orch = this.config.orchestration;
-    const role = plan.agent;
-    if (!this.agentId) return;
+    const role = plan.persona;
+    if (!this.workerId) return;
 
-    const claimed = this.store.claimTask({ taskId: task.id, agentId: this.agentId, internal: true });
+    const claimed = this.store.claimTask({ taskId: task.id, workerId: this.workerId, internal: true });
     if (!claimed) return;
     // Mark the claim as dispatcher-owned so startup handover can reclaim it
     claimed.context = { ...(claimed.context || {}), dispatched: true };
@@ -2698,21 +2703,21 @@ export class Dispatcher {
 
     // Surface the worker as its own active agent so the dashboard shows WHO
     // is working (e.g. hermes/engineer · local-cc-opus-5-5), not just the coordinator.
-    const worker = this.store.registerAgent({
+    const worker = this.store.registerWorker({
       platform: plan.platform,
-      agentName: plan.label,
+      workerName: plan.label,
       sessionId: 'dispatcher-worker',
       capabilities: [role || plan.label],
       currentTask: task.title
     });
-    this.store.updateHeartbeat({ agentId: worker.id, status: 'working', currentTask: task.title });
+    this.store.updateHeartbeat({ workerId: worker.id, status: 'working', currentTask: task.title });
 
-    this.running.set(task.id, { role: plan.label, startedAt: Date.now(), workerAgentId: worker.id, brainId: plan.brainId });
-    console.log(`Dispatcher: [${plan.label}/${plan.exec}:${plan.model || 'default'}${plan.effort ? '@' + plan.effort : ''}] running task ${task.id} — ${task.title}`);
+    this.running.set(task.id, { role: plan.label, startedAt: Date.now(), workerId: worker.id, agentId: plan.agentId });
+    console.log(`Dispatcher: [${plan.label}/${plan.exec}:${plan.model || 'default'}@${this.thinkingFor(normalizeThinking(task.context?.thinking) || plan.thinking)}] running task ${task.id} — ${task.title}`);
 
-    // Brief sharpener (PS-1) for tasks that skipped intake: cheap-brain pre-pass if
+    // Brief sharpener (PS-1) for tasks that skipped intake: cheap-agent pre-pass if
     // acceptance criteria are missing. Runs AFTER `running` is set so the task holds
-    // its brain slot meanwhile, and merges only the sharpened fields into a fresh
+    // its agent slot meanwhile, and merges only the sharpened fields into a fresh
     // read — never a stale snapshot over the claim.
     if (shouldSharpenTask(task, this.config)) {
       const work = structuredClone(task);
@@ -2730,12 +2735,12 @@ export class Dispatcher {
     const outDir = join(artDir, OUTPUTS_SUBDIR);
     try { mkdirSync(outDir, { recursive: true }); } catch { /* ignore */ }
     // Attempt start (minus a little clock slack): the artifact gate only lints files
-    // written during THIS attempt, so an earlier brain's leftovers can't fail it.
+    // written during THIS attempt, so an earlier agent's leftovers can't fail it.
     const attemptStartedMs = Date.now() - 2000;
 
     // CODE tasks (see core/worktree.ts) run in their own git worktree so concurrent
     // agents don't clobber each other. Any failure falls back to the shared checkout.
-    let brainCwd = artDir;
+    let agentCwd = artDir;
     let wtNote = '';
     if (plan.exec !== 'script') {
       try {
@@ -2745,7 +2750,7 @@ export class Dispatcher {
           task.worktree = { ...task.worktree, ...wt, pruned: false };
           const fresh = this.store.getTask(task.id);
           if (fresh) { fresh.worktree = task.worktree; this.store.saveTask(fresh); }
-          brainCwd = wt.path;
+          agentCwd = wt.path;
         }
       } catch (e: any) {
         task.worktree = undefined;
@@ -2762,7 +2767,7 @@ export class Dispatcher {
     // as it happens instead of nothing until the final answer.
     const streaming = STREAMING_EXECS.has(plan.exec);
     // A task can opt out of the lean claude profile with context.claudeProfile='full'.
-    const argv = [...this.buildArgv({ exec: plan.exec, model: plan.model, effort: plan.effort, command: plan.command }, prompt,
+    const argv = [...this.buildArgv({ exec: plan.exec, model: plan.model, thinking: normalizeThinking(task.context?.thinking) || plan.thinking, command: plan.command }, prompt,
       `${task.title}\n${task.description || ''}`, task.context?.claudeProfile === 'full'), ...streamArgs(plan.exec)];
     const renderer = streaming ? createStreamRenderer(plan.exec) : null;
     // hermes writes its usage report to a file (-z only); metered like the streaming execs.
@@ -2773,7 +2778,7 @@ export class Dispatcher {
       && task.context?.goalGenerated === true && task.context?.role === 'goal-achiever';
     const memoryOff = memoryAB && hashArm(task.id);
 
-    // Live PROGRESS LOG: stream the brain's stdout/stderr to artifacts/<id>/progress.log
+    // Live PROGRESS LOG: stream the agent's stdout/stderr to artifacts/<id>/progress.log
     // as it runs, so the dashboard can show a "what is it doing right now" window on
     // the in-progress card (served via GET /api/inbox/:id/progress → Store.readProgressLog).
     // Opened with the 'w' flag so each run starts a fresh log (a re-run isn't appended
@@ -2796,9 +2801,9 @@ export class Dispatcher {
         // server/ and dirtied the working tree. Rooted here, those files become
         // the task's artifacts instead. exec:script keeps the server cwd because
         // its configured command is a repo-relative path (./deploy/…).
-        ...(plan.exec === 'script' ? {} : { cwd: brainCwd }),
+        ...(plan.exec === 'script' ? {} : { cwd: agentCwd }),
         // Own process group (pgid = child pid) so cancel/timeout can kill the
-        // brain's whole tree (tool shells, scripts) — not just the top process.
+        // agent's whole tree (tool shells, scripts) — not just the top process.
         // Not unref'd: the server still waits on it and reaps it.
         detached: true,
         env: {
@@ -2813,7 +2818,7 @@ export class Dispatcher {
           COWORK_OUTPUTS_DIR: outDir,
           ...(memoryOff ? { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' } : {}),
           // When the server runs https with a self-signed cert, node-based child
-          // brains (claude CLI, exec:script pipelines) must trust it to reach
+          // agents (claude CLI, exec:script pipelines) must trust it to reach
           // COWORK_API or remote endpoints — add the cert as an extra CA rather than
           // disabling verification. Harmless when tls is off.
           ...(this.config.server.tls ? { NODE_EXTRA_CA_CERTS: this.config.server.tls.certFile } : {}),
@@ -2849,7 +2854,7 @@ export class Dispatcher {
       child.on('close', (code) => {
         clearTimeout(timer);
         if (renderer) { logProgress(stripAnsi(renderer.flush())); out = renderer.finalText(); }
-        this.recordRunUsage(task.id, plan.brainId, renderer?.usage() ?? this.readHermesUsage(hermesUsageFile), memoryAB ? (memoryOff ? 'memory-off' : 'memory-on') : undefined);
+        this.recordRunUsage(task.id, plan.agentId, renderer?.usage() ?? this.readHermesUsage(hermesUsageFile), memoryAB ? (memoryOff ? 'memory-off' : 'memory-on') : undefined);
         // Strip ANSI/terminal control sequences some CLIs emit even to a pipe
         // (e.g. Ollama's streaming cursor redraws) so results are clean text.
         const clean = stripAnsi(out).trim();
@@ -2871,36 +2876,36 @@ export class Dispatcher {
 
     this.running.delete(task.id);
     this.children.delete(task.id);
-    this.store.removeAgent(worker.id);
+    this.store.removeWorker(worker.id);
 
-    // Deleted mid-run: the brain was killed and nobody is waiting for this result.
+    // Deleted mid-run: the agent was killed and nobody is waiting for this result.
     // Stop here — verifying / handing over would re-run a deleted task on the next
-    // brain (or re-save its file).
+    // agent (or re-save its file).
     const wasCancelled = this.cancelled.delete(task.id);
     if (wasCancelled || !this.store.getTask(task.id)) {
-      console.log(`Dispatcher: task ${task.id} was deleted while running on ${plan.brainId} — run discarded`);
+      console.log(`Dispatcher: task ${task.id} was deleted while running on ${plan.agentId} — run discarded`);
       return;
     }
 
-    // Count this run: the local dispatcher ran the brain; attribute submission
+    // Count this run: the local dispatcher ran the agent; attribute submission
     // to whoever created the task.
-    this.store.countRun('local', plan.brainId);
-    if (task.from?.agent) this.store.countSubmitted(task.from.agent, plan.brainId);
+    this.store.countRun('local', plan.agentId);
+    if (task.from?.agent) this.store.countSubmitted(task.from.agent, plan.agentId);
     if (plan.exec) {
-      try { this.eventBus.emitBrainExecuted(plan.brainId, plan.exec, task.id); } catch { /* ignore */ }
+      try { this.eventBus.emitAgentExecuted(plan.agentId, plan.exec, task.id); } catch { /* ignore */ }
     }
 
     // VERIFY the result in strict gate precedence:
-    //   (1) hard/soft FAILURE — a brain that hit a rate limit (or refused, or
+    //   (1) hard/soft FAILURE — an agent that hit a rate limit (or refused, or
     //       returned nothing) can still exit 0 and masquerade as a clean success;
     //       the deterministic gate rejects those so the handover below advances to
-    //       the next fallback brain instead of marking a non-result "done".
+    //       the next fallback agent instead of marking a non-result "done".
     //   (2) QUESTION for the user — an otherwise-ok result that asks for input is
     //       a SUCCESSFUL run awaiting the user, parked on wait-input below. It must
     //       be recognised BEFORE the LLM gate: that verifier is told to FAIL a
     //       result that "does not actually address the task", which a genuine
     //       question does — running it first would hand the question to the next
-    //       brain and strand it, never asking the user.
+    //       agent and strand it, never asking the user.
     //   (2.5) BACKGROUND WAIT — an otherwise-ok, non-question result where the
     //       agent is still waiting on long background work it launched. It is a
     //       successful run that is NOT YET a deliverable: DEFER (re-arm on
@@ -2939,34 +2944,34 @@ export class Dispatcher {
         ? { ok: true }                                 // question / bg-wait / blocked → skip the LLM gate, park below
         : lint && !lint.ok
           ? lint
-          : await this.qualityGateVerdict(task, output.text, plan.brainId, plan.attempt + 1);
+          : await this.qualityGateVerdict(task, output.text, plan.agentId, plan.attempt + 1);
     if (output.ok && !verdict.ok) {
-      console.log(`Dispatcher: verifier REJECTED task ${task.id} result on ${plan.brainId} — ${verdict.reason}`);
+      console.log(`Dispatcher: verifier REJECTED task ${task.id} result on ${plan.agentId} — ${verdict.reason}`);
     }
 
-    // Handover: on failure advance to the NEXT brain in the resolved chain
-    // (or, for a pinned brain, retry it up to inbox.maxRetries).
+    // Handover: on failure advance to the NEXT agent in the resolved chain
+    // (or, for a pinned agent, retry it up to inbox.maxRetries).
     const bound = plan.pinned ? this.config.inbox.maxRetries : plan.chainLen;
     if (!verdict.ok) {
       // The `agy models` probe inside (≤60 s) runs after this task's slot was released
       // (running.delete above) and execute() is fire-and-forget, so it only delays
       // this task's own completion — never other tasks' dispatch or completion.
       const classified = await classifyCliFailure(
-        { exec: plan.exec, model: plan.model, text: output.text, stderr: output.stderr },
+        { exec: plan.exec, model: plan.exec === 'agy' ? agyModelSlug(plan.model, this.thinkingFor(normalizeThinking(task.context?.thinking) || plan.thinking)) : plan.model, text: output.text, stderr: output.stderr },
         detVerdict, verdict.reason || output.text.slice(0, 300));
       let failReason = classified.failReason;
-      if (classified.agyDiag) console.warn(`Dispatcher: ${plan.brainId} — ${classified.agyDiag}`);
+      if (classified.agyDiag) console.warn(`Dispatcher: ${plan.agentId} — ${classified.agyDiag}`);
       const isTimeout = /^\s*TIMEOUT\b/i.test(failReason) || /^\s*TIMEOUT\b/i.test(output.text);
       const progSummary = isTimeout ? this.summarizeProgressLedger(task.id) : null;
       const progText = isTimeout ? this.readProgressLedger(task.id) : null;
       if (progSummary) {
         failReason = `${failReason} — captured ${progSummary}`;
       }
-      this.recordFailedBrain(task.id, { brain: plan.brainId, agent: plan.agent, attempt: plan.attempt + 1, reason: failReason }, classified.rateLimited);
+      this.recordFailedAgent(task.id, { agent: plan.agentId, persona: plan.persona, attempt: plan.attempt + 1, reason: failReason }, classified.rateLimited);
       this.recordLesson(task.id, {
         kind: 'verify-fail',
-        brain: plan.brainId,
-        agent: plan.agent,
+        agent: plan.agentId,
+        persona: plan.persona,
         attempt: plan.attempt + 1,
         reason: failReason,
         resultText: progText ? `${output.text}\n${progText}` : output.text
@@ -2980,14 +2985,14 @@ export class Dispatcher {
         if (partialArtifacts.length) (fresh as any).artifacts = partialArtifacts;
         const nextAttempt = plan.attempt + 1;
         if (nextAttempt < bound) {
-          const nextBrain = plan.pinned ? plan.brainId : (this.chainFor(plan.agent, plan.division, fresh.context)[nextAttempt] || '?');
+          const nextAgent = plan.pinned ? plan.agentId : (this.chainFor(plan.persona, plan.division, fresh.context)[nextAttempt] || '?');
           fresh.status = 'pending';
           delete fresh.claimedAt;
           delete fresh.claimedBy;
           fresh.context = { ...(fresh.context || {}), attempts: nextAttempt, dispatched: false };
-          fresh.result = `attempt ${plan.attempt + 1}/${bound} failed on ${plan.brainId}${plan.pinned ? ' — retrying' : ` — handing over to ${nextBrain}`}: ${failReason}`;
+          fresh.result = `attempt ${plan.attempt + 1}/${bound} failed on ${plan.agentId}${plan.pinned ? ' — retrying' : ` — handing over to ${nextAgent}`}: ${failReason}`;
           this.store.saveTask(fresh);
-          console.log(`Dispatcher: handover — task ${task.id} attempt ${plan.attempt + 1} failed on ${plan.brainId} (${failReason.slice(0, 80)}), next → ${nextBrain}`);
+          console.log(`Dispatcher: handover — task ${task.id} attempt ${plan.attempt + 1} failed on ${plan.agentId} (${failReason.slice(0, 80)}), next → ${nextAgent}`);
           return;
         }
       }
@@ -3012,18 +3017,18 @@ export class Dispatcher {
     // The result is a QUESTION back to the user (not a failure — verdict is ok —
     // and not a finished deliverable). Park the task on `wait-input` with the
     // questions as an interaction packet: the orchestrator neither marks it done
-    // nor hands it to a fallback brain. Answering from the Inbox card releases it
+    // nor hands it to a fallback agent. Answering from the Inbox card releases it
     // back to `pending`, re-dispatched with the answers in context.humanInput.
     if (verdict.ok) {
       const req = inputReq;   // computed above (gate 2), before the LLM gate
       if (req.needsInput) {
         const t = this.store.getTask(task.id);
         if (t) {
-          t.context = { ...(t.context || {}), ranAgent: plan.agent, ranDivision: plan.division, ranBrain: plan.brainId, isRoster: plan.isRoster };
+          t.context = { ...(t.context || {}), ranPersona: plan.persona, ranDivision: plan.division, ranAgent: plan.agentId, isRoster: plan.isRoster };
           stampLists(t);
           this.store.saveTask(t);
         }
-        this.recordLesson(task.id, { kind: 'wait-input', brain: plan.brainId, agent: plan.agent, attempt: plan.attempt + 1, questions: req.questions, resultText: output.text });
+        this.recordLesson(task.id, { kind: 'wait-input', agent: plan.agentId, persona: plan.persona, attempt: plan.attempt + 1, questions: req.questions, resultText: output.text });
         this.store.parkForInput({ taskId: task.id, questions: req.questions, result: output.text.slice(0, 4000) });
         console.log(`Dispatcher: task ${task.id} paused on wait-input — agent asked ${req.questions.length} question(s) (${req.matched || 'phrase'})`);
         return;
@@ -3038,7 +3043,7 @@ export class Dispatcher {
     if (verdict.ok && bgDefer) {
       const t = this.store.getTask(task.id);
       if (t) {
-        t.context = { ...(t.context || {}), ranAgent: plan.agent, ranDivision: plan.division, ranBrain: plan.brainId, isRoster: plan.isRoster };
+        t.context = { ...(t.context || {}), ranPersona: plan.persona, ranDivision: plan.division, ranAgent: plan.agentId, isRoster: plan.isRoster };
         stampLists(t);
         this.store.saveTask(t);
       }
@@ -3048,27 +3053,27 @@ export class Dispatcher {
       return;
     }
 
-    // The whole fallback chain is exhausted here. Summarise which brains failed
-    // (from context.failedBrains) so the CEO sees exactly what was tried.
-    const failedBrains = Array.isArray(this.store.getTask(task.id)?.context?.failedBrains)
-      ? this.store.getTask(task.id)!.context!.failedBrains as Array<{ brain: string; reason: string }>
+    // The whole fallback chain is exhausted here. Summarise which agents failed
+    // (from context.failedAgents) so the CEO sees exactly what was tried.
+    const failedAgents = Array.isArray(this.store.getTask(task.id)?.context?.failedAgents)
+      ? this.store.getTask(task.id)!.context!.failedAgents as Array<{ agent: string; reason: string }>
       : [];
-    const failedList = failedBrains.map(f => `${f.brain} (${f.reason})`).join('; ');
+    const failedList = failedAgents.map(f => `${f.agent} (${f.reason})`).join('; ');
     if (blocked) {
-      this.recordLesson(task.id, { kind: 'blocked', brain: plan.brainId, agent: plan.agent, attempt: plan.attempt + 1, reason: footer!.reason, resultText: output.text });
-      console.log(`Dispatcher: task ${task.id} STATUS: BLOCKED on ${plan.brainId} → failed, no handover (${(footer!.reason || '').slice(0, 80)})`);
+      this.recordLesson(task.id, { kind: 'blocked', agent: plan.agentId, persona: plan.persona, attempt: plan.attempt + 1, reason: footer!.reason, resultText: output.text });
+      console.log(`Dispatcher: task ${task.id} STATUS: BLOCKED on ${plan.agentId} → failed, no handover (${(footer!.reason || '').slice(0, 80)})`);
     }
     const result = blocked
       ? this.blockedResult(footer!, output.text)
       : verdict.ok
       ? output.text.length > 2000 ? output.text.slice(0, 2000) + `\n…(full output in artifacts/${task.id}/result.md)` : output.text
-      : `FAILED after ${bound} attempt(s) (chain exhausted). Brains that failed: ${failedList || plan.brainId}. Last output: ${output.text.slice(0, 800)}`;
+      : `FAILED after ${bound} attempt(s) (chain exhausted). Agents that failed: ${failedList || plan.agentId}. Last output: ${output.text.slice(0, 800)}`;
 
-    // Record which agent/brain ran it on the task itself (item 5) + artifacts.
+    // Record which persona/agent ran it on the task itself (item 5) + artifacts.
     const done = this.store.getTask(task.id);
     if (done) {
-      done.context = { ...(done.context || {}), ...(verdict.ok && footer ? this.footerContext(footer, task, output.text) : {}), ranAgent: plan.agent, ranDivision: plan.division, ranBrain: plan.brainId, isRoster: plan.isRoster };
-      if (verdict.ok) this.store.clearBrainRateLimited(plan.brainId);   // it works again
+      done.context = { ...(done.context || {}), ...(verdict.ok && footer ? this.footerContext(footer, task, output.text) : {}), ranPersona: plan.persona, ranDivision: plan.division, ranAgent: plan.agentId, isRoster: plan.isRoster };
+      if (verdict.ok) this.store.clearAgentRateLimited(plan.agentId);   // it works again
       stampLists(done);
       if (verdict.ok && !blocked) this.notePrUrls(done, output.text);
       this.store.saveTask(done);
@@ -3080,7 +3085,7 @@ export class Dispatcher {
 }
 
 /**
- * Why a dispatched CLI run failed, and whether its brain should go on a
+ * Why a dispatched CLI run failed, and whether its agent should go on a
  * rate-limit cooldown — decided from the CLI's own signals only (exit/gate
  * verdict + stderr tail, see isCliRateLimitSignal), never the LLM verifier's text.
  * agy rejects valid models when its catalog fetch fails (503/429): tell that

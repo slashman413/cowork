@@ -11,8 +11,8 @@ import {
 
 /**
  * The result verifier is the fix for "a rate-limit reply looked like a done
- * task": a brain that exits 0 but returned a soft failure must be REJECTED so the
- * dispatcher hands the task to the next fallback brain. These tests pin the
+ * task": an agent that exits 0 but returned a soft failure must be REJECTED so the
+ * dispatcher hands the task to the next fallback agent. These tests pin the
  * deterministic verdict and the LLM-reply parser.
  */
 
@@ -472,12 +472,12 @@ test('parseSpecVerdict: all UNVERIFIABLE or crash/empty output returns UNVERIFIA
 });
 
 test('selectSpecJudge: cross-family judge selection matrix + cooldown/disabled skip + small-task fallback', () => {
-  const brains: Record<string, any> = {
+  const agents: Record<string, any> = {
     'local-cc-opus-5-5': { location: 'local', exec: 'claude', model: 'claude-opus-5-5' },
-    'local-agy-claude-opus-5-5-medium': { location: 'local', exec: 'agy', model: 'claude-opus-5-5-medium' },
+    'local-agy-claude-opus-5-5': { location: 'local', exec: 'agy', model: 'claude-opus-5-5-medium' },
     'remote-ai-code-gen-cc-opus-5-5': { location: 'remote', exec: 'claude' },
-    'local-agy-gemini-4-argon-medium': { location: 'local', exec: 'agy', model: 'gemini-4-argon-medium' },
-    'local-agy-gemini-3.8-flash-high': { location: 'local', exec: 'agy', model: 'gemini-3.8-flash-high' },
+    'local-agy-gemini-4-argon': { location: 'local', exec: 'agy', model: 'gemini-4-argon-medium' },
+    'local-agy-gemini-3.8-flash': { location: 'local', exec: 'agy', model: 'gemini-3.8-flash-high' },
     'local-dsh-qwen3-8-27b': { location: 'local', exec: 'dsh', model: 'qwen3.8-27b' },
     'local-hermes-qwen3.8-27b': { location: 'local', exec: 'hermes', model: 'qwen3.8-27b' },
     'local-codex-gpt-5-4': { location: 'remote', exec: 'codex', model: 'gpt-5.4' },
@@ -485,44 +485,44 @@ test('selectSpecJudge: cross-family judge selection matrix + cooldown/disabled s
   const judges = DEFAULT_SPEC_JUDGES as any;
 
   // Claude executors (local-cc-*, local-agy-claude-*, remote-*-cc-*) -> Gemini Argon, then Flash
-  assert.deepEqual(selectSpecJudges('local-cc-opus-5-5', { brains, judges }), [
-    'local-agy-gemini-4-argon-medium',
-    'local-agy-gemini-3.8-flash-high',
+  assert.deepEqual(selectSpecJudges('local-cc-opus-5-5', { agents, judges }), [
+    'local-agy-gemini-4-argon',
+    'local-agy-gemini-3.8-flash',
   ]);
-  assert.equal(selectSpecJudge('local-agy-claude-opus-5-5-medium', { brains, judges }), 'local-agy-gemini-4-argon-medium');
-  assert.equal(selectSpecJudge('remote-ai-code-gen-cc-opus-5-5', { brains, judges }), 'local-agy-gemini-4-argon-medium');
+  assert.equal(selectSpecJudge('local-agy-claude-opus-5-5', { agents, judges }), 'local-agy-gemini-4-argon');
+  assert.equal(selectSpecJudge('remote-ai-code-gen-cc-opus-5-5', { agents, judges }), 'local-agy-gemini-4-argon');
 
   // Gemini or qwen3.8-27b -> Claude Opus 5.5 medium (agy), then cc
-  assert.deepEqual(selectSpecJudges('local-agy-gemini-4-argon-medium', { brains, judges }), [
-    'local-agy-claude-opus-5-5-medium',
+  assert.deepEqual(selectSpecJudges('local-agy-gemini-4-argon', { agents, judges }), [
+    'local-agy-claude-opus-5-5',
     'local-cc-opus-5-5',
   ]);
-  assert.equal(selectSpecJudge('local-dsh-qwen3-8-27b', { brains, judges }), 'local-agy-claude-opus-5-5-medium');
-  assert.equal(selectSpecJudge('local-hermes-qwen3.8-27b', { brains, judges }), 'local-agy-claude-opus-5-5-medium');
+  assert.equal(selectSpecJudge('local-dsh-qwen3-8-27b', { agents, judges }), 'local-agy-claude-opus-5-5');
+  assert.equal(selectSpecJudge('local-hermes-qwen3.8-27b', { agents, judges }), 'local-agy-claude-opus-5-5');
 
   // Anything else (codex / gpt-oss / deepseek) -> default (Opus 5.5)
-  assert.equal(selectSpecJudge('local-codex-gpt-5-4', { brains, judges }), 'local-agy-claude-opus-5-5-medium');
+  assert.equal(selectSpecJudge('local-codex-gpt-5-4', { agents, judges }), 'local-agy-claude-opus-5-5');
 
   // Small task (result < 2 KB and <= 2 criteria) tries cheaper fallback first
   assert.equal(isSmallSpecTask('short result', ['c1', 'c2']), true);
   assert.equal(isSmallSpecTask('x'.repeat(2500), ['c1']), false);
   assert.equal(isSmallSpecTask('short result', ['c1', 'c2', 'c3']), false);
   assert.equal(
-    selectSpecJudge('local-cc-opus-5-5', { brains, judges, smallTask: true }),
-    'local-agy-gemini-3.8-flash-high',
+    selectSpecJudge('local-cc-opus-5-5', { agents, judges, smallTask: true }),
+    'local-agy-gemini-3.8-flash',
   );
 
   // Cooling judge is skipped -> falls back to second judge
-  const cooling = new Set(['local-agy-gemini-4-argon-medium']);
+  const cooling = new Set(['local-agy-gemini-4-argon']);
   assert.equal(
-    selectSpecJudge('local-cc-opus-5-5', { brains, judges, isCooling: id => cooling.has(id) }),
-    'local-agy-gemini-3.8-flash-high',
+    selectSpecJudge('local-cc-opus-5-5', { agents, judges, isCooling: id => cooling.has(id) }),
+    'local-agy-gemini-3.8-flash',
   );
 
   // Disabled judge is skipped; if all judges are unavailable -> null
-  const allCooling = new Set(['local-agy-gemini-4-argon-medium', 'local-agy-gemini-3.8-flash-high']);
+  const allCooling = new Set(['local-agy-gemini-4-argon', 'local-agy-gemini-3.8-flash']);
   assert.equal(
-    selectSpecJudge('local-cc-opus-5-5', { brains, judges, isCooling: id => allCooling.has(id) }),
+    selectSpecJudge('local-cc-opus-5-5', { agents, judges, isCooling: id => allCooling.has(id) }),
     null,
   );
 });
@@ -598,36 +598,36 @@ test('buildVerifierPrompt lists a capped-listing note string verbatim', () => {
 });
 
 test('selectSpecJudges: other-family fallbackPool extends the configured chain only after it', () => {
-  const brains: Record<string, any> = {
+  const agents: Record<string, any> = {
     exec: { location: 'local', exec: 'agy', model: 'gemini-3.8-flash-high' },
-    'local-agy-claude-opus-5-5-medium': { location: 'local', exec: 'agy', model: 'claude-opus-5-5-medium' },
+    'local-agy-claude-opus-5-5': { location: 'local', exec: 'agy', model: 'claude-opus-5-5-medium' },
     'local-cc-opus-5-5': { location: 'local', exec: 'claude', model: 'claude-opus-5-5' },
-    'local-agy-gemini-4-argon-medium': { location: 'local', exec: 'agy', model: 'gemini-4-argon-medium' },
+    'local-agy-gemini-4-argon': { location: 'local', exec: 'agy', model: 'gemini-4-argon-medium' },
     'local-dsh-qwen': { location: 'local', exec: 'dsh', model: 'qwen3.8-27b' },
   };
-  const pool = ['local-cc-opus-5-5', 'local-agy-gemini-4-argon-medium', 'local-dsh-qwen'];
-  assert.deepEqual(selectSpecJudges('exec', { brains, fallbackPool: pool }),
-    ['local-agy-claude-opus-5-5-medium', 'local-cc-opus-5-5', 'local-dsh-qwen']);
-  const cooling = new Set(['local-agy-claude-opus-5-5-medium', 'local-cc-opus-5-5']);
-  assert.deepEqual(selectSpecJudges('exec', { brains, fallbackPool: pool, isCooling: id => cooling.has(id) }), ['local-dsh-qwen']);
-  assert.deepEqual(selectSpecJudges('exec', { brains, isCooling: id => cooling.has(id) }), [], 'no pool → none, as before');
+  const pool = ['local-cc-opus-5-5', 'local-agy-gemini-4-argon', 'local-dsh-qwen'];
+  assert.deepEqual(selectSpecJudges('exec', { agents, fallbackPool: pool }),
+    ['local-agy-claude-opus-5-5', 'local-cc-opus-5-5', 'local-dsh-qwen']);
+  const cooling = new Set(['local-agy-claude-opus-5-5', 'local-cc-opus-5-5']);
+  assert.deepEqual(selectSpecJudges('exec', { agents, fallbackPool: pool, isCooling: id => cooling.has(id) }), ['local-dsh-qwen']);
+  assert.deepEqual(selectSpecJudges('exec', { agents, isCooling: id => cooling.has(id) }), [], 'no pool → none, as before');
 });
 
 test('explainSpecJudgeSkips: names every candidate and why it is unusable', () => {
-  const brains: Record<string, any> = {
+  const agents: Record<string, any> = {
     exec: { location: 'local', exec: 'agy', model: 'gemini-3.8-flash-high' },
     'local-cc-opus-5-5': { location: 'local', exec: 'claude', model: 'claude-opus-5-5', disabled: true },
-    'local-agy-gemini-4-argon-medium': { location: 'local', exec: 'agy', model: 'gemini-4-argon-medium' },
+    'local-agy-gemini-4-argon': { location: 'local', exec: 'agy', model: 'gemini-4-argon-medium' },
     'remote-x': { location: 'remote', exec: 'claude', model: 'claude-opus-5-5' },
   };
   const skips = explainSpecJudgeSkips('exec', {
-    brains, isCooling: id => id === 'local-agy-claude-opus-5-5-medium',
-    fallbackPool: ['local-agy-gemini-4-argon-medium', 'remote-x'],
+    agents, isCooling: id => id === 'local-agy-claude-opus-5-5',
+    fallbackPool: ['local-agy-gemini-4-argon', 'remote-x'],
   });
   assert.deepEqual(skips, [
-    { id: 'local-agy-claude-opus-5-5-medium', why: 'not registered in orchestration.brains' },
+    { id: 'local-agy-claude-opus-5-5', why: 'not registered in orchestration.agents' },
     { id: 'local-cc-opus-5-5', why: 'disabled' },
-    { id: 'local-agy-gemini-4-argon-medium', why: 'same model family as the executor' },
-    { id: 'remote-x', why: 'remote (the verifier only spawns local brains)' },
+    { id: 'local-agy-gemini-4-argon', why: 'same model family as the executor' },
+    { id: 'remote-x', why: 'remote (the verifier only spawns local agents)' },
   ]);
 });

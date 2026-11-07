@@ -421,7 +421,7 @@
           const last = s.lastRun;
           const nextTxt = next ? `${next.toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false })}` : '—';
           return `<li class="cal-series-item${s.overdue ? ' overdue' : ''}">
-            <button class="cal-series-main" data-open="${esc(s.taskId)}" title="${esc(`${s.title}${s.brain ? ` — ${s.brain}` : ''}`)}">
+            <button class="cal-series-main" data-open="${esc(s.taskId)}" title="${esc(`${s.title}${s.agent ? ` — ${s.agent}` : ''}`)}">
               <span class="cal-series-when${s.overdue ? ' warn' : ''}">${s.overdue ? '⚠ overdue' : next ? esc(relTime(next.getTime())) : '—'}<span class="cal-series-abs">${esc(nextTxt)}</span></span>
               <span class="cal-series-title">${esc(s.title)}</span>
               <span class="cal-series-meta">${s.recurring ? '<i data-lucide="repeat" class="cal-ico" aria-hidden="true"></i>' : ''}${esc(s.cadence)}${last ? `<span class="cal-sep" aria-hidden="true">·</span><span class="cal-series-last" style="--c:${CAL_COLORS[last.status] || '#94A3B8'}" title="Last run ${esc(STATUS_LABEL[last.status] || last.status)}"><span class="cal-dot"></span>${esc(relTime(Date.parse(last.at)))}</span>` : ''}</span>
@@ -465,7 +465,7 @@
             <dt>${e.kind === 'planned' ? 'Fires' : 'Started'}</dt><dd>${esc(fmt(e.start))} <span class="cal-muted">(${relTime(start.getTime())})</span></dd>
             ${e.end ? `<dt>Finished</dt><dd>${esc(fmt(e.end))}</dd>` : ''}
             ${e.cadence || series ? `<dt>Repeats</dt><dd><i data-lucide="repeat" class="cal-ico"></i> ${esc(e.cadence || series?.cadence || '')}</dd>` : ''}
-            ${e.brain ? `<dt>Brain</dt><dd><code>${esc(e.brain)}</code></dd>` : ''}
+            ${e.agent ? `<dt>Agent</dt><dd><code>${esc(e.agent)}</code></dd>` : ''}
           </dl>
           ${e.kind === 'planned' && !e.head ? `<p class="cal-note">A future fire of a recurring task — it becomes a real run when its time comes. To change it, edit the schedule's cadence.</p>` : ''}
           ${isHead ? `<div class="cal-resched">

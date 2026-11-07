@@ -8,7 +8,7 @@ import { EventBus } from './events.js';
 import type { Config } from '../types.js';
 
 /**
- * Recurring-task FLOOD GUARD. When brains are saturated or rate-limited, a
+ * Recurring-task FLOOD GUARD. When agents are saturated or rate-limited, a
  * recurring scheduler used to spawn a new run-child every slot even while the
  * previous one was still queued, stacking duplicate pending tasks. Guards:
  *  1. coalesce — at most one run in flight per scheduler; a slot that fires
@@ -24,7 +24,7 @@ function makeStore(scheduler?: any): Store {
   for (const k of ['inbox', 'artifacts', 'inputs', 'status', 'decisions', 'workflows', 'agencyAgents']) {
     paths[k] = path.join(root, k); fs.mkdirSync(paths[k], { recursive: true });
   }
-  const config = { paths, platforms: {}, orchestration: { brains: {}, ...(scheduler ? { scheduler } : {}) } } as unknown as Config;
+  const config = { paths, platforms: {}, orchestration: { agents: {}, ...(scheduler ? { scheduler } : {}) } } as unknown as Config;
   return new Store(config, new EventBus());
 }
 const from = { platform: 'p', agent: 'a' };
@@ -51,7 +51,7 @@ test('in-progress and wait-input runs also block a new spawn; a finished run doe
   const store = makeStore();
   const p = store.createTask({ title: 'Hourly', from, recurrence: { type: 'hours', interval: 1 } } as any);
   const [run] = store.releaseDueScheduled();
-  store.claimTask({ taskId: run.id, agentId: 'x', internal: true });
+  store.claimTask({ taskId: run.id, workerId: 'x', internal: true });
   makeDue(store, p.id);
   assert.equal(store.releaseDueScheduled().length, 0, 'in-progress blocks');
   await store.completeTask({ taskId: run.id, result: 'ok', internal: true });
@@ -131,7 +131,7 @@ test('collapse keeps an in-flight run and closes every queued copy beside it', (
   const store = makeStore({ coalesceRuns: false });
   const p = store.createTask({ title: 'Hourly', from, recurrence: { type: 'hours', interval: 1 } } as any);
   const [first] = store.releaseDueScheduled();
-  store.claimTask({ taskId: first.id, agentId: 'x', internal: true });
+  store.claimTask({ taskId: first.id, workerId: 'x', internal: true });
   makeDue(store, p.id); store.releaseDueScheduled();
   makeDue(store, p.id); store.releaseDueScheduled();
   (store as any).config.orchestration.scheduler = {};

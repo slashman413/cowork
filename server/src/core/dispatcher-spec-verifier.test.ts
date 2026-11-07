@@ -12,7 +12,7 @@ import type { Config, SpecVerdictMode, Task } from '../types.js';
  * P1-1: Spec-compliance verifier (cross-family judge, 7-day shadow, then enforce).
  * Covers:
  *  1. Shadow mode records context.specVerdict + lessons.jsonl kind="quality-shadow" and NEVER rejects.
- *  2. Enforce mode rejects CHANGES_REQUESTED, hands over to next brain, and appends failing criteria to brief.
+ *  2. Enforce mode rejects CHANGES_REQUESTED, hands over to next agent, and appends failing criteria to brief.
  *  3. Judge crash / timeout fails open (UNVERIFIABLE, crashed=true) even in enforce mode.
  *  4. All judges cooling / unavailable records UNVERIFIABLE and does not reject.
  *  5. Legacy tasks (without acceptance criteria) are untouched and use legacy llmVerdict.
@@ -33,13 +33,13 @@ function harness(mode: SpecVerdictMode = 'shadow') {
   };
   for (const p of Object.values(paths)) fs.mkdirSync(p, { recursive: true });
 
-  const brains: Record<string, any> = {
+  const agents: Record<string, any> = {
     'remote-examplehost-cc-opus': { location: 'remote', exec: 'claude', model: 'claude-opus-5-5' },
     'remote-examplehost-cc-fable': { location: 'remote', exec: 'claude', model: 'claude-fable-5-5' },
     'local-cc-opus-5-5': { location: 'local', exec: 'claude', model: 'claude-opus-5-5' },
-    'local-agy-gemini-4-argon-medium': { location: 'local', exec: 'agy', model: 'gemini-4-argon-medium' },
-    'local-agy-gemini-3.8-flash-high': { location: 'local', exec: 'agy', model: 'gemini-3.8-flash-high' },
-    'local-agy-claude-opus-5-5-medium': { location: 'local', exec: 'agy', model: 'claude-opus-5-5-medium' },
+    'local-agy-gemini-4-argon': { location: 'local', exec: 'agy', model: 'gemini-4-argon-medium' },
+    'local-agy-gemini-3.8-flash': { location: 'local', exec: 'agy', model: 'gemini-3.8-flash-high' },
+    'local-agy-claude-opus-5-5': { location: 'local', exec: 'agy', model: 'claude-opus-5-5-medium' },
   };
 
   const config = {
@@ -56,15 +56,15 @@ function harness(mode: SpecVerdictMode = 'shadow') {
           enforceAfter: '2026-10-27T02:00:00.000Z',
           maxFalseRejectRate: 0.10,
           judges: {
-            claude: ['local-agy-gemini-4-argon-medium', 'local-agy-gemini-3.8-flash-high'],
-            gemini: ['local-agy-claude-opus-5-5-medium', 'local-cc-opus-5-5'],
-            qwen: ['local-agy-claude-opus-5-5-medium', 'local-cc-opus-5-5'],
-            default: ['local-agy-claude-opus-5-5-medium', 'local-cc-opus-5-5'],
+            claude: ['local-agy-gemini-4-argon', 'local-agy-gemini-3.8-flash'],
+            gemini: ['local-agy-claude-opus-5-5', 'local-cc-opus-5-5'],
+            qwen: ['local-agy-claude-opus-5-5', 'local-cc-opus-5-5'],
+            default: ['local-agy-claude-opus-5-5', 'local-cc-opus-5-5'],
           },
         },
       },
-      agents: { engineer: { description: '', brains: CHAIN } },
-      brains,
+      roleChains: { engineer: { description: '', agents: CHAIN } },
+      agents,
     },
   } as unknown as Config;
 
@@ -99,9 +99,9 @@ function harness(mode: SpecVerdictMode = 'shadow') {
     t.status = 'in-progress';
     t.context = {
       ...(t.context || {}),
-      agent: 'engineer',
-      brain: CHAIN[0],
-      brainAuto: true,
+      persona: 'engineer',
+      agent: CHAIN[0],
+      agentAuto: true,
       attempts: 0,
       ...(opts.acceptance ? { acceptance: opts.acceptance } : {}),
       ...(opts.acceptanceSource ? { acceptanceSource: opts.acceptanceSource } : {}),
@@ -157,24 +157,24 @@ test('shadow mode: stores context.specVerdict + lessons.jsonl kind="quality-shad
   assert.equal(isFailedTask(out!), false);
   assert.equal(h.legacyLlmCalls(), 0, 'legacy llmVerdict is not called when acceptance is present');
   assert.equal(h.specCalls.length, 1);
-  assert.equal(h.specCalls[0].judgeId, 'local-agy-gemini-4-argon-medium', 'claude executor is judged by Gemini Argon');
+  assert.equal(h.specCalls[0].judgeId, 'local-agy-gemini-4-argon', 'claude executor is judged by Gemini Argon');
 
   const sv = out!.context!.specVerdict;
   assert.ok(sv, 'context.specVerdict is recorded');
   assert.equal(sv!.verdict, 'CHANGES_REQUESTED');
   assert.equal(sv!.mode, 'shadow');
-  assert.equal(sv!.judgeBrain, 'local-agy-gemini-4-argon-medium');
+  assert.equal(sv!.judgeAgent, 'local-agy-gemini-4-argon');
   assert.equal(sv!.criteria.length, 2);
   assert.equal(sv!.criteria[1].status, 'FAIL');
 
   const ls = h.lessons();
   assert.equal(ls.length, 1);
   assert.equal(ls[0].kind, 'quality-shadow');
-  assert.equal(ls[0].brain, CHAIN[0]);
+  assert.equal(ls[0].agent, CHAIN[0]);
   assert.match(ls[0].reason, /report\.md was not created/);
 });
 
-test('enforce mode: CHANGES_REQUESTED rejects, hands over to next brain, and appends failing criteria to brief', async () => {
+test('enforce mode: CHANGES_REQUESTED rejects, hands over to next agent, and appends failing criteria to brief', async () => {
   const h = harness('enforce');
   h.setSpecJudge(async () => ({
     ok: true,
@@ -198,13 +198,13 @@ test('enforce mode: CHANGES_REQUESTED rejects, hands over to next brain, and app
     result: 'Finished build.\nSTATUS: DONE\nEVIDENCE:\n- npm run build → 0',
   });
 
-  // Handed over to next brain in CHAIN
-  assert.equal(out!.status, 'pending', 'rejected deliverable is re-queued for next brain');
-  assert.equal(out!.context!.attempts, 1, 'attempt counter advanced for next brain');
+  // Handed over to next agent in CHAIN
+  assert.equal(out!.status, 'pending', 'rejected deliverable is re-queued for next agent');
+  assert.equal(out!.context!.attempts, 1, 'attempt counter advanced for next agent');
   const nextPlan = (h.dispatcher as any).planFor(out!);
-  assert.equal(nextPlan.brain || nextPlan.exec?.brainId, CHAIN[1], 'next rung in chain is selected');
-  assert.equal(out!.context!.failedBrains?.length, 1);
-  assert.equal(out!.context!.failedBrains?.[0].brain, CHAIN[0]);
+  assert.equal(nextPlan.agent || nextPlan.exec?.agentId, CHAIN[1], 'next rung in chain is selected');
+  assert.equal(out!.context!.failedAgents?.length, 1);
+  assert.equal(out!.context!.failedAgents?.[0].agent, CHAIN[0]);
   assert.equal(out!.context!.specVerdict?.verdict, 'CHANGES_REQUESTED');
   assert.equal(out!.context!.specVerdict?.mode, 'enforce');
 
@@ -244,8 +244,8 @@ test('judge crash or timeout fails open (UNVERIFIABLE, crashed=true) even in enf
 test('all cross-family judges cooling/unavailable records UNVERIFIABLE and does not reject', async () => {
   const h = harness('enforce');
   // Put both Gemini judges into cooldown (Store's rate-limit cooldown)
-  h.store.noteBrainRateLimited('local-agy-gemini-4-argon-medium');
-  h.store.noteBrainRateLimited('local-agy-gemini-3.8-flash-high');
+  h.store.noteAgentRateLimited('local-agy-gemini-4-argon');
+  h.store.noteAgentRateLimited('local-agy-gemini-3.8-flash');
 
   const t = h.createInProgress({
     acceptance: ['Tests pass'],
@@ -258,13 +258,13 @@ test('all cross-family judges cooling/unavailable records UNVERIFIABLE and does 
   assert.equal(out!.status, 'done', 'no available judge must fail open');
   assert.equal(h.specCalls.length, 0, 'no judge invoked when all are cooling');
   assert.equal(out!.context!.specVerdict?.verdict, 'UNVERIFIABLE');
-  assert.equal(out!.context!.specVerdict?.judgeBrain, null);
+  assert.equal(out!.context!.specVerdict?.judgeAgent, null);
 });
 
 test('no-judge UNVERIFIABLE records cause + why each candidate judge was skipped', async () => {
   const h = harness('shadow');
-  h.store.noteBrainRateLimited('local-agy-gemini-4-argon-medium');
-  (h.config.orchestration.brains as any)['local-agy-gemini-3.8-flash-high'].disabled = true;
+  h.store.noteAgentRateLimited('local-agy-gemini-4-argon');
+  (h.config.orchestration.agents as any)['local-agy-gemini-3.8-flash'].disabled = true;
 
   const t = h.createInProgress({ acceptance: ['Tests pass'] });
   const out = await h.store.completeTask({ taskId: t.id, result: 'All tests pass.\nSTATUS: DONE\nEVIDENCE:\n- npm test → pass' });
@@ -273,34 +273,34 @@ test('no-judge UNVERIFIABLE records cause + why each candidate judge was skipped
   assert.equal(sv.verdict, 'UNVERIFIABLE');
   assert.equal(sv.cause, 'no-judge');
   assert.deepEqual(sv.skippedJudges, [
-    { id: 'local-agy-gemini-4-argon-medium', why: 'cooling after a rate limit' },
-    { id: 'local-agy-gemini-3.8-flash-high', why: 'disabled' },
-    // other-family fallback pool (every judge chain): Claude brains can't judge a Claude executor
-    { id: 'local-agy-claude-opus-5-5-medium', why: 'same model family as the executor' },
+    { id: 'local-agy-gemini-4-argon', why: 'cooling after a rate limit' },
+    { id: 'local-agy-gemini-3.8-flash', why: 'disabled' },
+    // other-family fallback pool (every judge chain): Claude agents can't judge a Claude executor
+    { id: 'local-agy-claude-opus-5-5', why: 'same model family as the executor' },
     { id: 'local-cc-opus-5-5', why: 'same model family as the executor' },
   ]);
-  assert.match(sv.summary, /local-agy-gemini-4-argon-medium: cooling after a rate limit/);
-  assert.match(sv.summary, /local-agy-gemini-3\.8-flash-high: disabled/);
+  assert.match(sv.summary, /local-agy-gemini-4-argon: cooling after a rate limit/);
+  assert.match(sv.summary, /local-agy-gemini-3\.8-flash: disabled/);
   const shadow = h.lessons().filter((l: any) => l.kind === 'quality-shadow');
   assert.equal(shadow.length, 1);
   assert.match(shadow[0].reason, /cause=no-judge/);
 });
 
-test('configured judges all unavailable → falls back to an other-family tier brain instead of UNVERIFIABLE', async () => {
+test('configured judges all unavailable → falls back to an other-family tier agent instead of UNVERIFIABLE', async () => {
   const h = harness('shadow');
-  (h.config.orchestration as any).tiers = { judgment: ['local-cc-opus-5-5'], standard: ['local-agy-gemini-4-argon-medium'], mechanical: ['local-agy-gemini-3.8-flash-high'] };
+  (h.config.orchestration as any).tiers = { judgment: ['local-cc-opus-5-5'], standard: ['local-agy-gemini-4-argon'], mechanical: ['local-agy-gemini-3.8-flash'] };
   // Gemini executor; both configured (Claude) judges on quota — the 2026-10-20/21 pattern.
-  h.store.noteBrainRateLimited('local-agy-claude-opus-5-5-medium');
-  h.store.noteBrainRateLimited('local-cc-opus-5-5');
-  (h.config.orchestration.brains as any)['local-qwen-judge'] = { location: 'local', exec: 'dsh', model: 'qwen3.8-27b' };
+  h.store.noteAgentRateLimited('local-agy-claude-opus-5-5');
+  h.store.noteAgentRateLimited('local-cc-opus-5-5');
+  (h.config.orchestration.agents as any)['local-qwen-judge'] = { location: 'local', exec: 'dsh', model: 'qwen3.8-27b' };
   (h.config.orchestration as any).tiers.mechanical.push('local-qwen-judge');
   const t = h.createInProgress({ acceptance: ['Tests pass'] });
-  t.context = { ...t.context, brain: 'local-agy-gemini-3.8-flash-high' };
+  t.context = { ...t.context, agent: 'local-agy-gemini-3.8-flash' };
   h.store.saveTask(t);
 
-  const out = await (h.dispatcher as any).specVerdict(t, 'All tests pass.\nSTATUS: DONE', 'local-agy-gemini-3.8-flash-high', 1, ['Tests pass']);
+  const out = await (h.dispatcher as any).specVerdict(t, 'All tests pass.\nSTATUS: DONE', 'local-agy-gemini-3.8-flash', 1, ['Tests pass']);
   assert.equal(out.ok, true);
-  assert.deepEqual(h.specCalls.map(c => c.judgeId), ['local-qwen-judge'], 'gemini brains are skipped (same family), qwen tier brain judges');
+  assert.deepEqual(h.specCalls.map(c => c.judgeId), ['local-qwen-judge'], 'gemini agents are skipped (same family), qwen tier agent judges');
   const fresh = h.store.getTask(t.id)!;
   assert.equal(fresh.context!.specVerdict?.verdict, 'APPROVED');
 });
@@ -400,7 +400,7 @@ test('sharpened criteria enforce when orchestration.sharpener.mode is explicitly
   });
 
   // When sharpener.mode === 'enforce', CHANGES_REQUESTED rejects and hands over
-  assert.equal(out!.status, 'pending', 'rejected task re-enters pending pool for next brain');
+  assert.equal(out!.status, 'pending', 'rejected task re-enters pending pool for next agent');
   assert.equal(out!.context!.attempts, 1, 'attempt counter advanced');
   assert.equal(out!.context!.specVerdict?.mode, 'enforce');
   assert.equal(out!.context!.specVerdict?.verdict, 'CHANGES_REQUESTED');

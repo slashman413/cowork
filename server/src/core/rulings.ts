@@ -8,7 +8,7 @@
  *   - orchestrator auto-answers of a `wait-input` (ADR-009), logged by the
  *     dispatcher on `task.context.autoAnswer.decisions` as they are submitted.
  *
- * Format: one header line, then `date \t task \t agent \t brain \t ruling` rows.
+ * Format: one header line, then `date \t task \t agent \t agent \t ruling` rows.
  * Auto-answer rows carry an `AUTO-ANSWER: ` prefix in the ruling column. Tabs and
  * newlines inside a field are flattened to spaces so a row is always one line.
  *
@@ -19,12 +19,12 @@ import { join } from 'node:path';
 import type { Task } from '../types.js';
 
 export const RULINGS_FILE = 'rulings.tsv';
-export const RULINGS_HEADER = 'date\ttask\tagent\tbrain\truling';
+export const RULINGS_HEADER = 'date\ttask\tpersona\tagent\truling';
 export const AUTO_ANSWER_PREFIX = 'AUTO-ANSWER: ';
 const RULING_CAP = 600;
 const DECISIONS_CAP = 20;
 
-export interface RulingRow { date: string; task: string; agent: string; brain: string; ruling: string; }
+export interface RulingRow { date: string; task: string; persona: string; agent: string; ruling: string; }
 
 /** One orchestrator auto-answer, as logged on `context.autoAnswer.decisions`. */
 export interface AutoAnswerDecision { at: string; answer: string; }
@@ -60,9 +60,9 @@ export function rulingRowsForTask(task: Task): RulingRow[] {
   const ctx = (task.context || {}) as Record<string, any>;
   const date = task.completedAt || new Date().toISOString();
   const str = (v: unknown) => (typeof v === 'string' ? v : '');
-  const agent = cell(str(ctx.ranAgent) || str(ctx.agent) || str((task.to as any)?.agent) || str(task.to));
-  const brain = cell(ctx.ranBrain || ctx.brain || '');
-  const base = { task: task.id, agent, brain };
+  const persona = cell(str(ctx.ranPersona) || str(ctx.persona) || str((task.to as any)?.agent) || str(task.to));
+  const agent = cell(ctx.ranAgent || ctx.agent || '');
+  const base = { task: task.id, persona, agent };
   const rows: RulingRow[] = [];
 
   for (const r of Array.isArray(ctx.rulings) ? ctx.rulings : []) {
@@ -87,7 +87,7 @@ export function rulingRowsForTask(task: Task): RulingRow[] {
   return rows;
 }
 
-const toLine = (r: RulingRow) => [r.date, r.task, r.agent, r.brain, r.ruling].map(cell).join('\t');
+const toLine = (r: RulingRow) => [r.date, r.task, r.persona, r.agent, r.ruling].map(cell).join('\t');
 
 /**
  * Append a completed task's rulings to `<decisionsDir>/rulings.tsv` (header on
@@ -116,10 +116,10 @@ export function readRulings(decisionsDir: string, from = 0, to = Number.MAX_SAFE
   const rows: RulingRow[] = [];
   for (const line of raw.split('\n')) {
     if (!line.trim() || line === RULINGS_HEADER) continue;
-    const [date, task, agent, brain, ...rest] = line.split('\t');
+    const [date, task, persona, agent, ...rest] = line.split('\t');
     const t = Date.parse(date);
     if (!Number.isFinite(t) || t < from || t > to) continue;
-    rows.push({ date, task, agent: agent || '', brain: brain || '', ruling: rest.join(' ') });
+    rows.push({ date, task, persona: persona || '', agent: agent || '', ruling: rest.join(' ') });
   }
   return rows.sort((a, b) => Date.parse(b.date) - Date.parse(a.date));
 }

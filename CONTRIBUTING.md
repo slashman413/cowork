@@ -29,7 +29,7 @@ its Δ in the commit message**:
 - `CONVENTIONS.md` (the operating rules injected into every task)
 - the verifier prompts in `server/src/core/result-verifier.ts`
   (`buildVerifierPrompt`, the spec-verifier prompt)
-- a top-10 persona: the 10 roster agents with the most done tasks in the inbox
+- a top-10 persona: the 10 personas with the most done tasks in the inbox
   (`agency-agents/**/<slug>.md`)
 
 Without a measurement, rule tweaks are guesses. The eval replays 5 historical
@@ -50,7 +50,7 @@ curl -s --cacert ~/.cowork/tls/cert.pem -H "Authorization: Bearer $COWORK_API_KE
 cd server && node dist/eval-cli.js run --family engineering --a ../CONVENTIONS.md --b /tmp/conventions-old.md --out /tmp/eval-out
 ```
 
-`family` is a division (`engineering`, `marketing`, …) or an agent slug. Pick
+`family` is a division (`engineering`, `marketing`, …) or an persona slug. Pick
 the family the change affects most. For a persona, that is the persona's own
 slug. For `CONVENTIONS.md`, use the busiest division. The run writes
 `eval-report.md` (per-task scores, Δ(A−B), the outward-action check) into the
@@ -59,7 +59,7 @@ judge step's artifacts.
 **Cite it** in the commit message body:
 
 ```
-eval-prompt-change <runId> Δ(A−B)=+1.4 n=5 (family engineering, judge local-agy-gemini-4-argon-medium)
+eval-prompt-change <runId> Δ(A−B)=+1.4 n=5 (family engineering, judge local-agy-gemini-4-argon)
 ```
 
 **Read it honestly.** With n = 5, |Δ| < 2 (of 25) is noise. The rule asks you
@@ -73,8 +73,8 @@ numbers.
 
 ### How the sandbox works
 
-Each replay runs on the family's executor brain (the first runnable local
-brain of its chain) with the variant swapped in for `CONVENTIONS.md`. It gets
+Each replay runs on the family's executor agent (the first runnable local
+agent of its chain) with the variant swapped in for `CONVENTIONS.md`. It gets
 the original task text and brief, and a "SANDBOX REPLAY — do not perform
 outward actions" banner plus a hard `scope.forbid` in the prompt. Its
 environment has credentials and the hub key stripped. Git hooks refuse

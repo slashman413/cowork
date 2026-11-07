@@ -31,7 +31,7 @@ function fixture() {
   fs.writeFileSync(path.join(dir, 'assets', 'audio', 'bgm', 'house-vibez.mp3'), 'mp3');
   fs.writeFileSync(path.join(dir, 'assets', 'audio', 'bgm', 'notes.txt'), 'x');
   fs.writeFileSync(path.join(root, 'secret.mp3'), 'secret');
-  return new Shotcraft({ skillDir: dir, brains: ['b-opus', 'b-sonnet'], defaultBrain: 'b-opus' });
+  return new Shotcraft({ skillDir: dir, agents: ['b-opus', 'b-sonnet'], defaultAgent: 'b-opus' });
 }
 
 const base = { product: 'Acme Notes', message: 'Show how fast search is.' };
@@ -62,12 +62,12 @@ test('parseBrief: validates shots, clamps choices, template locks the spec', () 
   assert.throws(() => sc.parseBrief({ ...base, mode: 'shot' }), /at least one shot/);
 
   const b = sc.parseBrief({ ...base, shots: ['space-camera-moves · exploded-view', 'deck-deal-flyin', 'deck-deal-flyin'],
-    aspect: '7:3', seconds: 999, music: '../x.mp3', brain: 'evil', mode: 'weird' });
+    aspect: '7:3', seconds: 999, music: '../x.mp3', agent: 'evil', mode: 'weird' });
   assert.deepEqual(b.shots, ['space-camera-moves · exploded-view', 'deck-deal-flyin']);
   assert.equal(b.aspect, '16:9');
   assert.equal(b.seconds, 30);
   assert.equal(b.music, 'auto');
-  assert.equal(b.brain, 'b-opus');
+  assert.equal(b.agent, 'b-opus');
   assert.equal(b.mode, 'auto');
 
   const t = sc.parseBrief({ ...base, mode: 'template', aspect: '9:16', seconds: 15, music: 'house-vibez.mp3' });
@@ -100,5 +100,5 @@ test('buildGoal: unattended modes, phases, review step', () => {
   const goal = sc.buildGoal(brief);
   assert.equal(goal.phases.length, 4);
   assert.match(goal.description, /autonomous free creation/);
-  assert.deepEqual(goal.achieverBrainChain, ['b-opus']);
+  assert.deepEqual(goal.achieverAgentChain, ['b-opus']);
 });

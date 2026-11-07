@@ -18,20 +18,20 @@ const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'cowork-rulings-'));
 const task = (over: Partial<Task> = {}): Task => ({
   id: 'aaaaaaaa-1111-2222-3333-444444444444', title: 't', status: 'done', createdAt: '2026-10-20T00:00:00Z',
   completedAt: '2026-10-20T02:00:00.000Z', from: { platform: 'p', agent: 'a' },
-  context: { ranAgent: 'engineering-backend-architect', ranBrain: 'local-cc-opus' },
+  context: { ranPersona: 'engineering-backend-architect', ranAgent: 'local-cc-opus' },
   ...over,
 } as Task);
 
-test('footer rulings become one row each, with agent and brain', () => {
-  const rows = rulingRowsForTask(task({ context: { ranAgent: 'eng', ranBrain: 'b1', rulings: ['use X — cheaper — redo later', 'skip Y\tbecause\nZ'] } }));
+test('footer rulings become one row each, with agent', () => {
+  const rows = rulingRowsForTask(task({ context: { ranPersona: 'eng', ranAgent: 'b1', rulings: ['use X — cheaper — redo later', 'skip Y\tbecause\nZ'] } }));
   assert.equal(rows.length, 2);
-  assert.deepEqual(rows[0], { date: '2026-10-20T02:00:00.000Z', task: 'aaaaaaaa-1111-2222-3333-444444444444', agent: 'eng', brain: 'b1', ruling: 'use X — cheaper — redo later' });
+  assert.deepEqual(rows[0], { date: '2026-10-20T02:00:00.000Z', task: 'aaaaaaaa-1111-2222-3333-444444444444', persona: 'eng', agent: 'b1', ruling: 'use X — cheaper — redo later' });
   assert.equal(rows[1].ruling, 'skip Y because Z');   // tabs/newlines flattened
 });
 
 test('auto-answer decisions are logged with an AUTO-ANSWER prefix and not re-logged after the watermark', () => {
   const decisions = logAutoAnswer(undefined, { at: '2026-10-20T01:00:00.000Z', answer: describeAutoAnswer([{ id: 'q1', label: 'May I re-enable the cron?' }], { q1: 'yes' }) });
-  const t = task({ context: { ranAgent: 'eng', ranBrain: 'b1', autoAnswer: { count: 1, decisions } } });
+  const t = task({ context: { ranPersona: 'eng', ranAgent: 'b1', autoAnswer: { count: 1, decisions } } });
   const rows = rulingRowsForTask(t);
   assert.equal(rows.length, 1);
   assert.equal(rows[0].ruling, 'AUTO-ANSWER: May I re-enable the cron? → yes');
@@ -54,7 +54,7 @@ test('legacy auto-answered task falls back to its submitted interaction packet',
 
 test('agent falls back to task.to.agent, never an object string', () => {
   const rows = rulingRowsForTask(task({ to: { platform: 'claude', agent: 'cowork-orchestrator' } as any, context: { rulings: ['r'] } }));
-  assert.equal(rows[0].agent, 'cowork-orchestrator');
+  assert.equal(rows[0].persona, 'cowork-orchestrator');
 });
 
 test('logAutoAnswer keeps only the last 20 decisions', () => {
@@ -94,14 +94,14 @@ test('Store.completeTask appends the task\'s rulings to decisions/rulings.tsv an
   for (const p of Object.values(paths)) fs.mkdirSync(p, { recursive: true });
   const store = new Store({ paths, platforms: {}, inbox: { maxRetries: 3 }, orchestration: {} } as unknown as Config, new EventBus());
   const t = store.createTask({ title: 'decide things', from: { platform: 'p', agent: 'a' } } as any);
-  t.context = { ...(t.context || {}), ranAgent: 'eng', ranBrain: 'local-cc-opus', rulings: ['picked plan B — reversible — one revert'] };
+  t.context = { ...(t.context || {}), ranPersona: 'eng', ranAgent: 'local-cc-opus', rulings: ['picked plan B — reversible — one revert'] };
   store.saveTask(t);
   const done = await store.completeTask({ taskId: t.id, result: 'ok', internal: true });
   const rows = readRulings(paths.decisions);
   assert.equal(rows.length, 1);
   assert.equal(rows[0].task, t.id);
-  assert.equal(rows[0].agent, 'eng');
-  assert.equal(rows[0].brain, 'local-cc-opus');
+  assert.equal(rows[0].persona, 'eng');
+  assert.equal(rows[0].agent, 'local-cc-opus');
   assert.equal(rows[0].ruling, 'picked plan B — reversible — one revert');
   assert.equal(done!.context!.rulingsLoggedAt, done!.completedAt);
 });

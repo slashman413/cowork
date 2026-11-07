@@ -6,7 +6,7 @@ import { createHash } from 'crypto';
 import type { Config, GoalRecord, GoalPhase, GoalDecision, GoalBlockCode, GoalUnblockCheck, AchieverDecision, GoalTemplate, Task } from '../types.js';
 import { GOAL_TEMPLATES, withLoopDriver } from './goal-templates.js';
 import { appendGoalDecision, goalTrailPath, readGoalTrail, taskTrailRows, trailLine, type GoalDecisionRow } from './goal-trail.js';
-import { brainFamily, reviewChain, taskTier } from './tiers.js';
+import { agentFamily, reviewChain, taskTier } from './tiers.js';
 import { extractEvidenceBlock } from './result-verifier.js';
 import { extractNextMove } from './achiever-prompt.js';
 import {
@@ -58,7 +58,7 @@ export function hashArm(id: string): boolean {
   return createHash('sha1').update(id).digest()[0] % 2 === 0;
 }
 
-const CHECK_TYPES = new Set(['brain-available', 'file-exists', 'http-200', 'after-time']);
+const CHECK_TYPES = new Set(['agent-available', 'file-exists', 'http-200', 'after-time']);
 
 /** The check comes from an LLM: keep only well-formed ones. */
 export function sanitizeCheck(raw: unknown): GoalUnblockCheck | undefined {
@@ -83,13 +83,13 @@ export function isPublicHttpsUrl(value: string): boolean {
  * Run a zero-token probe. False means the obstacle is still there. A malformed
  * check returns true, so a bad check costs one LLM probe and never strands a goal.
  */
-export async function runUnblockCheck(check: GoalUnblockCheck, deps: { brainAvailable: (id: string) => boolean; now?: number; fetchStatus?: (url: string) => Promise<number> }): Promise<boolean> {
+export async function runUnblockCheck(check: GoalUnblockCheck, deps: { agentAvailable: (id: string) => boolean; now?: number; fetchStatus?: (url: string) => Promise<number> }): Promise<boolean> {
   switch (check.type) {
     case 'after-time': {
       const at = Date.parse(check.value);
       return !Number.isFinite(at) || at <= (deps.now ?? Date.now());
     }
-    case 'brain-available': return deps.brainAvailable(check.value);
+    case 'agent-available': return deps.agentAvailable(check.value);
     case 'file-exists': return !path.isAbsolute(check.value) || fs.existsSync(check.value);
     case 'http-200': {
       if (!isPublicHttpsUrl(check.value)) return true;
@@ -112,7 +112,7 @@ export function extractAttention(text: string | undefined): string {
  * A Goal drives toward a BINARY success criterion by repeatedly asking its
  * Achiever role to evaluate → plan → emit work, and its Judger role to audit each
  * completed phase (reports + meeting minutes). It reuses the platform's task /
- * brain / dispatcher machinery wholesale — the only genuinely new parts are this
+ * agent / dispatcher machinery wholesale — the only genuinely new parts are this
  * aggregate + its reasoning-context builders
  * and the dispatcher's driveGoals() tick + taskCompleted subscriber.
  *
@@ -321,8 +321,8 @@ export class Goals {
     successCriteria: string;
     reportBrief?: string;
     phases?: { key: string; title: string }[];
-    achieverBrainChain?: string[];
-    judgerBrainChain?: string[];
+    achieverAgentChain?: string[];
+    judgerAgentChain?: string[];
     stepBudget?: number;
     tokenBudget?: number;
   }): GoalRecord {
@@ -343,8 +343,8 @@ export class Goals {
       reportBrief: input.reportBrief ? String(input.reportBrief).trim() : undefined,
       status: 'draft',
       phases,
-      achieverBrainChain: input.achieverBrainChain,
-      judgerBrainChain: input.judgerBrainChain,
+      achieverAgentChain: input.achieverAgentChain,
+      judgerAgentChain: input.judgerAgentChain,
       history: [],
       historyInJsonl: true,
       minutes: [],
@@ -358,10 +358,10 @@ export class Goals {
     return rec;
   }
 
-  /** Patch an editable goal (draft or active): criteria, description, brains,
+  /** Patch an editable goal (draft or active): criteria, description, agents,
    *  budget, and appended phases. Never mutates history or terminal goals. */
   update(goalId: string, patch: Partial<Pick<GoalRecord,
-    'title' | 'description' | 'successCriteria' | 'reportBrief' | 'achieverBrainChain' | 'judgerBrainChain' | 'stepBudget' | 'tokenBudget'>>
+    'title' | 'description' | 'successCriteria' | 'reportBrief' | 'achieverAgentChain' | 'judgerAgentChain' | 'stepBudget' | 'tokenBudget'>>
     & { phases?: { key: string; title: string }[] }): GoalRecord {
     const rec = this.load(goalId);
     if (!rec) throw new Error('goal not found');
@@ -373,8 +373,8 @@ export class Goals {
     if (patch.description !== undefined) rec.description = String(patch.description).trim();
     if (patch.successCriteria !== undefined) rec.successCriteria = String(patch.successCriteria).trim();
     if (patch.reportBrief !== undefined) rec.reportBrief = String(patch.reportBrief).trim() || undefined;
-    if (patch.achieverBrainChain !== undefined) rec.achieverBrainChain = patch.achieverBrainChain;
-    if (patch.judgerBrainChain !== undefined) rec.judgerBrainChain = patch.judgerBrainChain;
+    if (patch.achieverAgentChain !== undefined) rec.achieverAgentChain = patch.achieverAgentChain;
+    if (patch.judgerAgentChain !== undefined) rec.judgerAgentChain = patch.judgerAgentChain;
     if (patch.stepBudget !== undefined && patch.stepBudget > 0) rec.stepBudget = Math.floor(patch.stepBudget);
     if (patch.tokenBudget !== undefined) {
       // 0 clears the cap.
@@ -509,7 +509,7 @@ export class Goals {
   }
 
   /**
-   * Every Achiever brain is rate limited. The goal stays active and takes no turn
+   * Every Achiever agent is rate limited. The goal stays active and takes no turn
    * until `until`. This is not a failure: nothing is counted and no row is written,
    * which is what stops a weekly limit turning into a storm of false blocks.
    */
@@ -839,11 +839,11 @@ export class Goals {
         const context: Record<string, any> = {
           goalId, phaseKey: phase.key, goalGenerated: true, role: 'goal-achiever'
         };
-        // A tiered task routes by class; pinning it to the Achiever's brain would defeat that.
+        // A tiered task routes by class; pinning it to the Achiever's agent would defeat that.
         const tier = taskTier({ tier: spec.tier });
         if (tier) context.tier = tier;
-        const brain = spec.brain || (tier ? undefined : rec.achieverBrainChain?.[0]);
-        if (brain) context.brain = brain;
+        const agent = spec.agent || (tier ? undefined : rec.achieverAgentChain?.[0]);
+        if (agent) context.agent = agent;
         const acceptance = cleanList(spec.acceptance);
         const verify = cleanList(spec.verify);
         if (acceptance.length) context.acceptance = acceptance;
@@ -894,11 +894,11 @@ export class Goals {
     const rec = this.load(goalId);
     if (!rec) return null;
     const phase = rec.phases.find(p => p.key === phaseKey);
-    const brain = rec.judgerBrainChain?.[0];
+    const agent = rec.judgerAgentChain?.[0];
     const context: Record<string, any> = {
       goalId, phaseKey, goalGenerated: true, role: 'goal-judger'
     };
-    if (brain) context.brain = brain;
+    if (agent) context.agent = agent;
     if (opts.closeout) context.closeout = true;
     // A/B (plan phase 3): half of Judgers get evidence and a length cap inline.
     const digest = this.config.orchestration?.goals?.judgerDigestAB === true && hashArm(`${goalId}/${phaseKey}`);
@@ -971,7 +971,7 @@ export class Goals {
   }
 
   /**
-   * PS-7 cross-family trail review. At phase close a brain of a DIFFERENT model
+   * PS-7 cross-family trail review. At phase close an agent of a DIFFERENT model
    * family than the phase's executor (tiers.reviewChain — Gemini reviews Claude,
    * an opus-class Claude reviews Gemini/qwen/other) reads the decision trail plus
    * the phase's task results and writes an "## Attention" section: weak evidence,
@@ -987,26 +987,26 @@ export class Goals {
     if (!rec || !phase || (phase.attentionTaskId && this.isOpen(this.store.getTask(phase.attentionTaskId)))) return null;
 
     const tasks = phase.taskIds.map(id => this.store.getTask(id)).filter((t): t is Task => !!t);
-    // Executor = the brain that ran most of the phase (fallback: the Achiever chain head).
+    // Executor = the agent that ran most of the phase (fallback: the Achiever chain head).
     const counts = new Map<string, number>();
     for (const t of tasks) {
-      const b = String(t.context?.ranBrain || t.context?.brain || '');
+      const b = String(t.context?.ranAgent || t.context?.agent || '');
       if (b) counts.set(b, (counts.get(b) || 0) + 1);
     }
-    const executor = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || rec.achieverBrainChain?.[0] || '';
-    const brains = orch?.brains || {};
-    const reviewer = reviewChain(executor, orch?.tiers, brains)[0];
+    const executor = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || rec.achieverAgentChain?.[0] || '';
+    const agents = orch?.agents || {};
+    const reviewer = reviewChain(executor, orch?.tiers, agents)[0];
 
     const context: Record<string, any> = {
       goalId, phaseKey, goalGenerated: true, role: 'goal-attention',
-      reviewOf: executor ? `${executor} [${brainFamily(brains[executor], executor)}]` : 'unknown'
+      reviewOf: executor ? `${executor} [${agentFamily(agents[executor], executor)}]` : 'unknown'
     };
-    if (reviewer) context.brain = reviewer;
+    if (reviewer) context.agent = reviewer;
 
     const trailRows = this.decisionTrail(goalId, phaseKey).slice(-60);
     const results = tasks.map(t => {
       const res = (t.result || '').slice(0, 1500);
-      return `### ${t.title} [${t.status}] — ran on ${t.context?.ranBrain || '?'}\nartifacts: ${t.id}/\n${res || '(no result)'}`;
+      return `### ${t.title} [${t.status}] — ran on ${t.context?.ranAgent || '?'}\nartifacts: ${t.id}/\n${res || '(no result)'}`;
     }).join('\n\n');
 
     const description = [
@@ -1095,7 +1095,7 @@ export class Goals {
       let text = '';
       try { text = extractAttention(fs.readFileSync(path.join(this.config.paths.artifacts, artifact), 'utf-8')); } catch { /* fall back to result */ }
       text = text || extractAttention(task.result);
-      const section = text || `## Attention\nreviewed by ${ctx.brain || 'unknown'}\n(review produced no Attention section — status ${task.status})`;
+      const section = text || `## Attention\nreviewed by ${ctx.agent || 'unknown'}\n(review produced no Attention section — status ${task.status})`;
       phase.attentionArtifact = artifact;
       // No artifact directory to keep it in (tests, odd configs): stay inline.
       if (this.persistAttention(phase, section)) delete phase.attention; else phase.attention = section;

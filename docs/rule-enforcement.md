@@ -15,7 +15,7 @@ Levels: **Enforced** = a code path blocks or corrects the violation ·
 
 | § | Rule | Enforced by | Level |
 |---|------|-------------|-------|
-| 1 | Write output to `$COWORK_ARTIFACTS_DIR` | Dispatcher sets the env var and spawns local brains with `cwd` = the artifacts dir (`dispatcher.ts` runTask). Nothing stops a write elsewhere. | Partial |
+| 1 | Write output to `$COWORK_ARTIFACTS_DIR` | Dispatcher sets the env var and spawns local agents with `cwd` = the artifacts dir (`dispatcher.ts` runTask). Nothing stops a write elsewhere. | Partial |
 | 1 | stdout is the result; long output goes to `result.md` | Dispatcher saves the full output to `artifacts/<id>/result.md` and truncates `task.result` | Enforced |
 | 1 | No separate "report" store | No report endpoint/store exists (structural) | Enforced |
 | 2 | Full permissions, used deliberately | A grant, not a constraint. Nothing checks "deliberately". | n/a |
@@ -23,7 +23,7 @@ Levels: **Enforced** = a code path blocks or corrects the violation ·
 | 3 | Never touch `inbox/`, `.status/`, `workflow-runs/` | Nothing checks it | **Unenforced** |
 | 4 | Say plainly when you can't do the task; no fabricated success | Result verifier: deterministic checks + LLM gate (`result-verifier.ts`); spec verifier P1-1 in **shadow** (flags but does not reject) | Partial |
 | 4 | `NEEDS_INPUT:` parks on wait-input | `detectInputRequest` → `store.parkForInput`; ADR-009 auto-answer then answers non-human-only questions | Enforced |
-| 4 | Never return a rate-limit / quota notice as the deliverable | `DEFAULT_FAIL_PATTERNS` + `isRateLimitFailure` reject and hand over; the Store brain cooldown (`Store.noteBrainRateLimited` / `brainCooldownUntil`, decided from CLI signals; it replaced the P0-1 `brain-cooldown.ts` breaker) stops re-dispatch to the limited brain | Enforced |
+| 4 | Never return a rate-limit / quota notice as the deliverable | `DEFAULT_FAIL_PATTERNS` + `isRateLimitFailure` reject and hand over; the Store agent cooldown (`Store.noteAgentRateLimited` / `agentCooldownUntil`, decided from CLI signals; it replaced the P0-1 `agent-cooldown.ts` breaker) stops re-dispatch to the limited agent | Enforced |
 | 4 | Don't claim files you didn't create | The task card lists artifacts from disk, so a claimed file that doesn't exist is visible. Nothing compares the claims to the listing. | Partial |
 | 4 | End with `STATUS:` / `EVIDENCE:` footer | `parseStatusFooter`: BLOCKED → failed with no handover; DONE_WITH_CONCERNS is flagged; a missing footer is only **measured** (`context.hasEvidence`, `/api/metrics/quality` EVIDENCE %), never rejected | Partial |
 | 4 | Evidence table (pushed / deployed / tests pass …) | P1-1 spec verifier checks claims against evidence. It runs in **shadow** mode (`verifier.spec.mode`), so it records lessons but does not reject. | Partial |
@@ -34,8 +34,8 @@ Levels: **Enforced** = a code path blocks or corrects the violation ·
 | 5 | Don't create cowork tasks unless the brief asks | Nothing checks it (task-create API has no parent/brief gate) | **Unenforced** |
 | 5 | Don't install system packages / change machine state | Nothing checks it | **Unenforced** |
 | 5 | Never archive / unarchive / delete / change visibility of a GitHub repo or disable a workflow without CEO approval | Nothing in cowork checks it (prose + incident note only) | **Unenforced** |
-| 6 | Credential / local-filesystem tasks run on `local-hermes-qwen3.8-27b` | WF-3 brain `env` manifests are recorded (`registerBrain`), but the router-side `requires` filter is **not wired** yet. Only a manual `context.brain` pin works. | **Unenforced** |
-| 6 | A remote brain without access reports a routing error, not a fake result | Result verifier + spec verifier (shadow) | Partial |
+| 6 | Credential / local-filesystem tasks run on `local-hermes-qwen3.8-27b` | WF-3 agent `env` manifests are recorded (`registerAgent`), but the router-side `requires` filter is **not wired** yet. Only a manual `context.agent` pin works. | **Unenforced** |
+| 6 | A remote agent without access reports a routing error, not a fake result | Result verifier + spec verifier (shadow) | Partial |
 
 **Count (2026-10-20):** 21 rules: 5 Enforced, 9 Partial, 6 Unenforced (§3 ×2,
 §5 ×3, §6 routing), 1 n/a. The strongest structural candidates for these are already
@@ -47,8 +47,8 @@ workflow gate for the §5 GitHub actions.
 The remedy menu in `server/src/core/correct-loop.ts` is ordered structure first:
 
 1. **router rule**: `orchestration.agentChains` / `divisionChains`
-2. **brain cooldown**: Store cooldown (`Store.noteBrainRateLimited`) + `orchestration.autoRerunRateLimited`
-3. **brain `env` requires-filter** (WF-3)
+2. **agent cooldown**: Store cooldown (`Store.noteAgentRateLimited`) + `orchestration.autoRerunRateLimited`
+3. **agent `env` requires-filter** (WF-3)
 4. **verifier failPattern**: `orchestration.verifier.failPatterns`
 5. **workflow gate**: `workflows/*.json` step `gate` (P1-2)
 6. **acceptance criterion**: brief `acceptance` / `scope` (P0-3)

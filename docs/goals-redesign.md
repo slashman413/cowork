@@ -33,7 +33,7 @@ $10,000/month"* (`goal-278e9d28`) — ended like this:
 > the Achiever (timeout or unparseable JSON)) — goal abandoned, NOT completed."*
 
 Read that closely. The goal was not impossible. The work was not wrong. The *Achiever
-brain returned unparseable output / timed out five times in a row* — a **transient
+agent returned unparseable output / timed out five times in a row* — a **transient
 infrastructure fault** — and the engine responded by **permanently discarding a
 multi-week objective and every phase of progress under it**. There was no way back: an
 `abandoned` goal could not be edited, resumed, or retried. The only recovery was to
@@ -121,7 +121,7 @@ Production guidance for long-running autonomous agents is unambiguous:
 2. Only **success is terminal.** Every non-success stop is a **hold with a stated way
    out** — an obstacle plus its implementation intention.
 3. **Stops must be recoverable.** Editing the constraint that caused the stop (budget,
-   criterion, brain) and resuming is the intended path.
+   criterion, agent) and resuming is the intended path.
 4. **Name the obstacle specifically.** "blocked" alone is useless; "blocked *because X*,
    resume *when Y*" is an actionable contract.
 5. **Make achievement easier by design**, not just by exhortation: evidence-bound
@@ -153,7 +153,7 @@ Production guidance for long-running autonomous agents is unambiguous:
 | Trigger | Old | New `blockReason` → `unblockCriteria` |
 |---------|-----|--------------------------------------|
 | Step budget exhausted | `abandoned` | *"step budget exhausted (N tasks)…"* → *"Raise stepBudget above N, or narrow the criterion, then resume; else delete."* |
-| `MAX_GOAL_FAILURES` consecutive no-progress turns (usually a transient brain fault) | `abandoned` | *"no usable progress after N turns…"* → *"The Achiever brain is reachable and returns a parseable decision (usually a transient fault); verify the brain, then resume."* |
+| `MAX_GOAL_FAILURES` consecutive no-progress turns (usually a transient agent fault) | `abandoned` | *"no usable progress after N turns…"* → *"The Achiever agent is reachable and returns a parseable decision (usually a transient fault); verify the agent, then resume."* |
 | Human decision to stop | `POST /abandon` | `POST /block` with `reason` + `unblockCriteria` (or **Delete** if truly done) |
 
 ### 3.3 The Achiever can now block *itself* (the biggest achievability win)
@@ -303,14 +303,14 @@ recoverable-`blocked` feature existed (commit `ab62931`), whose `activate()` all
 committed and built but **never restarted into service**.
 
 **Why the restart kept not happening — the trap.** `cowork-mcp` has
-`KillMode=control-group` and runs **local-brain tasks as its own child processes**. The task
+`KillMode=control-group` and runs **local-agent tasks as its own child processes**. The task
 that would deploy the fix is therefore a child of the very service it must restart, so a
 plain `systemctl --user restart cowork-mcp` SIGKILLs the deploying task mid-restart — the
 result is never written and the restart aborts with it. Every attempt to self-deploy from a
 task was suicide.
 
 **The fix.** `deploy/redeploy-server-when-idle.sh` — the server-side sibling of the existing
-`restart-brain-when-idle.sh`. Run **detached** via `systemd-run --user` so it lives in its
+`restart-agent-when-idle.sh`. Run **detached** via `systemd-run --user` so it lives in its
 own scope (not cowork-mcp's control group), it waits until the server has **no task
 children** (idle), then restarts it — so no in-flight task is killed and the deploy
 survives. `deploy/redeploy.sh` now **detects** when it is being run from inside

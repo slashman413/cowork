@@ -28,7 +28,7 @@ function makeStore(): { store: Store; root: string } {
   for (const p of Object.values(paths)) fs.mkdirSync(p, { recursive: true });
   const config = {
     paths, platforms: {},
-    orchestration: { brains: { 'local-x': { location: 'local', exec: 'hermes' } } },
+    orchestration: { agents: { 'local-x': { location: 'local', exec: 'hermes' } } },
   } as unknown as Config;
   return { store: new Store(config, new EventBus()), root };
 }
@@ -45,7 +45,7 @@ test('a pending task is not editable', () => {
 test('an in-progress task is not editable', () => {
   const { store } = makeStore();
   const t = store.createTask({ title: 'now', from: { platform: 'p', agent: 'a' } } as any);
-  store.claimTask({ taskId: t.id, agentId: 'w', internal: true });
+  store.claimTask({ taskId: t.id, workerId: 'w', internal: true });
   assert.throws(() => store.updateTask(t.id, { title: 'new' }), /not running or pending/);
 });
 
@@ -56,13 +56,13 @@ test('editing a scheduled task updates fields and keeps it scheduled', () => {
   const newWhen = new Date(Date.now() + 7_200_000).toISOString();
   const u = store.updateTask(t.id, {
     title: 'edited title', description: 'edited brief', priority: 'high',
-    brain: 'local-x', scheduledAt: newWhen,
+    agent: 'local-x', scheduledAt: newWhen,
   })!;
   assert.equal(u.status, 'scheduled', 'still parked');
   assert.equal(u.title, 'edited title');
   assert.equal(u.description, 'edited brief');
   assert.equal(u.priority, 'high');
-  assert.equal(u.context?.brain, 'local-x');
+  assert.equal(u.context?.agent, 'local-x');
   assert.equal(u.scheduledAt, newWhen);
 });
 
@@ -88,7 +88,7 @@ test('a cleared schedule on a scheduled task with unanswered questions lands on 
 test('re-arming a finished task with a future time clears its completion and re-schedules', () => {
   const { store } = makeStore();
   const t = store.createTask({ title: 'done one', from: { platform: 'p', agent: 'a' } } as any);
-  store.claimTask({ taskId: t.id, agentId: 'w', internal: true });
+  store.claimTask({ taskId: t.id, workerId: 'w', internal: true });
   // complete it (internal skips the guard)
   return store.completeTask({ taskId: t.id, result: 'all good', internal: true }).then(() => {
     const done = store.getTask(t.id)!;
@@ -109,7 +109,7 @@ test('re-arming a finished task with a future time clears its completion and re-
 test('editing a finished task without a schedule keeps it finished (metadata-only)', () => {
   const { store } = makeStore();
   const t = store.createTask({ title: 'done two', from: { platform: 'p', agent: 'a' } } as any);
-  store.claimTask({ taskId: t.id, agentId: 'w', internal: true });
+  store.claimTask({ taskId: t.id, workerId: 'w', internal: true });
   return store.completeTask({ taskId: t.id, result: 'ok', internal: true }).then(() => {
     const u = store.updateTask(t.id, { title: 'renamed', scheduledAt: '' })!;
     assert.equal(u.status, 'done', 'stays done — clearing the schedule is a metadata edit, not a re-run');
@@ -118,10 +118,10 @@ test('editing a finished task without a schedule keeps it finished (metadata-onl
   });
 });
 
-test('an unknown brain pin is rejected', () => {
+test('an unknown agent pin is rejected', () => {
   const { store } = makeStore();
   const t = store.createTask({ title: 'later', from: { platform: 'p', agent: 'a' }, scheduledAt: future() } as any);
-  assert.throws(() => store.updateTask(t.id, { brain: 'does-not-exist' }), /Unknown brain/);
+  assert.throws(() => store.updateTask(t.id, { agent: 'does-not-exist' }), /Unknown agent/);
 });
 
 test('an invalid scheduledAt is rejected', () => {
@@ -130,13 +130,13 @@ test('an invalid scheduledAt is rejected', () => {
   assert.throws(() => store.updateTask(t.id, { scheduledAt: 'whenever' }), /Invalid scheduledAt/);
 });
 
-test('setting brain to empty clears the pin', () => {
+test('setting agent to empty clears the pin', () => {
   const { store } = makeStore();
   const t = store.createTask({
     title: 'later', from: { platform: 'p', agent: 'a' }, scheduledAt: future(),
-    context: { brain: 'local-x' },
+    context: { agent: 'local-x' },
   } as any);
-  assert.equal(t.context?.brain, 'local-x');
-  const u = store.updateTask(t.id, { brain: '' })!;
-  assert.equal(u.context?.brain, undefined, 'pin cleared → routes via Auto');
+  assert.equal(t.context?.agent, 'local-x');
+  const u = store.updateTask(t.id, { agent: '' })!;
+  assert.equal(u.context?.agent, undefined, 'pin cleared → routes via Auto');
 });

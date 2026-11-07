@@ -174,7 +174,7 @@ test('artifacts routes: recursive listing and nested downloads work', async () =
     assert.equal(synRes.status, 200);
     assert.ok(synRes.body.includes('# synthetic result'));
 
-    // 10. Remote brain uploading a nested artifact
+    // 10. Remote agent uploading a nested artifact
     const upRes = await reqPost(server, `/api/artifacts/${taskId}/uploads/new-file.csv`, 'a,b,c\n1,2,3');
     assert.equal(upRes.status, 200);
     assert.ok(fs.existsSync(path.join(taskDir, 'uploads', 'new-file.csv')));

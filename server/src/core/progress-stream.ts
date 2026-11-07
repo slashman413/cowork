@@ -1,5 +1,5 @@
 /**
- * Live progress rendering for brain runs.
+ * Live progress rendering for agent runs.
  *
  * In plain print mode (`claude -p`, `agy -p`) a CLI writes NOTHING to stdout until
  * the very end — it prints the final answer and exits — so the progress log (and

@@ -9,7 +9,7 @@ import {
   parseSharpenOutput,
   shouldSharpenTask,
   isGateOrReviewOrVerifierOrEvalTask,
-  selectSharpenerBrain,
+  selectSharpenerAgent,
   sharpenTask,
   sharpenInBackground,
 } from './sharpener.js';
@@ -44,13 +44,13 @@ function mkConfig(p: Partial<Config['orchestration']> = {}): Config {
       sharpener: {
         enabled: true,
         mode: 'shadow',
-        brain: 'local-agy-gemini-3.8-flash-high',
+        agent: 'local-agy-gemini-3.8-flash',
       },
       tiers: {
-        mechanical: ['local-dsh-qwen3-8-27b', 'local-agy-gemini-3.8-flash-high'],
+        mechanical: ['local-dsh-qwen3-8-27b', 'local-agy-gemini-3.8-flash'],
       },
-      brains: {
-        'local-agy-gemini-3.8-flash-high': { location: 'local', exec: 'agy', model: 'gemini-3.8-flash-high' },
+      agents: {
+        'local-agy-gemini-3.8-flash': { location: 'local', exec: 'agy', model: 'gemini-3.8-flash-high' },
         'local-dsh-qwen3-8-27b': { location: 'local', exec: 'dsh' },
         'local-cc-opus-5-5': { location: 'local', exec: 'claude', model: 'claude-opus-5-5' },
       },
@@ -170,7 +170,7 @@ test('skip rules: identifies tasks that should NOT be sharpened', () => {
   assert.equal(shouldSharpenTask(mkTask({ from: { platform: 'cowork', agent: 'spec-verifier' } }), cfg), false);
 
   // Eval task
-  assert.equal(shouldSharpenTask(mkTask({ context: { brain: 'local-script-eval-harness' } }), cfg), false);
+  assert.equal(shouldSharpenTask(mkTask({ context: { agent: 'local-script-eval-harness' } }), cfg), false);
   assert.equal(shouldSharpenTask(mkTask({ context: { workflowId: 'eval-prompt-change' } }), cfg), false);
   assert.equal(shouldSharpenTask(mkTask({ from: { platform: 'cowork', agent: 'eval-harness' } }), cfg), false);
   assert.equal(shouldSharpenTask(mkTask({ tags: ['eval'] }), cfg), false);
@@ -186,17 +186,17 @@ test('skip rules: identifies tasks that should NOT be sharpened', () => {
   assert.equal(shouldSharpenTask(mkTask({ context: { tier: 'standard' } }), cfg), true);
 });
 
-test('selectSharpenerBrain selects configured brain or mechanical tier', () => {
+test('selectSharpenerAgent selects configured agent or mechanical tier', () => {
   const cfg = mkConfig();
-  const selected = selectSharpenerBrain(cfg);
+  const selected = selectSharpenerAgent(cfg);
   assert.ok(selected);
-  assert.equal(selected.brainId, 'local-agy-gemini-3.8-flash-high');
+  assert.equal(selected.agentId, 'local-agy-gemini-3.8-flash');
 
-  // When sharpener.brain is absent, uses first enabled mechanical brain
-  const cfgNoBrain = mkConfig({ sharpener: { enabled: true, mode: 'shadow' } });
-  const selectedMech = selectSharpenerBrain(cfgNoBrain);
+  // When sharpener.agent is absent, uses first enabled mechanical agent
+  const cfgNoAgent = mkConfig({ sharpener: { enabled: true, mode: 'shadow' } });
+  const selectedMech = selectSharpenerAgent(cfgNoAgent);
   assert.ok(selectedMech);
-  assert.equal(selectedMech.brainId, 'local-dsh-qwen3-8-27b');
+  assert.equal(selectedMech.agentId, 'local-dsh-qwen3-8-27b');
 });
 
 test('sharpenTask: successful sharpening sets context fields and acceptanceSource="sharpened"', async () => {
@@ -253,7 +253,7 @@ test('sharpenTask: fail-open on bad JSON, logs sharpen-failed to lessons.jsonl',
   assert.equal(entry.task, 'task-bad-json');
 });
 
-test('sharpenTask: fail-open on brain execution error, logs sharpen-failed to lessons.jsonl', async () => {
+test('sharpenTask: fail-open on agent execution error, logs sharpen-failed to lessons.jsonl', async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cowork-sharpener-test-'));
   const cfg = mkConfig();
   const task = mkTask({ id: 'task-runner-err' });
@@ -276,7 +276,7 @@ test('sharpenTask: fail-open on brain execution error, logs sharpen-failed to le
   assert.equal(entry.task, 'task-runner-err');
 });
 
-test('sharpenInBackground: never overwrites a claim made while the brain runs (double-dispatch regression)', async () => {
+test('sharpenInBackground: never overwrites a claim made while the agent runs (double-dispatch regression)', async () => {
   const cfg = mkConfig();
   const disk = new Map<string, Task>([['t1', mkTask({ id: 't1' })]]);
   const store = {

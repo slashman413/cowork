@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import type { CoworkEventPayloads, CoworkEventType, ActiveAgent, Task } from '../types.js';
+import type { CoworkEventPayloads, CoworkEventType, ActiveWorker, Task } from '../types.js';
 
 export class EventBus extends EventEmitter {
   public emitEvent<T extends CoworkEventType>(type: T, payload: CoworkEventPayloads[T]): void {
@@ -12,32 +12,32 @@ export class EventBus extends EventEmitter {
     this.emit('*', event); // wildcard for all events
   }
 
-  public emitAgentRegistered(agent: ActiveAgent): void {
-    this.emitEvent('agentRegistered', { agent });
+  public emitWorkerRegistered(worker: ActiveWorker): void {
+    this.emitEvent('workerRegistered', { worker });
   }
 
   public emitTaskCreated(task: Task): void {
     this.emitEvent('taskCreated', { task });
   }
 
-  public emitTaskClaimed(task: Task, agentId: string): void {
-    this.emitEvent('taskClaimed', { task, agentId });
+  public emitTaskClaimed(task: Task, workerId: string): void {
+    this.emitEvent('taskClaimed', { task, workerId });
   }
 
   public emitTaskCompleted(task: Task): void {
     this.emitEvent('taskCompleted', { task });
   }
 
-  public emitHeartbeat(agentId: string, status: string, currentTask?: string): void {
-    this.emitEvent('heartbeat', { agentId, status, currentTask });
+  public emitHeartbeat(workerId: string, status: string, currentTask?: string): void {
+    this.emitEvent('heartbeat', { workerId, status, currentTask });
   }
 
-  /** A task was deleted — the dispatcher kills its running brain process tree. */
+  /** A task was deleted — the dispatcher kills its running agent process tree. */
   public emitTaskDeleted(taskId: string, status?: string): void {
     this.emitEvent('taskDeleted', { taskId, status });
   }
 
-  public emitBrainExecuted(brainId: string, exec: string, taskId: string): void {
-    this.emitEvent('brainExecuted', { brainId, exec, taskId });
+  public emitAgentExecuted(agentId: string, exec: string, taskId: string): void {
+    this.emitEvent('agentExecuted', { agentId, exec, taskId });
   }
 }

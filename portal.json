@@ -16,7 +16,7 @@
     "videostudio": {
       "url": "/video-studio.html",
       "label": "Video Studio 影片工作室",
-      "description": "Code-rendered films: pick one of 59 lemo-opuscar styles, write a brief, a Claude brain directs and renders the MP4.",
+      "description": "Code-rendered films: pick one of 59 lemo-opuscar styles, write a brief, a Claude agent directs and renders the MP4.",
       "icon": "clapperboard",
       "category": "Marketing",
       "enabled": true,
@@ -128,7 +128,7 @@
     "deeptutor": {
       "url": "http://localhost:3782",
       "label": "DeepTutor",
-      "description": "AI tutoring platform — quizzes, RAG over uploaded docs, immersive reading, Audio Overview, layered memory. Pre-wired to the same local SGLang qwen3.8-27b (:8001) as the dsh brain; embeddings via Ollama nomic-embed-text.",
+      "description": "AI tutoring platform — quizzes, RAG over uploaded docs, immersive reading, Audio Overview, layered memory. Pre-wired to the same local SGLang qwen3.8-27b (:8001) as the dsh agent; embeddings via Ollama nomic-embed-text.",
       "icon": "graduation-cap",
       "category": "Knowledge",
       "enabled": true,

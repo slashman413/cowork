@@ -7,9 +7,9 @@
  * The form is derived from the config's own shape, so new keys show up without
  * code changes:
  *   boolean → switch · number → number field (…Ms keys get a "= 30 min" hint)
- *   "#rrggbb" → colour picker · brain id → brain picker · list of brain ids →
+ *   "#rrggbb" → colour picker · agent id → agent picker · list of agent ids →
  *   drag-to-reorder chain · other lists → chip editor · objects → collapsible
- *   groups · map-like objects (brains, services, …) → cards with "Add" / "Remove"
+ *   groups · map-like objects (agents, services, …) → cards with "Add" / "Remove"
  *   · `_comment` keys → help text.
  * Edits go to a working copy; a sticky bar counts changes and opens a review of
  * every changed path before saving. Raw JSON stays reachable under "Advanced".
@@ -24,11 +24,11 @@
     services: ['layout-grid', 'Services', 'Self-hosted web services shown on the Portal page.'],
     obsidian: ['notebook', 'Obsidian', 'Vault integration.'],
     inbox: ['inbox', 'Inbox', 'Task retention and retry policy.'],
-    orchestration: ['bot', 'Orchestration', 'Dispatcher, brains, routing chains, verifier and quality gates.'],
+    orchestration: ['bot', 'Orchestration', 'Dispatcher, agents, routing chains, verifier and quality gates.'],
   };
   // Map-like objects: every child is an entry of the same shape (add/remove entries).
-  const MAP_PATHS = new Set(['platforms', 'services', 'orchestration.brains', 'orchestration.agents',
-    'orchestration.roles', 'orchestration.divisionChains', 'orchestration.agentChains', 'orchestration.tiers',
+  const MAP_PATHS = new Set(['platforms', 'services', 'orchestration.agents', 'orchestration.roleChains',
+    'orchestration.roles', 'orchestration.divisionChains', 'orchestration.personaChains', 'orchestration.tiers',
     'orchestration.methods.cards', 'orchestration.verifier.spec.judges']);
   const ACRONYMS = { url: 'URL', api: 'API', tls: 'TLS', cors: 'CORS', id: 'ID', llm: 'LLM', ms: 'ms', mcp: 'MCP', cpu: 'CPU', gpu: 'GPU' };
 
@@ -121,15 +121,15 @@
       this._cfgSync();
     },
 
-    /** Brain ids + every value seen per key name (suggestions for free-text fields). */
+    /** Agent ids + every value seen per key name (suggestions for free-text fields). */
     _cfgIndexValues() {
       const s = this._cfg;
-      s.brains = Object.keys(s.work.orchestration?.brains || {});
+      s.agents = Object.keys(s.work.orchestration?.agents || {});
       s.seen = new Map();
       const walk = (o, key) => {
         if (Array.isArray(o)) return o.forEach((x) => walk(x, key));
         if (isObj(o)) return Object.entries(o).forEach(([k, v]) => walk(v, k));
-        if (typeof o === 'string' && key && o.length < 60 && !s.brains.includes(o)) {
+        if (typeof o === 'string' && key && o.length < 60 && !s.agents.includes(o)) {
           if (!s.seen.has(key)) s.seen.set(key, new Set());
           s.seen.get(key).add(o);
         }
@@ -231,8 +231,8 @@
         hint = v === '***' ? 'set — leave as is to keep' : '';
       } else if (typeof v === 'string' && /^#[0-9a-f]{6}$/i.test(v)) {
         control = `<span class="cfg-color"><input type="color" data-path="${esc(pk)}" data-kind="str" value="${esc(v)}"><input class="cfg-input" id="${id}" data-path="${esc(pk)}" data-kind="str" value="${esc(v)}"></span>`;
-      } else if (typeof v === 'string' && s.brains.includes(v) || /(^brain$|Brain$)/.test(key) && typeof v === 'string') {
-        control = this._cfgBrainSelect(v, `id="${id}" data-path="${esc(pk)}" data-kind="str"`);
+      } else if (typeof v === 'string' && s.agents.includes(v) || /(^agent$|Agent$)/.test(key) && typeof v === 'string') {
+        control = this._cfgAgentSelect(v, `id="${id}" data-path="${esc(pk)}" data-kind="str"`);
       } else if (typeof v === 'string' && v.length > 90) {
         control = `<textarea class="cfg-input cfg-area" id="${id}" data-path="${esc(pk)}" data-kind="str" rows="3">${esc(v)}</textarea>`;
       } else {
@@ -247,12 +247,12 @@
       </div>`;
     },
 
-    _cfgBrainSelect(v, attrs) {
-      const opts = this._cfg.brains.includes(v) || !v ? this._cfg.brains : [v, ...this._cfg.brains];
+    _cfgAgentSelect(v, attrs) {
+      const opts = this._cfg.agents.includes(v) || !v ? this._cfg.agents : [v, ...this._cfg.agents];
       return `<select class="cfg-input" ${attrs}>${v ? '' : '<option value="">— none —</option>'}${opts.map((b) => `<option ${b === v ? 'selected' : ''}>${esc(b)}</option>`).join('')}</select>`;
     },
 
-    /** Lists: brain chains (ordered, drag to reorder), primitive chips, or object cards. */
+    /** Lists: agent chains (ordered, drag to reorder), primitive chips, or object cards. */
     _cfgList(arr, parts) {
       const s = this._cfg, pk = pathKey(parts);
       if (arr.some(isObj)) {
@@ -261,12 +261,12 @@
           <div class="cfg-box-body">${isObj(o) ? this._cfgObject(o, [...parts, String(i)], 2) : ''}</div></details>`).join('')}
           <button type="button" class="cfg-add" data-addlist="${esc(pk)}"><i data-lucide="plus"></i> Add item</button></div>`;
       }
-      const isChain = arr.length ? arr.every((x) => s.brains.includes(x)) : /(chain|brains|judges|^\d+$)/i.test(parts[parts.length - 1]) || MAP_PATHS.has(pathKey(parts.slice(0, -1))) && /chain|tiers|judges/i.test(pathKey(parts));
+      const isChain = arr.length ? arr.every((x) => s.agents.includes(x)) : /(chain|agents|judges|^\d+$)/i.test(parts[parts.length - 1]) || MAP_PATHS.has(pathKey(parts.slice(0, -1))) && /chain|tiers|judges/i.test(pathKey(parts));
       const chips = arr.map((x, i) => `<span class="cfg-chip${isChain ? ' chain' : ''}" ${isChain ? 'draggable="true"' : ''} data-list="${esc(pk)}" data-idx="${i}">
           ${isChain ? `<span class="cfg-chip-n">${i + 1}</span>` : ''}${esc(typeof x === 'string' ? x : JSON.stringify(x))}
           <button type="button" data-chipdel="${esc(pk)}" data-idx="${i}" aria-label="Remove ${esc(String(x))}">×</button></span>`).join('');
       const adder = isChain
-        ? `<select class="cfg-input cfg-chip-add" data-chipadd="${esc(pk)}"><option value="">＋ add brain…</option>${s.brains.filter((b) => !arr.includes(b)).map((b) => `<option>${esc(b)}</option>`).join('')}</select>`
+        ? `<select class="cfg-input cfg-chip-add" data-chipadd="${esc(pk)}"><option value="">＋ add agent…</option>${s.agents.filter((b) => !arr.includes(b)).map((b) => `<option>${esc(b)}</option>`).join('')}</select>`
         : `<input class="cfg-input cfg-chip-add" data-chipadd="${esc(pk)}" data-num="${arr.length && arr.every((x) => typeof x === 'number') ? 1 : ''}" placeholder="＋ add, press Enter">`;
       return `<div class="cfg-chips${isChain ? ' is-chain' : ''}" data-chips="${esc(pk)}">${chips || '<span class="cfg-empty-inline">empty</span>'}${adder}</div>${isChain && arr.length > 1 ? '<span class="cfg-hint">Tried in order — drag to reorder.</span>' : ''}`;
     },
@@ -345,7 +345,7 @@
         if (el.tagName === 'SELECT') el.addEventListener('change', add);
         else el.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } });
       });
-      // Drag-to-reorder for brain chains.
+      // Drag-to-reorder for agent chains.
       let drag = null;
       root.querySelectorAll('.cfg-chip.chain').forEach((c) => {
         c.addEventListener('dragstart', (e) => { drag = c; c.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; });

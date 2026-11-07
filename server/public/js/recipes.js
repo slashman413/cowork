@@ -2,11 +2,11 @@
  * Recipes page (#recipes) — reusable tasks saved from runs that went well.
  *
  * Data: /api/recipes (server core/recipes.ts). A recipe is a brief with {{fields}}
- * plus what made the run work (agent, brain, tier, acceptance, timebox, inputs).
+ * plus what made the run work (agent, agent, tier, acceptance, timebox, inputs).
  * Running one fills the fields and creates an ordinary task.
  *
  *   Library   grid of cards — score ("9/10 good"), last 10 runs as dots, Run
- *   Run sheet only the recipe's fields, brain (Auto / last good brain), schedule
+ *   Run sheet only the recipe's fields, agent (Auto / last good agent), schedule
  *   Editor    capture from a task card ("★ Save as recipe") or edit: select a
  *             phrase in the brief → "Make field" turns every occurrence into {{key}}
  *   Detail    Runs / Brief / Origin / History tabs (#recipes/<id>)
@@ -125,7 +125,7 @@
         const grid = this.contentEl.querySelector('#rcp-grid');
         if (!list.length) {
           grid.innerHTML = `<div class="rcp-empty"><i data-lucide="chef-hat"></i><h3>No recipes yet</h3>
-            <p>Recipes are made from tasks that went well. Open a finished task and press <b>★ Save as recipe</b>: you pick which words change each time, and Cowork keeps the brain, agent and checks that worked.</p>
+            <p>Recipes are made from tasks that went well. Open a finished task and press <b>★ Save as recipe</b>: you pick which words change each time, and Cowork keeps the agent, agent and checks that worked.</p>
             <a class="btn btn-primary" href="#tasks">Go to Tasks</a></div>`;
         } else if (!rows.length) {
           grid.innerHTML = `<div class="rcp-empty"><p>No recipe matches.</p></div>`;
@@ -175,9 +175,9 @@
 
     // ── Run sheet ───────────────────────────────────────────────────────
     async recipeRunSheet(r) {
-      let brains = {};
-      try { brains = await this.api.get('/brains'); } catch { /* Auto only */ }
-      const ids = selectableBrainIds(brains);
+      let agents = {};
+      try { agents = await this.api.get('/agents'); } catch { /* Auto only */ }
+      const ids = selectableAgentIds(agents);
       const last = (this._rcpLast ||= JSON.parse(localStorage.getItem('rcp-last') || '{}'))[r.id] || {};
       const fs = 'padding:7px 9px;background:var(--bg-tertiary);border:1px solid var(--border-color);border-radius:8px;color:inherit;font:inherit;font-size:0.85rem;width:100%;box-sizing:border-box';
       const ls = 'font-size:0.74rem;color:var(--text-muted);font-weight:600;display:block;margin-bottom:3px';
@@ -188,16 +188,16 @@
         if (f.type === 'choice') return `<select id="${id}" class="rcp-in">${f.options.map((o) => `<option${o === (last[f.key] ?? f.default) ? ' selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
         return `<input id="${id}" class="rcp-in" type="${f.type === 'number' ? 'number' : f.type === 'date' ? 'date' : 'text'}" value="${v}">`;
       };
-      const brainDefault = r.carry.brainMode === 'lock' ? (r.carry.brain || '') : '';
-      const brainOpts = [['', 'Auto (router picks)'], ...(r.carry.brain && !ids.includes(r.carry.brain) ? [[r.carry.brain, r.carry.brain]] : []), ...ids.map((b) => [b, b])]
-        .map(([v, l]) => `<option value="${esc(v)}"${v === brainDefault ? ' selected' : ''}>${esc(l)}${v && v === r.carry.brain ? ' · made the good run' : ''}</option>`).join('');
+      const agentDefault = r.carry.agentMode === 'lock' ? (r.carry.agent || '') : '';
+      const agentOpts = [['', 'Auto (router picks)'], ...(r.carry.agent && !ids.includes(r.carry.agent) ? [[r.carry.agent, r.carry.agent]] : []), ...ids.map((b) => [b, b])]
+        .map(([v, l]) => `<option value="${esc(v)}"${v === agentDefault ? ' selected' : ''}>${esc(l)}${v && v === r.carry.agent ? ' · made the good run' : ''}</option>`).join('');
       const { content, close } = this._rcpModal(`
         <div class="rcp-modal-head"><span class="rcp-icon"><i data-lucide="${esc(r.icon)}"></i></span>
           <div><h3>${esc(r.name)}</h3><p class="rcp-modal-sub">${esc(r.purpose || 'Fill in the fields and run.')}</p></div></div>
         <form id="rcp-run-form" class="rcp-form">
           ${r.fields.length ? r.fields.map((f) => `<label class="rcp-field"><span>${esc(f.label)}${f.required ? '' : ' <em>(optional)</em>'}</span>${fieldInput(f)}</label>`).join('')
             : '<p class="rcp-note">This recipe has no fields: it runs exactly as saved.</p>'}
-          <label class="rcp-field"><span>Brain</span><select id="rcp-brain" class="rcp-in">${brainOpts}</select></label>
+          <label class="rcp-field"><span>Agent</span><select id="rcp-agent" class="rcp-in">${agentOpts}</select></label>
           <div class="rcp-field"><span>Input files <em>(untick to leave a saved file out of this run; attached files are for this run only)</em></span><div id="rcp-run-files"></div></div>
           <details class="rcp-adv"><summary>More options</summary>
             <label class="rcp-field"><span>Extra instructions <em>(optional, this run only)</em></span><textarea id="rcp-extra" class="rcp-in" rows="3"></textarea></label>
@@ -213,7 +213,7 @@
         e.preventDefault();
         const values = {};
         for (const f of r.fields) values[f.key] = content.querySelector(`#rcp-v-${f.key}`).value;
-        const body = { values, brain: content.querySelector('#rcp-brain').value };
+        const body = { values, agent: content.querySelector('#rcp-agent').value };
         const extra = content.querySelector('#rcp-extra').value.trim();
         if (extra) body.extra = extra;
         const at = content.querySelector('#rcp-at').value;
@@ -240,14 +240,14 @@
     async recipeDetail(id) {
       const r = await this.api.get(`/recipes/${encodeURIComponent(id)}`);
       const s = r.stats;
-      const runs = r.runs.length ? `<table class="rcp-table"><thead><tr><th>Run</th><th>Ver</th><th>Brain</th><th>Rating</th><th>When</th></tr></thead><tbody>${
-        r.runs.map((t) => `<tr><td><a href="#tasks/${esc(t.id)}">${esc(t.title)}</a></td><td>v${esc(String(t.version ?? '?'))}</td><td>${esc(t.brain || 'auto')}</td>
+      const runs = r.runs.length ? `<table class="rcp-table"><thead><tr><th>Run</th><th>Ver</th><th>Agent</th><th>Rating</th><th>When</th></tr></thead><tbody>${
+        r.runs.map((t) => `<tr><td><a href="#tasks/${esc(t.id)}">${esc(t.title)}</a></td><td>v${esc(String(t.version ?? '?'))}</td><td>${esc(t.agent || 'auto')}</td>
           <td>${t.rating ? (t.rating.good ? '👍' : '👎') + (t.rating.note ? ` <span class="rcp-muted">${esc(t.rating.note)}</span>` : '') : t.failed ? '<span class="rcp-bad">failed</span>' : t.status === 'done' ? '<span class="rcp-muted">unrated</span>' : esc(t.status)}</td>
           <td title="${esc(t.createdAt)}">${timeAgo(t.createdAt)}</td></tr>`).join('')}</tbody></table>`
         : '<p class="rcp-note">No runs yet. Press Run to make the first one.</p>';
       const carry = r.carry;
       const facts = [
-        ['Agent', carry.agent || 'router picks'], ['Brain', carry.brain ? `${carry.brain} (${carry.brainMode === 'lock' ? 'always' : 'suggested'})` : 'router picks'],
+        ['Persona', carry.persona || 'router picks'], ['Agent', carry.agent ? `${carry.agent} (${carry.agentMode === 'lock' ? 'always' : 'suggested'})` : 'router picks'],
         ['Tier', carry.tier], ['Timebox', carry.timeboxMin ? `${carry.timeboxMin} min` : null],
         ['Input files', carry.inputs.length ? carry.inputs.join(', ') : null],
       ].filter(([, v]) => v);
@@ -300,10 +300,10 @@
 
     recipeEditor(draft, { edit }) {
       const d = JSON.parse(JSON.stringify(draft));
-      d.carry ||= { brainMode: 'suggest', inputs: [] };
-      const keep = { agent: !!d.carry.agent, brain: !!d.carry.brain, tier: !!d.carry.tier, timeboxMin: !!d.carry.timeboxMin };
+      d.carry ||= { agentMode: 'suggest', inputs: [] };
+      const keep = { persona: !!d.carry.persona, agent: !!d.carry.agent, tier: !!d.carry.tier, timeboxMin: !!d.carry.timeboxMin };
       const carryRows = [
-        ['agent', 'Agent', d.carry.agent], ['brain', 'Brain', d.carry.brain], ['tier', 'Tier', d.carry.tier],
+        ['persona', 'Persona', d.carry.persona], ['agent', 'Agent', d.carry.agent], ['tier', 'Tier', d.carry.tier],
         ['timeboxMin', 'Timebox', d.carry.timeboxMin ? `${d.carry.timeboxMin} min` : ''],
       ].filter(([, , v]) => v);
       const fileNotes = [
@@ -330,8 +330,8 @@
 
           <div class="rcp-step"><span class="rcp-num">3</span><b>Keep what worked</b></div>
           ${carryRows.length ? `<div class="rcp-carry">${carryRows.map(([k, l, v]) => `
-            <label class="rcp-check"><input type="checkbox" data-keep="${k}"${keep[k] ? ' checked' : ''}><span><b>${l}</b> <span class="rcp-muted">${esc(v)}</span></span></label>`).join('')}</div>` : '<p class="rcp-note">Nothing to carry over: the router picks agent and brain.</p>'}
-          ${d.carry.brain ? `<label class="rcp-switch"><input type="checkbox" id="rcp-lock"${d.carry.brainMode === 'lock' ? ' checked' : ''}><span>Always use <b>${esc(d.carry.brain)}</b><br><em>Off: Cowork's router picks a brain each run (can be cheaper), and ${esc(d.carry.brain)} is one tap away.</em></span></label>` : ''}
+            <label class="rcp-check"><input type="checkbox" data-keep="${k}"${keep[k] ? ' checked' : ''}><span><b>${l}</b> <span class="rcp-muted">${esc(v)}</span></span></label>`).join('')}</div>` : '<p class="rcp-note">Nothing to carry over: the router picks agent.</p>'}
+          ${d.carry.agent ? `<label class="rcp-switch"><input type="checkbox" id="rcp-lock"${d.carry.agentMode === 'lock' ? ' checked' : ''}><span>Always use <b>${esc(d.carry.agent)}</b><br><em>Off: Cowork's router picks an agent each run (can be cheaper), and ${esc(d.carry.agent)} is one tap away.</em></span></label>` : ''}
 
           <div class="rcp-step"><span class="rcp-num">4</span><b>Acceptance checks</b></div>
           <p class="rcp-note">What a good result must have. The verifier checks every run against these. One check per line; leave empty for none.</p>
@@ -412,8 +412,8 @@
           ...d, name: $('#rcp-name').value.trim(), purpose: $('#rcp-purpose').value.trim(),
           title: $('#rcp-title').value.trim(), brief: $('#rcp-brief').value,
           carry: {
-            agent: kept('agent') ? c.agent : undefined, division: kept('agent') ? c.division : undefined,
-            brain: kept('brain') ? c.brain : undefined, brainMode: kept('brain') && $('#rcp-lock')?.checked ? 'lock' : 'suggest',
+            persona: kept('persona') ? c.persona : undefined, division: kept('persona') ? c.division : undefined,
+            agent: kept('agent') ? c.agent : undefined, agentMode: kept('agent') && $('#rcp-lock')?.checked ? 'lock' : 'suggest',
             tier: kept('tier') ? c.tier : undefined,
             acceptance: $('#rcp-acc').value.split('\n').map((x) => x.trim().replace(/^[-*•]\s+/, '')).filter(Boolean),
             timeboxMin: kept('timeboxMin') ? c.timeboxMin : undefined, priority: c.priority, tags: c.tags,

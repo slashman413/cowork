@@ -1,14 +1,14 @@
 #!/usr/bin/env node
-// remote-brain-client — a zero-dependency Cowork MCP client that turns a machine
-// into one or more "remote brains". It connects to the Cowork MCP server,
-// registers (declaring the brains it can run, which the server auto-adds to its
+// remote-agent-client — a zero-dependency Cowork MCP client that turns a machine
+// into one or more "remote agents". It connects to the Cowork MCP server,
+// registers (declaring the agents it can run, which the server auto-adds to its
 // registry), then polls the shared inbox for tasks addressed to ANY of its
-// brains, claims them, runs the matching local model, and reports results back.
+// agents, claims them, runs the matching local model, and reports results back.
 //
-// Zero-config by default: run `COWORK_URL=https://<host>:6868 node remote-brain-client.mjs`
+// Zero-config by default: run `COWORK_URL=https://<host>:6868 node remote-agent-client.mjs`
 // (self-signed TLS: also set NODE_EXTRA_CA_CERTS=<copy of the server cert.pem>)
 // and the client AUTO-DETECTS the model CLIs installed here (claude/hermes/agy) and
-// declares the matching brains in its registration handshake — no brain env needed.
+// declares the matching agents in its registration handshake — no agent env needed.
 // Override the auto default with any of (first that is set wins):
 //
 //   Preset — one flag, standard model set for a platform:
@@ -16,26 +16,26 @@
 //       remote-aicodegen-cc-opus (claude-opus-4-8), -cc-sonnet (claude-sonnet-5),
 //       -cc-fable (claude-fable-5), -cc-default (account default)
 //     PRESET=hermes  HOST=box2               # → qwen35b
-//     (BRAINS_FILE=/path/to/list.json also works; {HOST} is substituted.)
+//     (AGENTS_FILE=/path/to/list.json also works; {HOST} is substituted.)
 //
 //   Multiple explicit — one client, several models:
-//     BRAINS='[{"id":"remote-aicodegen-cc-opus","model":"claude-opus-4-8"},
+//     AGENTS='[{"id":"remote-aicodegen-cc-opus","model":"claude-opus-4-8"},
 //              {"id":"remote-aicodegen-cc-sonnet","model":"claude-sonnet-5"},
 //              {"id":"remote-aicodegen-cc-fable","model":"claude-fable-5"}]'
-//     EXEC=claude            # default exec for brains that don't set their own
+//     EXEC=claude            # default exec for agents that don't set their own
 //     HOST=aicodegen         # default host label
 //
 //   Single (simplest):
-//     BRAIN_ID=remote-aicodegen-cc-fable  EXEC=claude  MODEL=claude-fable-5
+//     AGENT_ID=remote-aicodegen-cc-fable  EXEC=claude  MODEL=claude-fable-5
 //
 //   COWORK_URL       cowork server base, e.g. https://<cowork-host>:6868   (required)
 //   COWORK_API_KEY   bearer token if the server sets server.apiKey       (optional)
 //   POLL_MS          inbox poll interval                                 (default 5000)
-//   MAX_CONCURRENT   tasks in parallel across all brains                 (default 1)
+//   MAX_CONCURRENT   tasks in parallel across all agents                 (default 1)
 //   TASK_TIMEOUT_MS  per-task wall clock                                 (default 3000000)
 //   AGENT_NAME       display name in Active Agents                       (default HOST/host)
 //
-// Node 18+ (global fetch). No npm install. Run: `node remote-brain-client.mjs`.
+// Node 18+ (global fetch). No npm install. Run: `node remote-agent-client.mjs`.
 
 import { spawn, spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, rmSync, existsSync } from 'node:fs';
@@ -44,8 +44,8 @@ import { dirname, join } from 'node:path';
 import os from 'node:os';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-// Operating rules every executing brain must follow (repo root CONVENTIONS.md).
-// Prepended to every prompt so a remote brain runs under the same rules as a local one.
+// Operating rules every executing agent must follow (repo root CONVENTIONS.md).
+// Prepended to every prompt so a remote agent runs under the same rules as a local one.
 let CONVENTIONS = '';
 try { CONVENTIONS = readFileSync(join(HERE, '..', 'CONVENTIONS.md'), 'utf8').trim(); } catch { /* optional */ }
 
@@ -57,9 +57,9 @@ const POLL_MS = +(process.env.POLL_MS || 5000);
 const MAX_CONCURRENT = +(process.env.MAX_CONCURRENT || 1);
 const TASK_TIMEOUT_MS = +(process.env.TASK_TIMEOUT_MS || 3000000);
 
-// Resolve the brain list. Precedence:
-//   PRESET → BRAINS_FILE → BRAINS → BRAIN_ID → AUTO-DETECT (default).
-// AUTO-DETECT means you can just run `COWORK_URL=… node remote-brain-client.mjs`:
+// Resolve the agent list. Precedence:
+//   PRESET → AGENTS_FILE → AGENTS → AGENT_ID → AUTO-DETECT (default).
+// AUTO-DETECT means you can just run `COWORK_URL=… node remote-agent-client.mjs`:
 // the client looks for installed model CLIs (claude / hermes / agy) and declares
 // the matching preset for each — so it propagates its own capabilities on connect
 // with zero config. Env vars only override the auto default. {HOST} is substituted.
@@ -99,20 +99,20 @@ function detectEnv() {
 const ENV_FACTS = detectEnv();
 console.log(`[env] detected ${ENV_FACTS.tools.length} tool(s), ${ENV_FACTS.paths.length} path(s), ${ENV_FACTS.secrets.length} secret-name(s)`);
 
-let BRAINS;
+let AGENTS;
 if (process.env.PRESET) {
-  BRAINS = preset(process.env.PRESET);
-} else if (process.env.BRAINS_FILE) {
-  BRAINS = loadJsonWithHost(readFileSync(process.env.BRAINS_FILE, 'utf8'));
-} else if (process.env.BRAINS) {
-  BRAINS = loadJsonWithHost(process.env.BRAINS);
-} else if (process.env.BRAIN_ID) {
-  BRAINS = [{ id: process.env.BRAIN_ID, exec: EXEC_DEFAULT, model: process.env.MODEL || '' }];
+  AGENTS = preset(process.env.PRESET);
+} else if (process.env.AGENTS_FILE || process.env.BRAINS_FILE) {
+  AGENTS = loadJsonWithHost(readFileSync(process.env.AGENTS_FILE || process.env.BRAINS_FILE, 'utf8'));
+} else if (process.env.AGENTS || process.env.BRAINS) {
+  AGENTS = loadJsonWithHost(process.env.AGENTS || process.env.BRAINS);
+} else if (process.env.AGENT_ID || process.env.BRAIN_ID) {
+  AGENTS = [{ id: process.env.AGENT_ID || process.env.BRAIN_ID, exec: EXEC_DEFAULT, model: process.env.MODEL || '' }];
 } else {
   // Auto-detect: declare a preset for every model CLI on PATH.
-  BRAINS = [];
+  AGENTS = [];
   for (const [cli, name] of [['claude', 'claude'], ['hermes', 'hermes'], ['agy', 'agy'], ['codex', 'codex']]) {
-    if (hasCli(cli)) BRAINS.push(...preset(name));
+    if (hasCli(cli)) AGENTS.push(...preset(name));
   }
   // Ollama has no fixed model set — enumerate the pulled CHAT models (skip embedders).
   if (hasCli('ollama')) {
@@ -120,31 +120,35 @@ if (process.env.PRESET) {
     for (const line of out.split('\n').slice(1)) {
       const name = line.split(/\s+/)[0];
       if (!name || /embed/i.test(name)) continue;   // skip embedding-only models
-      BRAINS.push({ id: `remote-{HOST}-ollama-${name.replace(/[:/]/g, '-')}`.split('{HOST}').join(HOST), exec: 'ollama', model: name });
+      AGENTS.push({ id: `remote-{HOST}-ollama-${name.replace(/[:/]/g, '-')}`.split('{HOST}').join(HOST), exec: 'ollama', model: name });
     }
   }
-  if (!BRAINS.length) {
+  if (!AGENTS.length) {
     console.error('Auto-detect found no usable model CLI (claude/hermes/agy/codex, or an Ollama chat model) on PATH.\n' +
-      'Install one, or declare brains explicitly: PRESET=<name> | BRAINS_FILE=path | BRAINS=<json> | BRAIN_ID=<id>.');
+      'Install one, or declare agents explicitly: PRESET=<name> | AGENTS_FILE=path | AGENTS=<json> | AGENT_ID=<id>.');
     process.exit(2);
   }
-  console.log(`[auto-detect] declaring brains for: ${[...new Set(BRAINS.map(b => b.exec))].join(', ')}`);
+  console.log(`[auto-detect] declaring agents for: ${[...new Set(AGENTS.map(b => b.exec))].join(', ')}`);
 }
-const BRAIN = Object.fromEntries(BRAINS.map(b => [b.id, {
-  id: b.id, exec: b.exec || EXEC_DEFAULT, model: b.model || '',
+// A thinking level is a run parameter, not part of an id (see THINKING below): a
+// config still listing x-high / x-medium / x-low declares one agent x.
+const LEVEL_SUFFIX = /-(low|medium|high)$/;
+const AGENT = Object.fromEntries(AGENTS.map(b => [b.id.replace(LEVEL_SUFFIX, ''), {
+  id: b.id.replace(LEVEL_SUFFIX, ''), exec: b.exec || EXEC_DEFAULT,
+  model: (b.exec || EXEC_DEFAULT) === 'agy' ? (b.model || '').replace(LEVEL_SUFFIX, '') : (b.model || ''),
   // Optional codex profile (~/.codex/config.toml) — pins model + custom model_provider
-  // so a brain can target a local vLLM endpoint or a non-default cloud provider.
+  // so an agent can target a local vLLM endpoint or a non-default cloud provider.
   profile: b.profile || '',
-  // Optional claude thinking effort (low|medium|high|xhigh|max) → `claude --effort`.
-  effort: b.effort || '',
+  // Optional default thinking level (low|medium|high|xhigh|max) for this agent.
+  thinking: b.thinking || b.effort || '',
   location: b.location || 'remote', host: b.host || HOST
 }]));
-const MY_IDS = new Set(Object.keys(BRAIN));
+const MY_IDS = new Set(Object.keys(AGENT));
 const AGENT_NAME = process.env.AGENT_NAME || `remote-${HOST}`;
-// Registration platform reflects the declared brains (a box may be claude-only,
-// hermes-only, or mixed). Derive from the first brain's exec.
+// Registration platform reflects the declared agents (a box may be claude-only,
+// hermes-only, or mixed). Derive from the first agent's exec.
 const execToPlatform = e => e === 'claude' ? 'claude' : e === 'agy' ? 'antigravity' : e === 'codex' ? 'codex' : e === 'ollama' ? 'ollama' : e === 'dsh' ? 'dsh' : 'hermes';
-const PLATFORM = execToPlatform(Object.values(BRAIN)[0]?.exec || EXEC_DEFAULT);
+const PLATFORM = execToPlatform(Object.values(AGENT)[0]?.exec || EXEC_DEFAULT);
 
 function need(k) { const v = process.env[k]; if (!v) { console.error(`Missing required env ${k}`); process.exit(2); } return v; }
 const OSC_CSI_RE = /\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07/g;
@@ -159,16 +163,16 @@ function stripAnsi(s) {
 let sessionId = null, rpcId = 0;
 const running = new Set();
 
-// ── Rate-limit usage self-report (Connections cards' brain meters) ──────────
+// ── Rate-limit usage self-report (Connections cards' agent meters) ──────────
 // Probes THIS host's metered CLIs and ships the snapshot with every heartbeat
-// as usage[brainId] = {exec, windows:[{label, usedPct, resetsAt}], at}. Only
-// claude/codex/agy have a queryable quota; hermes/ollama/script brains have
+// as usage[agentId] = {exec, windows:[{label, usedPct, resetsAt}], at}. Only
+// claude/codex/agy have a queryable quota; hermes/ollama/script agents have
 // none by design and report nothing (the dashboard hides them). agy reports
 // REMAINING (inverted to used) and needs a supplied bearer token — see
 // probeAgyUsage. Mirror of the server's TS probes in
 // server/src/core/usage-probe.ts — keep in sync.
 const USAGE_MS = +(process.env.USAGE_MS || 30000);
-let USAGE = {};   // brainId → snapshot; {} until the first successful probe
+let USAGE = {};   // agentId → snapshot; {} until the first successful probe
 const clampPct = n => Number.isFinite(+n) ? Math.max(0, Math.min(100, Math.round(+n * 10) / 10)) : null;
 
 async function probeClaudeUsage() {
@@ -477,9 +481,9 @@ async function probeAgyUsage() {
   return windows.length ? windows : null;
 }
 
-function agyWindowMatchesModel(modelOrBrainId, w) {
+function agyWindowMatchesModel(modelOrAgentId, w) {
   if (!w?.group) return true;
-  const target = (modelOrBrainId || '').toLowerCase();
+  const target = (modelOrAgentId || '').toLowerCase();
   const group = (w.group || '').toLowerCase();
   const title = (w.title || '').toLowerCase();
   const note = (w.groupNote || '').toLowerCase();
@@ -505,7 +509,7 @@ function agyWindowMatchesModel(modelOrBrainId, w) {
 
 async function refreshUsage() {
   const byExec = {};
-  for (const b of Object.values(BRAIN)) (byExec[b.exec] ||= []).push(b.id);
+  for (const b of Object.values(AGENT)) (byExec[b.exec] ||= []).push(b.id);
   const next = {};
   for (const [exec, ids] of Object.entries(byExec)) {
     let windows = null;
@@ -514,14 +518,14 @@ async function refreshUsage() {
     if (!windows) continue;
     const now = new Date().toISOString();
     for (const id of ids) {
-      const b = BRAIN[id];
+      const b = AGENT[id];
       const model = b?.model || id;
-      const brainWindows = exec === 'agy'
+      const agentWindows = exec === 'agy'
         ? windows.filter(w => agyWindowMatchesModel(model, w))
         : windows;
       next[id] = {
         exec,
-        windows: brainWindows.length ? brainWindows : windows,
+        windows: agentWindows.length ? agentWindows : windows,
         at: now
       };
     }
@@ -552,24 +556,24 @@ async function tool(name, args = {}) {
   try { return JSON.parse(t); } catch { return t; }
 }
 async function connect() {
-  await rpc('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: `remote-brain:${AGENT_NAME}`, version: '1.0' } });
+  await rpc('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: `remote-agent:${AGENT_NAME}`, version: '1.0' } });
   await rpc('notifications/initialized');
 }
 
 // ── Task execution ───────────────────────────────────────────────────────────
 function buildPrompt(task, artDir, inputInfo) {
   const ctx = task.context || {};
-  const persona = ctx.persona;   // roster agent's full .md persona (stamped by the dispatcher)
-  const role = ctx.agent || ctx.role || 'agent';
+  const persona = ctx.personaPrompt;   // the persona's full .md (stamped by the dispatcher)
+  const role = ctx.persona || ctx.role || 'agent';
   const lines = persona
     ? [...(CONVENTIONS ? [CONVENTIONS, ``, `---`, ``] : []), persona, ``, `---`, ``, `You have been assigned the following task. Work autonomously and produce your final deliverable as plain text (markdown allowed).`, ``,
        `# Task: ${task.title}`, ``, task.description, ``]
-    : [...(CONVENTIONS ? [CONVENTIONS, ``, `---`, ``] : []), `You are the "${role}" agent (brain: ${ctx.brain}) in a multi-agent company. Work autonomously and produce your final deliverable as plain-text output.`,
+    : [...(CONVENTIONS ? [CONVENTIONS, ``, `---`, ``] : []), `You are the "${role}" agent (agent: ${ctx.agent}) in a multi-agent company. Work autonomously and produce your final deliverable as plain-text output.`,
        ``, `# Task: ${task.title}`, ``, task.description, ``];
   // Surface user-supplied context, minus the persona + dispatcher bookkeeping (avoid noise/dupes).
   // inputFiles is rendered as its own section with local paths (below).
   const shown = { ...ctx };
-  for (const k of ['persona', 'brainAuto', 'remoteWaitSince', 'dispatched', 'attempts', 'agentName', 'ranAgent', 'ranDivision', 'ranBrain', 'isRoster', 'inputFiles']) delete shown[k];
+  for (const k of ['personaPrompt', 'agentAuto', 'remoteWaitSince', 'dispatched', 'attempts', 'personaName', 'ranPersona', 'ranDivision', 'ranAgent', 'isRoster', 'inputFiles']) delete shown[k];
   if (Object.keys(shown).length) lines.push('# Context', '```json', JSON.stringify(shown, null, 2), '```', '');
   if (inputInfo && inputInfo.files.length) {
     lines.push('# Attached input files',
@@ -599,20 +603,32 @@ function ensureDshPatch() {
   }
 }
 
-function runModel(brain, prompt, artDir) {
-  const dshPatch = brain.exec === 'dsh' ? ensureDshPatch() : null;
-  const argv = brain.exec === 'claude' ? ['claude', '-p', prompt, ...(brain.model ? ['--model', brain.model] : []), ...(brain.effort ? ['--effort', brain.effort] : []), '--dangerously-skip-permissions']
-    : brain.exec === 'hermes' ? ['hermes', ...(brain.model ? ['-m', brain.model] : []), '-z', prompt]
-    : brain.exec === 'agy' ? ['agy', '-p', prompt, ...(brain.model ? ['--model', brain.model] : []), '--dangerously-skip-permissions']
-    : brain.exec === 'codex' ? ['codex', 'exec', '--skip-git-repo-check', '--dangerously-bypass-approvals-and-sandbox', ...(brain.profile ? ['--profile', brain.profile] : []), ...(brain.model ? ['-m', brain.model] : []), prompt]
-    : brain.exec === 'ollama' ? (brain.model ? ['ollama', 'run', brain.model, prompt] : null)
+// Thinking level precedence: task context.thinking → agent default → medium.
+const THINKING_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
+const askedThinking = (agent, ctx) => [ctx?.thinking, agent.thinking].find(l => THINKING_LEVELS.includes(l));
+// agy's catalog slugs end in low|medium|high; a few models ship a single level.
+const agySlug = (model, level) => {
+  if (!model) return '';
+  return /^gpt-oss-/.test(model) ? `${model}-medium` : `${model}-${level === 'xhigh' || level === 'max' ? 'high' : level}`;
+};
+
+function runModel(agent, prompt, artDir, ctx) {
+  // Hermes fronts a local model whose own config decides reasoning, so it only gets a flag when a level was asked for.
+  const asked = askedThinking(agent, ctx);
+  const thinking = asked || 'medium';
+  const dshPatch = agent.exec === 'dsh' ? ensureDshPatch() : null;
+  const argv = agent.exec === 'claude' ? ['claude', '-p', prompt, ...(agent.model ? ['--model', agent.model] : []), '--effort', thinking, '--dangerously-skip-permissions']
+    : agent.exec === 'hermes' ? ['hermes', ...(agent.model ? ['-m', agent.model] : []), ...(asked ? ['--reasoning', thinking === 'xhigh' || thinking === 'max' ? 'high' : thinking] : []), '-z', prompt]
+    : agent.exec === 'agy' ? ['agy', '-p', prompt, ...(agent.model ? ['--model', agySlug(agent.model, thinking)] : []), '--dangerously-skip-permissions']
+    : agent.exec === 'codex' ? ['codex', 'exec', '--skip-git-repo-check', '--dangerously-bypass-approvals-and-sandbox', ...(agent.profile ? ['--profile', agent.profile] : []), ...(agent.model ? ['-m', agent.model] : []), '-c', `model_reasoning_effort="${thinking === 'max' ? 'xhigh' : thinking}"`, prompt]
+    : agent.exec === 'ollama' ? (agent.model ? ['ollama', 'run', agent.model, prompt] : null)
     // dsh (DeepSeek Harness) headless profile: answer one task, print it, exit.
     // Talks to a local OpenAI-compatible endpoint via the provider in
     // $DSH_HOME/settings.yaml; DSH_HOME + the provider apiKeyEnv are pinned so the
-    // brain is self-contained regardless of spawn cwd (SGLang ignores the value).
-    : brain.exec === 'dsh' ? ['env', `DSH_HOME=${process.env.HOME}/.dsh`, 'SGLANG_API_KEY=dummy', 'DSH_PERMISSION_MODE=danger-full-access', 'dsh', '--profile', 'headless', ...(dshPatch ? ['--patch', dshPatch] : []), prompt]
+    // agent is self-contained regardless of spawn cwd (SGLang ignores the value).
+    : agent.exec === 'dsh' ? ['env', `DSH_HOME=${process.env.HOME}/.dsh`, 'SGLANG_API_KEY=dummy', 'DSH_PERMISSION_MODE=danger-full-access', 'dsh', '--profile', 'headless', ...(dshPatch ? ['--patch', dshPatch] : []), prompt]
     : null;
-  if (!argv) return Promise.resolve({ ok: false, text: `unknown/misconfigured exec ${brain.exec}` });
+  if (!argv) return Promise.resolve({ ok: false, text: `unknown/misconfigured exec ${agent.exec}` });
   return new Promise((resolve) => {
     const child = spawn(argv[0], argv.slice(1), { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, COWORK_ARTIFACTS_DIR: artDir, COWORK_OUTPUTS_DIR: join(artDir, 'outputs') } });
     let out = '', err = '';
@@ -646,7 +662,7 @@ async function uploadArtifacts(taskId, artDir, route = 'artifacts') {
   }
   return n;
 }
-// Download the task's attached input files (files a person uploaded for the brain
+// Download the task's attached input files (files a person uploaded for the agent
 // to read) into a dedicated dir — kept OUT of artDir so they aren't re-uploaded as
 // output artifacts. Returns { dir, files } for buildPrompt to point the model at.
 async function downloadInputs(taskId) {
@@ -673,18 +689,18 @@ async function downloadInputs(taskId) {
   }
   return { dir, files };
 }
-async function handle(task, agentId) {
-  const brain = BRAIN[task.context.brain];
+async function handle(task, workerId) {
+  const agent = AGENT[task.context.agent];
   running.add(task.id);
   const artDir = join(os.tmpdir(), 'cowork-artifacts', task.id);
   const inputDir = join(os.tmpdir(), 'cowork-inputs', task.id);
   mkdirSync(join(artDir, 'outputs'), { recursive: true });
-  console.log(`[${AGENT_NAME}] claimed ${task.id} on ${brain.id} — ${task.title}`);
+  console.log(`[${AGENT_NAME}] claimed ${task.id} on ${agent.id} — ${task.title}`);
   try {
-    await tool('heartbeat', { agent_id: agentId, status: 'working', current_task: task.title });
+    await tool('heartbeat', { agent_id: workerId, status: 'working', current_task: task.title });
     const inputInfo = await downloadInputs(task.id);
     if (inputInfo.files.length) console.log(`[${AGENT_NAME}] downloaded ${inputInfo.files.length} input file(s) for ${task.id}`);
-    const { ok, text } = await runModel(brain, buildPrompt(task, artDir, inputInfo), artDir);
+    const { ok, text } = await runModel(agent, buildPrompt(task, artDir, inputInfo), artDir, task.context);
     // Persist the FULL transcript as result.md so it survives as a downloadable
     // artifact — the task result itself is truncated to a summary. (The local
     // dispatcher does the same; without this a long remote answer would be lost.)
@@ -695,7 +711,7 @@ async function handle(task, agentId) {
     if (outputs) console.log(`[${AGENT_NAME}] uploaded ${outputs} output(s) for ${task.id}`);
     const result = ok
       ? (text.length > 2000 ? text.slice(0, 2000) + `\n…(full output in artifacts/${task.id}/result.md)` : text)
-      : `FAILED on ${brain.id}: ${text.slice(0, 1000)}`;
+      : `FAILED on ${agent.id}: ${text.slice(0, 1000)}`;
     await tool('complete_task', { task_id: task.id, result });
     console.log(`[${AGENT_NAME}] ${ok ? 'completed' : 'FAILED'} ${task.id}`);
   } catch (e) {
@@ -706,7 +722,7 @@ async function handle(task, agentId) {
     try { rmSync(inputDir, { recursive: true, force: true }); } catch { /* best-effort cleanup */ }
     await refreshUsage().catch(() => {});
     await tool('heartbeat', {
-      agent_id: agentId,
+      agent_id: workerId,
       status: running.size ? 'working' : 'idle',
       ...(Object.keys(USAGE).length ? { usage: USAGE } : {})
     }).catch(() => {});
@@ -718,10 +734,10 @@ async function main() {
   await connect();
   const me = await tool('register_agent', {
     platform: PLATFORM, agent_name: AGENT_NAME, capabilities: [...MY_IDS],
-    brains: Object.values(BRAIN).map(b => ({ id: b.id, location: b.location, exec: b.exec, model: b.model, host: b.host, env: ENV_FACTS }))
+    agents: Object.values(AGENT).map(b => ({ id: b.id, location: b.location, exec: b.exec, model: b.model, ...(b.thinking ? { thinking: b.thinking } : {}), host: b.host, env: ENV_FACTS }))
   });
-  const agentId = me.id;
-  console.log(`[${AGENT_NAME}] registered as ${agentId} → ${URL_BASE}; serving brains: ${[...MY_IDS].join(', ')} (concurrency ${MAX_CONCURRENT})`);
+  const workerId = me.id;
+  console.log(`[${AGENT_NAME}] registered as ${workerId} → ${URL_BASE}; serving agents: ${[...MY_IDS].join(', ')} (concurrency ${MAX_CONCURRENT})`);
 
   // Measure quota usage now and on a slow timer; each heartbeat carries the
   // cached snapshot (probing is too heavy to run per-heartbeat).
@@ -731,16 +747,16 @@ async function main() {
   for (;;) {
     try {
       await tool('heartbeat', {
-        agent_id: agentId, status: running.size ? 'working' : 'idle',
+        agent_id: workerId, status: running.size ? 'working' : 'idle',
         ...(Object.keys(USAGE).length ? { usage: USAGE } : {})
       });
       if (running.size < MAX_CONCURRENT) {
         const inbox = await tool('list_inbox', { status: 'pending', limit: 50 });
-        const mine = (Array.isArray(inbox) ? inbox : []).filter(t => MY_IDS.has(t?.context?.brain) && !running.has(t.id));
+        const mine = (Array.isArray(inbox) ? inbox : []).filter(t => MY_IDS.has(t?.context?.agent) && !running.has(t.id));
         for (const task of mine.reverse()) {
           if (running.size >= MAX_CONCURRENT) break;
-          const claimed = await tool('claim_task', { task_id: task.id, agent_id: agentId }).catch(() => null);
-          if (claimed && claimed.status === 'in-progress' && claimed.claimedBy === agentId) handle(claimed, agentId);
+          const claimed = await tool('claim_task', { task_id: task.id, agent_id: workerId }).catch(() => null);
+          if (claimed && claimed.status === 'in-progress' && claimed.claimedBy === workerId) handle(claimed, workerId);
         }
       }
     } catch (e) {

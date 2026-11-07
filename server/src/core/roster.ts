@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import matter from 'gray-matter';
 import { globSync } from 'glob';
-import type { AgentCard } from '../types.js';
+import type { PersonaCard } from '../types.js';
 
 /**
  * Parse an agent .md into { data, content }, tolerating frontmatter that isn't
@@ -12,7 +12,7 @@ import type { AgentCard } from '../types.js';
  * vanish from the roster. The fallback reads the frontmatter block line by line,
  * splitting each on its FIRST colon, so such an agent still loads.
  */
-function parseAgentFile(raw: string): { data: Record<string, any>; content: string } {
+function parsePersonaFile(raw: string): { data: Record<string, any>; content: string } {
   const hasFrontmatter = /^---\r?\n/.test(raw);
   try {
     const p = matter(raw);
@@ -46,7 +46,7 @@ function parseAgentFile(raw: string): { data: Record<string, any>; content: stri
 
 export class Roster {
   private repoPath: string;
-  private agents: AgentCard[] = [];
+  private personas: PersonaCard[] = [];
   private divisions: any = {};
   private loadedAt = 0;
   // Lightweight cache: every roster query (dashboard, classifier, roster views)
@@ -63,21 +63,21 @@ export class Roster {
     this.repoPath = repoPath;
   }
 
-  public loadAll(): AgentCard[] {
-    if (this.loadedAt && Date.now() - this.loadedAt < this.ttlMs) return this.agents;
+  public loadAll(): PersonaCard[] {
+    if (this.loadedAt && Date.now() - this.loadedAt < this.ttlMs) return this.personas;
     return this.scan();
   }
 
   /** Rescan the agency-agents directory and refresh the cache. Builds into a
    *  local array so a mid-scan error never leaves a partial cache exposed. */
-  private scan(): AgentCard[] {
-    const agents: AgentCard[] = [];
+  private scan(): PersonaCard[] {
+    const personas: PersonaCard[] = [];
 
     if (!fs.existsSync(this.repoPath)) {
       console.warn(`Agency agents repo not found at ${this.repoPath}`);
-      this.agents = agents;
+      this.personas = personas;
       this.loadedAt = Date.now();
-      return agents;
+      return personas;
     }
 
     const divisionsPath = path.join(this.repoPath, 'divisions.json');
@@ -91,22 +91,22 @@ export class Roster {
 
     // Agents live in division subdirectories; top-level *.md are repo docs
     // (README, SECURITY, CONTRIBUTING, …) and examples/ holds sample output.
-    const agentFiles = globSync('*/**/*.md', {
+    const personaFiles = globSync('*/**/*.md', {
       cwd: this.repoPath,
       ignore: ['docs/**', 'examples/**', 'scripts/**', '**/README.md']
     });
 
-    for (const file of agentFiles) {
+    for (const file of personaFiles) {
       const fullPath = path.join(this.repoPath, file);
       try {
         const content = fs.readFileSync(fullPath, 'utf-8');
-        const parsed = parseAgentFile(content);
+        const parsed = parsePersonaFile(content);
 
         const slug = path.basename(file, '.md');
         const division = path.dirname(file).split(path.sep)[0] || 'unknown';
         const divisionMeta = this.divisions[division] || {};
 
-        agents.push({
+        personas.push({
           slug: parsed.data.slug || slug,
           name: parsed.data.name || slug,
           description: parsed.data.description || '',
@@ -124,23 +124,23 @@ export class Roster {
       }
     }
 
-    this.agents = agents;
+    this.personas = personas;
     this.loadedAt = Date.now();
-    return this.agents;
+    return this.personas;
   }
 
-  public search(query: string): AgentCard[] {
+  public search(query: string): PersonaCard[] {
     this.loadAll();
     const lowerQuery = query.toLowerCase();
-    return this.agents.filter(a => 
+    return this.personas.filter(a => 
       a.name.toLowerCase().includes(lowerQuery) || 
       a.description.toLowerCase().includes(lowerQuery)
     );
   }
 
-  public getByDivision(division: string): AgentCard[] {
+  public getByDivision(division: string): PersonaCard[] {
     this.loadAll();
-    return this.agents.filter(a => a.division === division);
+    return this.personas.filter(a => a.division === division);
   }
 
   public getDivisions(): any {
@@ -151,21 +151,21 @@ export class Roster {
   /** List of division ids that actually have agents (for the two-stage router). */
   public divisionIds(): string[] {
     this.loadAll();
-    return [...new Set(this.agents.map(a => a.division).filter((d): d is string => !!d))].sort();
+    return [...new Set(this.personas.map(a => a.division).filter((d): d is string => !!d))].sort();
   }
 
-  /** Full persona (frontmatter + body) of a roster agent by slug, plus its
+  /** Full persona (frontmatter + body) of a persona by slug, plus its
    *  division — injected as the system prompt when that agent runs a task. */
   public getPersona(slug: string): { name: string; division: string; persona: string; sourcePath: string } | null {
     this.loadAll();
-    const card = this.agents.find(a => a.slug === slug);
+    const card = this.personas.find(a => a.slug === slug);
     if (!card) return null;
     try {
       // Strip the YAML frontmatter — the markdown BODY is the actual persona/system
       // prompt. The raw `---` header would otherwise start the prompt and get parsed
       // as a CLI option (`unknown option '--- name: …'`) by positional-arg execs.
       const raw = fs.readFileSync(card.sourcePath, 'utf-8');
-      const body = parseAgentFile(raw).content.trim();
+      const body = parsePersonaFile(raw).content.trim();
       const persona = body || `You are ${card.name}. ${card.description}`.trim();
       return { name: card.name, division: card.division || 'unknown', persona, sourcePath: card.sourcePath };
     } catch {

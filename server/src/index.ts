@@ -1,11 +1,13 @@
 import express from 'express';
+import { legacyWireMiddleware, legacyWireUses } from './legacy-wire.js';
+import { DEFAULT_THINKING, normalizeThinking, THINKING_LEVELS } from './core/thinking.js';
 import path from 'path';
 import fs from 'fs';
 import http from 'http';
 import https from 'https';
 import { createMultiplexedServer } from './core/server-listener.js';
 import { createCompression } from './core/compression.js';
-import { activeConfigPath, loadConfig, persistRegistries, removeBrainCascade, restoreClientBrains } from './config.js';
+import { activeConfigPath, loadConfig, persistRegistries, removeAgentCascade, restoreClientAgents } from './config.js';
 import { EventBus } from './core/events.js';
 import { Store } from './core/store.js';
 import { Dispatcher } from './core/dispatcher.js';
@@ -32,7 +34,7 @@ import { AudioOverview, AUDIO_OVERVIEW_TAG, AUDIO_OVERVIEW_FILE, readTaskSourceF
 import { normalizeRecurrence, nextRunAt } from './core/recurrence.js';
 import { Shotcraft, SHOTCRAFT_TAG, GALLERY_URL, ASPECTS as SHOTCRAFT_ASPECTS, LENGTHS as SHOTCRAFT_LENGTHS } from './core/shotcraft.js';
 import { OUTPUTS_SUBDIR } from './core/artifact-lint.js';
-import { sharedIntegrations, defaultAuditTargets, defaultWrapBrain } from './core/integrations.js';
+import { sharedIntegrations, defaultAuditTargets, defaultWrapAgent } from './core/integrations.js';
 import { auditPath, mergeReports } from './core/skill-auditor.js';
 import { AUTH_COOKIE, KeylessLog, keyMatches, readCookie, resolveApiKey } from './core/auth.js';
 import { ClientGuard } from './core/client-guard.js';
@@ -44,35 +46,35 @@ async function main() {
 
   store.initialize();
 
-  // Self-heal the brain registry from the last known CLIENT declarations: a
-  // client-declared brain (e.g. every `local-agy-*` the Antigravity client
+  // Self-heal the agent registry from the last known CLIENT declarations: a
+  // client-declared agent (e.g. every `local-agy-*` the Antigravity client
   // registers) must always be selectable, but a full-config UI save or a
   // template reseed can wipe the persisted dynamic entries — and clients only
-  // re-declare their brains when THEY restart, not when the server does.
+  // re-declare their agents when THEY restart, not when the server does.
   // Restore anything the persisted roster still declares before the dispatcher
   // and UI come up. Idempotent; existing static defs are never overwritten.
   try {
-    const restored = restoreClientBrains(config, store.getActiveAgents());
+    const restored = restoreClientAgents(config, store.getActiveWorkers());
     if (restored.length) {
-      console.log(`Restored ${restored.length} client-declared brain(s) into the registry: ${restored.join(', ')}`);
+      console.log(`Restored ${restored.length} client-declared agent(s) into the registry: ${restored.join(', ')}`);
     }
   } catch (e) {
-    console.error('restoreClientBrains failed:', e);
+    console.error('restoreClientAgents failed:', e);
   }
 
   // Host system-load sampler feeding the dashboard's top metrics bar.
   const sysMetrics = new SystemMetrics();
   sysMetrics.start();
 
-  // Rate-limit usage sampler for LOCAL metered brains (claude/codex on this
-  // host). Remote brains self-report through their heartbeat instead.
-  const usagePoller = new UsagePoller(store, () => config.orchestration.brains || {});
+  // Rate-limit usage sampler for LOCAL metered agents (claude/codex on this
+  // host). Remote agents self-report through their heartbeat instead.
+  const usagePoller = new UsagePoller(store, () => config.orchestration.agents || {});
   usagePoller.start();
 
   const app = express();
   // Client denylist pre-check (IP + headers) ahead of body parsing, so a blocked
   // client gets 403 even for a malformed body. The /mcp body check runs below.
-  const clientGuard = new ClientGuard(config.server.blockedClients, () => store.getActiveAgents());
+  const clientGuard = new ClientGuard(config.server.blockedClients, () => store.getActiveWorkers());
   const guardSeen = new Map<string, number>();
   const logGuardBlock = (reason: string, req: express.Request) => {
     const key = `${req.ip}|${reason}`;
@@ -92,21 +94,22 @@ async function main() {
   // gzip JSON + static assets; SSE (/api/events) and /mcp stay unbuffered. See core/compression.ts.
   app.use(createCompression());
   app.use(express.json());
+  app.use(legacyWireMiddleware);
 
   // Client denylist (server.blockedClients): rejects a named client (by source IP
   // or declared identity) on every path with 403, independent of the API key —
-  // all brain clients share one key, so the key can't single one out. Its brains
+  // all agent clients share one key, so the key can't single one out. Its agents
   // are disabled so the dispatcher stops routing tasks there. See core/client-guard.ts.
   if (clientGuard.active) {
-    const enforceBrains = () => {
-      const brains = config.orchestration.brains || {};
-      const off = clientGuard.disableBlockedBrains(brains);
-      if (off.length) console.warn(`client-guard: disabled blocked brain(s): ${off.join(', ')}`);
+    const enforceAgents = () => {
+      const agents = config.orchestration.agents || {};
+      const off = clientGuard.disableBlockedAgents(agents);
+      if (off.length) console.warn(`client-guard: disabled blocked agent(s): ${off.join(', ')}`);
     };
-    enforceBrains();
-    setInterval(enforceBrains, 60_000).unref();
+    enforceAgents();
+    setInterval(enforceAgents, 60_000).unref();
     app.use(clientGuard.middleware(
-      () => clientGuard.blockedAgentIds(config.orchestration.brains || {}), logGuardBlock));
+      () => clientGuard.blockedWorkerIds(config.orchestration.agents || {}), logGuardBlock));
     console.log(`Client guard: blocking ips=[${(config.server.blockedClients?.ips || []).join(', ')}] ` +
       `names=[${(config.server.blockedClients?.names || []).join(', ')}]`);
   }
@@ -193,7 +196,7 @@ async function main() {
       console.log(` No server.apiKey set and host ${config.server.host} is not loopback.`);
       console.log(` Generated an API key (saved to ${auth.file}, shown only this once):`);
       console.log(`\n   ${apiKey}\n`);
-      console.log(' Clients: "Authorization: Bearer <key>" (or COWORK_API_KEY for the brain client).');
+      console.log(' Clients: "Authorization: Bearer <key>" (or COWORK_API_KEY for the agent client).');
       console.log(' Dashboard: open /?apiKey=<key> once.');
       console.log('='.repeat(72));
     } else if (auth.soft) {
@@ -204,7 +207,7 @@ async function main() {
     }
   } else if (auth.openOptOut) {
     console.warn(`WARNING: listening on ${config.server.host} with NO API key (allowUnauthenticated). ` +
-      'Anyone who can reach this port can create tasks for your brains.');
+      'Anyone who can reach this port can create tasks for your agents.');
   }
 
   // SSE
@@ -241,23 +244,23 @@ async function main() {
 
     try {
       const task = evt?.payload?.task;
-      const brainId = task?.context?.ranBrain || task?.context?.brain;
-      if (brainId) {
-        const brain = config.orchestration.brains?.[brainId];
-        if (brain?.location === 'local' && brain.exec && isMeteredExec(brain.exec)) {
-          void usagePoller.refreshExec(brain.exec);
+      const agentId = task?.context?.ranAgent || task?.context?.agent;
+      if (agentId) {
+        const agent = config.orchestration.agents?.[agentId];
+        if (agent?.location === 'local' && agent.exec && isMeteredExec(agent.exec)) {
+          void usagePoller.refreshExec(agent.exec);
         }
       }
     } catch (e) { console.error('UsagePoller: taskCompleted refresh failed:', e); }
   });
 
-  eventBus.on('brainExecuted', (evt: any) => {
+  eventBus.on('agentExecuted', (evt: any) => {
     try {
       const exec = evt?.payload?.exec;
       if (exec && isMeteredExec(exec)) {
         void usagePoller.refreshExec(exec);
       }
-    } catch (e) { console.error('UsagePoller: brainExecuted refresh failed:', e); }
+    } catch (e) { console.error('UsagePoller: agentExecuted refresh failed:', e); }
   });
 
   // MCP Server
@@ -314,7 +317,7 @@ async function main() {
 
   // Stale agent cleanup every 5 minutes, ~3 min timeout (200000ms)
   const cleanup = setInterval(() => {
-    store.removeStaleAgents(200000);
+    store.removeStaleWorkers(200000);
   }, 300000);
 
 
@@ -325,19 +328,20 @@ async function main() {
   app.get('/api/dispatcher', (_req, res) => {
     res.json({
       enabled: config.orchestration.enabled,
+      roleChains: config.orchestration.roleChains || {},
       agents: config.orchestration.agents || {},
-      brains: config.orchestration.brains || {},
+      defaultThinking: config.orchestration.defaultThinking || DEFAULT_THINKING,
       defaultChain: config.orchestration.defaultChain || [],
       divisionChains: config.orchestration.divisionChains || {},
       running: dispatcher.getRunning()
     });
   });
 
-  // ── Brain fallback chains (global default + per-division + per-agent) ───────
+  // ── Agent fallback chains (global default + per-division + per-agent) ───────
   app.get('/api/chains', (_req, res) => res.json({
     defaultChain: config.orchestration.defaultChain || [],
     divisionChains: config.orchestration.divisionChains || {},
-    agentChains: config.orchestration.agentChains || {},
+    personaChains: config.orchestration.personaChains || {},
     tiers: config.orchestration.tiers || {}
   }));
 
@@ -368,16 +372,16 @@ async function main() {
     res.json({ from: new Date(from).toISOString(), to: new Date(to).toISOString(), count: rows.length, rulings: rows });
   });
 
-  const validChain = (brains: any): string[] => {
-    if (!Array.isArray(brains)) throw new Error('brains (string[]) required');
-    const reg = config.orchestration.brains || {};
-    const bad = brains.filter((b: string) => !reg[b]);
-    if (bad.length) throw new Error(`unknown brain(s): ${bad.join(', ')}`);
-    return brains;
+  const validChain = (agents: any): string[] => {
+    if (!Array.isArray(agents)) throw new Error('agents (string[]) required');
+    const reg = config.orchestration.agents || {};
+    const bad = agents.filter((b: string) => !reg[b]);
+    if (bad.length) throw new Error(`unknown agent(s): ${bad.join(', ')}`);
+    return agents;
   };
   app.put('/api/chains/default', (req, res) => {
     try {
-      config.orchestration.defaultChain = validChain(req.body?.brains);
+      config.orchestration.defaultChain = validChain(req.body?.agents);
       persistRegistries(config);
       res.json({ ok: true, defaultChain: config.orchestration.defaultChain });
     } catch (e: any) { res.status(400).json({ error: e.message }); }
@@ -385,23 +389,23 @@ async function main() {
   app.put('/api/chains/division/:division', (req, res) => {
     try {
       config.orchestration.divisionChains = config.orchestration.divisionChains || {};
-      const brains = validChain(req.body?.brains);
-      if (brains.length) config.orchestration.divisionChains[req.params.division] = brains;
+      const agents = validChain(req.body?.agents);
+      if (agents.length) config.orchestration.divisionChains[req.params.division] = agents;
       else delete config.orchestration.divisionChains[req.params.division];   // empty = use default
       persistRegistries(config);
-      res.json({ ok: true, division: req.params.division, brains });
+      res.json({ ok: true, division: req.params.division, agents });
     } catch (e: any) { res.status(400).json({ error: e.message }); }
   });
-  // Per-roster-agent override. Empty brains[] clears it (agent falls back to its
+  // Per-roster-agent override. Empty agents[] clears it (agent falls back to its
   // division's chain, then the global default).
-  app.put('/api/chains/agent/:agent', (req, res) => {
+  app.put('/api/chains/persona/:persona', (req, res) => {
     try {
-      config.orchestration.agentChains = config.orchestration.agentChains || {};
-      const brains = validChain(req.body?.brains);
-      if (brains.length) config.orchestration.agentChains[req.params.agent] = brains;
-      else delete config.orchestration.agentChains[req.params.agent];
+      config.orchestration.personaChains = config.orchestration.personaChains || {};
+      const agents = validChain(req.body?.agents);
+      if (agents.length) config.orchestration.personaChains[req.params.persona] = agents;
+      else delete config.orchestration.personaChains[req.params.persona];
       persistRegistries(config);
-      res.json({ ok: true, agent: req.params.agent, brains });
+      res.json({ ok: true, persona: req.params.persona, agents });
     } catch (e: any) { res.status(400).json({ error: e.message }); }
   });
 
@@ -412,7 +416,7 @@ async function main() {
     const byDiv: Record<string, any> = {};
     for (const a of roster) {
       const d = a.division || 'other';
-      (byDiv[d] ||= { label: meta[d]?.label || d, icon: meta[d]?.icon, color: meta[d]?.color, agents: [] }).agents.push({ slug: a.slug, name: a.name, description: a.description, emoji: a.emoji });
+      (byDiv[d] ||= { label: meta[d]?.label || d, icon: meta[d]?.icon, color: meta[d]?.color, personas: [] }).personas.push({ slug: a.slug, name: a.name, description: a.description, emoji: a.emoji });
     }
     res.json(byDiv);
   });
@@ -499,7 +503,7 @@ async function main() {
   });
 
   // ── Obsidian Vault: shared knowledge base (read-only) ──────────────────────
-  // Every brain queries the vault here; local brains may also read config.obsidian
+  // Every agent queries the vault here; local agents may also read config.obsidian
   // .vaultPath off disk directly (reported by GET /api/obsidian). All reads are
   // path-guarded to the vault root inside ObsidianVault.
   app.get('/api/obsidian', (_req, res) => {
@@ -535,7 +539,7 @@ async function main() {
   app.get('/api/video-studio', (_req, res) => {
     res.json({
       available: studio.available(), libDir: studio.cfg.libDir, libVersion: studio.libVersion(),
-      defaultBrain: studio.cfg.defaultBrain, brains: studio.cfg.brains, aspects: ASPECTS, tag: VIDEO_STUDIO_TAG,
+      defaultAgent: studio.cfg.defaultAgent, agents: studio.cfg.agents, aspects: ASPECTS, tag: VIDEO_STUDIO_TAG,
     });
   });
   app.get('/api/video-studio/styles', (_req, res) => {
@@ -567,11 +571,11 @@ async function main() {
   // ── Audio Overview 語音導讀: source → narration script → edge-tts mp3 ──────
   // The page (/audio-overview.html) posts a source + options and watches tasks
   // tagged "audio-overview"; the audio is a normal task, see core/audio-overview.ts.
-  const audioOverview = new AudioOverview({ defaultBrain: studio.cfg.defaultBrain, brains: studio.cfg.brains });
+  const audioOverview = new AudioOverview({ defaultAgent: studio.cfg.defaultAgent, agents: studio.cfg.agents });
   app.get('/api/audio-overview', (_req, res) => {
     const vault = getObsidianVault(config.obsidian);
     res.json({
-      tag: AUDIO_OVERVIEW_TAG, file: AUDIO_OVERVIEW_FILE, defaultBrain: audioOverview.defaultBrain, brains: audioOverview.brains,
+      tag: AUDIO_OVERVIEW_TAG, file: AUDIO_OVERVIEW_FILE, defaultAgent: audioOverview.defaultAgent, agents: audioOverview.agents,
       obsidian: !!vault && vault.available(),
     });
   });
@@ -609,7 +613,7 @@ async function main() {
   app.get('/api/shotcraft', (_req, res) => {
     res.json({
       available: shotcraft.available(), skillDir: shotcraft.cfg.skillDir, version: shotcraft.version(),
-      defaultBrain: shotcraft.cfg.defaultBrain, brains: shotcraft.cfg.brains, aspects: SHOTCRAFT_ASPECTS,
+      defaultAgent: shotcraft.cfg.defaultAgent, agents: shotcraft.cfg.agents, aspects: SHOTCRAFT_ASPECTS,
       lengths: SHOTCRAFT_LENGTHS, bgm: shotcraft.bgm(), tag: SHOTCRAFT_TAG, galleryUrl: GALLERY_URL,
     });
   });
@@ -633,7 +637,7 @@ async function main() {
       const inputs = Array.isArray(body.inputs) ? body.inputs : undefined;
       const inputNames = (inputs || []).map((i: any) => String(i?.name || '')).filter(Boolean);
       const from = { platform: 'dashboard', agent: 'shotcraft' };
-      // Preview: the exact brief the brain will get, nothing created.
+      // Preview: the exact brief the agent will get, nothing created.
       if (body.dryRun === true) {
         const preview = kind === 'goal' ? shotcraft.buildGoal(brief).description
           : shotcraft.buildTask(brief, inputNames).description;
@@ -667,9 +671,9 @@ async function main() {
   // static skill audit (core/skill-auditor.ts).
   const integrations = sharedIntegrations(config.integrations);
   const intEnabled = () => config.integrations?.enabled !== false;
-  const localBrains = () => Object.entries(config.orchestration.brains || {})
+  const localAgents = () => Object.entries(config.orchestration.agents || {})
     .filter(([, b]) => b.location === 'local').map(([id]) => id);
-  const wrapBrainDefault = () => defaultWrapBrain(config.integrations?.wrapBrain, localBrains());
+  const wrapAgentDefault = () => defaultWrapAgent(config.integrations?.wrapAgent, localAgents());
   app.use('/api/integrations', (_req, res, next) => {
     if (!intEnabled()) return res.status(404).json({ error: 'integrations are disabled (config integrations.enabled=false)' });
     next();
@@ -678,7 +682,7 @@ async function main() {
     res.json({
       root: integrations.root, skillsHome: integrations.skillsHome,
       clientSkillDirs: integrations.clientSkillDirs.filter(d => fs.existsSync(d)),
-      allowHosts: integrations.allowHosts, wrapBrain: wrapBrainDefault(), brains: localBrains(),
+      allowHosts: integrations.allowHosts, wrapAgent: wrapAgentDefault(), agents: localAgents(),
       integrations: integrations.list(),
     });
   });
@@ -706,12 +710,12 @@ async function main() {
         case 'rescan': return res.json(integrations.rescan(id));
         case 'wrap': {
           // Rule 6: the clone lives under the operator's home, so the wrap task is
-          // always pinned to a LOCAL brain.
-          const brain = localBrains().includes(String(body.brain)) ? String(body.brain) : wrapBrainDefault();
-          if (!brain) throw new Error('no local brain configured to run the wrap task');
-          const spec = integrations.buildWrapTask(id, { brain, notes: typeof body.notes === 'string' ? body.notes.slice(0, 4000) : undefined });
+          // always pinned to a LOCAL agent.
+          const agent = localAgents().includes(String(body.agent)) ? String(body.agent) : wrapAgentDefault();
+          if (!agent) throw new Error('no local agent configured to run the wrap task');
+          const spec = integrations.buildWrapTask(id, { agent, notes: typeof body.notes === 'string' ? body.notes.slice(0, 4000) : undefined });
           const task = store.createTask({
-            ...spec, context: { ...spec.context, agent: 'engineering-developer-tooling-engineer' },
+            ...spec, context: { ...spec.context, persona: 'engineering-developer-tooling-engineer' },
             from: { platform: 'dashboard', agent: 'integrations' }, to: {}, priority: 'normal',
           });
           return res.status(201).json({ task });
@@ -745,20 +749,20 @@ async function main() {
       await usagePoller.refresh();
     }
     const now = Date.now();
-    const clients = store.getActiveAgents()
-      .filter(a => a.sessionId !== 'dispatcher-worker' && !(a.platform === 'cowork' && a.agentName === 'orchestrator'))
+    const clients = store.getActiveWorkers()
+      .filter(a => a.sessionId !== 'dispatcher-worker' && !(a.platform === 'cowork' && a.workerName === 'orchestrator'))
       .map(a => ({
-        id: a.id, agentName: a.agentName, platform: a.platform, status: a.status,
+        id: a.id, workerName: a.workerName, platform: a.platform, status: a.status,
         capabilities: a.capabilities || [], registeredAt: a.registeredAt, lastHeartbeat: a.lastHeartbeat,
         live: now - new Date(a.lastHeartbeat).getTime() < 600000
       }));
-    // usage: per-brain rate-limit snapshots (local poller + remote heartbeats);
-    // localBrains: which of those live on THIS host, so the UI can render them
+    // usage: per-agent rate-limit snapshots (local poller + remote heartbeats);
+    // localAgents: which of those live on THIS host, so the UI can render them
     // as a separate "cowork host" card instead of mis-filing them under a client.
-    const localBrains = Object.entries(config.orchestration.brains || {})
+    const localAgents = Object.entries(config.orchestration.agents || {})
       .filter(([, b]) => b.location === 'local' && isMeteredExec(b.exec))
       .map(([id]) => id);
-    res.json({ clients, counters: store.getCounters(), usage: store.getBrainUsage(), localBrains });
+    res.json({ clients, counters: store.getCounters(), usage: store.getAgentUsage(), localAgents });
   });
 
   // ── Task artifacts (persistent per-task dir; downloadable) ─────────────────
@@ -803,7 +807,7 @@ async function main() {
     // The dashboard opens a task's RESULT in the markdown viewer via the artifacts
     // route with the synthetic name "result.md". The local dispatcher writes a real
     // result.md to the artifacts dir, so prefer that on disk; but for tasks with no
-    // file (remote brains, older runs) fall back to the task record's result text
+    // file (remote agents, older runs) fall back to the task record's result text
     // rather than 404ing the chip.
     if (rawFile === 'result.md' && !fs.existsSync(file)) {
       const task = store.getTask(taskId);
@@ -832,7 +836,7 @@ async function main() {
       }
     });
   });
-  // Upload — a REMOTE brain client pushes each file it produced into the task's
+  // Upload — a REMOTE agent client pushes each file it produced into the task's
   // artifacts dir (the local dispatcher collects them from disk instead). Raw
   // binary body so any size/type streams; path-guarded; stamps task.artifacts so
   // the inbox card lists it, and /api/artifacts/:taskId already serves it live.
@@ -879,7 +883,7 @@ async function main() {
       if (err && !res.headersSent) res.status(500).json({ error: 'download failed' });
     });
   });
-  // Upload — a REMOTE brain client pushes each file from its outputs/ folder.
+  // Upload — a REMOTE agent client pushes each file from its outputs/ folder.
   app.post('/api/outputs/:taskId/*file', express.raw({ type: '*/*', limit: '256mb' }), (req, res) => {
     try {
       const taskId = path.basename(req.params.taskId);
@@ -901,7 +905,7 @@ async function main() {
     } catch (e: any) { res.status(400).json({ error: e.message }); }
   });
 
-  // ── Task INPUT files (a person attaches files for the brain to read) ───────
+  // ── Task INPUT files (a person attaches files for the agent to read) ───────
   // Staging upload: raw binary body, filename via ?name= (or X-Upload-Filename).
   // Returns a token the client passes to POST /api/inbox ({inputs:[{token,name}]})
   // or POST /api/inbox/:id/inputs. Staged before the task exists so the chat
@@ -938,78 +942,97 @@ async function main() {
     });
   });
 
-  // ── Agents registry (worker profiles with an ordered brain chain) ──────────
-  app.get('/api/agents-config', (_req, res) => res.json(config.orchestration.agents || {}));
+  // ── Agents registry (worker profiles with an ordered agent chain) ──────────
+  app.get('/api/roles-config', (_req, res) => res.json(config.orchestration.roleChains || {}));
 
-  app.put('/api/agents-config/:name', (req, res) => {
+  app.put('/api/roles-config/:name', (req, res) => {
     try {
       const name = req.params.name;
-      const { description, brains } = req.body || {};
-      if (!Array.isArray(brains)) throw new Error('brains (string[]) is required');
-      const registry = config.orchestration.brains || {};
-      const bad = brains.filter((b: string) => !registry[b]);
-      if (bad.length) throw new Error(`unknown brain(s): ${bad.join(', ')}`);
-      config.orchestration.agents = config.orchestration.agents || {};
-      config.orchestration.agents[name] = { description: String(description || name), brains };
+      const { description, agents } = req.body || {};
+      if (!Array.isArray(agents)) throw new Error('agents (string[]) is required');
+      const registry = config.orchestration.agents || {};
+      const bad = agents.filter((b: string) => !registry[b]);
+      if (bad.length) throw new Error(`unknown agent(s): ${bad.join(', ')}`);
+      config.orchestration.roleChains = config.orchestration.roleChains || {};
+      config.orchestration.roleChains[name] = { description: String(description || name), agents };
       persistRegistries(config);
-      res.json({ ok: true, name, agent: config.orchestration.agents[name] });
+      res.json({ ok: true, name, agent: config.orchestration.roleChains[name] });
     } catch (e: any) { res.status(400).json({ error: e.message }); }
   });
 
-  app.delete('/api/agents-config/:name', (req, res) => {
-    delete (config.orchestration.agents || {})[req.params.name];
+  app.delete('/api/roles-config/:name', (req, res) => {
+    delete (config.orchestration.roleChains || {})[req.params.name];
     persistRegistries(config);
     res.json({ ok: true });
   });
 
-  // ── Brain registry (model × platform × location) ───────────────────────────
-  app.get('/api/brains', (_req, res) => res.json(config.orchestration.brains || {}));
+  // ── Agent registry (model × platform × location) ───────────────────────────
+  // How often old-contract clients still show up; zero for a while means legacy-wire can go.
+  app.get('/api/legacy-wire', (_req, res) => res.json(legacyWireUses()));
 
-  app.put('/api/brains/:id', (req, res) => {
+  app.get('/api/agents', (_req, res) => res.json(config.orchestration.agents || {}));
+
+  app.put('/api/agents/:id', (req, res) => {
     try {
       const id = req.params.id;
-      const { description, location, exec, model, command, host } = req.body || {};
+      const { description, location, exec, model, command, host, thinking } = req.body || {};
       if (location !== 'local' && location !== 'remote') throw new Error('location must be local|remote');
-      config.orchestration.brains = config.orchestration.brains || {};
-      // Preserve the disabled flag through a PUT update — a brain stays disabled
+      config.orchestration.agents = config.orchestration.agents || {};
+      // Preserve the disabled flag through a PUT update — an agent stays disabled
       // (or enabled) unless the caller explicitly changes it.
-      const prev = config.orchestration.brains[id];
-      config.orchestration.brains[id] = {
+      const prev = config.orchestration.agents[id];
+      config.orchestration.agents[id] = {
         description: String(description || id), location,
         ...(exec ? { exec } : {}), ...(model !== undefined ? { model } : {}),
         ...(Array.isArray(command) ? { command } : {}), ...(host ? { host } : {}),
+        ...(normalizeThinking(thinking) ? { thinking: normalizeThinking(thinking) } : {}),
         ...(prev?.disabled ? { disabled: true } : {})
       };
       persistRegistries(config);
-      res.json({ ok: true, id, brain: config.orchestration.brains[id] });
+      res.json({ ok: true, id, agent: config.orchestration.agents[id] });
     } catch (e: any) { res.status(400).json({ error: e.message }); }
   });
 
-  // Disable a brain — it stays in the registry but is excluded from dispatch,
-  // chain resolution, and the brain picker until re-enabled.
-  app.patch('/api/brains/:id/disable', (req, res) => {
+  // Set an agent's default thinking level ('' clears it back to the global default).
+  app.patch('/api/agents/:id/thinking', (req, res) => {
+    const agent = config.orchestration.agents?.[req.params.id];
+    if (!agent) return res.status(404).json({ error: 'Agent not found' });
+    const raw = req.body?.thinking;
+    if (raw === '' || raw === null) delete agent.thinking;
+    else {
+      const level = normalizeThinking(raw);
+      if (!level) return res.status(400).json({ error: `thinking must be one of ${THINKING_LEVELS.join(', ')}` });
+      agent.thinking = level;
+    }
+    persistRegistries(config);
+    res.json({ ok: true, id: req.params.id, thinking: agent.thinking ?? null });
+  });
+
+  // Disable an agent — it stays in the registry but is excluded from dispatch,
+  // chain resolution, and the agent picker until re-enabled.
+  app.patch('/api/agents/:id/disable', (req, res) => {
     const id = req.params.id;
-    const brain = (config.orchestration.brains || {})[id];
-    if (!brain) return res.status(404).json({ error: 'brain not found' });
-    brain.disabled = true;
+    const agent = (config.orchestration.agents || {})[id];
+    if (!agent) return res.status(404).json({ error: 'agent not found' });
+    agent.disabled = true;
     persistRegistries(config);
     res.json({ ok: true, id, disabled: true });
   });
 
-  // Re-enable a previously disabled brain.
-  app.patch('/api/brains/:id/enable', (req, res) => {
+  // Re-enable a previously disabled agent.
+  app.patch('/api/agents/:id/enable', (req, res) => {
     const id = req.params.id;
-    const brain = (config.orchestration.brains || {})[id];
-    if (!brain) return res.status(404).json({ error: 'brain not found' });
-    delete brain.disabled;
+    const agent = (config.orchestration.agents || {})[id];
+    if (!agent) return res.status(404).json({ error: 'agent not found' });
+    delete agent.disabled;
     persistRegistries(config);
     res.json({ ok: true, id, disabled: false });
   });
 
-  // Deregister a brain — and CASCADE: strip it from every agent's chain so no
-  // agent is left pointing at a brain that no longer exists.
-  app.delete('/api/brains/:id', (req, res) => {
-    const scrubbed = removeBrainCascade(config, req.params.id);
+  // Deregister an agent — and CASCADE: strip it from every chain so no
+  // agent is left pointing at an agent that no longer exists.
+  app.delete('/api/agents/:id', (req, res) => {
+    const scrubbed = removeAgentCascade(config, req.params.id);
     res.json({ ok: true, id: req.params.id, agents_scrubbed: scrubbed });
   });
 

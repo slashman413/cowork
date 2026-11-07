@@ -28,13 +28,13 @@ function makeStore(): Store {
     agencyAgents: path.join(root, 'agency-agents'),
   };
   for (const p of Object.values(paths)) fs.mkdirSync(p, { recursive: true });
-  const config = { paths, orchestration: { brains: {} } } as unknown as Config;
+  const config = { paths, orchestration: { agents: {} } } as unknown as Config;
   return new Store(config, new EventBus());
 }
 
 test('submitting answers releases a wait-input task back to pending', () => {
   const store = makeStore();
-  const t = store.createTask({ title: 'Ship it', description: 'd', context: { agent: 'engineer' } });
+  const t = store.createTask({ title: 'Ship it', description: 'd', context: { persona: 'engineer' } });
   store.parkForInput({ taskId: t.id, questions: ['Which cloud provider?'] });
   assert.equal(store.getTask(t.id)!.status, 'wait-input');
 
@@ -46,7 +46,7 @@ test('submitting answers releases a wait-input task back to pending', () => {
 
 test('answers accumulate across multiple wait-input rounds', () => {
   const store = makeStore();
-  const t = store.createTask({ title: 'Migrate the DB', description: 'd', context: { agent: 'engineer' } });
+  const t = store.createTask({ title: 'Migrate the DB', description: 'd', context: { persona: 'engineer' } });
 
   // Round 1: agent asks for the repo path, user answers.
   store.parkForInput({ taskId: t.id, questions: ['What is your project path?'] });
@@ -64,7 +64,7 @@ test('answers accumulate across multiple wait-input rounds', () => {
 
 test('re-answering the same question overwrites the prior value', () => {
   const store = makeStore();
-  const t = store.createTask({ title: 'Fix it', description: 'd', context: { agent: 'engineer' } });
+  const t = store.createTask({ title: 'Fix it', description: 'd', context: { persona: 'engineer' } });
   store.parkForInput({ taskId: t.id, questions: ['API base URL?'] });
   store.submitInteraction({ taskId: t.id, responses: { q1: 'http://old' } });
   store.parkForInput({ taskId: t.id, questions: ['API base URL?'] });

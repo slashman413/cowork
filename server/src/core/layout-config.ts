@@ -36,7 +36,7 @@ export function activeLayoutPath(): string {
 }
 
 /** Singleton app pages: id === type, at most one each, rendered by app.js. */
-export const APP_PAGES = ['tasks', 'recipes', 'calendar', 'goals', 'routing', 'brains', 'personas', 'workers', 'config'] as const;
+export const APP_PAGES = ['tasks', 'recipes', 'calendar', 'goals', 'routing', 'agents', 'personas', 'workers', 'config'] as const;
 /**
  * Pre-2026-10-16 app-page ids, renamed so each URL matches its nav label
  * (#inbox showed "Tasks", …). Old ids in a user's layout.json are rewritten
@@ -62,7 +62,7 @@ const APP_PAGE_DEFAULTS: Record<string, { label: string; icon: string }> = {
   calendar: { label: 'Calendar', icon: 'calendar-days' },
   goals: { label: 'Goals', icon: 'target' },
   routing: { label: 'Routing', icon: 'bot' },
-  brains: { label: 'Brains', icon: 'cpu' },
+  agents: { label: 'Agents', icon: 'cpu' },
   personas: { label: 'Personas', icon: 'users-round' },
   workers: { label: 'Workers', icon: 'plug' },
   config: { label: 'Configuration', icon: 'settings' },

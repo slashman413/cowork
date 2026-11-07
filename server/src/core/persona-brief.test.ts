@@ -7,7 +7,7 @@ import { briefPersona } from './persona-brief.js';
 const pad = (n: number) => 'x'.repeat(n);
 const persona = [
   '# Dev Agent', 'intro line',
-  '## 🧠 Your Identity & Memory', '- Role: dev',
+  '## 🤖 Your Identity & Memory', '- Role: dev',
   '## 🚨 Critical Rules You Must Follow', '- never do X',
   '## 📋 Your Technical Deliverables', '```md', '## not a heading', pad(4000), '```',
   '## 🔄 Your Workflow Process', pad(2000),

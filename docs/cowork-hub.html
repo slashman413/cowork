@@ -34,10 +34,10 @@
   <!-- Async font load: a blackholed network must not block first paint.
        The body font stack falls back to system monospace until it lands. -->
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap"
+  <link href="https://fonts.googleapis.com/css2?family=JetAgents+Mono:wght@400;500;600;700&display=swap"
         rel="stylesheet" media="print" onload="this.media='all'">
   <noscript>
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=JetAgents+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
   </noscript>
   <style>
     /* ==========================================================
@@ -351,7 +351,7 @@
     * { margin: 0; padding: 0; box-sizing: border-box; }
 
     body {
-      font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', 'Noto Sans Mono CJK SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', monospace;
+      font-family: 'JetAgents Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', 'Noto Sans Mono CJK SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', monospace;
       background: var(--bg);
       min-height: 100vh;
       padding: 2rem;
@@ -4840,7 +4840,7 @@
       </div>
     </div>
 
-    <script id="archify-guided-views-data" type="application/json">[{"id":"dispatch-path","label":"Dispatch path","focus":["agents","mcp","inbox","router","dispatcher","brains"],"note":"Follow one dispatched task from the MCP call to the brain that executes it."},{"id":"routing-inputs","label":"Routing inputs","focus":["inbox","router","roster","config"],"note":"How a task with no pinned agent gets a division, a persona, and a chain order."},{"id":"failure-handover","label":"Failure handover","focus":["brains","verifier","dispatcher","artifacts"],"note":"A rejected result hands the task to the next chain rung; written output stays on disk."}]</script>
+    <script id="archify-guided-views-data" type="application/json">[{"id":"dispatch-path","label":"Dispatch path","focus":["agents","mcp","inbox","router","dispatcher","agents"],"note":"Follow one dispatched task from the MCP call to the agent that executes it."},{"id":"routing-inputs","label":"Routing inputs","focus":["inbox","router","roster","config"],"note":"How a task with no pinned agent gets a division, a persona, and a chain order."},{"id":"failure-handover","label":"Failure handover","focus":["agents","verifier","dispatcher","artifacts"],"note":"A rejected result hands the task to the next chain rung; written output stays on disk."}]</script>
 
     <div class="guided-views no-print" id="guided-views" hidden aria-label="Guided diagram views">
       <button id="guided-view-prev" type="button" aria-label="Previous guided view" title="Previous guided view ([)">&#8592;</button>
@@ -4917,14 +4917,14 @@
         <path data-edge-from="mcp" data-edge-to="inbox" data-edge-label="file task" data-edge-key="1" data-edge-id="mcp-to-inbox" data-composition-points="450,413;560,413" d="M 450 413 L 560 413" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="inbox" data-edge-to="router" data-edge-label="pending" data-edge-key="2" data-edge-id="inbox-to-router" data-composition-points="710,413;820,413" d="M 710 413 L 820 413" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="router" data-edge-to="dispatcher" data-edge-label="system prompt" data-edge-key="3" data-edge-id="router-to-dispatcher" data-composition-points="970,406;1080,406" d="M 970 406 L 1080 406" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="dispatcher" data-edge-to="brains" data-edge-label="chain rung 0 → n" data-edge-key="4" data-edge-id="dispatcher-to-brains" data-composition-points="1230,406;1340,406" d="M 1230 406 L 1340 406" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="dispatcher" data-edge-to="agents" data-edge-label="chain rung 0 → n" data-edge-key="4" data-edge-id="dispatcher-to-agents" data-composition-points="1230,406;1340,406" d="M 1230 406 L 1340 406" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <path data-edge-from="dashboard" data-edge-to="rest" data-edge-label="HTTP + SSE" data-edge-key="5" data-edge-id="dashboard-to-rest" data-composition-points="190,153;300,153" d="M 190 153 L 300 153" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="rest" data-edge-to="inbox" data-edge-label="/api/inbox" data-edge-key="6" data-edge-id="rest-to-inbox" data-composition-points="450,153;635,153;635,380" d="M 450 153 L 627 153 Q 635 153 635 161 L 635 380" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="roster" data-edge-to="router" data-edge-label="division → persona" data-edge-key="7" data-edge-id="roster-to-router" data-composition-points="895,186;895,380" d="M 895 186 L 895 380" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="config" data-edge-to="dispatcher" data-edge-label="chain order" data-edge-key="8" data-edge-id="config-to-dispatcher" data-composition-points="970,673;1025,673;1025,420;1080,420" d="M 970 673 L 1017 673 Q 1025 673 1025 665 L 1025 428 Q 1025 420 1033 420 L 1080 420" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="brains" data-edge-to="verifier" data-edge-label="result" data-edge-key="9" data-edge-id="brains-to-verifier" data-composition-points="1420,380;1420,356;1254,356;1254,153;1230,153" d="M 1420 380 L 1420 364 Q 1420 356 1412 356 L 1262 356 Q 1254 356 1254 348 L 1254 161 Q 1254 153 1246 153 L 1230 153" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="agents" data-edge-to="verifier" data-edge-label="result" data-edge-key="9" data-edge-id="agents-to-verifier" data-composition-points="1420,380;1420,356;1254,356;1254,153;1230,153" d="M 1420 380 L 1420 364 Q 1420 356 1412 356 L 1262 356 Q 1254 356 1254 348 L 1254 161 Q 1254 153 1246 153 L 1230 153" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="verifier" data-edge-to="dispatcher" data-edge-label="reject → next rung" data-edge-key="10" data-edge-id="verifier-to-dispatcher" data-composition-points="1155,186;1155,380" d="M 1155 186 L 1155 380" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
-        <path data-edge-from="brains" data-edge-to="artifacts" data-edge-label="writes output" data-edge-key="11" data-edge-id="brains-to-artifacts" data-composition-points="1340,420;1285,420;1285,673;1230,673" d="M 1340 420 L 1293 420 Q 1285 420 1285 428 L 1285 665 Q 1285 673 1277 673 L 1230 673" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="agents" data-edge-to="artifacts" data-edge-label="writes output" data-edge-key="11" data-edge-id="agents-to-artifacts" data-composition-points="1340,420;1285,420;1285,673;1230,673" d="M 1340 420 L 1293 420 Q 1285 420 1285 428 L 1285 665 Q 1285 673 1277 673 L 1230 673" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
 
         <!-- Components -->
         <g id="node-dashboard" data-node-id="dashboard" data-node-label="Cowork Dashboard" tabindex="0" role="button" aria-label="Focus Cowork Dashboard, localhost:6868, Architecture component" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="localhost:6868" data-node-context="Architecture component">
@@ -5013,8 +5013,8 @@
         <text data-detail="context" x="895" y="427" class="t-muted" font-size="9" text-anchor="middle">two-stage classifier</text>
         </g>
 
-        <g id="node-config" data-node-id="config" data-node-label="Live Config" tabindex="0" role="button" aria-label="Focus Live Config, ~/.cowork/config.json, cowork-mcp service · port 6868" aria-pressed="false" data-node-kind="database" data-node-sublabel="~/.cowork/config.json" data-node-tag="chains + brains" data-node-context="cowork-mcp service · port 6868">
-          <title>Live Config · ~/.cowork/config.json · cowork-mcp service · port 6868 · chains + brains</title>
+        <g id="node-config" data-node-id="config" data-node-label="Live Config" tabindex="0" role="button" aria-label="Focus Live Config, ~/.cowork/config.json, cowork-mcp service · port 6868" aria-pressed="false" data-node-kind="database" data-node-sublabel="~/.cowork/config.json" data-node-tag="chains + agents" data-node-context="cowork-mcp service · port 6868">
+          <title>Live Config · ~/.cowork/config.json · cowork-mcp service · port 6868 · chains + agents</title>
           <rect x="820" y="640" width="150" height="66" rx="6" class="c-mask"/>
           <rect x="820" y="640" width="150" height="66" rx="6" class="c-database" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(826 646) scale(0.6875)">
@@ -5023,7 +5023,7 @@
           </g>
           <text data-detail-anchor x="895" y="671" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Live Config</text>
         <text data-detail="context" x="895" y="687" class="t-muted" font-size="9" text-anchor="middle">~/.cowork/config.json</text>
-        <text data-detail="fine" x="895" y="698" class="t-database" font-size="7" text-anchor="middle">chains + brains</text>
+        <text data-detail="fine" x="895" y="698" class="t-database" font-size="7" text-anchor="middle">chains + agents</text>
         </g>
 
         <g id="node-verifier" data-node-id="verifier" data-node-label="Verifier" tabindex="0" role="button" aria-label="Focus Verifier, accept or reject result, cowork-mcp service · port 6868" aria-pressed="false" data-node-kind="security" data-node-sublabel="accept or reject result" data-node-context="cowork-mcp service · port 6868">
@@ -5038,15 +5038,15 @@
         <text data-detail="context" x="1155" y="167" class="t-muted" font-size="9" text-anchor="middle">accept or reject result</text>
         </g>
 
-        <g id="node-dispatcher" data-node-id="dispatcher" data-node-label="Dispatcher" tabindex="0" role="button" aria-label="Focus Dispatcher, runs the brain chain, cowork-mcp service · port 6868" aria-pressed="false" data-node-kind="backend" data-node-sublabel="runs the brain chain" data-node-context="cowork-mcp service · port 6868">
-          <title>Dispatcher · runs the brain chain · cowork-mcp service · port 6868</title>
+        <g id="node-dispatcher" data-node-id="dispatcher" data-node-label="Dispatcher" tabindex="0" role="button" aria-label="Focus Dispatcher, runs the agent chain, cowork-mcp service · port 6868" aria-pressed="false" data-node-kind="backend" data-node-sublabel="runs the agent chain" data-node-context="cowork-mcp service · port 6868">
+          <title>Dispatcher · runs the agent chain · cowork-mcp service · port 6868</title>
           <rect x="1080" y="380" width="150" height="66" rx="6" class="c-mask"/>
           <rect x="1080" y="380" width="150" height="66" rx="6" class="c-backend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(1086 386) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
           <text data-detail-anchor x="1155" y="411" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Dispatcher</text>
-        <text data-detail="context" x="1155" y="427" class="t-muted" font-size="9" text-anchor="middle">runs the brain chain</text>
+        <text data-detail="context" x="1155" y="427" class="t-muted" font-size="9" text-anchor="middle">runs the agent chain</text>
         </g>
 
         <g id="node-artifacts" data-node-id="artifacts" data-node-label="Artifacts + Inputs" tabindex="0" role="button" aria-label="Focus Artifacts + Inputs, artifacts/[task-id]/, cowork-mcp service · port 6868" aria-pressed="false" data-node-kind="database" data-node-sublabel="artifacts/[task-id]/" data-node-context="cowork-mcp service · port 6868">
@@ -5061,15 +5061,15 @@
         <text data-detail="context" x="1155" y="687" class="t-muted" font-size="9" text-anchor="middle">artifacts/[task-id]/</text>
         </g>
 
-        <g id="node-brains" data-node-id="brains" data-node-label="Brain Pool" tabindex="0" role="button" aria-label="Focus Brain Pool, local + remote execs, Architecture component" aria-pressed="false" data-node-kind="external" data-node-sublabel="local + remote execs" data-node-tag="claude · hermes · agy · codex" data-node-context="Architecture component">
-          <title>Brain Pool · local + remote execs · Architecture component · claude · hermes · agy · codex</title>
+        <g id="node-agents" data-node-id="agents" data-node-label="Agent Pool" tabindex="0" role="button" aria-label="Focus Agent Pool, local + remote execs, Architecture component" aria-pressed="false" data-node-kind="external" data-node-sublabel="local + remote execs" data-node-tag="claude · hermes · agy · codex" data-node-context="Architecture component">
+          <title>Agent Pool · local + remote execs · Architecture component · claude · hermes · agy · codex</title>
           <rect x="1340" y="380" width="160" height="66" rx="6" class="c-mask"/>
           <rect x="1340" y="380" width="160" height="66" rx="6" class="c-external" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(1346 386) scale(0.6875)">
             <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
             <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
           </g>
-          <text data-detail-anchor x="1420" y="411" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Brain Pool</text>
+          <text data-detail-anchor x="1420" y="411" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Agent Pool</text>
         <text data-detail="context" x="1420" y="427" class="t-muted" font-size="9" text-anchor="middle">local + remote execs</text>
         <text data-detail="fine" x="1420" y="438" class="t-external" font-size="7" text-anchor="middle">claude · hermes · agy · codex</text>
         </g>
@@ -5091,7 +5091,7 @@
           <rect x="988.8" y="386" width="72.4" height="14" rx="3" class="c-mask"/>
           <text x="1025" y="396" class="t-muted" font-size="8" text-anchor="middle">system prompt</text>
         </g>
-        <g data-detail="context" data-edge-from="dispatcher" data-edge-to="brains" data-edge-label="chain rung 0 → n" data-edge-key="4" data-edge-id="dispatcher-to-brains">
+        <g data-detail="context" data-edge-from="dispatcher" data-edge-to="agents" data-edge-label="chain rung 0 → n" data-edge-key="4" data-edge-id="dispatcher-to-agents">
           <rect x="1241.6" y="386" width="86.8" height="14" rx="3" class="c-mask"/>
           <text x="1285" y="396" class="t-backend" font-size="8" text-anchor="middle">chain rung 0 → n</text>
         </g>
@@ -5111,7 +5111,7 @@
           <rect x="993.6" y="526.5" width="62.8" height="14" rx="3" class="c-mask"/>
           <text x="1025" y="536.5" class="t-muted" font-size="8" text-anchor="middle">chain order</text>
         </g>
-        <g data-detail="context" data-edge-from="brains" data-edge-to="verifier" data-edge-label="result" data-edge-key="9" data-edge-id="brains-to-verifier">
+        <g data-detail="context" data-edge-from="agents" data-edge-to="verifier" data-edge-label="result" data-edge-key="9" data-edge-id="agents-to-verifier">
           <rect x="1317.6" y="336" width="38.8" height="14" rx="3" class="c-mask"/>
           <text x="1337" y="346" class="t-muted" font-size="8" text-anchor="middle">result</text>
         </g>
@@ -5119,7 +5119,7 @@
           <rect x="1106.8" y="266" width="96.39999999999999" height="14" rx="3" class="c-mask"/>
           <text x="1155" y="276" class="t-security" font-size="8" text-anchor="middle">reject → next rung</text>
         </g>
-        <g data-detail="context" data-edge-from="brains" data-edge-to="artifacts" data-edge-label="writes output" data-edge-key="11" data-edge-id="brains-to-artifacts">
+        <g data-detail="context" data-edge-from="agents" data-edge-to="artifacts" data-edge-label="writes output" data-edge-key="11" data-edge-id="agents-to-artifacts">
           <rect x="1248.8" y="526.5" width="72.4" height="14" rx="3" class="c-mask"/>
           <text x="1285" y="536.5" class="t-messagebus" font-size="8" text-anchor="middle">writes output</text>
         </g>
@@ -5354,8 +5354,8 @@
         </div>
         <ul>
           <li>&bull; With no pinned context the LLM router picks a division, then a persona</li>
-          <li>&bull; context.agent, division, or brain skips the classifier</li>
-          <li>&bull; Chains run top to bottom; a rejected result hands over to the next brain</li>
+          <li>&bull; context.agent, division, or agent skips the classifier</li>
+          <li>&bull; Chains run top to bottom; a rejected result hands over to the next agent</li>
         </ul>
       </div>
 
@@ -6046,13 +6046,13 @@
 
         // Prepend a local()-only @font-face block for each weight so that the
         // sandboxed image-rendering context used during PNG/JPEG/WebP export
-        // can find JetBrains Mono if the user has it installed locally, and
+        // can find JetAgents Mono if the user has it installed locally, and
         // falls through cleanly to the monospace stack otherwise. The usual
         // Google-Fonts <link> in the host document is unreachable from the
         // serialized SVG, so url()-sourced faces would just hang.
         var fontFallback = [400, 500, 600, 700].map(function (w) {
-          return "@font-face { font-family: 'JetBrains Mono'; font-weight: " + w +
-                 "; src: local('JetBrains Mono'), local('JetBrainsMono-Regular'); }";
+          return "@font-face { font-family: 'JetAgents Mono'; font-weight: " + w +
+                 "; src: local('JetAgents Mono'), local('JetAgentsMono-Regular'); }";
         }).join('\n');
 
         var style = document.createElementNS('http://www.w3.org/2000/svg', 'style');
@@ -6070,7 +6070,7 @@
 
           style.textContent =
             fontFallback + "\n" +
-            "svg { font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', 'Noto Sans Mono CJK SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', monospace; }\n" +
+            "svg { font-family: 'JetAgents Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', 'Noto Sans Mono CJK SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', monospace; }\n" +
             hostStyle + "\n" +
             ":root, svg { " + darkVars + " }\n" +
             "@media (prefers-color-scheme: light) { :root, svg { " + lightVars + " } }\n" +
@@ -6098,7 +6098,7 @@
           // Keep this order.
           style.textContent =
             fontFallback + "\n" +
-            "svg { font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', 'Noto Sans Mono CJK SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', monospace; }\n" +
+            "svg { font-family: 'JetAgents Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', 'Noto Sans Mono CJK SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', monospace; }\n" +
             hostStyle + "\n" +
             ":root, svg { " + vars + " }\n";
 
@@ -6209,7 +6209,7 @@
       function fitCanvasText(ctx, text, maxWidth, startSize, minSize, weight) {
         var value = String(text || '').trim();
         var size = startSize;
-        var family = "'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+        var family = "'JetAgents Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
         while (size > minSize) {
           ctx.font = (weight || '600') + ' ' + size + 'px ' + family;
           if (ctx.measureText(value).width <= maxWidth) return value;
@@ -6300,7 +6300,7 @@
               var fittedSubtitle = fitCanvasText(ctx, subtitle, SHARE_CARD_WIDTH - SHARE_CARD_PADDING * 2 - 280, 13, 11, '500');
               ctx.fillText(fittedSubtitle, SHARE_CARD_PADDING, 87);
 
-              ctx.font = "600 12px 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+              ctx.font = "600 12px 'JetAgents Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
               ctx.textAlign = 'right';
               ctx.fillStyle = accent;
               ctx.fillText(cardLabel, SHARE_CARD_WIDTH - SHARE_CARD_PADDING, 50);

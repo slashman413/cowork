@@ -13,7 +13,7 @@ import type { Config } from '../types.js';
  * pinned to the same executor. Failed/unfinished tasks are refused (they use
  * rerunTask instead).
  */
-function makeStore(brains: Record<string, unknown> = {}): { store: Store; root: string } {
+function makeStore(agents: Record<string, unknown> = {}): { store: Store; root: string } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cowork-continue-'));
   const paths = {
     inbox: path.join(root, 'inbox'),
@@ -25,7 +25,7 @@ function makeStore(brains: Record<string, unknown> = {}): { store: Store; root: 
     agencyAgents: path.join(root, 'agency-agents'),
   };
   for (const p of Object.values(paths)) fs.mkdirSync(p, { recursive: true });
-  const config = { paths, orchestration: { brains } } as unknown as Config;
+  const config = { paths, orchestration: { agents } } as unknown as Config;
   return { store: new Store(config, new EventBus()), root };
 }
 
@@ -43,7 +43,7 @@ test('continueTask seeds the follow-up with the prior result + artifacts as inpu
     description: 'Design the netcode.',
     from: { platform: 'p', agent: 'a' },
     priority: 'high',
-    context: { ranAgent: 'software-architect', ranDivision: 'engineering', ranBrain: 'remote-opus' }
+    context: { ranPersona: 'software-architect', ranDivision: 'engineering', ranAgent: 'remote-opus' }
   } as any);
   seedArtifacts(root, orig.id, { 'architecture.md': '# arch\nlots of detail', 'diagram.svg': '<svg/>' });
   await store.completeTask({ taskId: orig.id, result: 'Here is the architecture blueprint.', internal: true });
@@ -56,9 +56,9 @@ test('continueTask seeds the follow-up with the prior result + artifacts as inpu
   assert.equal(next.priority, 'high', 'priority carried over');
 
   // Executor pin follows what actually ran.
-  assert.equal(next.context?.agent, 'software-architect');
+  assert.equal(next.context?.persona, 'software-architect');
   assert.equal(next.context?.division, 'engineering');
-  assert.equal(next.context?.brain, 'remote-opus');
+  assert.equal(next.context?.agent, 'remote-opus');
   assert.equal(next.context?.continuedFrom, orig.id);
 
   // Prior outputs land as inputs on disk + on context.inputFiles.
@@ -106,7 +106,7 @@ test('continueTask refuses a failed (chain-exhausted) task — that path is reru
   const bad = store.createTask({ title: 'nope', from: { platform: 'p', agent: 'a' } } as any);
   await store.completeTask({
     taskId: bad.id,
-    result: 'FAILED after 3 attempt(s) (chain exhausted). Brains that failed: x. Last output: limit',
+    result: 'FAILED after 3 attempt(s) (chain exhausted). Agents that failed: x. Last output: limit',
     internal: true
   });
   assert.equal(store.continueTask(bad.id), null, 'a failed task is not continuable');
@@ -119,48 +119,48 @@ test('continueTask refuses an unfinished task and a missing task', () => {
   assert.equal(store.continueTask('does-not-exist'), null, 'a missing task returns null');
 });
 
-// ── Brain override: choose which brain claims the continuation ──────────────
-test('continueTask pins the follow-up to a chosen (known) brain instead of the original one', async () => {
+// ── Agent override: choose which agent claims the continuation ──────────────
+test('continueTask pins the follow-up to a chosen (known) agent instead of the original one', async () => {
   const { store } = makeStore({ 'remote-opus': {}, 'remote-sonnet': {} });
   const orig = store.createTask({
     title: 'keep building', from: { platform: 'p', agent: 'a' },
-    context: { ranAgent: 'software-architect', ranBrain: 'remote-opus' }
+    context: { ranPersona: 'software-architect', ranAgent: 'remote-opus' }
   } as any);
   await store.completeTask({ taskId: orig.id, result: 'phase 1 done', internal: true });
 
   const next = store.continueTask(orig.id, 'remote-sonnet')!;
-  assert.equal(next.context?.brain, 'remote-sonnet', 'follow-up pinned to the chosen brain');
-  assert.equal(next.context?.brainAuto, undefined, 'a chosen brain is a USER pin, not a transient auto pin');
-  assert.equal(next.context?.agent, 'software-architect', 'agent assignment still carried over');
+  assert.equal(next.context?.agent, 'remote-sonnet', 'follow-up pinned to the chosen agent');
+  assert.equal(next.context?.agentAuto, undefined, 'a chosen agent is a USER pin, not a transient auto pin');
+  assert.equal(next.context?.persona, 'software-architect', 'agent assignment still carried over');
 });
 
-test('continueTask with a blank brain choice clears the pin so the agent chain routes it', async () => {
+test('continueTask with a blank agent choice clears the pin so the role chain routes it', async () => {
   const { store } = makeStore({ 'remote-opus': {} });
   const orig = store.createTask({
     title: 'route me', from: { platform: 'p', agent: 'a' },
-    context: { ranAgent: 'software-architect', ranBrain: 'remote-opus' }
+    context: { ranPersona: 'software-architect', ranAgent: 'remote-opus' }
   } as any);
   await store.completeTask({ taskId: orig.id, result: 'ok', internal: true });
 
   const next = store.continueTask(orig.id, '')!;
-  assert.equal(next.context?.brain, undefined, 'blank choice = Auto → no brain pin');
-  assert.equal(next.context?.agent, 'software-architect', 'agent still set so the chain can route');
+  assert.equal(next.context?.agent, undefined, 'blank choice = Auto → no agent pin');
+  assert.equal(next.context?.persona, 'software-architect', 'agent still set so the chain can route');
 });
 
-test('continueTask with no brain arg keeps the original brain (default, unchanged)', async () => {
+test('continueTask with no agent arg keeps the original agent (default, unchanged)', async () => {
   const { store } = makeStore({ 'remote-opus': {} });
   const orig = store.createTask({
-    title: 'default', from: { platform: 'p', agent: 'a' }, context: { ranBrain: 'remote-opus' }
+    title: 'default', from: { platform: 'p', agent: 'a' }, context: { ranAgent: 'remote-opus' }
   } as any);
   await store.completeTask({ taskId: orig.id, result: 'ok', internal: true });
-  assert.equal(store.continueTask(orig.id)!.context?.brain, 'remote-opus', 'same brain when no override given');
+  assert.equal(store.continueTask(orig.id)!.context?.agent, 'remote-opus', 'same agent when no override given');
 });
 
-test('continueTask rejects an unknown brain id (surfaces as a 400 upstream)', async () => {
+test('continueTask rejects an unknown agent id (surfaces as a 400 upstream)', async () => {
   const { store } = makeStore({ 'remote-opus': {} });
-  const orig = store.createTask({ title: 'bad brain', from: { platform: 'p', agent: 'a' } } as any);
+  const orig = store.createTask({ title: 'bad agent', from: { platform: 'p', agent: 'a' } } as any);
   await store.completeTask({ taskId: orig.id, result: 'ok', internal: true });
-  assert.throws(() => store.continueTask(orig.id, 'ghost-brain'), /Unknown brain/, 'unknown brain is refused');
+  assert.throws(() => store.continueTask(orig.id, 'ghost-agent'), /Unknown agent/, 'unknown agent is refused');
 });
 
 // --- Continue dialog extra steer: { prompt } and { inputs } ---------------
@@ -218,11 +218,11 @@ test('continueTask folds extra staged uploads in alongside the prior run\'s outp
   assert.ok(sp && fs.readFileSync(sp, 'utf8') === 'SPEC', 'extra upload copied verbatim');
 });
 
-test('continueTask accepts prompt + inputs + brain together (the full dialog payload)', async () => {
+test('continueTask accepts prompt + inputs + agent together (the full dialog payload)', async () => {
   const { store } = makeStore({ 'remote-sonnet': {} });
   const orig = store.createTask({
     title: 'Draft', description: 'brief', from: { platform: 'p', agent: 'a' },
-    context: { ranBrain: 'remote-opus' }
+    context: { ranAgent: 'remote-opus' }
   } as any);
   await store.completeTask({ taskId: orig.id, result: 'ok', internal: true });
 
@@ -230,7 +230,7 @@ test('continueTask accepts prompt + inputs + brain together (the full dialog pay
   const next = store.continueTask(orig.id, 'remote-sonnet',
     { prompt: 'Refine it.', inputs: [{ token: f.token, name: f.name }] })!;
 
-  assert.equal(next.context?.brain, 'remote-sonnet', 'brain override applied');
+  assert.equal(next.context?.agent, 'remote-sonnet', 'agent override applied');
   assert.match(next.description!, /Refine it\./, 'prompt applied');
   assert.ok((next.context?.inputFiles as string[]).includes('extra.md'), 'extra input applied');
 });

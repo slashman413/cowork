@@ -11,7 +11,7 @@ import type { Config, Task, AchieverDecision } from '../types.js';
 /**
  * Exercise the DISPATCHER's Goal driver (`driveGoals`) — the glue that turns
  * "the Achiever decides its next move" into real tasks — WITHOUT spawning any
- * LLM. `askAchieverBrain` (the only place a brain is spawned) is stubbed with a
+ * LLM. `askAchieverAgent` (the only place an agent is spawned) is stubbed with a
  * scripted queue of decisions, so the evaluate→plan→emit loop runs
  * deterministically: decide → materialise task(s) → complete → decide again.
  */
@@ -39,11 +39,11 @@ function harness(decisions: (AchieverDecision | null)[]) {
   const store = new FakeStore();
   const goals = new Goals(config, store as any);
   const dispatcher = new Dispatcher(config, store as any, {} as any, goals);
-  // Stub the brain call: return the next scripted decision as a fenced JSON block
+  // Stub the agent call: return the next scripted decision as a fenced JSON block
   // (so it also exercises parseAchieverDecision), or empty for a "no decision".
   const queue = [...decisions];
-  (dispatcher as any).achieverBrains = () => [{ exec: 'claude', model: 'test' }];
-  (dispatcher as any).askAchieverBrain = async () => {
+  (dispatcher as any).achieverAgents = () => [{ exec: 'claude', model: 'test' }];
+  (dispatcher as any).askAchieverAgent = async () => {
     const d = queue.length ? queue.shift() : null;
     return { text: d ? '```json\n' + JSON.stringify(d) + '\n```' : '' };
   };
@@ -126,7 +126,7 @@ test('driver BLOCKS (honest reason + resume contract) a goal that exhausts its s
   // complete each task's status (→ quiescent) WITHOUT auditing its phase, so the
   // phase stays workable and execution tasks accrue until the budget guard bites.
   const { goals, store, dispatcher } = harness([]);
-  (dispatcher as any).askAchieverBrain = async () => ({ text:
+  (dispatcher as any).askAchieverAgent = async () => ({ text:
     '```json\n' + JSON.stringify({ kind: 'emit', tasks: [{ title: 'again' }] }) + '\n```' });
   const g = goals.create({
     title: 'Endless', successCriteria: 'Never?', stepBudget: 2,
@@ -148,7 +148,7 @@ test('driver BLOCKS (honest reason + resume contract) a goal that exhausts its s
 
 test('driver BLOCKS (recoverably) a goal whose Achiever never returns a usable decision', async () => {
   const { goals, dispatcher } = harness([]);
-  (dispatcher as any).askAchieverBrain = async () => ({ text: 'sorry, I could not decide' });   // unparseable every time
+  (dispatcher as any).askAchieverAgent = async () => ({ text: 'sorry, I could not decide' });   // unparseable every time
   const goalId = seedGoal(goals);
   for (let i = 0; i < Dispatcher.MAX_GOAL_FAILURES + 1; i++) {
     drive(dispatcher);
@@ -163,7 +163,7 @@ test('driver BLOCKS (recoverably) a goal whose Achiever never returns a usable d
 
 test('an Achiever that self-declares a block holds the goal recoverably (not a failure)', async () => {
   const { goals, dispatcher } = harness([]);
-  (dispatcher as any).askAchieverBrain = async () => ({ text:
+  (dispatcher as any).askAchieverAgent = async () => ({ text:
     '```json\n' + JSON.stringify({ kind: 'block', reason: 'needs a human decision on pricing', unblockCriteria: 'the CEO approves the price' }) + '\n```' });
   const goalId = seedGoal(goals);
   drive(dispatcher); await settle();
@@ -177,7 +177,7 @@ test('a blocked goal AUTO-RESUMES when its retry time arrives — recovery needs
   // The transient fault clears: the Achiever now returns a usable emit decision.
   const { goals, store, dispatcher, dir } = harness([{ kind: 'emit', tasks: [{ title: 'real work' }] }]);
   const goalId = seedGoal(goals);
-  goals.block(goalId, 'transient brain fault');
+  goals.block(goalId, 'transient agent fault');
   assert.equal(goals.get(goalId)!.status, 'blocked');
 
   makeRetryDue(dir, goalId);                 // its backoff has elapsed
@@ -192,9 +192,9 @@ test('a blocked goal AUTO-RESUMES when its retry time arrives — recovery needs
 
 test('a half-open probe that still fails re-blocks with a GROWN backoff (one-shot trial)', async () => {
   const { goals, dispatcher, dir } = harness([]);
-  (dispatcher as any).askAchieverBrain = async () => ({ text: 'still broken, no JSON' });   // fault persists
+  (dispatcher as any).askAchieverAgent = async () => ({ text: 'still broken, no JSON' });   // fault persists
   const goalId = seedGoal(goals);
-  goals.block(goalId, 'transient brain fault');
+  goals.block(goalId, 'transient agent fault');
   assert.equal(goals.get(goalId)!.blockCount, 1);
 
   makeRetryDue(dir, goalId);
@@ -220,27 +220,27 @@ test('driver self-heals a dropped Judger event by re-emitting the Judger', async
   assert.ok(revived, 'a fresh Judger task was re-emitted by the self-heal');
 });
 
-// ── Rate limits and the brain chain ─────────────────────────────────────────
+// ── Rate limits and the agent chain ─────────────────────────────────────────
 
 function chainHarness(cooling: Record<string, string> = {}) {
   const h = harness([]);
-  delete (h.dispatcher as any).achieverBrains;   // the real chain walk
+  delete (h.dispatcher as any).achieverAgents;   // the real chain walk
   const config = (h.dispatcher as any).config;
-  config.orchestration.brains = {
+  config.orchestration.agents = {
     first: { location: 'local', exec: 'claude', model: 'a' },
     second: { location: 'local', exec: 'hermes', model: 'b' }
   };
-  (h.store as any).brainCooldownUntil = (id: string) => cooling[id];
-  (h.store as any).noteBrainRateLimited = (id: string) => { cooling[id] = '2030-01-01T00:00:00.000Z'; return cooling[id]; };
-  const g = h.goals.create({ title: 'G', successCriteria: 'C?', phases: [{ key: 'a', title: 'A' }], achieverBrainChain: ['first', 'second'] });
+  (h.store as any).agentCooldownUntil = (id: string) => cooling[id];
+  (h.store as any).noteAgentRateLimited = (id: string) => { cooling[id] = '2030-01-01T00:00:00.000Z'; return cooling[id]; };
+  const g = h.goals.create({ title: 'G', successCriteria: 'C?', phases: [{ key: 'a', title: 'A' }], achieverAgentChain: ['first', 'second'] });
   h.goals.activate(g.goalId);
   return { ...h, goalId: g.goalId };
 }
 
-test('a rate-limit reply falls through to the next brain, with no failure and no block row', async () => {
+test('a rate-limit reply falls through to the next agent, with no failure and no block row', async () => {
   const { goals, store, dispatcher, goalId } = chainHarness();
   const asked: string[] = [];
-  (dispatcher as any).askAchieverBrain = async (b: any) => {
+  (dispatcher as any).askAchieverAgent = async (b: any) => {
     asked.push(b.id);
     return { text: b.id === 'first' ? "You've hit your weekly limit" : '```json\n' + JSON.stringify({ kind: 'emit', tasks: [{ title: 'work' }] }) + '\n```' };
   };
@@ -255,10 +255,10 @@ test('a rate-limit reply falls through to the next brain, with no failure and no
   assert.match(turns[0].raw!, /weekly limit/);
 });
 
-test('with every brain cooling the goal holds until the reset: zero spawns, no failure', async () => {
+test('with every agent cooling the goal holds until the reset: zero spawns, no failure', async () => {
   const { goals, dispatcher, goalId } = chainHarness({ first: '2030-01-02T00:00:00.000Z', second: '2030-01-01T00:00:00.000Z' });
   let spawns = 0;
-  (dispatcher as any).askAchieverBrain = async () => { spawns++; return { text: '' }; };
+  (dispatcher as any).askAchieverAgent = async () => { spawns++; return { text: '' }; };
   for (let i = 0; i < 3; i++) { drive(dispatcher); await settle(); }
   assert.equal(spawns, 0);
   const rec = goals.get(goalId)!;
@@ -270,14 +270,14 @@ test('with every brain cooling the goal holds until the reset: zero spawns, no f
 
 test('a real decision that mentions a rate limit is still a decision', async () => {
   const { store, dispatcher } = chainHarness();
-  (dispatcher as any).askAchieverBrain = async () => ({ text: 'The API rate limit matters.\n```json\n' + JSON.stringify({ kind: 'emit', tasks: [{ title: 'work' }] }) + '\n```' });
+  (dispatcher as any).askAchieverAgent = async () => ({ text: 'The API rate limit matters.\n```json\n' + JSON.stringify({ kind: 'emit', tasks: [{ title: 'work' }] }) + '\n```' });
   drive(dispatcher); await settle();
   assert.equal(store.tasks.length, 1);
 });
 
 test('an unusable reply is logged with its raw text, the thing that was missing before', async () => {
   const { goals, dispatcher, goalId } = chainHarness();
-  (dispatcher as any).askAchieverBrain = async () => ({ text: 'prose with no json at all' });
+  (dispatcher as any).askAchieverAgent = async () => ({ text: 'prose with no json at all' });
   drive(dispatcher); await settle();
   const t = goals.achieverTurns(goalId).at(-1)!;
   assert.equal(t.outcome, 'unparseable');
@@ -287,7 +287,7 @@ test('an unusable reply is logged with its raw text, the thing that was missing 
 test('a blocked goal with a failing typed check fires no LLM turn and pushes its retry out', async () => {
   const { goals, dispatcher, dir, goalId } = chainHarness();
   let spawns = 0;
-  (dispatcher as any).askAchieverBrain = async () => { spawns++; return { text: '' }; };
+  (dispatcher as any).askAchieverAgent = async () => { spawns++; return { text: '' }; };
   goals.block(goalId, 'waiting on a time', 'after 2030', { code: 'achiever_declared', check: { type: 'after-time', value: '2030-01-01T00:00:00Z' } });
   makeRetryDue(dir, goalId);
   drive(dispatcher); await settle();
@@ -300,7 +300,7 @@ test('a blocked goal with a failing typed check fires no LLM turn and pushes its
 test('a turn over the token budget blocks with its own reason and spends nothing', async () => {
   const { goals, store, dispatcher } = harness([]);
   let spawns = 0;
-  (dispatcher as any).askAchieverBrain = async () => { spawns++; return { text: '' }; };
+  (dispatcher as any).askAchieverAgent = async () => { spawns++; return { text: '' }; };
   const g = goals.create({ title: 'G', successCriteria: 'C?', tokenBudget: 100, phases: [{ key: 'a', title: 'A' }] });
   goals.activate(g.goalId);
   store.tasks.push({ id: 'x', title: 't', status: 'done', context: { goalId: g.goalId, goalGenerated: true, usage: { input: 90, cacheRead: 50, cacheWrite: 0, output: 1 } } } as any);
@@ -313,10 +313,10 @@ test('a turn over the token budget blocks with its own reason and spends nothing
 
 // ── Review fixes, 11-06: found from the first live turn ─────────────────────
 
-test('an empty reply moves on to the next brain, with no failure counted', async () => {
+test('an empty reply moves on to the next agent, with no failure counted', async () => {
   const { goals, dispatcher, goalId } = chainHarness();
   const asked: string[] = [];
-  (dispatcher as any).askAchieverBrain = async (b: any) => {
+  (dispatcher as any).askAchieverAgent = async (b: any) => {
     asked.push(b.id);
     return b.id === 'first' ? { text: '\n', stderr: 'boom' }
       : { text: '```json\n{"kind":"plan","phase":{"key":"next","title":"Next"},"reason":"r"}\n```' };
@@ -331,25 +331,25 @@ test('an empty reply moves on to the next brain, with no failure counted', async
   assert.equal(t[0].raw, 'boom', 'stderr is kept when stdout is empty');
 });
 
-test('a failure counts once, only when every brain failed', async () => {
+test('a failure counts once, only when every agent failed', async () => {
   const { dispatcher, goalId } = chainHarness();
   let spawns = 0;
-  (dispatcher as any).askAchieverBrain = async () => { spawns++; return { text: 'prose' }; };
+  (dispatcher as any).askAchieverAgent = async () => { spawns++; return { text: 'prose' }; };
   (dispatcher as any).driveGoals();
   await settle();
   assert.equal(spawns, 2);
   assert.equal((dispatcher as any).goalFailures.get(goalId), 1);
 });
 
-test('a goal with no chain gets a tool-free claude brain, then the router', () => {
+test('a goal with no chain gets a tool-free claude agent, then the router', () => {
   const { dispatcher } = chainHarness();
   const orch = (dispatcher as any).config.orchestration;
   orch.classifier = { exec: 'hermes', model: 'b', timeoutMs: 1000 };
-  orch.brains.third = { location: 'local', exec: 'agy', model: 'c' };
-  orch.brains.far = { location: 'remote', exec: 'claude', model: 'd' };
+  orch.agents.third = { location: 'local', exec: 'agy', model: 'c' };
+  orch.agents.far = { location: 'remote', exec: 'claude', model: 'd' };
   orch.defaultChain = ['far', 'third', 'second', 'first'];
-  const names = (chain?: string[]) => (dispatcher as any).achieverBrains(chain).map((b: any) => b.id || `router:${b.model}`);
-  // agy keeps its tools, and remote brains cannot run this.
+  const names = (chain?: string[]) => (dispatcher as any).achieverAgents(chain).map((b: any) => b.id || `router:${b.model}`);
+  // agy keeps its tools, and remote agents cannot run this.
   assert.deepEqual(names([]), ['first', 'router:b']);
   assert.deepEqual(names(undefined), ['first', 'router:b']);
   assert.deepEqual(names(['second']), ['second'], 'a pinned chain is respected');
@@ -364,7 +364,7 @@ test('hermes turns use the narrowest toolset and report usage', () => {
 
 test('a rate limit reported only on stderr holds the goal instead of failing it', async () => {
   const { goals, dispatcher, goalId } = chainHarness();
-  (dispatcher as any).askAchieverBrain = async () => ({ text: '', stderr: "You've hit your 5-hour limit" });
+  (dispatcher as any).askAchieverAgent = async () => ({ text: '', stderr: "You've hit your 5-hour limit" });
   (dispatcher as any).driveGoals();
   await settle();
   assert.ok(goals.get(goalId)!.achieverRetryAt);
@@ -373,7 +373,7 @@ test('a rate limit reported only on stderr holds the goal instead of failing it'
 
 test('a turn whose goal was paused meanwhile neither applies nor counts', async () => {
   const { goals, dispatcher, goalId } = chainHarness();
-  (dispatcher as any).askAchieverBrain = async () => {
+  (dispatcher as any).askAchieverAgent = async () => {
     goals.pause(goalId);
     return { text: '```json\n{"kind":"plan","phase":{"key":"late","title":"Late"},"reason":"r"}\n```' };
   };

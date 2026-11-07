@@ -11,8 +11,8 @@ import { Store } from './store.js';
 import type { Config } from '../types.js';
 
 /**
- * Regression: deleting an in-progress task left its brain running (a dsh run kept
- * the local SGLang engine at ~96 % GPU). The fix spawns brains in their own process
+ * Regression: deleting an in-progress task left its agent running (a dsh run kept
+ * the local SGLang engine at ~96 % GPU). The fix spawns agents in their own process
  * group and kills the WHOLE tree — including tool processes that escaped into their
  * own session and ones that ignore SIGTERM.
  */
@@ -26,7 +26,7 @@ async function waitFor(fn: () => boolean, ms = 3000) {
   return fn();
 }
 
-/** Spawn a "brain" tree like execute() does: detached shell → plain child,
+/** Spawn a "agent" tree like execute() does: detached shell → plain child,
  *  a child in its own session (setsid), and a child that ignores SIGTERM. */
 function spawnTree(dir: string) {
   const script = `
@@ -59,24 +59,24 @@ test('killProcessTree kills the root, its group, escaped sessions and SIGTERM-ig
   }
 });
 
-test('deleting a running task (taskDeleted event) kills its brain tree and marks the run cancelled', async () => {
+test('deleting a running task (taskDeleted event) kills its agent tree and marks the run cancelled', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'proctree-'));
   try {
     const bus = new EventBus();
-    const config = { orchestration: { killGraceMs: 300, brains: {}, agents: {} }, inbox: { maxRetries: 1 } } as unknown as Config;
+    const config = { orchestration: { killGraceMs: 300, agents: {}, agents: {} }, inbox: { maxRetries: 1 } } as unknown as Config;
     const d = new Dispatcher(config, {} as any, bus);
     const child = spawnTree(dir);
     const pids = await treePids(dir);
-    (d as any).running.set('task-1', { role: 'x', startedAt: Date.now(), brainId: 'local-dsh-qwen3-8-27b' });
+    (d as any).running.set('task-1', { role: 'x', startedAt: Date.now(), agentId: 'local-dsh-qwen3-8-27b' });
     (d as any).children.set('task-1', child);
 
     bus.emitTaskDeleted('some-other-task', 'in-progress');
     await sleep(100);
-    assert.ok(pids.every(alive), 'an unrelated delete leaves this brain alone');
+    assert.ok(pids.every(alive), 'an unrelated delete leaves this agent alone');
 
     bus.emitTaskDeleted('task-1', 'in-progress');
     assert.ok((d as any).cancelled.has('task-1'), 'run marked cancelled → execute() discards it');
-    assert.ok(await waitFor(() => pids.every(p => !alive(p))), `brain tree killed: ${pids.filter(alive)}`);
+    assert.ok(await waitFor(() => pids.every(p => !alive(p))), `agent tree killed: ${pids.filter(alive)}`);
     assert.equal(d.cancelTask('not-running'), false, 'cancelling a task this dispatcher is not running is a no-op');
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -94,7 +94,7 @@ test('Store.deleteTask emits taskDeleted with the full id (short-id delete inclu
     const bus = new EventBus();
     const seen: any[] = [];
     bus.on('taskDeleted', (e: any) => seen.push(e.payload));
-    const store = new Store({ paths, orchestration: { brains: {} } } as unknown as Config, bus);
+    const store = new Store({ paths, orchestration: { agents: {} } } as unknown as Config, bus);
     const task = store.createTask({ title: 'run me', from: { platform: 'p', agent: 'a' } } as any);
     assert.equal(store.deleteTask(task.id.slice(0, 8)).deleted, true);
     assert.deepEqual(seen, [{ taskId: task.id, status: 'pending' }]);
@@ -103,7 +103,7 @@ test('Store.deleteTask emits taskDeleted with the full id (short-id delete inclu
   }
 });
 
-test('end-to-end: a task deleted mid-run has its brain tree killed and its run discarded (no handover)', async () => {
+test('end-to-end: a task deleted mid-run has its agent tree killed and its run discarded (no handover)', async () => {
   const root = mkdtempSync(join(tmpdir(), 'cowork-e2e-'));
   const pidDir = mkdtempSync(join(tmpdir(), 'proctree-'));
   try {
@@ -114,29 +114,29 @@ test('end-to-end: a task deleted mid-run has its brain tree killed and its run d
     }
     const config = {
       paths, server: { port: 0 }, inbox: { maxRetries: 3 },
-      orchestration: { taskTimeoutMs: 60000, killGraceMs: 300, brains: {}, agents: {} }
+      orchestration: { taskTimeoutMs: 60000, killGraceMs: 300, agents: {}, agents: {} }
     } as unknown as Config;
     const bus = new EventBus();
     const store = new Store(config, bus);
     const d = new Dispatcher(config, store, bus);
-    (d as any).agentId = store.registerAgent({ platform: 'cowork', agentName: 'orchestrator', capabilities: [] } as any).id;
+    (d as any).workerId = store.registerWorker({ platform: 'cowork', workerName: 'orchestrator', capabilities: [] } as any).id;
     (d as any).buildPrompt = () => 'prompt';
     let verified = false;
     (d as any).llmVerdict = async () => { verified = true; return { ok: true }; };
 
     const task = store.createTask({ title: 'gpu hog', from: { platform: 'p', agent: 'a' } } as any);
-    const brain = `sleep 300 & echo $! > ${pidDir}/plain; setsid sleep 300 & echo $! > ${pidDir}/escaped; ` +
+    const agent = `sleep 300 & echo $! > ${pidDir}/plain; setsid sleep 300 & echo $! > ${pidDir}/escaped; ` +
       `sh -c 'trap "" TERM; while :; do sleep 0.1; done' & echo $! > ${pidDir}/stubborn; wait`;
-    const plan = { agent: 'x', label: 'dsh-like', platform: 'dsh', exec: 'script', model: '', brainId: 'local-dsh-qwen3-8-27b',
-      command: ['sh', '-c', brain], attempt: 0, chainLen: 1, pinned: true, isRoster: false };
+    const plan = { persona: 'x', label: 'dsh-like', platform: 'dsh', exec: 'script', model: '', agentId: 'local-dsh-qwen3-8-27b',
+      command: ['sh', '-c', agent], attempt: 0, chainLen: 1, pinned: true, isRoster: false };
     const run = (d as any).execute(store.getTask(task.id), plan) as Promise<void>;
 
     const pids = await treePids(pidDir);
-    assert.ok(pids.every(alive), 'brain tree running');
+    assert.ok(pids.every(alive), 'agent tree running');
     assert.equal(store.deleteTask(task.id).deleted, true);
 
-    await run;   // resolves once the killed brain closes
-    assert.ok(await waitFor(() => pids.every(p => !alive(p))), `brain tree killed: ${pids.filter(alive)}`);
+    await run;   // resolves once the killed agent closes
+    assert.ok(await waitFor(() => pids.every(p => !alive(p))), `agent tree killed: ${pids.filter(alive)}`);
     assert.equal(verified, false, 'deleted run is not verified');
     assert.equal(store.getTask(task.id), null, 'deleted task is not resurrected by handover/complete');
     assert.equal((d as any).running.size, 0);

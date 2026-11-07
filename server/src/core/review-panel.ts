@@ -30,7 +30,7 @@ export interface PanelFinding {
 
 export interface PanelReview {
   family: string;
-  brain: string;
+  agent: string;
   /** Raw reviewer reply (empty when the reviewer crashed). */
   text: string;
   failed?: boolean;
@@ -104,7 +104,7 @@ export function buildLeadJudgmentPrompt(input: {
     ...(input.acceptance.length ? input.acceptance.map((c, i) => `${i + 1}. ${c}`) : ['1. Deliverable genuinely and completely addresses the task']),
     ...(input.priorFindings?.length ? [``, `PRIOR ROUND'S ACT-ON FINDINGS (check whether each is resolved):`, ...input.priorFindings.map((f, i) => `${i + 1}. ${f}`)] : []),
     ``,
-    ...reviews.flatMap(r => [`## Reviewer — family: ${r.family} (brain ${r.brain})`, r.text.slice(0, 6000), ``]),
+    ...reviews.flatMap(r => [`## Reviewer — family: ${r.family} (agent ${r.agent})`, r.text.slice(0, 6000), ``]),
     `## How to judge`,
     `Merge findings that describe the same issue differently and list every family that raised it. Findings two or more families raised independently are the highest signal. Read a lone family's finding, but weight it accordingly. Be especially careful about dismissing security findings and correctness bugs.`,
     ``,

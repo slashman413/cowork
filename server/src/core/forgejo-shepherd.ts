@@ -1,9 +1,9 @@
 /**
  * Forgejo/Gitea PR shepherd — the server-side executor for report §5c on a
- * self-hosted forge. The pr-watch brain reviews; this module is the only code
+ * self-hosted forge. The pr-watch agent reviews; this module is the only code
  * that writes to the forge, and it enforces the merge policy itself
  * (decidePrAction + label + author ≠ bot + head-sha pin) instead of trusting
- * the brain's prompt.
+ * the agent's prompt.
  */
 import fs from 'fs';
 import os from 'os';

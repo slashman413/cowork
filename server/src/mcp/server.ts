@@ -5,7 +5,9 @@ import type { Config } from '../types.js';
 import type { Store } from '../core/store.js';
 import type { EventBus } from '../core/events.js';
 import type { Goals } from '../core/goals.js';
-import { registerBrain, removeBrainCascade, clientTaskView } from '../config.js';
+import { LEGACY_REGISTER_KEY, noteLegacyRegister, withLegacyPin } from '../legacy-wire.js';
+import { THINKING_LEVELS } from '../core/thinking.js';
+import { registerAgent, removeAgentCascade, clientTaskView } from '../config.js';
 import { getObsidianVault } from '../core/obsidian.js';
 import { sharedIntegrations, defaultAuditTargets } from '../core/integrations.js';
 import { auditPath, mergeReports, formatSummary } from '../core/skill-auditor.js';
@@ -18,15 +20,15 @@ import { applyPstackCommand } from '../core/playbooks.js';
 // Sent to every client in the initialize response so a connecting agent LEARNS,
 // from the handshake itself, how to declare the models it can run.
 const SERVER_INSTRUCTIONS = [
-  'Cowork multi-agent hub. To join as a worker and offer your models ("brains"),',
-  'call register_agent ONCE and include a `brains` array — this is how you propagate',
+  'Cowork multi-agent hub. To join as a worker and offer your agents (a model on a machine),',
+  'call register_agent ONCE and include an `agents` array — this is how you propagate',
   'your capabilities; the server auto-registers them (no config files needed):',
   '',
   '  register_agent({',
   '    platform: "claude" | "hermes" | "antigravity",',
   '    agent_name: "<short name for this machine>",',
-  '    capabilities: ["<brain id>", ...],',
-  '    brains: [',
+  '    capabilities: ["<agent id>", ...],',
+  '    agents: [',
   '      { id: "remote-<host>-cc-sonnet-5-5", location: "remote", exec: "claude", model: "claude-sonnet-5-5" },',
   '      { id: "remote-<host>-cc-opus-5-5",   location: "remote", exec: "claude", model: "claude-opus-5-5" },',
   '      { id: "remote-<host>-cc-default",    location: "remote", exec: "claude", model: "" }  // account default',
@@ -34,24 +36,51 @@ const SERVER_INSTRUCTIONS = [
   '  })',
   '',
   'exec is one of: claude | hermes | agy | codex | ollama (model = an Ollama chat model) | script.',
-  'Each brain may also carry an optional `env` manifest — {paths, tools, secrets, net, traits}',
+  'Thinking level is a run parameter, not part of an id: never end an agent id or model with',
+  '-low/-medium/-high. An agent may set `thinking` (low|medium|high|xhigh|max) as its default; a task',
+  'sets context.thinking to override it; otherwise a run uses medium. Clients must apply it when they',
+  'run a task: claude --effort, codex model_reasoning_effort, agy model slug <model>-<level>.',
+  'A response with agent_aliases means you declared a retired id: use the canonical id and register again.',
+  'Each agent may also carry an optional `env` manifest — {paths, tools, secrets, net, traits}',
   'of machine-detected FACTS (names only, never secret values) — so the router can avoid sending a',
   'task to a host that lacks the paths/tools/credentials it needs. The ready-made client auto-detects it.',
   '',
   'Then poll list_inbox(status:"pending"), claim_task(task_id, agent_id) any task whose',
-  'context.brain is one of your ids, run it locally, and complete_task(...). Call',
-  'deregister_agent(agent_id) to remove your brains when you leave (they are NOT',
+  'context.agent is one of your agent ids, run it locally, and complete_task(...). The agent_id in',
+  'these calls is your worker registration `id` returned by register_agent, not an id in `agents`. Call',
+  'deregister_agent(agent_id) to remove your agents when you leave (they are NOT',
   'auto-removed on disconnect). A ready-made client + presets live in the repo:',
-  'deploy/remote-brain-client.mjs and JOIN-AS-A-BRAIN.md.'
+  'deploy/remote-agent-client.mjs and JOIN-AS-AN-AGENT.md.'
 ].join('\n');
 
 /** Cap a client-declared env manifest to sane bounds before it is persisted:
  *  ≤200 entries per list, each ≤300 chars. A hostile or buggy client cannot
  *  bloat the registry. Returns a plain object with only the known list fields. */
-function capEnv(env: Record<string, unknown>): import('../types.js').BrainEnv {
+/** One agent a worker offers (the register_agent handshake). The schema is closed:
+ *  a key must be declared here AND forwarded by the handler, or it is silently dropped. */
+const agentDeclarations = z.array(z.object({
+  id: z.string(),
+  location: z.enum(['local', 'remote']).default('remote'),
+  exec: z.enum(['claude', 'hermes', 'agy', 'script', 'codex', 'ollama', 'dsh']).optional(),
+  model: z.string().optional(),
+  /** Default thinking level for this agent; a task's context.thinking overrides it. */
+  thinking: z.enum(THINKING_LEVELS).optional(),
+  host: z.string().optional(),
+  description: z.string().optional(),
+  // WF-3 (RC-1): env capability manifest.
+  env: z.object({
+    paths: z.array(z.string()).optional(),
+    tools: z.array(z.string()).optional(),
+    secrets: z.array(z.string()).optional(),
+    net: z.array(z.string()).optional(),
+    traits: z.array(z.string()).optional()
+  }).partial().optional()
+}));
+
+function capEnv(env: Record<string, unknown>): import('../types.js').AgentEnv {
   const cap = (v: unknown): string[] =>
     Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string').slice(0, 200).map(s => s.slice(0, 300)) : [];
-  const out: import('../types.js').BrainEnv = {};
+  const out: import('../types.js').AgentEnv = {};
   for (const k of ['paths', 'tools', 'secrets', 'net', 'traits'] as const) {
     if (Array.isArray((env as any)[k])) out[k] = cap((env as any)[k]);
   }
@@ -64,47 +93,32 @@ function buildServer(config: Config, store: Store, eventBus: EventBus, goals?: G
     version: config.server.version || '1.0.0'
   }, { instructions: SERVER_INSTRUCTIONS });
 
-  // 1. register_agent — a connecting client may also DECLARE the brains it can
-  //    run (clients-capability protocol). Each declared brain is auto-added to
+  // 1. register_agent — a connecting client may also DECLARE the agents it can
+  //    run (clients-capability protocol). Each declared agent is auto-added to
   //    the registry, owned by this agent, and removed only via deregister_agent
   //    or the UI (never on heartbeat timeout).
   server.tool(
     'register_agent',
     'Register this client as a worker and OPTIONALLY declare the models it can run ' +
-    'via `brains` (the clients-capability handshake). Each brain {id, location, exec, ' +
+    'via `agents` (the clients-capability handshake). Each agent {id, location, exec, ' +
     'model, host} is auto-added to the server registry so the orchestrator can send it ' +
-    'tasks; brains persist until deregister_agent. Returns the agent id (save it for ' +
-    'heartbeat/claim) and registered_brains.',
+    'tasks; agents persist until deregister_agent. Returns the agent id (save it for ' +
+    'heartbeat/claim) and registered_agents.',
     {
       platform: z.string(),
       agent_name: z.string(),
       session_id: z.string().optional(),
       capabilities: z.array(z.string()).optional(),
       current_task: z.string().optional(),
-      brains: z.array(z.object({
-        id: z.string(),
-        location: z.enum(['local', 'remote']).default('remote'),
-        exec: z.enum(['claude', 'hermes', 'agy', 'script', 'codex', 'ollama', 'dsh']).optional(),
-        model: z.string().optional(),
-        host: z.string().optional(),
-        description: z.string().optional(),
-        // WF-3 (RC-1): env capability manifest. The schema is closed, so this key
-        // must be declared here AND forwarded below — otherwise it is silently
-        // stripped and the feature no-ops with no error.
-        env: z.object({
-          paths: z.array(z.string()).optional(),
-          tools: z.array(z.string()).optional(),
-          secrets: z.array(z.string()).optional(),
-          net: z.array(z.string()).optional(),
-          traits: z.array(z.string()).optional()
-        }).partial().optional()
-      })).optional()
+      agents: agentDeclarations.optional(),
+      // Clients on the old contract send the same array under its retired name.
+      [LEGACY_REGISTER_KEY]: agentDeclarations.optional()
     },
     async (args) => {
       try {
-        const agent = store.registerAgent({
+        const worker = store.registerWorker({
           platform: args.platform,
-          agentName: args.agent_name,
+          workerName: args.agent_name,
           sessionId: args.session_id,
           capabilities: args.capabilities,
           currentTask: args.current_task
@@ -112,48 +126,50 @@ function buildServer(config: Config, store: Store, eventBus: EventBus, goals?: G
         store.resetCounters(args.agent_name);   // fresh client → fresh counters
         const registered: string[] = [];
         const aliased: Record<string, string> = {};
-        for (const b of args.brains || []) {
-          const canon = registerBrain(config, b.id, {
+        const legacyDeclared = (args as any)[LEGACY_REGISTER_KEY] as typeof args.agents;
+        if (legacyDeclared) noteLegacyRegister();
+        for (const b of args.agents || legacyDeclared || []) {
+          const canon = registerAgent(config, b.id, {
             description: b.description || `${b.id} (auto-registered by ${args.agent_name})`,
             location: b.location,
             ...(b.exec ? { exec: b.exec } : {}),
             ...(b.model !== undefined ? { model: b.model } : {}),
+            ...(b.thinking ? { thinking: b.thinking } : {}),
             ...(b.host ? { host: b.host } : {}),
             // WF-3: forward the (capped) env manifest so the router can use it.
             ...(b.env ? { env: capEnv(b.env) } : {}),
             dynamic: true,
-            registeredBy: agent.id
+            registeredBy: worker.id
           });
           registered.push(canon);
           if (canon !== b.id) aliased[b.id] = canon;
         }
-        // brain_aliases: declared retired id → canonical registry id, so a client
+        // agent_aliases: declared retired id → canonical registry id, so a client
         // can update its own config (tasks still reach it under the declared id).
         return { content: [{ type: 'text', text: JSON.stringify({
-          ...agent, registered_brains: registered,
-          ...(Object.keys(aliased).length ? { brain_aliases: aliased } : {})
+          ...worker, agent_name: worker.workerName, registered_agents: registered,
+          ...(Object.keys(aliased).length ? { agent_aliases: aliased } : {})
         }) }] };
       } catch (e: any) {
         return { content: [{ type: 'text', text: e.message }], isError: true };
       }
     }
   );
-
-  // 1b. deregister_agent — remove the agent AND every brain it registered,
-  //     scrubbing those brains from all agent chains.
+  // 1b. deregister_agent — remove the agent AND every agent it registered,
+  //     scrubbing those agents from all role chains.
   server.tool(
     'deregister_agent',
-    'Remove this worker and every brain it registered (cascading them out of all ' +
-    'agent chains). Call on clean shutdown; brains are NOT auto-removed on disconnect.',
+    'Remove this worker and every agent it registered (cascading them out of all ' +
+    'role chains). Call on clean shutdown; agents are NOT auto-removed on disconnect.',
     { agent_id: z.string() },
     async (args) => {
       try {
-        const brains = config.orchestration.brains || {};
-        const owned = Object.keys(brains).filter(id => brains[id].registeredBy === args.agent_id);
+        const agents = config.orchestration.agents || {};
+        const owned = Object.keys(agents).filter(id => agents[id].registeredBy === args.agent_id);
         let scrubbed = 0;
-        for (const id of owned) scrubbed += removeBrainCascade(config, id);
-        const removed = store.removeAgent(args.agent_id);
-        return { content: [{ type: 'text', text: JSON.stringify({ ok: true, agent_removed: removed, brains_removed: owned, agents_scrubbed: scrubbed }) }] };
+        for (const id of owned) scrubbed += removeAgentCascade(config, id);
+        const removed = store.removeWorker(args.agent_id);
+        return { content: [{ type: 'text', text: JSON.stringify({ ok: true, agent_removed: removed, agents_removed: owned, agents_scrubbed: scrubbed }) }] };
       } catch (e: any) {
         return { content: [{ type: 'text', text: e.message }], isError: true };
       }
@@ -161,8 +177,8 @@ function buildServer(config: Config, store: Store, eventBus: EventBus, goals?: G
   );
 
   // 2. heartbeat — may carry a `usage` payload: the client's self-measured
-  //    rate-limit snapshot per brain id ({exec, windows:[{label, usedPct,
-  //    resetsAt}], at}). Only accepted for brains the agent itself declared
+  //    rate-limit snapshot per agent id ({exec, windows:[{label, usedPct,
+  //    resetsAt}], at}). Only accepted for agents the agent itself declared
   //    (its capabilities), so one client can never overwrite another's meters.
   server.tool(
     'heartbeat',
@@ -188,17 +204,17 @@ function buildServer(config: Config, store: Store, eventBus: EventBus, goals?: G
     },
     async (args) => {
       try {
-        const agent = store.updateHeartbeat({
-          agentId: args.agent_id,
+        const worker = store.updateHeartbeat({
+          workerId: args.agent_id,
           currentTask: args.current_task,
           status: args.status
         });
-        if (!agent) throw new Error('Agent not found');
+        if (!worker) throw new Error('Worker not found');
         if (args.usage) {
-          const mine = new Set(agent.capabilities || []);
-          for (const [brainId, u] of Object.entries(args.usage)) {
-            if (!mine.has(brainId)) continue;
-            store.setBrainUsage(brainId, {
+          const mine = new Set(worker.capabilities || []);
+          for (const [agentId, u] of Object.entries(args.usage)) {
+            if (!mine.has(agentId)) continue;
+            store.setAgentUsage(agentId, {
               exec: u.exec,
               at: u.at || new Date().toISOString(),
               windows: u.windows.map(w => ({
@@ -215,7 +231,7 @@ function buildServer(config: Config, store: Store, eventBus: EventBus, goals?: G
             });
           }
         }
-        return { content: [{ type: 'text', text: JSON.stringify(agent) }] };
+        return { content: [{ type: 'text', text: JSON.stringify(worker) }] };
       } catch (e: any) {
         return { content: [{ type: 'text', text: e.message }], isError: true };
       }
@@ -233,11 +249,11 @@ function buildServer(config: Config, store: Store, eventBus: EventBus, goals?: G
     },
     async (args) => {
       try {
-        let agents = store.getRoster({ search: args.search, division: args.category });
+        let personas = store.getRoster({ search: args.search, division: args.category });
         if (args.platform) {
-          agents = agents.filter(a => a.platforms?.includes(args.platform!));
+          personas = personas.filter(a => a.platforms?.includes(args.platform!));
         }
-        return { content: [{ type: 'text', text: JSON.stringify(agents) }] };
+        return { content: [{ type: 'text', text: JSON.stringify(personas) }] };
       } catch (e: any) {
         return { content: [{ type: 'text', text: e.message }], isError: true };
       }
@@ -339,9 +355,9 @@ function buildServer(config: Config, store: Store, eventBus: EventBus, goals?: G
     },
     async (args) => {
       try {
-        const task = store.claimTask({ taskId: args.task_id, agentId: args.agent_id });
+        const task = store.claimTask({ taskId: args.task_id, workerId: args.agent_id });
         if (!task) throw new Error('Task not found');
-        return { content: [{ type: 'text', text: JSON.stringify(clientTaskView(config, task)) }] };
+        return { content: [{ type: 'text', text: JSON.stringify(withLegacyPin(clientTaskView(config, task))) }] };
       } catch (e: any) {
         return { content: [{ type: 'text', text: e.message }], isError: true };
       }
@@ -383,7 +399,7 @@ function buildServer(config: Config, store: Store, eventBus: EventBus, goals?: G
           agent: args.agent,
           limit: args.limit
         });
-        return { content: [{ type: 'text', text: JSON.stringify(tasks.map(t => clientTaskView(config, t))) }] };
+        return { content: [{ type: 'text', text: JSON.stringify(tasks.map(t => withLegacyPin(clientTaskView(config, t)))) }] };
       } catch (e: any) {
         return { content: [{ type: 'text', text: e.message }], isError: true };
       }
@@ -421,8 +437,8 @@ function buildServer(config: Config, store: Store, eventBus: EventBus, goals?: G
         success_criteria: z.string(),
         report_brief: z.string().optional(),
         phases: z.array(z.object({ key: z.string(), title: z.string() })).optional(),
-        achiever_brain_chain: z.array(z.string()).optional(),
-        judger_brain_chain: z.array(z.string()).optional(),
+        achiever_agent_chain: z.array(z.string()).optional(),
+        judger_agent_chain: z.array(z.string()).optional(),
         step_budget: z.number().optional()
       },
       async (args) => {
@@ -433,8 +449,8 @@ function buildServer(config: Config, store: Store, eventBus: EventBus, goals?: G
             successCriteria: args.success_criteria,
             reportBrief: args.report_brief,
             phases: args.phases,
-            achieverBrainChain: args.achiever_brain_chain,
-            judgerBrainChain: args.judger_brain_chain,
+            achieverAgentChain: args.achiever_agent_chain,
+            judgerAgentChain: args.judger_agent_chain,
             stepBudget: args.step_budget
           });
           return { content: [{ type: 'text', text: JSON.stringify(g) }] };
@@ -470,7 +486,7 @@ function buildServer(config: Config, store: Store, eventBus: EventBus, goals?: G
     );
 
     // update_goal_progress — the MCP counterpart of applyAchieverDecision, so a
-    // remote/CLI Achiever brain can advance a goal exactly as the in-process
+    // remote/CLI Achiever agent can advance a goal exactly as the in-process
     // driver does: one evaluate | plan | emit move per call.
     server.tool(
       'update_goal_progress',
@@ -491,13 +507,13 @@ function buildServer(config: Config, store: Store, eventBus: EventBus, goals?: G
         tasks: z.array(z.object({
           title: z.string(),
           description: z.string().optional(),
-          brain: z.string().optional(),
+          agent: z.string().optional(),
           scheduledAt: z.string().optional(),
           tier: z.string().optional(),
           acceptance: z.array(z.string()).optional(),
           verify: z.array(z.string()).optional()
         })).optional(),
-        unblockCheck: z.object({ type: z.enum(['brain-available', 'file-exists', 'http-200', 'after-time']), value: z.string() }).optional()
+        unblockCheck: z.object({ type: z.enum(['agent-available', 'file-exists', 'http-200', 'after-time']), value: z.string() }).optional()
       },
       async (args) => {
         try {
@@ -518,10 +534,10 @@ function buildServer(config: Config, store: Store, eventBus: EventBus, goals?: G
     );
   }
 
-  // ── Obsidian Vault: shared knowledge base every brain can consult ──────────
-  // Backed by config.obsidian. These tools give REMOTE brains the same read
-  // access a LOCAL brain gets from the filesystem; obsidian_info reports the
-  // on-disk `vaultPath` so a local brain can also grep it directly.
+  // ── Obsidian Vault: shared knowledge base every agent can consult ──────────
+  // Backed by config.obsidian. These tools give REMOTE agents the same read
+  // access a LOCAL agent gets from the filesystem; obsidian_info reports the
+  // on-disk `vaultPath` so a local agent can also grep it directly.
   {
     const vaultUnavailable = () => ({
       content: [{ type: 'text' as const, text: JSON.stringify({ available: false, note: 'Obsidian vault is not configured or is disabled (config.obsidian).' }) }]
@@ -530,7 +546,7 @@ function buildServer(config: Config, store: Store, eventBus: EventBus, goals?: G
     server.tool(
       'obsidian_info',
       'Report the shared Obsidian knowledge base: whether it is available, its ' +
-      'on-disk vaultPath (local brains may read/grep it directly), and the note count.',
+      'on-disk vaultPath (local agents may read/grep it directly), and the note count.',
       {},
       async () => {
         try {

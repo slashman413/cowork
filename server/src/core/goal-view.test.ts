@@ -247,9 +247,9 @@ test('a rejected move records why, and real progress clears it', () => {
   assert.equal(goals.get(g.goalId)!.lastRejected, undefined);
 });
 
-test('emit carries tier and brief; both lists skip the sharpener and the brain pin', () => {
+test('emit carries tier and brief; both lists skip the sharpener and the agent pin', () => {
   const { goals, store } = setup();
-  const g = goals.create({ title: 'G', successCriteria: 'C?', phases: [{ key: 'a', title: 'A' }], achieverBrainChain: ['opus'] });
+  const g = goals.create({ title: 'G', successCriteria: 'C?', phases: [{ key: 'a', title: 'A' }], achieverAgentChain: ['opus'] });
   goals.activate(g.goalId);
   goals.applyAchieverDecision(g.goalId, { kind: 'emit', tasks: [
     { title: 'tiered', tier: 'mechanical', acceptance: ['file exists'], verify: ['ls file'] },
@@ -258,17 +258,17 @@ test('emit carries tier and brief; both lists skip the sharpener and the brain p
   const [tiered, plain] = store.tasks;
   assert.equal(tiered.context!.tier, 'mechanical');
   assert.equal(tiered.context!.sharpen, false);
-  assert.equal(tiered.context!.brain, undefined);
-  assert.equal(plain.context!.brain, 'opus');
+  assert.equal(tiered.context!.agent, undefined);
+  assert.equal(plain.context!.agent, 'opus');
   assert.equal(plain.context!.sharpen, undefined);
 });
 
 test('unblock checks run without an LLM and reject anything malformed', async () => {
-  const deps = { brainAvailable: (id: string) => id === 'free', now: NOW };
+  const deps = { agentAvailable: (id: string) => id === 'free', now: NOW };
   assert.equal(await runUnblockCheck({ type: 'after-time', value: '2026-11-05T00:00:00Z' }, deps), true);
   assert.equal(await runUnblockCheck({ type: 'after-time', value: '2026-11-07T00:00:00Z' }, deps), false);
-  assert.equal(await runUnblockCheck({ type: 'brain-available', value: 'free' }, deps), true);
-  assert.equal(await runUnblockCheck({ type: 'brain-available', value: 'busy' }, deps), false);
+  assert.equal(await runUnblockCheck({ type: 'agent-available', value: 'free' }, deps), true);
+  assert.equal(await runUnblockCheck({ type: 'agent-available', value: 'busy' }, deps), false);
   assert.equal(await runUnblockCheck({ type: 'file-exists', value: '/definitely/not/here' }, deps), false);
   assert.equal(await runUnblockCheck({ type: 'http-200', value: 'https://example.com/x' }, { ...deps, fetchStatus: async () => 503 }), false);
   assert.equal(await runUnblockCheck({ type: 'http-200', value: 'https://example.com/x' }, { ...deps, fetchStatus: async () => 200 }), true);

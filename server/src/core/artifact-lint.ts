@@ -5,14 +5,14 @@ import { execFileSync } from 'child_process';
 
 /**
  * Deterministic artifact quality gate (ADR-013, inspired by Nutlope/hallmark and
- * pbakaus/impeccable): zero-LLM checks on the FILES a brain produced, not just its
+ * pbakaus/impeccable): zero-LLM checks on the FILES an agent produced, not just its
  * stdout. The result verifier only ever saw stdout, so a run that printed a fine
  * summary but left an empty report.md, a broken data.json or a page of
  * "Lorem ipsum" passed as done.
  *
  * Two tiers, deliberately asymmetric:
  *   critical  unambiguous non-deliverables — the attempt is rejected (in 'enforce'
- *             mode) and handed to the next brain:
+ *             mode) and handed to the next agent:
  *               · empty / whitespace-only text deliverable
  *               · .json that does not parse
  *               · "lorem ipsum" or unresolved {{template_tags}} in prose
@@ -41,7 +41,7 @@ export interface LintReport {
 
 export interface LintOptions {
   /** Only lint files modified at/after this epoch-ms (the attempt's start), so a
-   *  defect left by an earlier attempt can't fail every later brain. */
+   *  defect left by an earlier attempt can't fail every later agent. */
   sinceMs?: number;
   /** Files never linted (runtime-owned). */
   ignore?: string[];

@@ -25,8 +25,8 @@ export const GALLERY_URL = 'https://vincentwei1021.github.io/video-shotcraft/';
 
 export const DEFAULT_SHOTCRAFT: Required<ShotcraftConfig> = {
   skillDir: '~/.agents/skills/video-shotcraft',
-  defaultBrain: 'local-cc-opus-5-5',
-  brains: ['local-cc-opus-5-5', 'local-cc-sonnet-5-5'],
+  defaultAgent: 'local-cc-opus-5-5',
+  agents: ['local-cc-opus-5-5', 'local-cc-sonnet-5-5'],
 };
 
 export type ShotcraftMode = 'auto' | 'guided' | 'template' | 'shot' | 'ask';
@@ -46,7 +46,7 @@ export interface ShotcraftBrief {
   jianying: boolean;
   /** Guided/ask modes: let the orchestrator answer checkpoints as the CEO's delegate. */
   autoAnswer: boolean;
-  brain: string;
+  agent: string;
   notes?: string;
 }
 
@@ -80,7 +80,7 @@ export function resolveShotcraftConfig(cfg?: ShotcraftConfig): Required<Shotcraf
   return {
     ...merged,
     skillDir: expand(merged.skillDir),
-    brains: Array.isArray(merged.brains) && merged.brains.length ? merged.brains : DEFAULT_SHOTCRAFT.brains,
+    agents: Array.isArray(merged.agents) && merged.agents.length ? merged.agents : DEFAULT_SHOTCRAFT.agents,
   };
 }
 
@@ -190,7 +190,7 @@ export class Shotcraft {
       music,
       jianying: b.jianying === true,
       autoAnswer: b.autoAnswer === true,
-      brain: this.cfg.brains.includes(b.brain) ? b.brain : this.cfg.defaultBrain,
+      agent: this.cfg.agents.includes(b.agent) ? b.agent : this.cfg.defaultAgent,
       notes: str(b.notes).trim().slice(0, 2000) || undefined,
     };
   }
@@ -289,7 +289,7 @@ export class Shotcraft {
     const stops = brief.mode === 'guided' || brief.mode === 'ask';
     return {
       tags: [SHOTCRAFT_TAG, ...(stops && !brief.autoAnswer ? ['human-only'] : [])],
-      context: { brain: brief.brain, claudeProfile: 'full', shotcraft: brief },
+      context: { agent: brief.agent, claudeProfile: 'full', shotcraft: brief },
     };
   }
 
@@ -308,7 +308,7 @@ export class Shotcraft {
     return {
       title: `🎬 ${brief.product} promo film (video-shotcraft)`,
       description: [
-        `Produce a finished product film with the video-shotcraft skill. Every task this goal creates must name the skill (\`/video-shotcraft\`) and be pinned to brain ${brief.brain}.`,
+        `Produce a finished product film with the video-shotcraft skill. Every task this goal creates must name the skill (\`/video-shotcraft\`) and be pinned to agent ${brief.agent}.`,
         'Give each task the brief below verbatim; the producing task\'s artifacts dir is where the film lives — later tasks read it from there.',
         '',
         '---',
@@ -322,7 +322,7 @@ export class Shotcraft {
         { key: 'produce', title: 'Remotion build, sound design, render' },
         { key: 'review', title: 'Independent final review + fixes' },
       ],
-      achieverBrainChain: [brief.brain],
+      achieverAgentChain: [brief.agent],
       stepBudget: 8,
     };
   }

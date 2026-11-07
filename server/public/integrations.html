@@ -3,12 +3,12 @@
   Integrations — turn a GitHub / open-source repository into a cowork capability
   (ADR-014). Served by the cowork server and launched from the Portal card.
   A thin client over:
-    GET    /api/integrations                    registry + paths + local brains
+    GET    /api/integrations                    registry + paths + local agents
     POST   /api/integrations        {repo,install?,force?}   fetch → detect → audit (→ install)
     POST   /api/integrations/:id/install   {force?}          skills → ~/.agents/skills + client dirs;
                                                              static web app → /plugins/<id>/ portal card
     POST   /api/integrations/:id/update|rescan|uninstall {purge?}
-    POST   /api/integrations/:id/wrap      {brain,notes}     create a task: an engineering agent wraps a
+    POST   /api/integrations/:id/wrap      {agent,notes}     create a task: an engineering agent wraps a
                                                              CLI / MCP server / library as a SKILL.md
     POST   /api/integrations/audit                           audit every installed skill dir
   Pipeline + security model: server/src/core/integrations.ts, core/skill-auditor.ts.
@@ -110,7 +110,7 @@
     const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
     applyTheme(next); localStorage.setItem('cowork-theme', next);
   };
-  let info = { integrations: [], brains: [] };
+  let info = { integrations: [], agents: [] };
   const busy = new Set();
 
   async function api(path, body) {
@@ -172,10 +172,10 @@
     if (action === 'purge') { if (!confirm(`Remove ${e?.source}: uninstall, delete the clone and its registry entry?`)) return; action = 'uninstall'; body.purge = true; }
     if (action === 'uninstall' && !body.purge && !confirm(`Uninstall ${e?.source}? (links, copied skills and portal card are removed; the clone stays)`)) return;
     if (action === 'wrap') {
-      const brain = prompt(`Local brain to run the wrap task (Rule 6 — must be local):\n${info.brains.join(', ')}`, info.wrapBrain || '');
-      if (brain === null) return;
+      const agent = prompt(`Local agent to run the wrap task (Rule 6 — must be local):\n${info.agents.join(', ')}`, info.wrapAgent || '');
+      if (agent === null) return;
       const notes = prompt('Notes for the agent (optional):', '') || '';
-      body = { brain, notes };
+      body = { agent, notes };
     }
     busy.add(id); render(); say(`${action}: ${e?.source}…`);
     try {

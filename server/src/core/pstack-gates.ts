@@ -23,11 +23,11 @@ export function sharpenPending(task: Task, nowMs = Date.now(), waitMs = SHARPEN_
   return nowMs - started < waitMs;
 }
 
-/** Remote brains get at most this much of a skill inline. */
+/** Remote agents get at most this much of a skill inline. */
 export const REMOTE_SKILL_INLINE_BYTES = 1200;
 
 /** G10: render `# Skill` lines for `context.skill: "<pstack skill name>"`.
- *  Local brains are told to read the full vendored SKILL.md; remote brains,
+ *  Local agents are told to read the full vendored SKILL.md; remote agents,
  *  which cannot see this filesystem, get its first 1.2 KB inline. */
 export function renderSkillPrompt(opts: { repoRoot: string; skill: unknown; isLocal: boolean }): string[] {
   const name = typeof opts.skill === 'string' ? opts.skill.trim() : '';
@@ -78,43 +78,43 @@ export function parseArena(v: unknown): ArenaSpec | null {
   return { runners, rubric: rubric || 'correctness, completeness against the brief, evidence quality, clarity' };
 }
 
-/** G6: pick up to n runner brains from distinct model families (tier order). */
-export function pickArenaBrains(
+/** G6: pick up to n runner agents from distinct model families (tier order). */
+export function pickArenaAgents(
   n: number,
   tiers: Record<string, string[]> | undefined,
-  brains: Record<string, { location?: string; disabled?: boolean; exec?: string; model?: string }> | undefined,
+  agents: Record<string, { location?: string; disabled?: boolean; exec?: string; model?: string }> | undefined,
   family: (id: string) => string
 ): string[] {
   const pool = [...(tiers?.judgment || []), ...(tiers?.standard || []), ...(tiers?.mechanical || [])];
   const out: string[] = []; const fams = new Set<string>();
   for (const id of pool) {
-    const b = brains?.[id];
+    const b = agents?.[id];
     if (!b || b.disabled) continue;
     const f = family(id);
     if (fams.has(f)) continue;
     fams.add(f); out.push(id);
     if (out.length >= n) return out;
   }
-  for (const id of pool) {            // not enough families: fill with any remaining brain
+  for (const id of pool) {            // not enough families: fill with any remaining agent
     if (out.length >= n) break;
-    if (brains?.[id] && !brains[id].disabled && !out.includes(id)) out.push(id);
+    if (agents?.[id] && !agents[id].disabled && !out.includes(id)) out.push(id);
   }
   return out;
 }
 
 /** G6: build the child task specs for an arena run: N runners + one judge. */
-export function arenaPlan(task: Task, spec: ArenaSpec, runnerBrains: string[]) {
+export function arenaPlan(task: Task, spec: ArenaSpec, runnerAgents: string[]) {
   const baseCtx = { ...(task.context || {}) } as Record<string, unknown>;
-  for (const k of ['arena', 'arenaChildren', 'dependsOn', 'brain', 'brainAuto', 'review', 'prUrl']) delete baseCtx[k];
-  const runners = runnerBrains.map((brain, i) => ({
-    title: `[arena ${i + 1}/${runnerBrains.length}] ${task.title}`,
+  for (const k of ['arena', 'arenaChildren', 'dependsOn', 'agent', 'agentAuto', 'review', 'prUrl']) delete baseCtx[k];
+  const runners = runnerAgents.map((agent, i) => ({
+    title: `[arena ${i + 1}/${runnerAgents.length}] ${task.title}`,
     description: task.description || task.title,
-    context: { ...baseCtx, brain, arenaParent: task.id, arenaRole: 'runner' },
+    context: { ...baseCtx, agent, arenaParent: task.id, arenaRole: 'runner' },
   }));
   const judge = {
     title: `[arena judge] ${task.title}`,
     description: [
-      `Judge the ${runnerBrains.length} independent attempts at this brief (their results are attached as dependency results).`,
+      `Judge the ${runnerAgents.length} independent attempts at this brief (their results are attached as dependency results).`,
       `Rubric: ${spec.rubric}.`,
       `Score each attempt 1-10 per rubric item, name the winner by task id, and list what the synthesis must take from the others.`,
       ``, `Brief:`, task.description || task.title,

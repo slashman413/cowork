@@ -46,7 +46,7 @@ test('prInScope + prWatchTaskSpec: recurring, shadow-mode instructions, valid re
 
 test('dispatcher hook: a result with a PR URL sets context.prUrl and spawns one pr-watch task', () => {
   const h = pstackHarness({ prAutomation: cfg });
-  const t = h.mk({ agent: 'engineer' });
+  const t = h.mk({ persona: 'engineer' });
   const fresh = h.store.getTask(t.id)!;
   (h.dispatcher as any).notePrUrls(fresh, 'Opened https://github.com/slashman413/cowork/pull/77\nSTATUS: DONE');
   h.store.saveTask(fresh);

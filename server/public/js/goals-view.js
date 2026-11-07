@@ -18,7 +18,7 @@
     'needs-you': { label: 'Needs you', icon: 'circle-alert' },
     stuck: { label: 'Stuck', icon: 'octagon-alert' },
     running: { label: 'Running', icon: 'loader' },
-    thinking: { label: 'Thinking', icon: 'brain' },
+    thinking: { label: 'Thinking', icon: 'bot' },
     auditing: { label: 'Auditing', icon: 'scale' },
     retrying: { label: 'Retrying', icon: 'refresh-cw' },
     sleeping: { label: 'Sleeping', icon: 'moon' },
@@ -36,7 +36,7 @@
   // Inverse of the server's compact letter (core/goal-view.ts PHASE_LETTER).
   const PHASE_LETTER_STATUS = { p: 'planned', a: 'active', c: 'completing', d: 'done' };
   const BLOCK_TEXT = {
-    rate_limit: 'Every Achiever brain was rate limited',
+    rate_limit: 'Every Achiever agent was rate limited',
     achiever_no_progress: 'Achiever turns made no usable progress',
     budget_exhausted: 'Step budget used up',
     token_budget: 'Token budget used up'
@@ -518,14 +518,14 @@
             ${field('gs-budget', `Step budget (${g.budget.used} used)`, `<input id="gs-budget" type="number" min="1" value="${esc(g.budget.cap)}" ${disabled}>`, when)}
             ${field('gs-tokens', 'Token budget (optional)', `<input id="gs-tokens" type="number" min="0" value="${esc(g.tokenBudget || '')}" placeholder="No limit" ${disabled}>`, 'Counts metered tokens, cache reads included.')}
           </div>
-          ${field('gs-achiever', 'Achiever brains', `<input id="gs-achiever" value="${esc((g.achieverBrainChain || []).join(', '))}" placeholder="Comma separated, blank means auto" ${disabled}>`)}
-          ${field('gs-judger', 'Judger brains', `<input id="gs-judger" value="${esc((g.judgerBrainChain || []).join(', '))}" placeholder="Comma separated, blank means auto" ${disabled}>`)}
+          ${field('gs-achiever', 'Achiever agents', `<input id="gs-achiever" value="${esc((g.achieverAgentChain || []).join(', '))}" placeholder="Comma separated, blank means auto" ${disabled}>`)}
+          ${field('gs-judger', 'Judger agents', `<input id="gs-judger" value="${esc((g.judgerAgentChain || []).join(', '))}" placeholder="Comma separated, blank means auto" ${disabled}>`)}
           <div class="gv-form-foot"><button type="submit" class="btn btn-primary" ${disabled}>Save</button><span class="gv-saved" id="gs-saved" role="status"></span></div>
         </form>
         <h3 class="gv-h">Token use</h3>
         <table class="gv-table"><thead><tr><th scope="col">Role</th><th scope="col">Tokens</th><th scope="col">Metered runs</th><th scope="col">Not metered</th></tr></thead>
           <tbody>${usageRow('Tasks', u.tasks)}${usageRow('Achiever turns', u.achiever)}</tbody></table>
-        <p class="gv-hint">Runs from before telemetry, and brains that report nothing, show as not metered, never as zero. Id: <code>${esc(g.goalId)}</code></p>`;
+        <p class="gv-hint">Runs from before telemetry, and agents that report nothing, show as not metered, never as zero. Id: <code>${esc(g.goalId)}</code></p>`;
     },
 
     _gvBindDetail(host, g) {
@@ -588,7 +588,7 @@
           try {
             await this.api.patch(`/goals/${enc(id)}`, {
               title: val('gs-title'), successCriteria: val('gs-criteria'), stepBudget: budget, tokenBudget: tokens,
-              achieverBrainChain: parseList(val('gs-achiever')), judgerBrainChain: parseList(val('gs-judger'))
+              achieverAgentChain: parseList(val('gs-achiever')), judgerAgentChain: parseList(val('gs-judger'))
             });
             saved.textContent = g.nextRetryAt ? `Saved. Takes effect on the next retry, ${fmtWhen(g.nextRetryAt)}.` : 'Saved.';
             await this._goalsRefresh();
@@ -634,8 +634,8 @@
         body: `${field('gb-reason', 'What is the obstacle?', '<input id="gb-reason">')}
           ${field('gb-resume', 'It can resume when…', '<input id="gb-resume">', 'A condition someone could check.')}
           <div class="gv-grid2">
-            ${field('gb-type', 'Automatic check (optional)', `<select id="gb-type"><option value="">None</option><option value="after-time">After a time</option><option value="file-exists">A file exists</option><option value="http-200">A public URL returns 200</option><option value="brain-available">A brain has quota</option></select>`)}
-            ${field('gb-value', 'Check value', '<input id="gb-value" placeholder="Time, path, URL or brain id">')}
+            ${field('gb-type', 'Automatic check (optional)', `<select id="gb-type"><option value="">None</option><option value="after-time">After a time</option><option value="file-exists">A file exists</option><option value="http-200">A public URL returns 200</option><option value="agent-available">An agent has quota</option></select>`)}
+            ${field('gb-value', 'Check value', '<input id="gb-value" placeholder="Time, path, URL or agent id">')}
           </div>`,
         onSubmit: async (dlg) => {
           const reason = dlg.querySelector('#gb-reason').value.trim();
@@ -717,8 +717,8 @@
             ${field('gc-desc', 'Context for the agents doing the work', '<textarea id="gc-desc" rows="3"></textarea>')}
             ${field('gc-report', 'Report focus for the Judger', '<input id="gc-report" placeholder="Financial breakdown per phase">')}
             <div class="gv-grid2">
-              ${field('gc-achiever', 'Achiever brains', '<input id="gc-achiever" placeholder="Comma separated, blank means auto">')}
-              ${field('gc-judger', 'Judger brains', '<input id="gc-judger" placeholder="Comma separated, blank means auto">')}
+              ${field('gc-achiever', 'Achiever agents', '<input id="gc-achiever" placeholder="Comma separated, blank means auto">')}
+              ${field('gc-judger', 'Judger agents', '<input id="gc-judger" placeholder="Comma separated, blank means auto">')}
               ${field('gc-budget', 'Step budget', '<input id="gc-budget" type="number" min="1" placeholder="24">')}
             </div>
           </details>
@@ -784,7 +784,7 @@
         const body = {
           title: q('gc-title').value.trim(), description: q('gc-desc').value.trim(), successCriteria: q('gc-criteria').value.trim(),
           reportBrief: q('gc-report').value.trim() || undefined, phases,
-          achieverBrainChain: parseList(q('gc-achiever').value), judgerBrainChain: parseList(q('gc-judger').value),
+          achieverAgentChain: parseList(q('gc-achiever').value), judgerAgentChain: parseList(q('gc-judger').value),
           stepBudget: budget > 0 ? budget : undefined
         };
         const saved = q('gc-saved');

@@ -5,45 +5,50 @@ description: Coordinate with other AI agents through the Cowork MCP server: insp
 
 # Cowork — Multi-Agent Coordination
 
+> **Naming (2026-11):** what used to be a "brain" is an **agent**. Pin with `context.agent`, name a persona with
+> `context.persona`, and set the level with `context.thinking` (`low|medium|high|xhigh|max`, default `medium`).
+> Agent ids never end in `-low`, `-medium` or `-high`. Declare agents in `register_agent`'s `agents` array;
+> `agent_id` in the MCP tools is your worker's registration id. See `JOIN-AS-AN-AGENT.md`.
+
 Use the Cowork MCP server at `https://localhost:6868/mcp` as the shared hub for
-agents and brain workers. The dashboard is `https://localhost:6868/`; the source repo
+agents and agent workers. The dashboard is `https://localhost:6868/`; the source repo
 is `~/workspace/github/slashman413/cowork`.
 
 Require the `cowork` MCP server to be configured for this Codex session before calling
 its tools. If it is unavailable, say so and use the dashboard or REST endpoints only
 when the user has requested that alternative.
-REST calls need `-H "Authorization: Bearer $COWORK_API_KEY"` (dispatched tasks and brain
+REST calls need `-H "Authorization: Bearer $COWORK_API_KEY"` (dispatched tasks and agent
 clients get the key in env; never paste it into task text or output).
 
 > **Operating rules:** every task you execute runs under [CONVENTIONS.md](https://github.com/slashman413/cowork/blob/main/CONVENTIONS.md) —
 > put output in `$COWORK_ARTIFACTS_DIR`, use your full permissions freely, and ask
 > rather than guess when blocked. They are injected into your prompt automatically.
 
-## Local Codex brain
+## Local Codex agent
 
-`cowork-local-brain@codex.service` is the persistent worker for
+`cowork-local-agent@codex.service` is the persistent worker for
 `local-codex-default` (plus `local-codex-gpt-6-luna` / `-gpt-5-6-terra` / `-gpt-5-6-luna`;
 ids are `local-` because they run on this host — `location` stays `remote` because the
 client claims them from the inbox). Retired `remote-codex-*` ids still resolve. It registers and polls tasks automatically. Do not register the
-same brain from an interactive Codex session, and never deregister it on session exit:
-that removes the brain from its fallback chains.
+same agent from an interactive Codex session, and never deregister it on session exit:
+that removes the agent from its fallback chains.
 
 Inspect the worker with:
 
 ```bash
-systemctl --user status cowork-local-brain@codex.service
-journalctl --user -u cowork-local-brain@codex.service -n 100 --no-pager
+systemctl --user status cowork-local-agent@codex.service
+journalctl --user -u cowork-local-agent@codex.service -n 100 --no-pager
 ```
 
 ## Interactive workflow
 
 1. Register this interactive session once with `register_agent`, using
-   `platform: "codex"`, a descriptive `agent_name`, and no `brains` array.
+   `platform: "codex"`, a descriptive `agent_name`, and no `agents` array.
 2. Save the returned agent id and send `heartbeat` when starting or completing work.
 3. Check `get_dashboard()` or `list_inbox(status: "pending")` before creating work,
    to avoid duplicate tasks.
 4. Dispatch with `create_task`. Supply a complete description, origin identity, and
-   `context.role` for automatic routing. Pin `context.brain` only when a
+   `context.role` for automatic routing. Pin `context.agent` only when a
    specific execution identity is required. Pass `scheduled_at` (ISO 8601) to park the
    task until a launch time, or an `interaction` packet to collect answers from a person
    first (the task waits on `wait-input` until they reply).
@@ -54,11 +59,11 @@ journalctl --user -u cowork-local-brain@codex.service -n 100 --no-pager
 ## Routing
 
 - `context: {"role": "orchestrator"}` starts the two-stage dispatcher: it selects a
-  division, then an agent persona and its brain fallback chain.
-- `context: {"agent": "<agent-slug>"}` targets one agent persona.
-- `context: {"brain": "local-codex-default"}` pins a task to the Codex worker.
+  division, then an agent persona and its agent fallback chain.
+- `context: {"persona": "<persona-slug>"}` targets one persona.
+- `context: {"agent": "local-codex-default"}` pins a task to the Codex worker.
 - A `manual` tag prevents automatic dispatch.
-- A failed brain rung hands the task to the next rung. Do not duplicate the task while
+- A failed agent rung hands the task to the next rung. Do not duplicate the task while
   handover is in progress.
 
 ## Goals
@@ -83,8 +88,8 @@ If you run as the Achiever, three things matter most:
   move, not a stall.
 - **Never stop at an unmet criterion.** `stepBudget` (default 24) caps lifetime
   execution tasks, and 5 consecutive turns that neither plan nor emit **block** the goal
-  (recoverably — raise the budget / verify the brain; it then auto-retries on a backoff and
-  self-resumes once it's back under budget or the brain recovers) — an
+  (recoverably — raise the budget / verify the agent; it then auto-retries on a backoff and
+  self-resumes once it's back under budget or the agent recovers) — an
   `evaluate{met:false}` is one of those. Plan a different approach instead, guided by the
   Judger's latest minutes.
 - **Block honestly, don't spin.** If you hit a real obstacle you can't clear — a missing

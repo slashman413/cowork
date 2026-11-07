@@ -23,8 +23,8 @@ function harness() {
     inbox: { maxRetries: 3 },
     orchestration: {
       verifier: { enabled: true, llm: { enabled: true } },
-      agents: { engineer: { description: '', brains: CHAIN } },
-      brains: Object.fromEntries(CHAIN.map(b => [b, { location: b.startsWith('local') ? 'local' : 'remote' }]))
+      roleChains: { engineer: { description: '', agents: CHAIN } },
+      agents: Object.fromEntries(CHAIN.map(b => [b, { location: b.startsWith('local') ? 'local' : 'remote' }]))
     }
   } as unknown as Config;
   const store = new Store(config, new EventBus());
@@ -35,7 +35,7 @@ function harness() {
   const rung = (): Task => {
     const t = store.createTask({ title: 'ship it', from: { platform: 'p', agent: 'a' } } as any);
     t.status = 'in-progress';
-    t.context = { ...(t.context || {}), agent: 'engineer', brain: CHAIN[0], brainAuto: true, attempts: 0 };
+    t.context = { ...(t.context || {}), persona: 'engineer', agent: CHAIN[0], agentAuto: true, attempts: 0 };
     store.saveTask(t);
     return t;
   };

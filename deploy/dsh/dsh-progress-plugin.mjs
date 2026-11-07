@@ -39,7 +39,7 @@ export function apply(ctx) {
     try {
       process.stderr.write(msg);
     } catch {
-      // Fail-soft: process I/O errors must never crash the brain
+      // Fail-soft: process I/O errors must never crash the agent
     }
   };
 

@@ -10,14 +10,14 @@ import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
  *   invalid model selection (--model "gemini-3.8-flash-high" --effort ""):
  *   model gemini-3.8-flash-high is not recognized as a known model or custom model in settings
  *
- * That reads like a misconfigured brain, so the dispatcher handled it as an
+ * That reads like a misconfigured agent, so the dispatcher handled it as an
  * ordinary failure: no rate-limit classification, no auto re-run on reset (Oct
  * 10: ~400 runs died this way during a quota exhaustion). This module tells the
  * two cases apart by asking `agy models` whether the slug exists:
  *   - listed, or the catalog is unavailable right now → transient capacity
  *     failure, worded so isRateLimitFailure() matches it;
  *   - catalog loads but the slug is missing → the model was retired upstream and
- *     the brain needs updating (see BRAIN_ID_ALIASES for renamed agy ids).
+ *     the agent needs updating (see AGENT_ID_ALIASES for renamed agy ids).
  */
 
 export const AGY_MODEL_REJECTED_RE = /is not recognized as a known model|invalid model selection/i;
@@ -97,7 +97,7 @@ export function diagnoseAgyModelFailure(model: string, text: string, models: str
   if (!isAgyModelRejection(text)) return null;
   if (model && models && !models.includes(model)) {
     return `agy model "${model}" is retired — not in \`agy models\` (available: ${models.join(', ')}). ` +
-      `Update this brain's model or re-register the agy brain client.`;
+      `Update this agent's model or re-register the agy agent client.`;
   }
   return `agy could not load its model catalog (Antigravity fetchAvailableModels failed: service overloaded / resource exhausted), ` +
     `so "${model || 'default'}" was rejected as unknown — transient, the model is ${models ? 'listed' : 'not verifiable right now'}.`;

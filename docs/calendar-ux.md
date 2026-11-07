@@ -65,7 +65,7 @@ Upcoming, dot = Scheduled runs / Ad-hoc).
   Rows that need attention get a faint tint. This is the default on screens narrower than 720 px. When it is empty, it shows a "clear 30 days" message with a Schedule button.
 - **Empty week/month**: a slim note at the top of the card says nothing is in the period and how to add something.
 - **Schedules rail**: each item shows the relative next fire (`in 10 min`) + its absolute time, the title (up to 2 lines), and cadence · last-run dot.
-  Run-now and edit icon buttons are dimmed until hover (always shown on phones). The brain is in the tooltip and the detail sheet.
+  Run-now and edit icon buttons are dimmed until hover (always shown on phones). The agent is in the tooltip and the detail sheet.
 
 **Motion**: changing view or period fades and slides the grid in (220 ms). The 60-second auto-refresh
 does **not** animate. While a fetch is in flight, the old frame dims rather than blanking.
@@ -78,7 +78,7 @@ persist in `localStorage['cowork-calendar']`.
 
 | Action | Result |
 |--------|--------|
-| Click an entry | Detail sheet: status, time (absolute + relative), cadence, brain, next 5 fires, recent runs, and the actions *Open in Tasks*, *Open schedule*, *Edit schedule*, *Run now* (primary). Close with the × or the backdrop |
+| Click an entry | Detail sheet: status, time (absolute + relative), cadence, agent, next 5 fires, recent runs, and the actions *Open in Tasks*, *Open schedule*, *Edit schedule*, *Run now* (primary). Close with the × or the backdrop |
 | Click empty day (month) / slot (week) | New task with **Run at** pre-filled to that time (the slot is snapped to 15 min; a month day uses 09:00). On a phone, tapping a month day opens it in agenda instead |
 | Drag an upcoming entry (draggable = the task's **next** fire) | Confirm, then `POST /inbox/:id/edit {scheduledAt}`. In month view it keeps the time of day; in week view it snaps to 15 min. |
 | Detail sheet → *Reschedule* | Same as dragging, with a datetime field |
@@ -109,7 +109,7 @@ The default window is 7 days back to 35 days ahead, capped at 100 days. Logic li
     "seriesId": "…?",                     // the scheduler this entry belongs to
     "cadence": "every day at 08:00?",     // planned recurring only
     "head": true,                         // the movable next fire
-    "priority": "…", "brain": "…"
+    "priority": "…", "agent": "…"
   }],
   "series": [{                            // one per `scheduled` task, window-independent
     "taskId", "title", "next", "cadence" /* or "once" */, "recurring", "overdue",

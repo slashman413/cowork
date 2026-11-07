@@ -1,0 +1,8 @@
+{
+  "_comment": "Wire names retired by the 2026-11 agent rename. Read only by src/legacy-wire.ts so clients on the old contract keep working until they re-register. Delete this file and src/legacy-wire.ts once /api/legacy-wire shows no use for a while.",
+  "contextKey": "brain",
+  "contextKeys": { "brainAuto": "agentAuto", "brainMode": "agentMode" },
+  "bodyKeys": { "brain": "agent", "brains": "agents" },
+  "routes": { "/api/brains": "/api/agents" },
+  "registerKey": "brains"
+}

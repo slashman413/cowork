@@ -1,12 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Dispatcher } from './dispatcher.js';
-import type { ActiveAgent, Config, Task } from '../types.js';
+import type { ActiveWorker, Config, Task } from '../types.js';
 
 /**
  * Exercises reclaimStaleClaims — the fix for "tasks stuck in-progress with no
  * agent actually working them". The original guard only reclaimed a task when
- * its claimer had VANISHED from the roster. A local/remote brain client, though,
+ * its claimer had VANISHED from the roster. A local/remote agent client, though,
  * heartbeats forever: when its child CLI dies without a complete_task the task is
  * stranded in-progress while the client sits `idle` on the roster, so the claim
  * was never rescued. These tests drive the private method directly against a fake
@@ -18,9 +18,9 @@ const HARD = 5_400_000;     // 90 min
 
 function harness() {
   const tasks = new Map<string, Task>();
-  const agents = new Map<string, ActiveAgent>();
+  const agents = new Map<string, ActiveWorker>();
   const store = {
-    getActiveAgents: () => Array.from(agents.values()),
+    getActiveWorkers: () => Array.from(agents.values()),
     listTasks: (f?: { status?: string }) =>
       Array.from(tasks.values()).filter(t => !f?.status || t.status === f.status),
     saveTask: (t: Task) => { tasks.set(t.id, t); }
@@ -40,9 +40,9 @@ function harness() {
     tasks.set(id, t);
     return t;
   };
-  const putAgent = (id: string, status: ActiveAgent['status']): void => {
+  const putAgent = (id: string, status: ActiveWorker['status']): void => {
     agents.set(id, {
-      id, platform: 'hermes', agentName: 'local', status,
+      id, platform: 'hermes', workerName: 'local', status,
       registeredAt: new Date(now).toISOString(), lastHeartbeat: new Date(now).toISOString()
     });
   };

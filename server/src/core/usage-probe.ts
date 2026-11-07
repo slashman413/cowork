@@ -3,14 +3,14 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import os from 'os';
 import path from 'path';
-import type { BrainUsage, BrainUsageWindow, BrainConfig } from '../types.js';
+import type { AgentUsage, AgentUsageWindow, AgentConfig } from '../types.js';
 import type { Store } from './store.js';
 
 const execFileAsync = promisify(execFile);
 
 /**
- * Rate-limit usage prober for METERED brain execs, feeding the Connections
- * cards ("how much of this brain's quota is burned, and when does it reset").
+ * Rate-limit usage prober for METERED agent execs, feeding the Connections
+ * cards ("how much of this agent's quota is burned, and when does it reset").
  *
  * Strategy per exec — everything is best-effort and fails to `null` (no data →
  * the UI simply doesn't render a meter):
@@ -35,10 +35,10 @@ const execFileAsync = promisify(execFile);
  *            claude/codex the quota is reported as REMAINING, so we invert to
  *            used = 100 - remaining.
  *   hermes / ollama / script — self-hosted, no external rate limit BY DESIGN;
- *            deliberately absent so those brains never show a meter.
+ *            deliberately absent so those agents never show a meter.
  *
  * The same claude/codex/agy logic exists in plain-JS form in
- * deploy/remote-brain-client.mjs (zero-dep client, can't import this file);
+ * deploy/remote-agent-client.mjs (zero-dep client, can't import this file);
  * keep the two in sync when changing normalization.
  */
 
@@ -129,12 +129,12 @@ function isWindowKey(key: string): boolean {
   return /_hour$/.test(key) || key === 'seven_day' || key.startsWith('seven_day_');
 }
 
-export function normalizeClaudeUsage(raw: any): BrainUsageWindow[] {
+export function normalizeClaudeUsage(raw: any): AgentUsageWindow[] {
   const label = (kind: string) =>
     kind === 'session' || kind === 'five_hour' ? '5h'
       : kind === 'weekly' || kind === 'weekly_all' || kind === 'seven_day' || kind === 'seven_day_weekly_all' ? '7d'
       : kind.replace(/^seven_day_/, '7d-');
-  const byLabel = new Map<string, BrainUsageWindow>();  // first writer wins → limits[] authoritative
+  const byLabel = new Map<string, AgentUsageWindow>();  // first writer wins → limits[] authoritative
   const add = (lbl: string, p: number | null, resetsAt: unknown) => {
     if (p == null || byLabel.has(lbl)) return;
     byLabel.set(lbl, { label: lbl, usedPct: p, resetsAt: (resetsAt as string) || undefined });
@@ -170,7 +170,7 @@ function claudeToken(): string | null {
   } catch { return null; }
 }
 
-async function probeClaude(): Promise<BrainUsageWindow[] | null> {
+async function probeClaude(): Promise<AgentUsageWindow[] | null> {
   const token = claudeToken();
   if (!token) return null;
   try {
@@ -190,8 +190,8 @@ async function probeClaude(): Promise<BrainUsageWindow[] | null> {
  * when the snapshot was recorded (resets_in_seconds is relative to it).
  * Exported for tests.
  */
-export function normalizeCodexRateLimits(rl: any, atMs: number): BrainUsageWindow[] {
-  const windows: BrainUsageWindow[] = [];
+export function normalizeCodexRateLimits(rl: any, atMs: number): AgentUsageWindow[] {
+  const windows: AgentUsageWindow[] = [];
   for (const key of ['primary', 'secondary']) {
     const w = rl?.[key];
     const p = pct(w?.used_percent);
@@ -251,7 +251,7 @@ function codexSessionFiles(root = path.join(os.homedir(), '.codex', 'sessions'))
 
 /** Last rate_limits snapshot from the newest Codex session logs (checks a few
  *  recent files in case the newest session hasn't emitted a token_count yet). */
-function probeCodex(): BrainUsageWindow[] | null {
+function probeCodex(): AgentUsageWindow[] | null {
   for (const file of codexSessionFiles().slice(0, 5)) {
     try {
       const lines = fs.readFileSync(file, 'utf8').split('\n');
@@ -365,7 +365,7 @@ function agyGroupInfo(group: any): { name?: string; models: string[]; note?: str
  * member models so the UI can render the grouped Antigravity layout.
  * Best-effort and tolerant of field-name variants. Exported for tests.
  */
-export function normalizeAgyQuota(raw: any): BrainUsageWindow[] {
+export function normalizeAgyQuota(raw: any): AgentUsageWindow[] {
   const asArray = (v: any, single: any) =>
     Array.isArray(v) ? v : (single != null ? [single] : []);
   const groups = asArray(
@@ -381,7 +381,7 @@ export function normalizeAgyQuota(raw: any): BrainUsageWindow[] {
   for (const b of asArray(raw?.quotaSummaryBuckets || raw?.buckets, null)) {
     pairs.push({ b, g: raw, flat: true });
   }
-  const windows: BrainUsageWindow[] = [];
+  const windows: AgentUsageWindow[] = [];
   for (const { b, g, flat } of pairs) {
     // A fraction (0–1) and an already-scaled percent (0–100) are reported under
     // different names; scale the fraction, trust the percent as-is.
@@ -403,7 +403,7 @@ export function normalizeAgyQuota(raw: any): BrainUsageWindow[] {
 
     const { name, models, note } = agyGroupInfo(g);
     const title = String(b?.displayName || '').trim();
-    const win: BrainUsageWindow = {
+    const win: AgentUsageWindow = {
       label: agyLabel(b, g),
       usedPct: remaining != null ? pct(100 - remaining)! : 100,
       resetsAt: b?.resetTime || b?.resetsAt || b?.bucketInfo?.resetTime || g?.resetTime || undefined
@@ -428,14 +428,14 @@ export function normalizeAgyQuota(raw: any): BrainUsageWindow[] {
 }
 
 /**
- * Check whether an Antigravity quota window belongs to a given model slug or brain ID.
+ * Check whether an Antigravity quota window belongs to a given model slug or agent ID.
  * Antigravity partitions quota by model family (Gemini Models, Claude and GPT models,
- * Gemini 4 Argon); a brain must only track the windows for its own model group so an
+ * Gemini 4 Argon); an agent must only track the windows for its own model group so an
  * exhausted Claude/Argon limit does not falsely cool down or mis-state resets for Gemini.
  */
-export function agyWindowMatchesModel(modelOrBrainId: string, w: BrainUsageWindow): boolean {
+export function agyWindowMatchesModel(modelOrAgentId: string, w: AgentUsageWindow): boolean {
   if (!w?.group) return true;
-  const target = (modelOrBrainId || '').toLowerCase();
+  const target = (modelOrAgentId || '').toLowerCase();
   const group = (w.group || '').toLowerCase();
   const title = (w.title || '').toLowerCase();
   const note = (w.groupNote || '').toLowerCase();
@@ -612,11 +612,11 @@ async function agyAccessToken(): Promise<string | null> {
   return null;
 }
 
-async function probeAgy(): Promise<BrainUsageWindow[] | null> {
+async function probeAgy(): Promise<AgentUsageWindow[] | null> {
   const token = await agyAccessToken();
   if (!token) return null;
   const userAgent = await installedAgyUserAgent();
-  const merged: BrainUsageWindow[] = [];
+  const merged: AgentUsageWindow[] = [];
   for (const host of AGY_QUOTA_HOSTS) {
     try {
       const res = await fetch(`https://${host}/v1internal:retrieveUserQuotaSummary`, {
@@ -643,7 +643,7 @@ async function probeAgy(): Promise<BrainUsageWindow[] | null> {
  *  reports. The first host to report a given
  *  group+window wins; host order therefore sets the group order. Exported for
  *  tests. */
-export function mergeAgyWindows(windows: BrainUsageWindow[]): BrainUsageWindow[] {
+export function mergeAgyWindows(windows: AgentUsageWindow[]): AgentUsageWindow[] {
   const seen = new Set<string>();
   return windows.filter(w => {
     const key = `${w.group ?? ''}\u0000${w.label}\u0000${w.title ?? ''}`.toLowerCase();
@@ -654,7 +654,7 @@ export function mergeAgyWindows(windows: BrainUsageWindow[]): BrainUsageWindow[]
 }
 
 /** Execs we know how to meter on THIS host. */
-const PROBES: Record<string, () => Promise<BrainUsageWindow[] | null> | BrainUsageWindow[] | null> = {
+const PROBES: Record<string, () => Promise<AgentUsageWindow[] | null> | AgentUsageWindow[] | null> = {
   claude: probeClaude,
   codex: probeCodex,
   agy: probeAgy
@@ -664,8 +664,8 @@ export function isMeteredExec(exec?: string): boolean { return !!exec && exec in
 
 /**
  * Background poller: measures usage once per metered exec (all local claude
- * brains share one account → one HTTP call) and stamps the result onto every
- * LOCAL brain with that exec. Remote brains are NOT touched here — their own
+ * agents share one account → one HTTP call) and stamps the result onto every
+ * LOCAL agent with that exec. Remote agents are NOT touched here — their own
  * client self-reports via heartbeat.
  */
 export class UsagePoller {
@@ -674,7 +674,7 @@ export class UsagePoller {
 
   constructor(
     private store: Store,
-    private brains: () => Record<string, BrainConfig>,
+    private agents: () => Record<string, AgentConfig>,
     private intervalMs = +(process.env.USAGE_POLL_MS || 30000)
   ) {}
 
@@ -693,23 +693,23 @@ export class UsagePoller {
 
     const p = (async () => {
       const ids: string[] = [];
-      for (const [id, b] of Object.entries(this.brains())) {
+      for (const [id, b] of Object.entries(this.agents())) {
         if (b.location === 'local' && b.exec === targetExec) ids.push(id);
       }
       if (!ids.length) return;
-      let windows: BrainUsageWindow[] | null = null;
+      let windows: AgentUsageWindow[] | null = null;
       try { windows = await PROBES[targetExec](); } catch { /* fail-soft: keep last snapshot */ }
       if (!windows) return;
       const at = new Date().toISOString();
       for (const id of ids) {
-        const brain = this.brains()[id];
-        const model = brain?.model || id;
-        const brainWindows = targetExec === 'agy'
+        const agent = this.agents()[id];
+        const model = agent?.model || id;
+        const agentWindows = targetExec === 'agy'
           ? windows.filter(w => agyWindowMatchesModel(model, w))
           : windows;
-        this.store.setBrainUsage(id, {
+        this.store.setAgentUsage(id, {
           exec: targetExec,
-          windows: brainWindows.length ? brainWindows : windows,
+          windows: agentWindows.length ? agentWindows : windows,
           at
         });
       }
@@ -723,7 +723,7 @@ export class UsagePoller {
 
   async refresh(): Promise<void> {
     const execs = new Set<string>();
-    for (const b of Object.values(this.brains())) {
+    for (const b of Object.values(this.agents())) {
       if (b.location === 'local' && isMeteredExec(b.exec)) {
         execs.add(b.exec!);
       }

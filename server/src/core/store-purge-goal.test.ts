@@ -29,7 +29,7 @@ function makeStore(): { store: Store; goals: string } {
     agencyAgents: path.join(root, 'agency-agents'),
   };
   for (const p of Object.values(paths)) fs.mkdirSync(p, { recursive: true });
-  const config = { paths, orchestration: { brains: {} } } as unknown as Config;
+  const config = { paths, orchestration: { agents: {} } } as unknown as Config;
   return { store: new Store(config, new EventBus()), goals: paths.goals };
 }
 

@@ -31,7 +31,7 @@ function makeGoals(orchestration: Record<string, any> = {}) {
   const config = {
     paths: { goals: path.join(base, 'goals'), artifacts: path.join(base, 'artifacts') },
     orchestration: {
-      brains: {
+      agents: {
         'remote-cc-opus': { location: 'remote', exec: 'claude', model: 'claude-opus-5-5' },
         'local-gemini': { location: 'local', exec: 'agy', model: 'gemini-3-pro' },
         'local-hermes-qwen3.8-27b': { location: 'local', exec: 'hermes', model: 'qwen3.8-27b' }
@@ -82,7 +82,7 @@ test('taskTrailRows copies RULING lines in, split into decision / why', () => {
   const t = {
     id: 'aaaaaaaa-1111-2222-3333-444444444444', title: 'Build it', status: 'done', completedAt: '2026-10-20T02:00:00.000Z',
     from: { platform: 'cowork' }, to: {}, priority: 'normal', createdAt: '2026-10-20T01:00:00.000Z',
-    context: { ranBrain: 'local-hermes-qwen3.8-27b', rulings: ['used plan B — reversible — one revert'] }
+    context: { ranAgent: 'local-hermes-qwen3.8-27b', rulings: ['used plan B — reversible — one revert'] }
   } as unknown as Task;
   const rows = taskTrailRows(t, 'build');
   assert.equal(rows.length, 2);
@@ -96,7 +96,7 @@ test('taskTrailRows copies RULING lines in, split into decision / why', () => {
 
 // ── goal lifecycle → trail + Attention ───────────────────────────────────────
 
-function runPhase(goals: Goals, store: FakeStore, ranBrain: string) {
+function runPhase(goals: Goals, store: FakeStore, ranAgent: string) {
   const g = goals.create({ title: 'Ship X', successCriteria: 'Does GET /x return 200?', phases: [{ key: 'baseline', title: 'Baseline' }] });
   goals.activate(g.goalId);
   goals.applyAchieverDecision(g.goalId, { kind: 'emit', tasks: [{ title: 'measure', description: 'measure now' }], reason: 'need a baseline' });
@@ -104,7 +104,7 @@ function runPhase(goals: Goals, store: FakeStore, ranBrain: string) {
   t.status = 'done';
   t.completedAt = new Date().toISOString();
   t.result = 'measured 404\nRULING: measured prod not staging — it is what users see — staging may differ';
-  t.context = { ...t.context, ranBrain, rulings: ['measured prod not staging — it is what users see — staging may differ'] };
+  t.context = { ...t.context, ranAgent, rulings: ['measured prod not staging — it is what users see — staging may differ'] };
   goals.onTaskCompleted(t);
   return g.goalId;
 }
@@ -124,7 +124,7 @@ test('phase close logs the trail and creates a different-family Attention review
   const attention = goals.generatedTasks(goalId).find(t => t.context!.role === 'goal-attention')!;
   assert.ok(attention, 'attention task created');
   // qwen executor → an opus-class Claude reviewer (CEO judge-family ruling)
-  assert.equal(attention.context!.brain, 'remote-cc-opus');
+  assert.equal(attention.context!.agent, 'remote-cc-opus');
   assert.match(attention.description, /RULING: measured prod not staging/);
   assert.match(attention.description, /## Attention/);
   assert.match(attention.description, /No flags/);
@@ -157,7 +157,7 @@ test('Claude-executed phase is reviewed by Gemini; Attention file before report 
   const { goals, store, config } = makeGoals();
   const goalId = runPhase(goals, store, 'remote-cc-opus');
   const attention = goals.generatedTasks(goalId).find(t => t.context!.role === 'goal-attention')!;
-  assert.equal(attention.context!.brain, 'local-gemini');
+  assert.equal(attention.context!.agent, 'local-gemini');
 
   fs.mkdirSync(path.join(config.paths.artifacts, attention.id), { recursive: true });
   fs.writeFileSync(path.join(config.paths.artifacts, attention.id, 'attention-baseline.md'), '## Attention\nreviewed by gemini-3-pro\nNo flags\n');

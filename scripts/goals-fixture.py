@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Copy the live goals and their tasks into a temp store and run a server on it.
 
-The server has its dispatcher off and no brains, so nothing it does can spawn a
+The server has its dispatcher off and no agents, so nothing it does can spawn a
 run or touch live data. The UX harness's mutating flows run only against this.
 
 Usage: goals-fixture.py <repo-with-server> [--port 16868]   (runs until killed)
@@ -48,7 +48,7 @@ config = {
     'server': {'port': a.port, 'host': '127.0.0.1', 'allowUnauthenticated': True},
     'paths': {**paths, 'agencyAgents': os.path.join(a.live, 'agency-agents')},
     'platforms': {}, 'services': {},
-    'orchestration': {'enabled': False, 'brains': {}, 'agents': {}},
+    'orchestration': {'enabled': False, 'agents': {}, 'agents': {}},
 }
 cfg = os.path.join(tmp, 'config.json')
 json.dump(config, open(cfg, 'w'))

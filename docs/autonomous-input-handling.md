@@ -22,7 +22,7 @@ Add an **opt-in** autonomous answerer, the sibling of `driveGoals`/`driveWorkflo
 that runs each dispatcher tick when `orchestration.autoAnswer.enabled` is true:
 
 For every task on `wait-input` with an unanswered interaction packet, the
-**orchestrator brain** is asked to answer the questions **as the CEO's fully-
+**orchestrator agent** is asked to answer the questions **as the CEO's fully-
 authorised delegate**. It replies with one fenced-JSON block — either the answers
 keyed by field id, or an honest `escalate`. Answers are submitted via the same
 `store.submitInteraction` path a human uses (`submittedBy: "orchestrator
@@ -60,7 +60,7 @@ keyed by field id, or an honest `escalate`. Answers are submitted via the same
     "enabled": false,        // opt-in; default keeps the wait-for-a-person behaviour
     "maxAttempts": 3,        // per-task ceiling before leaving it for a human
     "timeoutMs": 300000,     // optional; defaults to classifier.timeoutMs
-    "brains": []             // optional; defaults to the orchestrator agent's chain
+    "agents": []             // optional; defaults to the orchestrator role's agent chain
   }
 }
 ```
@@ -72,7 +72,7 @@ keyed by field id, or an honest `escalate`. Answers are submitted via the same
   now self-heals across *both* blocked goals and paused tasks.
 - **Harder / traded off:** the orchestrator now makes reversible product decisions
   unattended. That is the point, but it means the quality of those defaults rides
-  on the orchestrator brain; the `maxAttempts` ceiling and honest-escalation rule
+  on the orchestrator agent; the `maxAttempts` ceiling and honest-escalation rule
   bound the blast radius. Left **off by default** so the change is inert until the
   operator flips it on.
 - Truly human-only actions (money, browser auth, owner-only toggles) still stop

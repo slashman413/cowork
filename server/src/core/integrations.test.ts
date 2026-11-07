@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { parseRepoRef, detectRepo, defaultWrapBrain, Integrations, dirSizeBytes } from './integrations.js';
+import { parseRepoRef, detectRepo, defaultWrapAgent, Integrations, dirSizeBytes } from './integrations.js';
 
 test('integrations: parseRepoRef validates and extracts repo metadata', () => {
   // owner/repo
@@ -80,12 +80,12 @@ test('integrations: detectRepo classifies repo contents', () => {
   }
 });
 
-test('integrations: defaultWrapBrain picks a local brain', () => {
+test('integrations: defaultWrapAgent picks a local agent', () => {
   const locals = ['local-codex-default', 'local-hermes-qwen3.8-27b', 'local-cc-sonnet-5-5'];
-  const picked = defaultWrapBrain(undefined, locals);
+  const picked = defaultWrapAgent(undefined, locals);
   assert.equal(picked, 'local-cc-sonnet-5-5');
 
-  const configured = defaultWrapBrain('local-hermes-qwen3.8-27b', locals);
+  const configured = defaultWrapAgent('local-hermes-qwen3.8-27b', locals);
   assert.equal(configured, 'local-hermes-qwen3.8-27b');
 });
 
@@ -117,9 +117,9 @@ test('integrations: buildWrapTask creates safe prompt for agent', () => {
       installed: { skills: [] },
     });
 
-    const taskSpec = hub.buildWrapTask(id, { brain: 'local-hermes-qwen3.8-27b' });
+    const taskSpec = hub.buildWrapTask(id, { agent: 'local-hermes-qwen3.8-27b' });
     assert.ok(taskSpec.title.includes('acme/tool'));
-    assert.equal(taskSpec.context.brain, 'local-hermes-qwen3.8-27b');
+    assert.equal(taskSpec.context.agent, 'local-hermes-qwen3.8-27b');
     assert.ok(taskSpec.description.includes('Write ONLY inside the wrapper dir'));
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });

@@ -1,14 +1,16 @@
 import fs from 'fs';
+import { normalizeTaskContext } from '../legacy-wire.js';
+import { normalizeThinking } from './thinking.js';
 import path from 'path';
 import matter from 'gray-matter';
 import { v4 as uuidv4 } from 'uuid';
 import { globSync } from 'glob';
-import type { Config, ActiveAgent, Task, DashboardData, AgentCard, InteractionField, BrainUsage } from '../types.js';
+import type { Config, ActiveWorker, Task, DashboardData, PersonaCard, InteractionField, AgentUsage } from '../types.js';
 import type { EventBus } from './events.js';
 import { Roster } from './roster.js';
 import { normalizeRecurrence, recurrenceFromLegacyHours, nextRunAt, type TaskRecurrence } from './recurrence.js';
 import { isRateLimitFailure } from './result-verifier.js';
-import { canonicalBrainId } from '../config.js';
+import { canonicalAgentId } from '../config.js';
 import { agyWindowMatchesModel } from './usage-probe.js';
 import { normalizeContextBrief } from './brief.js';
 import { assertTier } from './tiers.js';
@@ -18,9 +20,9 @@ import { safeRelPath } from './recipes.js';
 
 /**
  * A veto the Dispatcher registers on the store so EXTERNAL task completions
- * (a remote brain's client calling complete_task / PATCH inbox) pass through the
+ * (a remote agent's client calling complete_task / PATCH inbox) pass through the
  * same result verification as local runs. `handover` means the guard has already
- * re-queued the task for the next fallback brain — do NOT mark it done. `complete`
+ * re-queued the task for the next fallback agent — do NOT mark it done. `complete`
  * lets completion proceed, optionally rewriting the stored result (e.g. a
  * "chain exhausted" FAILED summary). `wait-input` means the result is really a
  * QUESTION back to the user: park the task on `wait-input` with the questions as
@@ -62,12 +64,12 @@ export function isFailedTask(task: Task): boolean {
 }
 
 /**
- * A `done` task that was CLOSED ADMINISTRATIVELY without ever running a brain —
+ * A `done` task that was CLOSED ADMINISTRATIVELY without ever running an agent —
  * e.g. a scheduled duplicate that a sibling attempt superseded, or a task
  * cancelled before its launch time. Its status/result were set directly, so it
  * never entered the dispatcher's execution path: no `artifacts/<id>/` dir and no
  * `result.md` are created (those are written only by dispatcher.mkdirSync/
- * writeFileSync when a brain actually runs). On the dashboard such a task looks
+ * writeFileSync when an agent actually runs). On the dashboard such a task looks
  * identical to a real "done (ran)" card yet has an empty artifacts list, which
  * reads like a silent failure. This classifier lets the UI badge it distinctly.
  *
@@ -100,7 +102,7 @@ export class Store {
   private config: Config;
   private eventBus: EventBus;
   private roster: Roster;
-  private activeAgents = new Map<string, ActiveAgent>();
+  private activeWorkers = new Map<string, ActiveWorker>();
   private startTime = Date.now();
   private completionGuard?: CompletionGuard;
 
@@ -132,8 +134,8 @@ export class Store {
     }
 
     this.roster.loadAll();
-    this.loadActiveAgents();
-    this.loadBrainUsage();
+    this.loadActiveWorkers();
+    this.loadAgentUsage();
     this.reportHiddenTasks();
   }
 
@@ -163,35 +165,35 @@ export class Store {
     }
   }
 
-  private loadActiveAgents(): void {
-    const agentsFile = path.join(this.config.paths.status, 'agents.json');
-    if (fs.existsSync(agentsFile)) {
+  private loadActiveWorkers(): void {
+    const workersFile = path.join(this.config.paths.status, 'workers.json');
+    if (fs.existsSync(workersFile)) {
       try {
-        const data = JSON.parse(fs.readFileSync(agentsFile, 'utf-8'));
+        const data = JSON.parse(fs.readFileSync(workersFile, 'utf-8'));
         if (Array.isArray(data)) {
-          for (const agent of data) {
-            this.activeAgents.set(agent.id, agent);
+          for (const worker of data) {
+            this.activeWorkers.set(worker.id, worker);
           }
         }
       } catch (e) {
-        console.error('Failed to load active agents', e);
+        console.error('Failed to load active workers', e);
       }
     }
   }
 
-  private saveActiveAgents(): void {
-    const agentsFile = path.join(this.config.paths.status, 'agents.json');
-    const data = Array.from(this.activeAgents.values());
-    fs.writeFileSync(agentsFile, JSON.stringify(data, null, 2));
+  private saveActiveWorkers(): void {
+    const workersFile = path.join(this.config.paths.status, 'workers.json');
+    const data = Array.from(this.activeWorkers.values());
+    fs.writeFileSync(workersFile, JSON.stringify(data, null, 2));
   }
 
-  public registerAgent(params: { platform: string; agentName: string; sessionId?: string; capabilities?: string[]; currentTask?: string }): ActiveAgent {
+  public registerWorker(params: { platform: string; workerName: string; sessionId?: string; capabilities?: string[]; currentTask?: string }): ActiveWorker {
     const id = uuidv4();
     const now = new Date().toISOString();
-    const agent: ActiveAgent = {
+    const worker: ActiveWorker = {
       id,
       platform: params.platform,
-      agentName: params.agentName,
+      workerName: params.workerName,
       sessionId: params.sessionId,
       capabilities: params.capabilities || [],
       currentTask: params.currentTask,
@@ -200,87 +202,87 @@ export class Store {
       lastHeartbeat: now
     };
     
-    this.activeAgents.set(id, agent);
-    this.saveActiveAgents();
-    this.eventBus.emitAgentRegistered(agent);
+    this.activeWorkers.set(id, worker);
+    this.saveActiveWorkers();
+    this.eventBus.emitWorkerRegistered(worker);
     
-    return agent;
+    return worker;
   }
 
-  public updateHeartbeat(params: { agentId: string; status?: 'idle' | 'working' | 'blocked'; currentTask?: string }): ActiveAgent | null {
-    const agent = this.activeAgents.get(params.agentId);
-    if (!agent) return null;
+  public updateHeartbeat(params: { workerId: string; status?: 'idle' | 'working' | 'blocked'; currentTask?: string }): ActiveWorker | null {
+    const worker = this.activeWorkers.get(params.workerId);
+    if (!worker) return null;
     
-    agent.lastHeartbeat = new Date().toISOString();
-    if (params.status) agent.status = params.status;
-    if (params.currentTask !== undefined) agent.currentTask = params.currentTask;
+    worker.lastHeartbeat = new Date().toISOString();
+    if (params.status) worker.status = params.status;
+    if (params.currentTask !== undefined) worker.currentTask = params.currentTask;
     
-    this.saveActiveAgents();
-    this.eventBus.emitHeartbeat(agent.id, agent.status, agent.currentTask);
+    this.saveActiveWorkers();
+    this.eventBus.emitHeartbeat(worker.id, worker.status, worker.currentTask);
     
-    return agent;
+    return worker;
   }
 
-  public getActiveAgents(filters?: { platform?: string; status?: string }): ActiveAgent[] {
-    let agents = Array.from(this.activeAgents.values());
+  public getActiveWorkers(filters?: { platform?: string; status?: string }): ActiveWorker[] {
+    let workers = Array.from(this.activeWorkers.values());
     if (filters?.platform) {
-      agents = agents.filter(a => a.platform === filters.platform);
+      workers = workers.filter(a => a.platform === filters.platform);
     }
     if (filters?.status) {
-      agents = agents.filter(a => a.status === filters.status);
+      workers = workers.filter(a => a.status === filters.status);
     }
-    return agents;
+    return workers;
   }
 
-  // ── Per-client × per-brain invocation counters (in-memory, non-persistent;
+  // ── Per-client × per-agent invocation counters (in-memory, non-persistent;
   //    reset on service restart and when a client re-registers). ──────────────
   private counters = { ran: new Map<string, Map<string, number>>(), submitted: new Map<string, Map<string, number>>() };
-  private bump(m: Map<string, Map<string, number>>, client: string, brain: string): void {
+  private bump(m: Map<string, Map<string, number>>, client: string, agent: string): void {
     if (!m.has(client)) m.set(client, new Map());
     const b = m.get(client)!;
-    b.set(brain, (b.get(brain) || 0) + 1);
+    b.set(agent, (b.get(agent) || 0) + 1);
   }
-  public countRun(client: string, brain: string): void { this.bump(this.counters.ran, client, brain); }
-  public countSubmitted(client: string, brain: string): void { this.bump(this.counters.submitted, client, brain); }
+  public countRun(client: string, agent: string): void { this.bump(this.counters.ran, client, agent); }
+  public countSubmitted(client: string, agent: string): void { this.bump(this.counters.submitted, client, agent); }
   public resetCounters(client: string): void { this.counters.ran.delete(client); this.counters.submitted.delete(client); }
   public getCounters(): { ran: Record<string, Record<string, number>>; submitted: Record<string, Record<string, number>> } {
     const toObj = (m: Map<string, Map<string, number>>) => Object.fromEntries([...m].map(([k, v]) => [k, Object.fromEntries(v)]));
     return { ran: toObj(this.counters.ran), submitted: toObj(this.counters.submitted) };
   }
 
-  // ── Per-brain rate-limit usage snapshots. Refilled by the local UsagePoller
+  // ── Per-agent rate-limit usage snapshots. Refilled by the local UsagePoller
   //    and by remote clients' heartbeats, AND persisted to .status so a server
   //    restart / redeploy doesn't blank every rate-limit meter until the next
-  //    poll or heartbeat lands (a remote brain may not re-report for minutes,
+  //    poll or heartbeat lands (a remote agent may not re-report for minutes,
   //    so its meter would silently vanish across every redeploy — the "rate
   //    limits sometimes not shown" report). The reloaded snapshot carries its
   //    original `at`, so the UI still flags it as stale once it ages out. Only
-  //    METERED brains (claude/codex/…) ever get an entry — hermes/ollama/script
-  //    brains have no quota and stay absent. ─────────────────────────────────
-  private brainUsage = new Map<string, BrainUsage>();
-  private brainUsageSaveTimer: NodeJS.Timeout | null = null;
+  //    METERED agents (claude/codex/…) ever get an entry — hermes/ollama/script
+  //    agents have no quota and stay absent. ─────────────────────────────────
+  private agentUsage = new Map<string, AgentUsage>();
+  private agentUsageSaveTimer: NodeJS.Timeout | null = null;
 
-  private brainUsageFile(): string {
-    return path.join(this.config.paths.status, 'brain-usage.json');
+  private agentUsageFile(): string {
+    return path.join(this.config.paths.status, 'agent-usage.json');
   }
 
-  private loadBrainUsage(): void {
+  private loadAgentUsage(): void {
     try {
-      const data = JSON.parse(fs.readFileSync(this.brainUsageFile(), 'utf-8'));
+      const data = JSON.parse(fs.readFileSync(this.agentUsageFile(), 'utf-8'));
       if (data && typeof data === 'object') {
-        // Every configured brain, whatever its location: a `local-` id names this
+        // Every configured agent, whatever its location: a `local-` id names this
         // host, and some (local-codex-*) are client-claimed (location "remote").
-        const knownBrains = new Set(Object.keys(this.config.orchestration?.brains || {}));
+        const knownAgents = new Set(Object.keys(this.config.orchestration?.agents || {}));
         for (const [rawId, u] of Object.entries(data)) {
           if (u && typeof u === 'object' && Array.isArray((u as any).windows)) {
             // A snapshot written before a rename carries the retired id.
-            const id = canonicalBrainId(this.config, rawId);
-            // Prune retired local brains that are no longer configured on this host
-            if (id.startsWith('local-') && knownBrains.size > 0 && !knownBrains.has(id)) {
+            const id = canonicalAgentId(this.config, rawId);
+            // Prune retired local agents that are no longer configured on this host
+            if (id.startsWith('local-') && knownAgents.size > 0 && !knownAgents.has(id)) {
               continue;
             }
-            if (id !== rawId && this.brainUsage.has(id)) continue;   // canonical entry wins
-            this.brainUsage.set(id, u as BrainUsage);
+            if (id !== rawId && this.agentUsage.has(id)) continue;   // canonical entry wins
+            this.agentUsage.set(id, u as AgentUsage);
           }
         }
       }
@@ -289,55 +291,55 @@ export class Store {
 
   // Coalesce writes: usage arrives on every heartbeat (seconds apart), so flush
   // to disk at most once per window instead of on every update.
-  private scheduleBrainUsageSave(): void {
-    if (this.brainUsageSaveTimer) return;
-    this.brainUsageSaveTimer = setTimeout(() => {
-      this.brainUsageSaveTimer = null;
+  private scheduleAgentUsageSave(): void {
+    if (this.agentUsageSaveTimer) return;
+    this.agentUsageSaveTimer = setTimeout(() => {
+      this.agentUsageSaveTimer = null;
       try {
-        fs.writeFileSync(this.brainUsageFile(), JSON.stringify(Object.fromEntries(this.brainUsage), null, 2));
+        fs.writeFileSync(this.agentUsageFile(), JSON.stringify(Object.fromEntries(this.agentUsage), null, 2));
       } catch { /* best-effort; a lost snapshot just re-fills on the next poll */ }
     }, 5000);
-    this.brainUsageSaveTimer.unref?.();
+    this.agentUsageSaveTimer.unref?.();
   }
 
-  public setBrainUsage(brainId: string, usage: BrainUsage): void {
-    const existing = this.brainUsage.get(brainId);
+  public setAgentUsage(agentId: string, usage: AgentUsage): void {
+    const existing = this.agentUsage.get(agentId);
     if (existing?.at && usage.at && new Date(usage.at).getTime() < new Date(existing.at).getTime()) {
       return; // Do not overwrite with an older snapshot
     }
     let windows = usage.windows;
     if (usage.exec === 'agy' && Array.isArray(windows)) {
-      const model = this.config.orchestration?.brains?.[brainId]?.model || brainId;
+      const model = this.config.orchestration?.agents?.[agentId]?.model || agentId;
       const matched = windows.filter(w => agyWindowMatchesModel(model, w));
       if (matched.length) windows = matched;
     }
-    this.brainUsage.set(brainId, { ...usage, windows });
-    this.scheduleBrainUsageSave();
+    this.agentUsage.set(agentId, { ...usage, windows });
+    this.scheduleAgentUsageSave();
   }
-  public removeBrainUsage(brainId: string): void {
-    if (this.brainUsage.delete(brainId)) {
-      this.scheduleBrainUsageSave();
+  public removeAgentUsage(agentId: string): void {
+    if (this.agentUsage.delete(agentId)) {
+      this.scheduleAgentUsageSave();
     }
   }
-  public getBrainUsage(): Record<string, BrainUsage> {
-    return Object.fromEntries(this.brainUsage);
+  public getAgentUsage(): Record<string, AgentUsage> {
+    return Object.fromEntries(this.agentUsage);
   }
 
   /**
    * Decide whether a just-failed task died on a RATE LIMIT (as opposed to an auth
    * error, a bad deliverable, a timeout, …) and, if so, record the soonest time its
    * usage window resets so the task can be auto-re-run then. Mutates `task.context`
-   * in place (the caller persists it). Inspects the per-brain failure reasons on
-   * `context.failedBrains` plus the final result text; the reset time is read from
-   * the live rate-limit meters (Store.setBrainUsage) of the brains that failed.
+   * in place (the caller persists it). Inspects the per-agent failure reasons on
+   * `context.failedAgents` plus the final result text; the reset time is read from
+   * the live rate-limit meters (Store.setAgentUsage) of the agents that failed.
    * Clears the flags when the failure is NOT a rate limit, so a re-run that later
    * fails for a different reason doesn't keep looking rate-limited.
    */
   private classifyRateLimit(task: Task): void {
     const ctx: Record<string, any> = { ...(task.context || {}) };
-    const failedBrains: Array<{ brain?: string; reason?: string }> =
-      Array.isArray(ctx.failedBrains) ? ctx.failedBrains : [];
-    const reasons = failedBrains.map(f => f.reason || '').join('\n');
+    const failedAgents: Array<{ agent?: string; reason?: string }> =
+      Array.isArray(ctx.failedAgents) ? ctx.failedAgents : [];
+    const reasons = failedAgents.map(f => f.reason || '').join('\n');
     const haystack = `${reasons}\n${task.result || ''}`;
 
     if (!isRateLimitFailure(haystack)) {
@@ -350,14 +352,14 @@ export class Store {
     }
 
     ctx.rateLimited = true;
-    // Consult the meters of the brains that failed (fall back to every metered
-    // brain when no brain ids were recorded) for the soonest future reset.
-    const usageAll = this.getBrainUsage();
-    const ids = failedBrains.map(f => f.brain).filter((b): b is string => !!b);
-    const pool: Array<{ brainId?: string; u: BrainUsage }> = (ids.length
-      ? ids.map(id => ({ brainId: id, u: usageAll[id] }))
-      : Object.entries(usageAll).map(([brainId, u]) => ({ brainId, u })))
-      .filter((item): item is { brainId: string; u: BrainUsage } => !!item.u && Array.isArray(item.u.windows));
+    // Consult the meters of the agents that failed (fall back to every metered
+    // agent when no agent ids were recorded) for the soonest future reset.
+    const usageAll = this.getAgentUsage();
+    const ids = failedAgents.map(f => f.agent).filter((b): b is string => !!b);
+    const pool: Array<{ agentId?: string; u: AgentUsage }> = (ids.length
+      ? ids.map(id => ({ agentId: id, u: usageAll[id] }))
+      : Object.entries(usageAll).map(([agentId, u]) => ({ agentId, u })))
+      .filter((item): item is { agentId: string; u: AgentUsage } => !!item.u && Array.isArray(item.u.windows));
     const reset = this.earliestFutureReset(pool);
     if (reset) ctx.rateLimitResetsAt = reset; else delete ctx.rateLimitResetsAt;
     // Auto re-run is DEFAULT-ON (orchestration.autoRerunRateLimited.enabled): the
@@ -374,12 +376,12 @@ export class Store {
   /** Soonest future `resetsAt` across a set of usage snapshots. Prefers windows
    *  that are actually exhausted (used ≥ 80%) — the one that caused the failure —
    *  and only falls back to the soonest of any future window when none look maxed. */
-  private earliestFutureReset(pool: Array<{ brainId?: string; u: BrainUsage }>): string | undefined {
+  private earliestFutureReset(pool: Array<{ agentId?: string; u: AgentUsage }>): string | undefined {
     const now = Date.now();
     const futures: number[] = [];
     const exhausted: number[] = [];
-    for (const { brainId, u } of pool) {
-      const model = brainId ? (this.config.orchestration?.brains?.[brainId]?.model || brainId) : undefined;
+    for (const { agentId, u } of pool) {
+      const model = agentId ? (this.config.orchestration?.agents?.[agentId]?.model || agentId) : undefined;
       for (const w of u.windows) {
         if (model && u.exec === 'agy' && !agyWindowMatchesModel(model, w)) continue;
         if (!w.resetsAt) continue;
@@ -418,7 +420,7 @@ export class Store {
   }
 
   /**
-   * Tail the live PROGRESS LOG the dispatcher streams while a local brain runs a
+   * Tail the live PROGRESS LOG the dispatcher streams while a local agent runs a
    * task (`artifacts/<id>/progress.log`). Returns the last ~`maxBytes` of text plus
    * whether the task is still executing, so the dashboard can show a live "what is
    * it doing right now" window on an in-progress card. The log is empty when no run
@@ -455,27 +457,27 @@ export class Store {
     return { running, status, log, updatedAt };
   }
 
-  public removeAgent(id: string): boolean {
-    const existed = this.activeAgents.delete(id);
-    if (existed) this.saveActiveAgents();
+  public removeWorker(id: string): boolean {
+    const existed = this.activeWorkers.delete(id);
+    if (existed) this.saveActiveWorkers();
     return existed;
   }
 
-  public removeStaleAgents(timeoutMs: number): void {
+  public removeStaleWorkers(timeoutMs: number): void {
     const now = Date.now();
     let changed = false;
-    for (const [id, agent] of this.activeAgents.entries()) {
-      if (now - new Date(agent.lastHeartbeat).getTime() > timeoutMs) {
-        this.activeAgents.delete(id);
+    for (const [id, worker] of this.activeWorkers.entries()) {
+      if (now - new Date(worker.lastHeartbeat).getTime() > timeoutMs) {
+        this.activeWorkers.delete(id);
         changed = true;
       }
     }
     if (changed) {
-      this.saveActiveAgents();
+      this.saveActiveWorkers();
     }
   }
 
-  // ── Task input files (attached by a person for the brain to read) ──────────
+  // ── Task input files (attached by a person for the agent to read) ──────────
   // Layout mirrors artifacts/: <repo>/inputs/<taskId>/<file> for a task's inputs,
   // plus <repo>/inputs/_staging/<token>/<file> for uploads that arrive BEFORE
   // their task exists (chat composer). Gitignored. Materializing staged uploads
@@ -629,6 +631,7 @@ export class Store {
     };
     // Brief contract (P0-3): validate + normalize context.acceptance/verify/
     // timeboxMin/scope (throws → 400 on the API / isError on MCP).
+    task.context = normalizeTaskContext(task.context, id => !!this.config.orchestration.agents?.[canonicalAgentId(this.config, id)]);
     task.context = normalizeContextBrief(task.context);
     assertTier(task.context?.tier);
     if (task.context?.tier) task.context = { ...task.context, tier: String(task.context.tier).trim().toLowerCase() };
@@ -640,15 +643,15 @@ export class Store {
       if (this.config.paths?.decisions) {
         appendLesson(this.config.paths.decisions, buildLesson({
           kind: 'brief-missing-acceptance', task: id, title: task.title || '',
-          agent: 'orchestrator', brain: String(task.context?.brain || ''), attempt: 0,
+          persona: 'orchestrator', agent: String(task.context?.agent || ''), attempt: 0,
           reason: 'orchestrator-created subtask has no context.acceptance'
         }));
       }
     }
-    // A pin to a retired brain id (BRAIN_ID_ALIASES) is stored as the canonical id.
-    if (typeof task.context?.brain === 'string') {
-      const canon = canonicalBrainId(this.config, task.context.brain);
-      if (canon !== task.context.brain) task.context = { ...task.context, brain: canon };
+    // A pin to a retired agent id (AGENT_ID_ALIASES) is stored as the canonical id.
+    if (typeof task.context?.agent === 'string') {
+      const canon = canonicalAgentId(this.config, task.context.agent);
+      if (canon !== task.context.agent) task.context = { ...task.context, agent: canon };
     }
     // Materialize any staged input uploads into inputs/<id>/ and record the stored
     // filenames on context.inputFiles BEFORE the task is written/emitted, so it is
@@ -736,7 +739,7 @@ export class Store {
     const guard = this.schedulerGuardConfig();
     const all = this.listTasks();
     const inFlight = new Map<string, Task>();   // scheduler id → its outstanding run-child
-    let backlog = 0;                             // pending tasks waiting for a brain
+    let backlog = 0;                             // pending tasks waiting for an agent
     for (const t of all) {
       if (t.status === 'pending') backlog++;
       const pid = t.context?.scheduledParentId;
@@ -759,10 +762,10 @@ export class Store {
         const anchor = task.scheduledAt ? new Date(task.scheduledAt) : new Date(now);
         const next = nextRunAt(recurrence, anchor, new Date(now));
         if (next) {
-          // FLOOD GUARD 1 — coalesce. When brains are saturated or rate-limited,
+          // FLOOD GUARD 1 — coalesce. When agents are saturated or rate-limited,
           // the previous cycle's run-child can still be queued when the next slot
           // fires. Spawning another just stacks identical pending copies that all
-          // run later, back to back, on the same scarce brains. While a run is
+          // run later, back to back, on the same scarce agents. While a run is
           // still in flight it stands in for this slot: skip the spawn and re-arm
           // to the next slot. Opt out per task with context.allowOverlappingRuns.
           const outstanding = inFlight.get(task.id);
@@ -780,7 +783,7 @@ export class Store {
             continue;
           }
           // FLOOD GUARD 2 — backlog pressure. When the runnable queue is already
-          // deep (brains can't keep up), HOLD the scheduler due instead of adding
+          // deep (agents can't keep up), HOLD the scheduler due instead of adding
           // to the pile: it stays `scheduled` with its past scheduledAt and is
           // re-checked every tick, spawning ONE run as soon as the backlog drains
           // (nextRunAt then skips any slots missed meanwhile, so no catch-up burst).
@@ -839,7 +842,7 @@ export class Store {
 
   /**
    * Collapse DUPLICATE queued runs of the same recurring scheduler, which pile up
-   * when cycles fire faster than the brains drain them (before the coalesce
+   * when cycles fire faster than the agents drain them (before the coalesce
    * guard existed, or via a manual "Run now"/re-run). Per scheduler, only the
    * `pending` copies that are NOT running are touched: when a sibling is
    * already in flight (claimed / in-progress / wait-input / deferred) every
@@ -868,7 +871,7 @@ export class Store {
         if (dup === keeper) continue;
         dup.status = 'done';
         dup.completedAt = new Date().toISOString();
-        dup.result = `SUPERSEDED: duplicate queued run of recurring task ${pid}. Run ${keeper.id} (${keeper.status}) covers this cycle. Closed without running so the backlog doesn't flood the brains.`;
+        dup.result = `SUPERSEDED: duplicate queued run of recurring task ${pid}. Run ${keeper.id} (${keeper.status}) covers this cycle. Closed without running so the backlog doesn't flood the agents.`;
         dup.context = { ...(dup.context || {}), supersededBy: keeper.id };
         this.saveTask(dup);
         this.eventBus.emitTaskCompleted(dup);
@@ -930,7 +933,7 @@ export class Store {
     return task;
   }
 
-  public claimTask(params: { taskId: string; agentId: string; internal?: boolean }): Task | null {
+  public claimTask(params: { taskId: string; workerId: string; internal?: boolean }): Task | null {
     const task = this.getTask(params.taskId);
     if (!task) return null;
     // Human-in-the-loop hold: a task with an unanswered interaction packet is not
@@ -941,29 +944,29 @@ export class Store {
         && task.interaction.fields.length > 0 && task.interaction.status !== 'submitted') {
       return null;
     }
-    // A LOCAL-brain task is the dispatcher's to run (it spawns the CLI directly and
+    // A LOCAL-agent task is the dispatcher's to run (it spawns the CLI directly and
     // injects the roster persona). External clients must not claim it — otherwise a
-    // client that registered a local brain races the dispatcher and runs the task
+    // client that registered a local agent races the dispatcher and runs the task
     // WITHOUT the persona/ran-labels. Only internal (dispatcher) claims are allowed.
     if (!params.internal) {
-      const brainId = task.context?.brain;
-      const brain = brainId ? this.config.orchestration.brains?.[canonicalBrainId(this.config, brainId)] : undefined;
-      if (brain && brain.location === 'local') return null;
+      const agentId = task.context?.agent;
+      const agent = agentId ? this.config.orchestration.agents?.[canonicalAgentId(this.config, agentId)] : undefined;
+      if (agent && agent.location === 'local') return null;
     }
     // Atomic compare-and-set: only a pending task can be claimed. The server is
     // single-process, so claimTask runs to completion without interleaving —
-    // this makes concurrent claims (many remote clients on one brain) safe:
+    // this makes concurrent claims (many remote clients on one agent) safe:
     // the first wins, the rest get null. Re-claim by the same agent is allowed.
-    if (task.status !== 'pending' && task.claimedBy !== params.agentId) return null;
+    if (task.status !== 'pending' && task.claimedBy !== params.workerId) return null;
 
     task.status = 'in-progress';
     task.claimedAt = new Date().toISOString();
-    task.claimedBy = params.agentId;
+    task.claimedBy = params.workerId;
     
     const taskFile = this.resolveTaskFile(task.id) || `${task.id}.json`;
     this.writeTaskFile(taskFile, task);
 
-    this.eventBus.emitTaskClaimed(task, params.agentId);
+    this.eventBus.emitTaskClaimed(task, params.workerId);
     return task;
   }
 
@@ -975,10 +978,10 @@ export class Store {
     const task = this.getTask(params.taskId);
     if (!task) return null;
 
-    // External completions (a remote brain reporting its result) pass through the
+    // External completions (a remote agent reporting its result) pass through the
     // guard: a soft failure reported as a result — a rate-limit / "you've hit your
     // session limit" notice, a refusal, or an empty answer — is rejected and
-    // handed to the next fallback brain instead of being marked done. The
+    // handed to the next fallback agent instead of being marked done. The
     // dispatcher's own completions are already verified, so they pass internal:true.
     let result = params.result;
     if (!params.internal && this.completionGuard && task.status !== 'done') {
@@ -997,14 +1000,14 @@ export class Store {
     task.status = 'done';
     task.completedAt = new Date().toISOString();
     if (result) task.result = result;
-    // Flag a chain-exhausted failure (every fallback brain failed verification) so
+    // Flag a chain-exhausted failure (every fallback agent failed verification) so
     // the UI groups it into the red "failed" category with a confirm-gated re-run,
     // rather than listing it as a green success. Covers BOTH completion paths — the
-    // dispatcher's own internal completion and a remote brain's guarded completion
+    // dispatcher's own internal completion and a remote agent's guarded completion
     // — because both finalise here with the same "FAILED after N attempt(s)…" text.
     task.failed = (typeof result === 'string' && /^FAILED after \d+ attempt/i.test(result.trim())) || undefined;
 
-    // Classify WHY it failed: a chain-exhausted failure whose brains all died on a
+    // Classify WHY it failed: a chain-exhausted failure whose agents all died on a
     // rate limit / quota / overload is flagged `context.rateLimited` + the window's
     // reset time, so the dashboard can offer an auto-re-run-on-reset toggle and the
     // dispatcher can honour it (see classifyRateLimit / Dispatcher.autoRerunRateLimited).
@@ -1032,7 +1035,7 @@ export class Store {
 
   /**
    * Spawn a one-shot RUN-CHILD from a recurring parent (its scheduler). The child
-   * inherits the parent's brief, routing, brain pin, tags and interaction, but NOT
+   * inherits the parent's brief, routing, agent pin, tags and interaction, but NOT
    * its recurrence or schedule — it enters the pending pool immediately, runs once,
    * and becomes the `done` record for this cycle (carrying that run's own inputs and
    * results on its own card). It links back to the parent via
@@ -1042,13 +1045,13 @@ export class Store {
    */
   private spawnScheduledRun(parent: Task): Task {
     const ctx = { ...(parent.context || {}) };
-    delete ctx.failedBrains;
-    const pin = ctx.brainAuto ? undefined : ctx.brain;
-    if (pin) ctx.brain = pin; else delete ctx.brain;
-    delete ctx.brainAuto;
+    delete ctx.failedAgents;
+    const pin = ctx.agentAuto ? undefined : ctx.agent;
+    if (pin) ctx.agent = pin; else delete ctx.agent;
+    delete ctx.agentAuto;
     delete ctx.claimCount; delete ctx.lastClaimAt; delete ctx.failedCount;
     delete ctx.remoteWaitSince;
-    delete ctx.ranAgent; delete ctx.ranDivision; delete ctx.ranBrain; delete ctx.isRoster;
+    delete ctx.ranPersona; delete ctx.ranDivision; delete ctx.ranAgent; delete ctx.isRoster;
     delete ctx.specVerdict; delete ctx.specFindings;
     delete ctx.dispatched; delete ctx.inputFiles;
     delete ctx.humanInput; delete ctx.awaitingInput; delete ctx.inputQuestions;
@@ -1071,22 +1074,22 @@ export class Store {
   }
 
   /**
-   * When a brain is COOLING DOWN on a rate limit — its usage meter reports a window
+   * When an agent is COOLING DOWN on a rate limit — its usage meter reports a window
    * that is fully used (≥ 100%, or 0% remaining) and resets in the future — return
-   * that reset time (the latest such window, since the brain is unusable until all
-   * exhausted windows reset). Undefined when the brain has room or isn't metered.
+   * that reset time (the latest such window, since the agent is unusable until all
+   * exhausted windows reset). Undefined when the agent has room or isn't metered.
    */
-  public brainCooldownUntil(brainId: string): string | undefined {
+  public agentCooldownUntil(agentId: string): string | undefined {
     const now = Date.now();
     let until = 0;
     // An OBSERVED rate-limit failure counts too: meters poll on an interval and
-    // often still read < 100% when the brain is already refusing work.
-    const seen = this.brainRateLimitedUntil.get(brainId);
+    // often still read < 100% when the agent is already refusing work.
+    const seen = this.agentRateLimitedUntil.get(agentId);
     if (seen !== undefined) {
-      if (seen > now) until = seen; else this.brainRateLimitedUntil.delete(brainId);
+      if (seen > now) until = seen; else this.agentRateLimitedUntil.delete(agentId);
     }
-    const u = this.brainUsage.get(brainId);
-    const model = this.config.orchestration?.brains?.[brainId]?.model || brainId;
+    const u = this.agentUsage.get(agentId);
+    const model = this.config.orchestration?.agents?.[agentId]?.model || agentId;
     for (const w of (u && Array.isArray(u.windows)) ? u.windows : []) {
       if (u?.exec === 'agy' && !agyWindowMatchesModel(model, w)) continue;
       const used = typeof w.usedPct === 'number' ? w.usedPct
@@ -1097,19 +1100,19 @@ export class Store {
     return until ? new Date(until).toISOString() : undefined;
   }
 
-  /** Brains seen failing on a rate limit → epoch ms the cooldown ends (in-memory). */
-  private brainRateLimitedUntil = new Map<string, number>();
+  /** Agents seen failing on a rate limit → epoch ms the cooldown ends (in-memory). */
+  private agentRateLimitedUntil = new Map<string, number>();
 
   /**
-   * Record that `brainId` just failed a run on a rate limit / quota / overload, so
-   * brainCooldownUntil reports it cooling even before its meter catches up. The
-   * cooldown lasts until that brain's nearly-exhausted (≥ 80%) usage window resets;
-   * with no such window (unmetered brain, or a transient overload) it is a short
-   * fixed hold. Cleared early by clearBrainRateLimited when the brain next succeeds.
+   * Record that `agentId` just failed a run on a rate limit / quota / overload, so
+   * agentCooldownUntil reports it cooling even before its meter catches up. The
+   * cooldown lasts until that agent's nearly-exhausted (≥ 80%) usage window resets;
+   * with no such window (unmetered agent, or a transient overload) it is a short
+   * fixed hold. Cleared early by clearAgentRateLimited when the agent next succeeds.
    */
-  public noteBrainRateLimited(brainId: string, fallbackMs = 15 * 60_000): string {
-    const u = this.brainUsage.get(brainId);
-    const model = this.config.orchestration?.brains?.[brainId]?.model || brainId;
+  public noteAgentRateLimited(agentId: string, fallbackMs = 15 * 60_000): string {
+    const u = this.agentUsage.get(agentId);
+    const model = this.config.orchestration?.agents?.[agentId]?.model || agentId;
     const now = Date.now();
     let reset = 0;
     for (const w of (u && Array.isArray(u.windows)) ? u.windows : []) {
@@ -1120,31 +1123,31 @@ export class Store {
       if (used >= 80 && Number.isFinite(at) && at > now) reset = reset ? Math.min(reset, at) : at;
     }
     const until = reset || now + fallbackMs;
-    this.brainRateLimitedUntil.set(brainId, until);
+    this.agentRateLimitedUntil.set(agentId, until);
     return new Date(until).toISOString();
   }
 
-  /** Forget an observed rate-limit cooldown (the brain just completed a run fine). */
-  public clearBrainRateLimited(brainId: string): void {
-    this.brainRateLimitedUntil.delete(brainId);
+  /** Forget an observed rate-limit cooldown (the agent just completed a run fine). */
+  public clearAgentRateLimited(agentId: string): void {
+    this.agentRateLimitedUntil.delete(agentId);
   }
 
   /**
    * MANUALLY move a task that has not started yet (`pending` or `scheduled`) onto
-   * another brain — e.g. one held because its brain is cooling down on a rate
-   * limit. '' clears the pin so the agent's chain routes it from the top; '<id>'
-   * pins that known brain. Resets the chain bookkeeping (attempts, the
+   * another agent — e.g. one held because its agent is cooling down on a rate
+   * limit. '' clears the pin so the role's agent chain routes it from the top; '<id>'
+   * pins that known agent. Resets the chain bookkeeping (attempts, the
    * dispatcher-published remote pin + its grace clock, the stale pending reason)
    * so the next tick plans it afresh. Returns null when the task is gone or has
    * already been claimed / finished (use rerunTask for a failed task).
    */
-  public reassignTask(taskId: string, brain: string): Task | null {
+  public reassignTask(taskId: string, agent: string): Task | null {
     const task = this.getTask(taskId);
     if (!task || (task.status !== 'pending' && task.status !== 'scheduled')) return null;
-    const targetBrain = this.resolveBrainOverride(brain, undefined);
+    const targetAgent = this.resolveAgentOverride(agent, undefined);
     const ctx: Record<string, any> = { ...(task.context || {}) };
-    delete ctx.brainAuto;
-    if (targetBrain) ctx.brain = targetBrain; else delete ctx.brain;
+    delete ctx.agentAuto;
+    if (targetAgent) ctx.agent = targetAgent; else delete ctx.agent;
     ctx.attempts = 0;
     ctx.dispatched = false;
     delete ctx.remoteWaitSince;
@@ -1165,35 +1168,35 @@ export class Store {
    * Re-queue a FAILED (chain-exhausted) or rejected task for another run. Resets
    * it to `pending` from the TOP of its chain: clears the failed flag, the prior
    * result/claim/completion, and the scheduling bookkeeping (attempts / dispatched /
-   * failedBrains / dispatcher-published brain pin), while preserving the brief, the
-   * agent / division / user brain pin, and any attached input files. The UI gates
+   * failedAgents / dispatcher-published agent pin), while preserving the brief, the
+   * agent / division / user agent pin, and any attached input files. The UI gates
    * this behind an explicit confirmation. Returns null if the task is gone or is
    * not in a re-runnable (finished-failed) state.
    */
-  public rerunTask(taskId: string, brainOverride?: string, opts?: { scheduledAt?: string; auto?: boolean }): Task | null {
+  public rerunTask(taskId: string, agentOverride?: string, opts?: { scheduledAt?: string; auto?: boolean }): Task | null {
     const task = this.getTask(taskId);
     if (!task) return null;
     if (!isFailedTask(task)) return null;
 
     const ctx: Record<string, any> = { ...(task.context || {}) };
-    delete ctx.failedBrains;
+    delete ctx.failedAgents;
     // Rate-limit auto re-run bookkeeping: the dispatcher's own re-run spends one
     // unit of the per-task budget; a person's manual re-run starts it afresh.
     if (opts?.auto) ctx.autoRerunCount = (Number(ctx.autoRerunCount) || 0) + 1;
     else delete ctx.autoRerunCount;
-    // Which brain claims the re-run. Default preserves a deliberate USER pin
-    // (context.brain set WITHOUT brainAuto) and drops a dispatcher-published
-    // chain pin (brainAuto, transient). The caller may override that default:
-    // '' clears the pin (route via chain), '<id>' pins that known brain.
-    const existingPin = ctx.brainAuto ? undefined
-      : (typeof ctx.brain === 'string' ? ctx.brain : undefined);
-    const targetBrain = this.resolveBrainOverride(brainOverride, existingPin);
-    delete ctx.brainAuto;
-    if (targetBrain) ctx.brain = targetBrain; else delete ctx.brain;
+    // Which agent claims the re-run. Default preserves a deliberate USER pin
+    // (context.agent set WITHOUT agentAuto) and drops a dispatcher-published
+    // chain pin (agentAuto, transient). The caller may override that default:
+    // '' clears the pin (route via chain), '<id>' pins that known agent.
+    const existingPin = ctx.agentAuto ? undefined
+      : (typeof ctx.agent === 'string' ? ctx.agent : undefined);
+    const targetAgent = this.resolveAgentOverride(agentOverride, existingPin);
+    delete ctx.agentAuto;
+    if (targetAgent) ctx.agent = targetAgent; else delete ctx.agent;
     ctx.attempts = 0;
     ctx.dispatched = false;
     delete ctx.remoteWaitSince;
-    delete ctx.ranAgent; delete ctx.ranDivision; delete ctx.ranBrain; delete ctx.isRoster;
+    delete ctx.ranPersona; delete ctx.ranDivision; delete ctx.ranAgent; delete ctx.isRoster;
     delete ctx.specVerdict; delete ctx.specFindings;
 
     task.context = ctx;
@@ -1241,9 +1244,11 @@ export class Store {
     description?: string;
     priority?: Task['priority'];
     tags?: string[];
-    agent?: string | null;
+    persona?: string | null;
     division?: string | null;
-    brain?: string | null;
+    agent?: string | null;
+    /** Thinking level for the run; '' or null falls back to the agent's or the default. */
+    thinking?: string | null;
     scheduledAt?: string | null;
     loopIntervalHours?: number | null;
     /** Acceptance criteria update (PS-1). */
@@ -1269,27 +1274,28 @@ export class Store {
     }
     if (Array.isArray(patch.tags)) task.tags = patch.tags;
 
-    // Routing context — agent / division / brain pin. An empty string clears the
+    // Routing context — agent / division / agent pin. An empty string clears the
     // key (back to Auto), a non-empty value sets it, undefined leaves it as-is.
     const ctx: Record<string, any> = { ...(task.context || {}) };
     const setCtx = (key: string, val: string | null | undefined) => {
       if (val === undefined) return;
       if (val === null || val === '') delete ctx[key]; else ctx[key] = val;
     };
-    setCtx('agent', patch.agent);
+    setCtx('persona', patch.persona);
+    if (patch.thinking !== undefined) setCtx('thinking', patch.thinking === null || patch.thinking === '' ? null : (normalizeThinking(patch.thinking) ?? null));
     setCtx('division', patch.division);
-    if (patch.brain !== undefined) {
-      // A pinned brain must exist in the registry (mirrors resolveBrainOverride),
-      // else the task would target a brain that can never claim it.
-      if (patch.brain && patch.brain.trim()) {
-        const brains = this.config.orchestration?.brains || {};
-        const brain = canonicalBrainId(this.config, patch.brain);
-        if (!brains[brain]) throw new Error(`Unknown brain "${patch.brain}" — not in the registry`);
-        ctx.brain = brain;
-        delete ctx.brainAuto;   // an explicit edit is a USER pin, not a dispatcher-published one
+    if (patch.agent !== undefined) {
+      // A pinned agent must exist in the registry (mirrors resolveAgentOverride),
+      // else the task would target an agent that can never claim it.
+      if (patch.agent && patch.agent.trim()) {
+        const agents = this.config.orchestration?.agents || {};
+        const agent = canonicalAgentId(this.config, patch.agent);
+        if (!agents[agent]) throw new Error(`Unknown agent "${patch.agent}" — not in the registry`);
+        ctx.agent = agent;
+        delete ctx.agentAuto;   // an explicit edit is a USER pin, not a dispatcher-published one
       } else {
-        delete ctx.brain;
-        delete ctx.brainAuto;
+        delete ctx.agent;
+        delete ctx.agentAuto;
       }
     }
     if (patch.acceptance !== undefined) {
@@ -1327,10 +1333,10 @@ export class Store {
         const c: Record<string, any> = { ...(task.context || {}) };
         c.attempts = 0;
         c.dispatched = false;
-        delete c.failedBrains;
-        delete c.brainAuto;
+        delete c.failedAgents;
+        delete c.agentAuto;
         delete c.remoteWaitSince;
-        delete c.ranAgent; delete c.ranDivision; delete c.ranBrain; delete c.isRoster;
+        delete c.ranPersona; delete c.ranDivision; delete c.ranAgent; delete c.isRoster;
         task.context = c;
         delete task.failed;
         delete task.result;
@@ -1406,7 +1412,7 @@ export class Store {
       try { write(dest); stored.push(out); } catch { /* ignore */ }
     };
 
-    // 1) The prior result as a readable markdown file the brain can open.
+    // 1) The prior result as a readable markdown file the agent can open.
     if (typeof prev.result === 'string' && prev.result.trim()) {
       place('previous-result.md', dest =>
         fs.writeFileSync(dest, `# Result of "${prev.title || prev.id}"\n\n${prev.result}\n`));
@@ -1437,7 +1443,7 @@ export class Store {
    * prior result plus every artifact it produced land under inputs/<newId>/ and
    * on context.inputFiles, so the executor picks up exactly where it left off.
    * The continuation is pinned to the same executor that ran the original
-   * (agent / division / brain), and records context.continuedFrom = <prevId>.
+   * (agent / division / agent), and records context.continuedFrom = <prevId>.
    *
    * Only a DONE, non-failed task is continuable — a chain-exhausted failure uses
    * {@link rerunTask} instead. Inputs are materialized BEFORE the task is written
@@ -1455,7 +1461,7 @@ export class Store {
    */
   public continueTask(
     taskId: string,
-    brainOverride?: string,
+    agentOverride?: string,
     opts: { prompt?: string; inputs?: Array<{ token?: string; name?: string }>; scheduledAt?: string } = {}
   ): Task | null {
     const prev = this.getTask(taskId);
@@ -1467,23 +1473,23 @@ export class Store {
     const id = uuidv4();
     const prevCtx = prev.context || {};
     // Pin to the same executor that ran the original so the follow-up resumes on
-    // the same brain/agent, not a fresh routing decision. ranAgent/ranBrain are
+    // the same persona/agent, not a fresh routing decision. ranPersona/ranAgent are
     // what actually ran; fall back to the original assignment when unset.
     const ctx: Record<string, any> = { continuedFrom: prev.id };
-    const agent = prevCtx.ranAgent || prevCtx.agent || prevCtx.role;
+    const persona = prevCtx.ranPersona || prevCtx.persona || prevCtx.role;
     const division = prevCtx.ranDivision || prevCtx.division;
-    const sameBrain = prevCtx.ranBrain || prevCtx.brain;
-    if (agent) ctx.agent = agent;
+    const sameAgent = prevCtx.ranAgent || prevCtx.agent;
+    if (persona) ctx.persona = persona;
     if (division) ctx.division = division;
-    // Which brain claims the follow-up. The caller may override the same-brain
-    // default (see resolveBrainOverride): undefined keeps the original's brain,
-    // '' routes via the agent's chain ("Auto"), '<id>' pins that known brain.
-    const targetBrain = this.resolveBrainOverride(brainOverride, sameBrain);
-    if (targetBrain) ctx.brain = targetBrain;   // else: no pin → chain routes it
+    // Which agent claims the follow-up. The caller may override the same-agent
+    // default (see resolveAgentOverride): undefined keeps the original's agent,
+    // '' routes via the role's agent chain ("Auto"), '<id>' pins that known agent.
+    const targetAgent = this.resolveAgentOverride(agentOverride, sameAgent);
+    if (targetAgent) ctx.agent = targetAgent;   // else: no pin → chain routes it
 
     const title = /^continue\b/i.test(prev.title || '') ? prev.title : `Continue: ${prev.title || 'task'}`;
     // Operator's added steer for THIS continuation — surfaced as its own section
-    // so the brain treats it as the current directive over the carried-over brief.
+    // so the agent treats it as the current directive over the carried-over brief.
     const extraPrompt = typeof opts.prompt === 'string' ? opts.prompt.trim() : '';
     const description = [
       prev.description || '',
@@ -1541,26 +1547,26 @@ export class Store {
   }
 
   /**
-   * Resolve a caller-supplied brain choice for a continue/re-run into the brain
-   * id to pin (or undefined for "no pin — route via the agent's chain"):
-   *   - `undefined`  → no explicit choice; keep `fallback` (same-brain default)
+   * Resolve a caller-supplied agent choice for a continue/re-run into the agent
+   * id to pin (or undefined for "no pin — route via the role's agent chain"):
+   *   - `undefined`  → no explicit choice; keep `fallback` (same-agent default)
    *   - `''` (blank) → explicit "Auto"; return undefined so the chain routes it
-   *   - `'<id>'`     → pin to exactly that brain; MUST exist in the registry
-   * Throws on an unknown brain id so the API surfaces a 400 rather than pinning
-   * a task to a brain that can never claim it.
+   *   - `'<id>'`     → pin to exactly that agent; MUST exist in the registry
+   * Throws on an unknown agent id so the API surfaces a 400 rather than pinning
+   * a task to an agent that can never claim it.
    */
-  private resolveBrainOverride(override: string | undefined, fallback: string | undefined): string | undefined {
+  private resolveAgentOverride(override: string | undefined, fallback: string | undefined): string | undefined {
     if (override === undefined) return fallback;
-    const v = canonicalBrainId(this.config, override.trim());
+    const v = canonicalAgentId(this.config, override.trim());
     if (!v) return undefined;
-    const brains = this.config.orchestration?.brains || {};
-    if (!brains[v]) throw new Error(`Unknown brain "${v}" — not in the registry`);
+    const agents = this.config.orchestration?.agents || {};
+    if (!agents[v]) throw new Error(`Unknown agent "${v}" — not in the registry`);
     return v;
   }
 
   /**
    * Delete a task and everything filed under it: its inbox JSON, its artifacts
-   * dir, and its input files. Emits `taskDeleted` so a running brain is killed.
+   * dir, and its input files. Emits `taskDeleted` so a running agent is killed.
    */
   public deleteTask(id: string): { deleted: boolean; artifacts: boolean } {
     const task = this.getTask(id);
@@ -1584,8 +1590,8 @@ export class Store {
     const taskFile = this.resolveTaskFile(fullId) || `${fullId}.json`;
     fs.rmSync(path.join(this.config.paths.inbox, taskFile), { force: true });
     this.taskCache.delete(taskFile);
-    // Tell the dispatcher: if this task is mid-run, its brain process tree must be
-    // killed — deleting the files alone left e.g. a dsh brain hammering the GPU.
+    // Tell the dispatcher: if this task is mid-run, its agent process tree must be
+    // killed — deleting the files alone left e.g. a dsh agent hammering the GPU.
     try { this.eventBus?.emitTaskDeleted?.(fullId, task.status); } catch { /* best-effort */ }
     return { deleted: true, artifacts };
   }
@@ -1756,7 +1762,7 @@ export class Store {
   /**
    * Park a task on `wait-input` because its produced result ASKED THE USER a
    * question rather than delivering — so the orchestrator neither marks it done
-   * nor hands it to a fallback brain. The questions become an interaction packet
+   * nor hands it to a fallback agent. The questions become an interaction packet
    * the user answers from the Inbox card; submitInteraction() then releases it
    * back to `pending` (re-dispatched with the answers in context.humanInput). The
    * partial output is preserved on task.result so the user sees what was asked.
@@ -1995,7 +2001,7 @@ export class Store {
 
 
 
-  public getRoster(filters?: { search?: string; division?: string }): AgentCard[] {
+  public getRoster(filters?: { search?: string; division?: string }): PersonaCard[] {
     if (filters?.search) {
       return this.roster.search(filters.search);
     }
@@ -2013,16 +2019,16 @@ export class Store {
     return this.roster.divisionIds();
   }
 
-  public getAgentPersona(slug: string): { name: string; division: string; persona: string; sourcePath?: string } | null {
+  public getPersona(slug: string): { name: string; division: string; persona: string; sourcePath?: string } | null {
     return this.roster.getPersona(slug);
   }
 
-  public agentsInDivision(division: string): AgentCard[] {
+  public personasInDivision(division: string): PersonaCard[] {
     return this.roster.getByDivision(division);
   }
 
   public getDashboard(): DashboardData {
-    const activeAgents = this.activeAgents.size;
+    const activeWorkers = this.activeWorkers.size;
     const tasks = this.listTasks();
     // Single pass over the task list instead of six full .filter() scans.
     let pending = 0, scheduled = 0, waitingInput = 0, inProgress = 0, failed = 0, completed = 0;
@@ -2045,7 +2051,7 @@ export class Store {
     }
 
     return {
-      activeAgents,
+      activeWorkers,
       inboxSummary: {
         pending,
         scheduled,

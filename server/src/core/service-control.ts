@@ -15,7 +15,7 @@ export type ControlAction = 'start' | 'stop' | 'restart' | 'enable' | 'disable';
  * the client not rendering their buttons.
  */
 const PROTECTED_UNITS = new Set(['cowork-mcp.service']);
-const PROTECTED_PREFIXES = ['cowork-local-brain@'];
+const PROTECTED_PREFIXES = ['cowork-local-agent@'];
 
 function isProtected(unit: string): boolean {
   if (PROTECTED_UNITS.has(unit)) return true;

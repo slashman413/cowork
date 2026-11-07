@@ -1,5 +1,5 @@
 /**
- * Persona brief: a token-lean view of a roster agent's .md persona for LOCAL runs.
+ * Persona brief: a token-lean view of a persona's .md persona for LOCAL runs.
  *
  * Roster personas are long (median ~13k chars, p90 ~25k) and most of the bulk is
  * deliverable templates, code samples and workflow checklists the agent only needs
@@ -9,7 +9,7 @@
  * communication style, success metrics) inline and replaces the rest with a pointer
  * naming the dropped sections, the absolute file path, and when to read it.
  *
- * Only for brains that can read this host's filesystem: remote clients build their
+ * Only for agents that can read this host's filesystem: remote clients build their
  * own prompt from context.persona (stampPersona) and keep the full text.
  */
 

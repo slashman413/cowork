@@ -127,7 +127,7 @@ test('a non-official bot approval (made before branch protection) is re-issued',
 
 test('dispatcher hook: an opened Forgejo PR spawns one shepherd pr-watch; unknown hosts spawn none', () => {
   const h = pstackHarness({ prAutomation: cfg });
-  const t = h.mk({ agent: 'engineer' });
+  const t = h.mk({ persona: 'engineer' });
   (h.dispatcher as any).notePrUrls(t, `PR_OPENED: ${BASE}/cowork/pr-sandbox/pulls/9\nSTATUS: DONE`);
   assert.equal(t.context!.prUrl, `${BASE}/cowork/pr-sandbox/pulls/9`);
   const watchers = () => h.store.listTasks({}).filter(x => x.context?.prWatch);

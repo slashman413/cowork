@@ -4,7 +4,7 @@ import { EventEmitter } from 'node:events';
 import { parseAgyModels, diagnoseAgyModelFailure, AGY_MODEL_REJECTED_RE, isAgyModelRejection,
   listAgyModels, _resetAgyModelCache, _agyModelCache } from './agy-models.js';
 import { isRateLimitFailure } from './result-verifier.js';
-import { canonicalBrainId, migrateBrainAliases } from '../config.js';
+import { canonicalAgentId, migrateAgentAliases } from '../config.js';
 
 const REJECTED = 'invalid model selection (--model "gemini-3.8-flash-high" --effort ""): model gemini-3.8-flash-high is not recognized as a known model or custom model in settings';
 
@@ -30,16 +30,16 @@ test('diagnoseAgyModelFailure: a slug missing from a loaded catalog is reported 
   assert.equal(diagnoseAgyModelFailure('x', 'some other error', null), null);
 });
 
-test('retired agy brain ids alias to live ones and the renamed brain forwards the live model', () => {
-  assert.equal(canonicalBrainId(undefined, 'local-agy-gemini-3.1-pro-high'), 'local-agy-gemini-3.8-flash-high');
-  assert.equal(canonicalBrainId(undefined, 'local-agy-claude-opus-4-6-thinking'), 'local-agy-claude-opus-5-5-high');
-  const config: any = { orchestration: { brains: {
+test('retired agy agent ids alias to live ones and the renamed agent forwards the live model', () => {
+  assert.equal(canonicalAgentId(undefined, 'local-agy-gemini-3.1-pro-high'), 'local-agy-gemini-3.8-flash');
+  assert.equal(canonicalAgentId(undefined, 'local-agy-claude-opus-4-6-thinking'), 'local-agy-claude-opus-5-5');
+  const config: any = { orchestration: { agents: {
     'local-agy-gemini-3.6-flash-low': { description: 'x', location: 'local', exec: 'agy', model: 'gemini-3.6-flash-low' }
-  }, agents: { a: { brains: ['local-agy-gemini-3.6-flash-low'] } } } };
-  migrateBrainAliases(config);
-  assert.equal(config.orchestration.brains['local-agy-gemini-3.8-flash-low'].model, 'gemini-3.8-flash-low');
-  assert.equal(config.orchestration.brains['local-agy-gemini-3.6-flash-low'], undefined);
-  assert.deepEqual(config.orchestration.agents.a.brains, ['local-agy-gemini-3.8-flash-low']);
+  }, roleChains: { a: { agents: ['local-agy-gemini-3.6-flash-low'] } } } };
+  migrateAgentAliases(config);
+  assert.equal(config.orchestration.agents['local-agy-gemini-3.8-flash'].model, 'gemini-3.8-flash');
+  assert.equal(config.orchestration.agents['local-agy-gemini-3.6-flash-low'], undefined);
+  assert.deepEqual(config.orchestration.roleChains.a.agents, ['local-agy-gemini-3.8-flash']);
 });
 
 test('isAgyModelRejection: agy\'s own short error matches, a report quoting it does not', () => {

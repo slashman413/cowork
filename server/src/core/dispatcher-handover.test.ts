@@ -5,11 +5,11 @@ import { verifyOutput } from './result-verifier.js';
 import type { Config, Task } from '../types.js';
 
 /**
- * These tests exercise the completion GUARD — the fix for "a remote brain that
+ * These tests exercise the completion GUARD — the fix for "a remote agent that
  * reported 'you've hit your session limit' got marked done". When a remote
- * brain's client reports its result, store.completeTask runs this guard; a soft
- * failure must be REJECTED so the task hands over to the next brain in the chain
- * instead of completing. No brain is spawned (the verifier's deterministic gate
+ * agent's client reports its result, store.completeTask runs this guard; a soft
+ * failure must be REJECTED so the task hands over to the next agent in the chain
+ * instead of completing. No agent is spawned (the verifier's deterministic gate
  * runs inline). We call the guard directly with a fake store.
  */
 
@@ -21,17 +21,17 @@ function harness(verifierEnabled = true) {
   const store = {
     getTask: (id: string) => tasks.get(id) || null,
     saveTask: (t: Task) => { tasks.set(t.id, t); },
-    getAgentPersona: () => null,
-    brainCooldownUntil: () => undefined,
-    noteBrainRateLimited: (b: string) => { cooled.push(b); return ''; },
-    clearBrainRateLimited: () => {}
+    getPersona: () => null,
+    agentCooldownUntil: () => undefined,
+    noteAgentRateLimited: (b: string) => { cooled.push(b); return ''; },
+    clearAgentRateLimited: () => {}
   };
   const config = {
     inbox: { maxRetries: 3 },
     orchestration: {
       verifier: { enabled: verifierEnabled },
-      agents: { engineer: { description: '', brains: CHAIN } },
-      brains: {
+      roleChains: { engineer: { description: '', agents: CHAIN } },
+      agents: {
         'remote-examplehost-cc-opus': { location: 'remote' },
         'remote-examplehost-cc-fable': { location: 'remote' },
         'local-cc-opus': { location: 'local' }
@@ -46,10 +46,10 @@ function harness(verifierEnabled = true) {
 
 function chainRung(id: string, attempt = 0): Partial<Task> & { id: string } {
   return { id, title: 'do it', description: '', status: 'in-progress',
-    context: { agent: 'engineer', brain: CHAIN[attempt], brainAuto: true, attempts: attempt } };
+    context: { persona: 'engineer', agent: CHAIN[attempt], agentAuto: true, attempts: attempt } };
 }
 
-test('a reported session-limit result hands over to the next brain (not done)', async () => {
+test('a reported session-limit result hands over to the next agent (not done)', async () => {
   const { guard, put, tasks } = harness();
   const task = put(chainRung('t1'));
   const decision = await guard(task, "You've hit your session limit. Please try again later.");
@@ -58,10 +58,10 @@ test('a reported session-limit result hands over to the next brain (not done)', 
   const t = tasks.get('t1')!;
   assert.equal(t.status, 'pending', 'task must be re-queued, not completed');
   assert.equal(t.context!.attempts, 1, 'attempt advanced to the next chain rung');
-  assert.equal(t.context!.brain, undefined, 'auto brain pin cleared so planFor picks the next brain');
-  const failed = t.context!.failedBrains as Array<{ brain: string; reason: string }>;
+  assert.equal(t.context!.agent, undefined, 'auto agent pin cleared so planFor picks the next agent');
+  const failed = t.context!.failedAgents as Array<{ agent: string; reason: string }>;
   assert.equal(failed.length, 1);
-  assert.equal(failed[0].brain, 'remote-examplehost-cc-opus');
+  assert.equal(failed[0].agent, 'remote-examplehost-cc-opus');
   assert.match(failed[0].reason, /failure pattern/i);
 });
 
@@ -80,9 +80,9 @@ test('an empty reported result hands over', async () => {
   assert.equal(decision.action, 'handover');
 });
 
-test('chain exhausted → completes as FAILED with the failed-brain summary', async () => {
+test('chain exhausted → completes as FAILED with the failed-agent summary', async () => {
   const { guard, put } = harness();
-  // Last rung (index 2); a failure here has no next brain.
+  // Last rung (index 2); a failure here has no next agent.
   const task = put(chainRung('t4', 2));
   const decision = await guard(task, 'rate limit reached, try again');
   assert.equal(decision.action, 'complete');
@@ -91,24 +91,24 @@ test('chain exhausted → completes as FAILED with the failed-brain summary', as
   assert.match(decision.result || '', /local-cc-opus/);
 });
 
-test('a user-pinned brain retries itself (not the chain) up to maxRetries', async () => {
+test('a user-pinned agent retries itself (not the chain) up to maxRetries', async () => {
   const { guard, put, tasks } = harness();
-  // brainAuto absent → user pin. Retries the same brain.
+  // agentAuto absent → user pin. Retries the same agent.
   const task = put({ id: 't5', title: 'x', description: '', status: 'in-progress',
-    context: { agent: 'engineer', brain: 'remote-examplehost-cc-opus', attempts: 0 } });
+    context: { persona: 'engineer', agent: 'remote-examplehost-cc-opus', attempts: 0 } });
   const decision = await guard(task, 'quota exceeded for this key');
   assert.equal(decision.action, 'handover');
   const t = tasks.get('t5')!;
-  assert.equal(t.context!.brain, 'remote-examplehost-cc-opus', 'pinned brain kept for retry');
+  assert.equal(t.context!.agent, 'remote-examplehost-cc-opus', 'pinned agent kept for retry');
   assert.equal(t.context!.attempts, 1);
 });
 
-test('a completion not attributable to a brain passes straight through', async () => {
+test('a completion not attributable to an agent passes straight through', async () => {
   const { guard, put } = harness();
-  // No context.brain — e.g. a human agent or pipeline reporting completion.
+  // No context.agent — e.g. a human agent or pipeline reporting completion.
   const task = put({ id: 't6', title: 'x', description: '', status: 'in-progress', context: {} });
   const decision = await guard(task, "You've hit your session limit");
-  assert.equal(decision.action, 'complete', 'guard must not touch non-brain completions');
+  assert.equal(decision.action, 'complete', 'guard must not touch non-agent completions');
   assert.equal(decision.result, undefined);
 });
 
@@ -120,7 +120,7 @@ test('verifier disabled → reported soft failures pass through untouched', asyn
   assert.equal(decision.result, undefined);
 });
 
-test('a reported rate-limit refusal cools the brain; an LLM rejection that mentions rate limits does not', async () => {
+test('a reported rate-limit refusal cools the agent; an LLM rejection that mentions rate limits does not', async () => {
   const { guard, put, dispatcher, cooled } = harness();
   await guard(put(chainRung('rl1')), "You've hit your usage limit · resets 5pm");
   assert.deepEqual(cooled, ['remote-examplehost-cc-opus'], 'CLI refusal → cooldown');
@@ -133,7 +133,7 @@ test('a reported rate-limit refusal cools the brain; an LLM rejection that menti
   assert.deepEqual(cooled, ['remote-examplehost-cc-opus'], 'no second cooldown from free text');
 });
 
-test('classifyCliFailure: a timeout cools the brain only when the stderr tail is a rate limit', async () => {
+test('classifyCliFailure: a timeout cools the agent only when the stderr tail is a rate limit', async () => {
   const timedOut = (stderr: string) => ({ text: `TIMEOUT after 600000ms\n\n${stderr}`, stderr });
   const early = ['retrying after 429 Too Many Requests', 'ok', 'tool call 1', 'tool call 2', 'tool call 3', 'tool call 4'].join('\n');
   for (const [stderr, expected] of [[early, false], [early + '\nError: 429 Too Many Requests', true], ['', false]] as const) {
@@ -157,7 +157,7 @@ test('classifyCliFailure: agy model rejection → transient outage cools, retire
   assert.equal(retired.rateLimited, false, 'a retired model is a real failure, not a cooldown');
   assert.match(retired.failReason, /is retired/);
 
-  // The same text from a non-agy brain, or quoted in a long deliverable, is not diagnosed.
+  // The same text from a non-agy agent, or quoted in a long deliverable, is not diagnosed.
   const other = await classifyCliFailure({ exec: 'claude', text, stderr: '' }, det, det.reason!, async () => null);
   assert.equal(other.agyDiag, undefined);
   const long = 'Report\n' + text + '\n' + 'detail\n'.repeat(20);

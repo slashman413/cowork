@@ -9,7 +9,7 @@ import type { Task, TaskWorktree } from '../types.js';
  * Code-task rule: a task is a code task when `context.repo` (aliases `repoPath`,
  * `workdir`, `cwd`) names a directory inside a git repository. `context.worktree:
  * false` opts out; `context.worktree: true` forces it (still needs a repo path to
- * know which repo). The brain then runs with cwd = <repo>/.worktrees/<task-id> on
+ * know which repo). The agent then runs with cwd = <repo>/.worktrees/<task-id> on
  * branch cowork/<task-id>; COWORK_ARTIFACTS_DIR / COWORK_OUTPUTS_DIR are unchanged.
  */
 
@@ -25,7 +25,7 @@ export function gitToplevel(dir: string): string | null {
   return out ? out.trim() : null;
 }
 
-/** The repo a task's brain should be isolated in, or null if not a code task. */
+/** The repo a task's agent should be isolated in, or null if not a code task. */
 export function codeTaskRepo(task: Pick<Task, 'context'>): string | null {
   const c = task.context || {};
   if (c.worktree === false) return null;

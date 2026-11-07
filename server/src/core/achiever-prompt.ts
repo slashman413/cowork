@@ -52,7 +52,7 @@ export const ACHIEVER_TAIL = [
 const EVALUATE = '{"kind":"evaluate","met":true|false,"reason":"evidence"}';
 const PLAN = '{"kind":"plan","phase":{"key":"kebab-case","title":"..."},"reason":"..."}';
 const EMIT = '{"kind":"emit","tasks":[{"title":"...","description":"standalone brief","tier":"mechanical|standard|judgment","acceptance":["checkable"],"verify":["command or check"],"scheduledAt":"ISO-8601, optional, future"}],"reason":"..."}';
-const BLOCK = '{"kind":"block","reason":"obstacle","unblockCriteria":"checkable condition","unblockCheck":{"type":"brain-available|file-exists|http-200|after-time","value":"brain id|absolute path|https url|ISO time"}}  (unblockCheck is optional)';
+const BLOCK = '{"kind":"block","reason":"obstacle","unblockCriteria":"checkable condition","unblockCheck":{"type":"agent-available|file-exists|http-200|after-time","value":"agent id|absolute path|https url|ISO time"}}  (unblockCheck is optional)';
 
 export function buildAchieverPrompt(ctx: AchieverPromptContext): string {
   const rec = ctx.record;

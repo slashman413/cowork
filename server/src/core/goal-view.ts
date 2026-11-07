@@ -55,8 +55,8 @@ export function classifyBlockReason(reason: string): GoalBlockCode {
 
 /** Standard wording for causes the system itself raises. */
 export const BLOCK_TEXT: Partial<Record<GoalBlockCode, { reason: string; resume: string }>> = {
-  rate_limit: { reason: 'Every Achiever brain is rate limited', resume: 'A brain in the chain has quota again.' },
-  achiever_no_progress: { reason: 'Achiever turns made no usable progress', resume: 'The Achiever returns a usable move. Retries run on a backoff; if it keeps blocking, check the brain or edit the goal.' },
+  rate_limit: { reason: 'Every Achiever agent is rate limited', resume: 'An agent in the chain has quota again.' },
+  achiever_no_progress: { reason: 'Achiever turns made no usable progress', resume: 'The Achiever returns a usable move. Retries run on a backoff; if it keeps blocking, check the agent or edit the goal.' },
   budget_exhausted: { reason: 'Step budget used up before the criterion was met', resume: 'Raise the step budget or narrow the criterion. The goal then resumes on its next retry.' },
   token_budget: { reason: 'Token budget used up before the criterion was met', resume: 'Raise the token budget or narrow the criterion. The goal then resumes on its next retry.' }
 };
@@ -187,7 +187,7 @@ export function sortSummaries(list: GoalSummary[]): GoalSummary[] {
 export function taskRow(t: Task) {
   return {
     id: t.id, title: t.title, status: t.status, phaseKey: t.context?.phaseKey, role: t.context?.role,
-    scheduledAt: t.scheduledAt, brain: t.context?.ranBrain || t.context?.brain, usage: t.context?.usage
+    scheduledAt: t.scheduledAt, agent: t.context?.ranAgent || t.context?.agent, usage: t.context?.usage
   };
 }
 
@@ -243,7 +243,7 @@ export function readHistory(dir: string, goalId: string): GoalDecision[] {
 
 export interface AchieverTurn {
   at: string;
-  brain?: string;
+  agent?: string;
   exec?: string;
   mode?: string;
   outcome: 'applied' | 'rejected' | 'unparseable' | 'rate-limited' | 'timeout' | 'error';

@@ -10,10 +10,10 @@ import type { Config, Task } from '../types.js';
 
 /**
  * P0-2 / P0-4: the STATUS / EVIDENCE footer and RULING lines, end to end through
- * a REAL Store's completeTask guard (the remote-brain completion path):
+ * a REAL Store's completeTask guard (the remote-agent completion path):
  *   DONE                → done
  *   DONE_WITH_CONCERNS  → done + context.qualityFlag = "concerns" + CONCERNS text
- *   BLOCKED             → failed with the reason, NOT handed to the next brain,
+ *   BLOCKED             → failed with the reason, NOT handed to the next agent,
  *                         lessons.jsonl gets kind "blocked"
  *   no footer           → unchanged (done), context.hasEvidence = false
  * The LLM gate is stubbed to FAIL so a BLOCKED result provably skips it.
@@ -34,8 +34,8 @@ function harness() {
     inbox: { maxRetries: 3 },
     orchestration: {
       verifier: { enabled: true, llm: { enabled: true } },
-      agents: { engineer: { description: '', brains: CHAIN } },
-      brains: Object.fromEntries(CHAIN.map(b => [b, { location: b.startsWith('local') ? 'local' : 'remote' }]))
+      roleChains: { engineer: { description: '', agents: CHAIN } },
+      agents: Object.fromEntries(CHAIN.map(b => [b, { location: b.startsWith('local') ? 'local' : 'remote' }]))
     }
   } as unknown as Config;
   const store = new Store(config, new EventBus());
@@ -46,7 +46,7 @@ function harness() {
   const rung = (): Task => {
     const t = store.createTask({ title: 'ship it', from: { platform: 'p', agent: 'a' } } as any);
     t.status = 'in-progress';
-    t.context = { ...(t.context || {}), agent: 'engineer', brain: CHAIN[0], brainAuto: true, attempts: 0 };
+    t.context = { ...(t.context || {}), persona: 'engineer', agent: CHAIN[0], agentAuto: true, attempts: 0 };
     store.saveTask(t);
     return t;
   };
@@ -106,8 +106,8 @@ test('STATUS: BLOCKED → failed with the reason, no handover, lesson kind "bloc
   assert.equal(isFailedTask(out!), true, 'shows as failed');
   assert.match(out!.result!, /^FAILED \(blocked\): the Gumroad token in ~\/\.priv is expired/);
   assert.equal(out!.context!.attempts, 0, 'attempt counter not advanced — no handover');
-  assert.equal(out!.context!.brain, CHAIN[0], 'brain pin untouched — no handover');
-  assert.equal(out!.context!.failedBrains, undefined, 'not recorded as a brain failure');
+  assert.equal(out!.context!.agent, CHAIN[0], 'agent pin untouched — no handover');
+  assert.equal(out!.context!.failedAgents, undefined, 'not recorded as an agent failure');
   assert.equal(out!.context!.rateLimited, undefined);
   assert.equal(h.llm(), 0, 'LLM gate never consulted');
   const ls = h.lessons();

@@ -1,7 +1,6 @@
 # Self-Improvement + Env-Sharing — implementation status
 
-Design & specs: `docs/design-self-improvement-env-sharing.md` and
-`docs/specs-self-improvement-env-sharing.md`. Constraint: improvement is
+Constraint: improvement is
 **event-driven and human-gated** — no cron, no autonomous "improver" agent.
 
 This is a phased rollout following the specs' own build order. Each phase is
@@ -11,25 +10,25 @@ independently shippable.
 
 ### WF-1 — Lesson ledger (cross-task memory)
 - `server/src/core/lessons.ts` — `extractRequires` (deterministic `path:`/`tool:`/`secret:`
-  extraction, no LLM), `deriveBrainFamily`, `titleSlug`, `buildLesson` (caps
+  extraction, no LLM), `deriveAgentFamily`, `titleSlug`, `buildLesson` (caps
   reason→500 chars, requires→10), `appendLesson` (**never-throw**, best-effort).
 - Wired into the dispatcher at the four failure/park sites (`recordLesson`), next
-  to `recordFailedBrain`. On every verifier rejection and every `wait-input`
+  to `recordFailedAgent`. On every verifier rejection and every `wait-input`
   parking (remote + local paths) one JSON line is appended to
   `decisions/lessons.jsonl`. Ledger failure (full/unwritable disk) is swallowed
   after logging — it can never break dispatch.
 - Tests: `server/src/core/lessons.test.ts`.
 
-### WF-3 Part R — Brain env manifests (RC-1 fix)
-- `types.ts`: `BrainEnv` ({paths, tools, secrets, net, traits}) + `BrainConfig.env`.
+### WF-3 Part R — Agent env manifests (RC-1 fix)
+- `types.ts`: `AgentEnv` ({paths, tools, secrets, net, traits}) + `AgentConfig.env`.
 - `mcp/server.ts`: `env` added to the (closed) `register_agent` zod schema **and**
-  forwarded through `registerBrain` — both halves, per RC-1; forgetting the
+  forwarded through `registerAgent` — both halves, per RC-1; forgetting the
   forward would silently no-op. Server caps each list to ≤200 entries × ≤300 chars
   (`capEnv`).
-- `deploy/remote-brain-client.mjs`: `detectEnv()` auto-detects tools (`command -v`),
+- `deploy/remote-agent-client.mjs`: `detectEnv()` auto-detects tools (`command -v`),
   paths (`test -d` over `$ENV_PATHS`, default `~/workspace:~/.priv`), and credential
   **names** under `~/.priv/` (never values). Declared in the registration handshake.
-- Tests: `server/src/core/brain-env.test.ts` (RC-1 persistence round-trip).
+- Tests: `server/src/core/agent-env.test.ts` (RC-1 persistence round-trip).
 
 `secrets` carries credential NAMES only — no secret value ever transits the
 handshake, the store, or an artifact.

@@ -13,7 +13,7 @@ import { Recipes, carryInputNames, draftFromTask, instantiate, recipeStats, reci
  *   PUT    /recipes/:id                 — edit; brief/fields/carry changes bump the version (addInputs as above;
  *                                          dropping a name from carry.inputs removes that file)
  *   DELETE /recipes/:id                 — archive (soft)
- *   POST   /recipes/:id/run             — { values, extra?, brain?, scheduledAt?, recurrence?,
+ *   POST   /recipes/:id/run             — { values, extra?, agent?, scheduledAt?, recurrence?,
  *                                          skipInputs?: names, inputs?: [{token,name}] (this run only) } → task
  *   POST   /inbox/:id/rating            — { good, note? } 👍/👎 on a task (feeds recipe stats)
  */
@@ -42,7 +42,7 @@ export function createRecipeRouter(recipes: Recipes, store: Store): Router {
     const tasks = allTasks();
     const runs = tasks.filter(t => t.context?.recipe?.id === r.id).slice(0, 50).map(t => ({
       id: t.id, title: t.title, status: t.status, createdAt: t.createdAt, completedAt: t.completedAt,
-      version: t.context?.recipe?.version, brain: t.context?.ranBrain || t.context?.brain,
+      version: t.context?.recipe?.version, agent: t.context?.ranAgent || t.context?.agent,
       rating: t.context?.rating || null, failed: (t as any).failed === true || /^FAILED\b/i.test(String(t.result || '').trim()),
     }));
     const originTask = r.origin?.taskId ? store.getTask(r.origin.taskId) : null;
@@ -91,7 +91,7 @@ export function createRecipeRouter(recipes: Recipes, store: Store): Router {
       const params = instantiate(r, {
         values: body.values && typeof body.values === 'object' ? body.values : {},
         extra: typeof body.extra === 'string' ? body.extra : undefined,
-        brain: typeof body.brain === 'string' ? body.brain : undefined,
+        agent: typeof body.agent === 'string' ? body.agent : undefined,
         pitfalls: recipePitfalls(r, allTasks()),
         scheduledAt: typeof body.scheduledAt === 'string' ? body.scheduledAt : undefined,
         recurrence: body.recurrence ?? undefined,

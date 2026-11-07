@@ -144,13 +144,13 @@ expected to carry `acceptance` + `verify`; a missing `acceptance` is logged and
 counted in `decisions/lessons.jsonl` as `kind: "brief-missing-acceptance"`
 (warning only, not rejected yet).
 
-### Brain tier (`context.tier`)
+### Agent tier (`context.tier`)
 
 `context.tier` (or a workflow step's `tier`) is one of `mechanical`,
 `standard`, `judgment` or `review`. When the task has no pinned
-`context.brain` and its agent has no `agentChains` override, it runs on
+`context.agent` and its agent has no `agentChains` override, it runs on
 `orchestration.tiers[<tier>]` first, then its normal chain (duplicates
-dropped, disabled brains stripped). `review` picks brains of a different model
+dropped, disabled agents stripped). `review` picks agents of a different model
 family than `context.reviewOf`: Gemini judges Claude, and opus-class judges
 Gemini and qwen. Without `reviewOf` it uses the judgment list. An unknown tier
 returns 400. A task with no tier keeps its chain unchanged. Measured by
@@ -171,9 +171,9 @@ The Cowork MCP Server exposes these tools via Streamable HTTP at `/mcp`:
 
 | Tool | Purpose |
 |------|---------|
-| `register_agent` | Register an agent session; optionally DECLARE runnable `brains` |
-| `deregister_agent` | Remove the agent and cascade-remove every brain it registered |
-| `heartbeat` | Update agent status; may carry `usage` — the client's self-measured rate-limit snapshot per brain (`{ exec, windows: [{ label, usedPct, resetsAt }], at }`), shown as meters on the Connections cards. Only metered execs (claude/codex) report; hermes/ollama/script have no quota and send nothing |
+| `register_agent` | Register an agent session; optionally DECLARE runnable `agents` |
+| `deregister_agent` | Remove the agent and cascade-remove every agent it registered |
+| `heartbeat` | Update agent status; may carry `usage` — the client's self-measured rate-limit snapshot per agent (`{ exec, windows: [{ label, usedPct, resetsAt }], at }`), shown as meters on the Connections cards. Only metered execs (claude/codex) report; hermes/ollama/script have no quota and send nothing |
 | `get_roster` | Query the Agencies (~285 agents across 19 divisions) |
 | `create_task` | Create a cross-platform task; optional `scheduled_at` (ISO 8601) parks it as `scheduled` until launch time (default: run now); optional `recurrence` (or legacy `loop_interval_hours`) makes it repeat on a flexible cadence (minutes/hours/daily/weekly/monthly/cron) |
 | `claim_task` | Claim a pending task |
@@ -185,13 +185,13 @@ The Cowork MCP Server exposes these tools via Streamable HTTP at `/mcp`:
 | `integrations` | Fetch, audit, rescan and install external integrations (unless `config.integrations.enabled` is false) |
 
 **Routing context** — the dispatcher reads these `task.context` fields:
-`agent` (an agent slug or special-executor name → skip the classifier),
-`brain` (pin one brain id; the dispatcher also *publishes* the target remote brain
+`agent` (an persona slug or special-executor name → skip the classifier),
+`agent` (pin one agent id; the dispatcher also *publishes* the target remote agent
 here so its client can claim the task), and `division` (override the routed
 division). With none set, the two-stage router picks division → agent.
 
 **Code tasks / worktrees** — if `context.repo` (aliases `repoPath`, `workdir`, `cwd`) names a
-directory inside a git repo, the brain runs in its own worktree `<repo>/.worktrees/<task-id>`
+directory inside a git repo, the agent runs in its own worktree `<repo>/.worktrees/<task-id>`
 on branch `cowork/<task-id>` (artifacts/outputs dirs unchanged). `context.worktree: false`
 opts out; `true` forces. On finish `artifacts/<id>/worktree.diff` is written and
 `task.worktree = {path, branch, base}` recorded. `POST /api/inbox/:id/worktree/merge`
@@ -212,7 +212,7 @@ type names are **camelCase** and each frame is `{ type, payload, timestamp }`
 | `taskClaimed` | `{ task, agentId }` |
 | `taskCompleted` | `{ task }` |
 | `taskDeleted` | `{ taskId, status? }` |
-| `brainExecuted` | `{ brainId, exec, taskId }` |
+| `agentExecuted` | `{ agentId, exec, taskId }` |
 
 Subscribe with `curl -N http://localhost:6868/api/events` (no buffering). There is
 no `agent_disconnected` event — a client that stops heartbeating is pruned silently
@@ -224,7 +224,7 @@ no `agent_disconnected` event — a client that stops heartbeating is pruned sil
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/status` | Dashboard overview |
-| GET | `/api/agents` | Active agents |
+| GET | `/api/agents` | Active workers |
 | GET | `/api/inbox` | Task list (query: status, platform, limit) |
 | POST | `/api/inbox` | Create task |
 | PATCH | `/api/inbox/:id` | Claim or complete task |

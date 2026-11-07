@@ -6,7 +6,7 @@
 # so a plain `systemctl --user restart cowork-mcp` re-launches the SAME stale
 # build — pushing to `main` changes nothing until someone rebuilds. This has
 # repeatedly made shipped fixes look "not working" on the live host (e.g. the
-# codex --skip-git-repo-check fix and the brain rate-limit meters). Run this
+# codex --skip-git-repo-check fix and the agent rate-limit meters). Run this
 # after pulling to close that gap in one step:
 #
 #   git pull && deploy/redeploy.sh
@@ -40,7 +40,7 @@ if [ "$RESTART" = "0" ]; then
 fi
 
 if command -v systemctl >/dev/null 2>&1 && systemctl --user status "$SERVICE" >/dev/null 2>&1; then
-  # Self-kill trap: cowork-mcp has KillMode=control-group and runs local-brain
+  # Self-kill trap: cowork-mcp has KillMode=control-group and runs local-agent
   # tasks as its own children, so if THIS process is running inside the service's
   # control group (e.g. a goal/task doing the deploy), restarting it would SIGKILL
   # us mid-restart — the fix builds but never goes live. Detect that and hand off

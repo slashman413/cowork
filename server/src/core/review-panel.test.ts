@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { selectSpecJudges } from './result-verifier.js';
 import { parseLeadJudgment, applyBucketRules, buildLeadJudgmentPrompt, buildPanelReviewerPrompt, effectivePanelSize, LEAD_FILTERS_VERBATIM } from './review-panel.js';
 
-const brains = {
+const agents = {
   'cc-opus': { exec: 'claude', model: 'claude-opus-5-5' },
   'cc-sonnet': { exec: 'claude', model: 'claude-sonnet-5-5' },
   'agy-gemini-argon': { exec: 'agy', model: 'gemini-4-argon-medium' },
@@ -16,20 +16,20 @@ const judges = { claude: ['agy-gemini-argon', 'agy-gemini-flash'], gemini: ['cc-
 // ── Family-distinct selection ──────────────────────────────────────────────
 
 test('selectSpecJudges: panel returns one judge per distinct family, never the executor family', () => {
-  const out = selectSpecJudges('cc-sonnet', { brains, judges, panel: 2, panelPool: ['cc-opus', 'agy-gemini-flash', 'dsh-qwen', 'codex-off'] });
+  const out = selectSpecJudges('cc-sonnet', { agents, judges, panel: 2, panelPool: ['cc-opus', 'agy-gemini-flash', 'dsh-qwen', 'codex-off'] });
   assert.deepEqual(out, ['agy-gemini-argon', 'dsh-qwen']);
   // Gemini executor: claude judge first (CEO ruling), then qwen; never a second gemini.
-  const g = selectSpecJudges('agy-gemini-flash', { brains, judges, panel: 3, panelPool: ['agy-gemini-argon', 'dsh-qwen', 'cc-sonnet'] });
+  const g = selectSpecJudges('agy-gemini-flash', { agents, judges, panel: 3, panelPool: ['agy-gemini-argon', 'dsh-qwen', 'cc-sonnet'] });
   assert.deepEqual(g, ['cc-opus', 'dsh-qwen']);
 });
 
 test('selectSpecJudges: panel default 1 keeps the ordered single-family chain', () => {
-  assert.deepEqual(selectSpecJudges('cc-sonnet', { brains, judges }), ['agy-gemini-argon', 'agy-gemini-flash']);
-  assert.deepEqual(selectSpecJudges('cc-sonnet', { brains, judges, panel: 1, panelPool: ['dsh-qwen'] }), ['agy-gemini-argon', 'agy-gemini-flash']);
+  assert.deepEqual(selectSpecJudges('cc-sonnet', { agents, judges }), ['agy-gemini-argon', 'agy-gemini-flash']);
+  assert.deepEqual(selectSpecJudges('cc-sonnet', { agents, judges, panel: 1, panelPool: ['dsh-qwen'] }), ['agy-gemini-argon', 'agy-gemini-flash']);
 });
 
-test('selectSpecJudges: panel skips cooling/disabled brains and may return fewer than asked', () => {
-  const out = selectSpecJudges('cc-sonnet', { brains, judges, panel: 2, panelPool: ['codex-off'], isCooling: id => id === 'agy-gemini-argon' });
+test('selectSpecJudges: panel skips cooling/disabled agents and may return fewer than asked', () => {
+  const out = selectSpecJudges('cc-sonnet', { agents, judges, panel: 2, panelPool: ['codex-off'], isCooling: id => id === 'agy-gemini-argon' });
   assert.deepEqual(out, ['agy-gemini-flash']);
 });
 
@@ -103,7 +103,7 @@ test('prompts carry the rubric lenses and the verbatim lead filters', () => {
     assert.ok(r.includes(lens), lens);
   }
   assert.ok(r.endsWith('BASE PROMPT'));
-  const lead = buildLeadJudgmentPrompt({ title: 't', acceptance: ['x'], reviews: [{ family: 'gemini', brain: 'g', text: 'FAIL' }] });
+  const lead = buildLeadJudgmentPrompt({ title: 't', acceptance: ['x'], reviews: [{ family: 'gemini', agent: 'g', text: 'FAIL' }] });
   assert.ok(lead.includes(LEAD_FILTERS_VERBATIM));
   assert.ok(lead.includes('If a reviewer\'s findings are all nits and style preferences, the code is probably fine. Say so.'));
   assert.ok(lead.includes('A finding that amounts to "I prefer a different approach" is not a bug'));

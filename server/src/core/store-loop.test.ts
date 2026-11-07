@@ -29,7 +29,7 @@ function makeStore(): { store: Store; root: string; paths: any } {
     agencyAgents: path.join(root, 'agency-agents'),
   };
   for (const p of Object.values(paths)) fs.mkdirSync(p as string, { recursive: true });
-  const config = { paths, platforms: {}, orchestration: { brains: {} } } as unknown as Config;
+  const config = { paths, platforms: {}, orchestration: { agents: {} } } as unknown as Config;
   return { store: new Store(config, new EventBus()), root, paths };
 }
 
@@ -79,7 +79,7 @@ test('the finished run-child holds its own artifacts and result, not the parent'
   } as any);
   const [child] = store.releaseDueScheduled();
 
-  // A brain produced an artifact for this cycle under the child's own dir.
+  // An agent produced an artifact for this cycle under the child's own dir.
   const artDir = path.join(paths.artifacts, child.id);
   fs.mkdirSync(artDir, { recursive: true });
   fs.writeFileSync(path.join(artDir, 'output.md'), '# hi');
@@ -130,15 +130,15 @@ test('per-run bookkeeping does not bleed into the run-child, but pins/agent surv
   const t = store.createTask({
     title: 'Daily', from: { platform: 'p', agent: 'a' },
     scheduledAt: due(), loopIntervalHours: 24,
-    context: { brain: 'local-x', agent: 'mentor', dispatched: true, inputFiles: ['a.txt'], attempts: 3 },
+    context: { agent: 'local-x', persona: 'mentor', dispatched: true, inputFiles: ['a.txt'], attempts: 3 },
   } as any);
   const [child] = store.releaseDueScheduled();
 
   assert.equal(child.context?.dispatched, undefined, 'stale claim marker stripped');
   assert.equal(child.context?.inputFiles, undefined, 'per-run input filenames stripped');
   assert.equal(child.context?.attempts, undefined, 'attempt counter reset');
-  assert.equal(child.context?.brain, 'local-x', 'a deliberate brain pin is preserved');
-  assert.equal(child.context?.agent, 'mentor', 'the agent assignment is preserved');
+  assert.equal(child.context?.agent, 'local-x', 'a deliberate agent pin is preserved');
+  assert.equal(child.context?.persona, 'mentor', 'the agent assignment is preserved');
 });
 
 test('legacy loopIntervalHours still recurs (normalized onto recurrence)', () => {

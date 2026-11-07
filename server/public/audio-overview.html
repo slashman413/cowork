@@ -5,13 +5,13 @@
 
   Served by the cowork server itself (like video-studio.html) and launched from the
   Portal card. A thin client over:
-    GET  /api/audio-overview                 allowed brains, obsidian availability
+    GET  /api/audio-overview                 allowed agents, obsidian availability
     POST /api/audio-overview/tasks           source + options → one ordinary cowork task (tag audio-overview)
     GET  /api/inbox?tag=audio-overview       "Recent overviews", refreshed from SSE /api/events
     GET  /api/inbox?status=done              source picker: finished tasks
     GET  /api/outputs/:id, /api/artifacts/:id   their files;  /api/outputs/:id/audio-overview.mp3?inline=1 = the player
     GET  /api/obsidian/search | /notes       Obsidian note picker
-  The script + mp3 are produced by a brain; see server/src/core/audio-overview.ts and
+  The script + mp3 are produced by an agent; see server/src/core/audio-overview.ts and
   deploy/scripts/audio-overview-render.mjs.
 -->
 <html lang="en" data-theme="dark">
@@ -138,13 +138,13 @@
       <div class="row">
         <div><label class="f">Length</label>
           <div class="seg" id="length"><button data-v="short" class="on">Short ~2–3 min</button><button data-v="medium">Medium ~5–6 min</button></div></div>
-        <div><label class="f" for="brain">Brain</label><select id="brain"></select></div>
+        <div><label class="f" for="agent">Agent</label><select id="agent"></select></div>
       </div>
       <label class="f" for="notes">Extra notes (optional)</label>
       <input type="text" id="notes" placeholder="Audience, tone, points to stress…">
       <div class="privacy">Privacy: audio is synthesised with edge-tts, which sends the script text to Microsoft's online TTS service. Don't use confidential sources.</div>
       <div class="submit"><button class="btn primary" id="go" disabled>🎧 Create overview</button><span class="msg" id="msg"></span></div>
-      <div class="hint">A brain writes the script, then a render script voices it (HsiaoChen / YunJhe for zh-TW, Aria / Guy for en) and builds <code>audio-overview.mp3</code>. Usually a few minutes.</div>
+      <div class="hint">An agent writes the script, then a render script voices it (HsiaoChen / YunJhe for zh-TW, Aria / Guy for en) and builds <code>audio-overview.mp3</code>. Usually a few minutes.</div>
     </section>
     <section class="col" id="list">
       <h2>Recent overviews <span id="n"></span></h2>
@@ -225,9 +225,9 @@
       try {
         const source = kind === 'task' ? { kind, taskId: $('#taskpick').value, file: $('#filepick').value }
           : kind === 'note' ? { kind, path: $('#notepick').value } : { kind, text: $('#pasted').value };
-        const body = { source, title: $('#title').value, style: segVal('style'), lang: segVal('lang'), length: segVal('length'), brain: $('#brain').value, notes: $('#notes').value };
+        const body = { source, title: $('#title').value, style: segVal('style'), lang: segVal('lang'), length: segVal('length'), agent: $('#agent').value, notes: $('#notes').value };
         const task = await api('/audio-overview/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-        localStorage.setItem(LS.last, JSON.stringify({ brain: body.brain, style: body.style, lang: body.lang, length: body.length }));
+        localStorage.setItem(LS.last, JSON.stringify({ agent: body.agent, style: body.style, lang: body.lang, length: body.length }));
         msg.className = 'msg ok'; msg.textContent = 'Queued ✓';
         await load();
         document.getElementById(`item-${task.id}`)?.scrollIntoView({ block: 'start' });
@@ -262,7 +262,7 @@
         return { id: t.id, playing: playing.has(t.id), html: `
           <div class="item" id="item-${esc(t.id)}">
             <div class="top"><span class="ttl" title="${esc(t.title)}">${esc(ao.title || t.title)}</span><span class="st ${cls}">${esc(label)}</span></div>
-            <div class="meta">${esc(ao.style === 'dialogue' ? 'two-host dialogue' : 'narrator')} · ${esc(ao.lang || '')} · ${esc(ao.length || '')} · ${esc(ao.source || '')} · ${esc((t.context?.brain || '').replace(/^local-cc-/, ''))} · ${new Date(t.createdAt).toLocaleString()}</div>
+            <div class="meta">${esc(ao.style === 'dialogue' ? 'two-host dialogue' : 'narrator')} · ${esc(ao.lang || '')} · ${esc(ao.length || '')} · ${esc(ao.source || '')} · ${esc((t.context?.agent || '').replace(/^local-cc-/, ''))} · ${new Date(t.createdAt).toLocaleString()}</div>
             ${has ? `<audio controls preload="metadata" data-task="${esc(t.id)}" src="${outUrl(t.id, info.file)}"></audio>` : ''}
             ${cls === 'run' ? `<pre data-progress="${esc(t.id)}">…</pre>` : ''}
             ${cls === 'failed' && t.result ? `<pre>${esc(t.result.slice(0, 600))}</pre>` : ''}
@@ -289,7 +289,7 @@
         try {
           const p = await api(`/inbox/${encodeURIComponent(pre.dataset.progress)}/progress`);
           const lines = (p.log || '').trim().split('\n').filter(Boolean);
-          pre.textContent = lines.slice(-6).join('\n') || 'Waiting for the brain to start…';
+          pre.textContent = lines.slice(-6).join('\n') || 'Waiting for the agent to start…';
           pre.scrollTop = pre.scrollHeight;
         } catch {}
       }
@@ -314,8 +314,8 @@
       try {
         info = await api('/audio-overview');
         const last = JSON.parse(localStorage.getItem(LS.last) || '{}');
-        $('#brain').innerHTML = info.brains.map(b => `<option value="${esc(b)}">${esc(b.replace(/^local-cc-/, ''))}${b === info.defaultBrain ? ' (default)' : ''}</option>`).join('');
-        $('#brain').value = info.brains.includes(last.brain) ? last.brain : info.defaultBrain;
+        $('#agent').innerHTML = info.agents.map(b => `<option value="${esc(b)}">${esc(b.replace(/^local-cc-/, ''))}${b === info.defaultAgent ? ' (default)' : ''}</option>`).join('');
+        $('#agent').value = info.agents.includes(last.agent) ? last.agent : info.defaultAgent;
         ['style', 'lang', 'length'].forEach(k => last[k] && setSeg(k, last[k]));
         if (!info.obsidian) { $('#notebtn').disabled = true; $('#notebtn').title = 'Obsidian vault unavailable'; }
         await loadTasks();

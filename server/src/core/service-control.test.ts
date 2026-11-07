@@ -17,7 +17,7 @@ const services: Record<string, ServiceConfig> = {
   firecrawl: { url: 'http://localhost:3002', enabled: true, unit: 'firecrawl.service' }, // controllable:false
   noUnit: { url: 'http://localhost:9000', enabled: true }, // monitored, but no lifecycle
   selfKill: { url: 'http://localhost:6868', enabled: true, unit: 'cowork-mcp.service' },
-  brain: { url: 'http://localhost:1', enabled: true, unit: 'cowork-local-brain@claude.service' },
+  agent: { url: 'http://localhost:1', enabled: true, unit: 'cowork-local-agent@claude.service' },
   badUnit: { url: 'http://localhost:1', enabled: true, unit: 'not a unit; rm -rf' },
 };
 
@@ -52,9 +52,9 @@ test('enable on a non-controllable service → 403', async () => {
   assert.match(String(out.body.error), /autostart/);
 });
 
-test('protected units (server + brains) → 423, never executed', async () => {
+test('protected units (server + agents) → 423, never executed', async () => {
   assert.equal((await controlService('selfKill', 'stop', on)).status, 423);
-  assert.equal((await controlService('brain', 'restart', on)).status, 423);
+  assert.equal((await controlService('agent', 'restart', on)).status, 423);
 });
 
 test('malformed unit name in config → 400 (never reaches systemctl)', async () => {

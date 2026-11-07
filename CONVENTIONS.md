@@ -1,6 +1,6 @@
 # Cowork Operating Rules
 
-**Every agent and brain executing a cowork task must follow these rules.** They are
+**Every agent executing a cowork task must follow these rules.** They are
 injected into your prompt at dispatch time — treat them as binding, not advisory.
 They exist because agents share one repository and one task store: a file written to
 the wrong place is at best noise and at worst someone else's data loss.
@@ -67,7 +67,7 @@ Files a person attached to your task are listed in your prompt and live in
   with your question(s). The verifier detects this and parks the task on
   `wait-input` for a human, instead of marking it done.
 - Never emit a rate-limit / quota / "try again later" notice as if it were the
-  deliverable — the verifier rejects those and hands the task to the next brain.
+  deliverable — the verifier rejects those and hands the task to the next agent.
 - Do not claim you created a file you did not create. The artifacts list is generated
   from what is actually on disk, so an invented filename is immediately visible.
 - **End every result with a status footer** (`NEEDS_INPUT:` / `WAITING_ON_BACKGROUND:`
@@ -78,7 +78,7 @@ Files a person attached to your task are listed in your prompt and live in
   - <command run / URL checked / file produced> → <observed result>
   CONCERNS: <only if DONE_WITH_CONCERNS>
   ```
-  `BLOCKED` = cannot finish for a reason another brain would hit too (say why on the
+  `BLOCKED` = cannot finish for a reason another agent would hit too (say why on the
   STATUS line); the task fails and is not retried. A claim without evidence is not done:
 
   | Claim | Required evidence |
@@ -117,20 +117,21 @@ lines. At T-5 min of your timebox, write `progress.md` and return partial result
   status) and let the CEO decide. (Added 2026-10-05 after the daily GitHub review
   archived 66 repos without approval.)
 
-## 6. Credential tasks MUST use a local brain (Inc 6 rule)
+## 6. Credential tasks MUST use a local agent (Inc 6 rule)
 
 Any task that needs access to the **local filesystem** — especially credentials under
 `~/.priv/` (Cloudflare, Gumroad, Twitter/X, YouTube, GitHub tokens, Mautic, NAS) or
-any `/home/wayne/` path — must run on a **local brain** (`local-hermes-qwen3.8-27b`).
+any `/home/wayne/` path — must run on a **local agent** (`local-hermes-qwen3.8-27b`).
 
-- **Remote brains on other machines (e.g. `remote-ai-code-gen-cc-opus-4-8`) cannot
+- **Remote agents on other machines (e.g. `remote-ai-code-gen-cc-opus-4-8`) cannot
   access `/home/wayne/`.** A credential task routed to one will fail or vanish.
-  If you are a remote brain and the task requires `~/.priv/` or local files, do NOT
+  If you are a remote agent and the task requires `~/.priv/` or local files, do NOT
   fake it — report the routing error and stop (see rule 4).
-- The `local-`/`remote-` prefix names the machine: `local-*` brains (including
-  `local-codex-*`) run on this host, `remote-*` brains run on another machine.
-  Still pin credential tasks to the local brain above.
-- When dispatching, pin the brain: `context: {"brain": "local-hermes-qwen3.8-27b"}`.
+- The `local-`/`remote-` prefix names the machine: `local-*` agents (including
+  `local-codex-*`) run on this host, `remote-*` agents run on another machine.
+  Still pin credential tasks to the local agent above.
+- When dispatching, pin the agent: `context: {"agent": "local-hermes-qwen3.8-27b"}`. Set the thinking level
+  separately with `context.thinking` (`low|medium|high|xhigh|max`, default `medium`); name a persona with `context.persona`.
   Old ids (`local-ha-qwen3-8-27b`, …) still resolve, but use the canonical one.
 - Full rule + incident history: `/home/wayne/.hermes/cowork-routing-rules.md`.
 
@@ -150,10 +151,10 @@ Every task, subtask, or goal you create goes to the **local cowork server on
   and report it (`STATUS: BLOCKED`).
 - On `ai-code-gen` this is enforced: claude runs get `cowork-local` instead of
   `cowork`, and `mcp__cowork__create_task` / `create_goal` are denied in
-  `~/.claude/settings.json`. Other brains (hermes, codex, agy, dsh) must follow it
+  `~/.claude/settings.json`. Other agents (hermes, codex, agy, dsh) must follow it
   by this rule alone. (Added 2026-11-03 at the CEO's request.)
 
 ---
 
-*Full protocol: [PROTOCOL.md](PROTOCOL.md). Joining as a remote brain:
-[JOIN-AS-A-BRAIN.md](JOIN-AS-A-BRAIN.md).*
+*Full protocol: [PROTOCOL.md](PROTOCOL.md). Joining as a remote agent:
+[JOIN-AS-AN-AGENT.md](JOIN-AS-AN-AGENT.md).*

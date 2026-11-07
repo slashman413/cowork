@@ -2,19 +2,19 @@
 
 **A self-hosted MCP server + web dashboard that lets different AI coding agents share one task
 queue.** Dispatch a task from any of them (or from the UI); a dispatcher routes it to a named
-*brain* (model × CLI × machine), runs it, verifies the result, and falls back to the next brain
+*agent* (model × CLI × machine), runs it, verifies the result, and falls back to the next agent
 on rate limits. Artifacts, remote machines and cost/usage meters are built in.
 
 - **Mixed-vendor agents, one inbox:** Claude Code, Codex, Gemini CLI / Antigravity, Hermes, Ollama.
-- **Brain routing with fallback chains:** route by role, pin by task, fail over on quota errors.
+- **Agent routing with fallback chains:** route by role, pin by task, fail over on quota errors.
 - **Plain files on disk:** the task store is files. No database to run.
-- **Remote brains:** another machine joins with one command and offers its models
-  ([JOIN-AS-A-BRAIN.md](JOIN-AS-A-BRAIN.md)):
-  `COWORK_URL=http://<host>:6868 HOST=<you> node cowork/deploy/remote-brain-client.mjs`
+- **Remote agents:** another machine joins with one command and offers its models
+  ([JOIN-AS-AN-AGENT.md](JOIN-AS-AN-AGENT.md)):
+  `COWORK_URL=http://<host>:6868 HOST=<you> node cowork/deploy/remote-agent-client.mjs`
 
 Jump to: [Quick Start](#quick-start) · [Connecting agents](#connecting-ai-agents) ·
-[Dispatcher](#task-execution--the-dispatcher) · [Brains](#brains--named-execution-identities-model--platform--location) ·
-[Brains](#brains--named-execution-identities-model--platform--location) ·
+[Dispatcher](#task-execution--the-dispatcher) · [Agents](#agents--named-execution-identities-model--platform--location) ·
+[Vocabulary](#vocabulary) · [Thinking level](#thinking-level) ·
 [MCP tools](#mcp-tools-reference)
 
 ## Screenshots
@@ -25,8 +25,8 @@ role → model chains, and a real-time activity feed.
 
 ![Cowork dashboard — metrics, counters, dispatcher chains, and live activity](docs/images/cowork-dashboard.png)
 
-The [Task Inbox](#task-execution--the-dispatcher), [Brains](#brains--named-execution-identities-model--platform--location),
-and [Connections](#wiring-a-remote-brain-machine) views are
+The [Task Inbox](#task-execution--the-dispatcher), [Agents](#agents--named-execution-identities-model--platform--location),
+and [Connections](#wiring-a-remote-agent-machine) views are
 shown in context throughout this README.
 
 ## Supported Platforms
@@ -87,11 +87,11 @@ docker logs <container>   # first start prints the generated API key once
 ```
 
 The image (amd64 + arm64) runs the MCP server, dashboard and task inbox with the local
-dispatcher off: agents connect to `http://<host>:6868/mcp`, and machines offer their brains
-with `deploy/remote-brain-client.mjs` (see [JOIN-AS-A-BRAIN.md](JOIN-AS-A-BRAIN.md)). Config
+dispatcher off: agents connect to `http://<host>:6868/mcp`, and machines offer their agents
+with `deploy/remote-agent-client.mjs` (see [JOIN-AS-AN-AGENT.md](JOIN-AS-AN-AGENT.md)). Config
 and all state live in the `/data` volume. `/api` and `/mcp` always require a key: pass your own
 with `-e COWORK_API_KEY=…`, or the server generates one on first start, saves it to
-`/data/api-key` and prints it once. Clients send `Authorization: Bearer <key>` (the brain client
+`/data/api-key` and prints it once. Clients send `Authorization: Bearer <key>` (the agent client
 reads `COWORK_API_KEY`); open `http://<host>:6868/?apiKey=<key>` once to log the dashboard in. Images are
 built from `v*` tags by `.github/workflows/release.yml` on a digest-pinned base.
 
@@ -106,9 +106,9 @@ npm install
 
 **Config lives outside the repo.** The tracked `cowork/config.json` is a sanitized
 **template only**. On first run the server copies it to **`~/.cowork/config.json`** —
-your real per-server config (host binding, registered brains, chains). Edit *that*
+your real per-server config (host binding, registered agents, chains). Edit *that*
 copy, not the template; the server also persists all live dashboard/API edits there,
-so your personal host/brain settings never touch the repo. Override the location with
+so your personal host/agent settings never touch the repo. Override the location with
 the `COWORK_CONFIG` env var.
 
 Edit `~/.cowork/config.json` to match your environment:
@@ -145,7 +145,7 @@ Edit `~/.cowork/config.json` to match your environment:
 | `server.host` | `0.0.0.0` | Bind address (`127.0.0.1` for local-only) |
 | `server.apiKey` | `null` | API key for /api and /mcp. When null and `host` is not loopback, a key is generated into `api-key` beside the config and printed once |
 | `server.allowUnauthenticated` | `false` | Serve a non-loopback host with no key (also `COWORK_ALLOW_NO_AUTH=1`). Only for a trusted, firewalled network |
-| `server.blockedClients` | — | Client denylist enforced regardless of the API key: `{ips: [...], names: [...]}`. A matching source IP gets 403 on every path; a `names` substring (case-insensitive) in the User-Agent / `X-Cowork-Client` header, MCP `clientInfo.name`, or tool-call identity args (`agent_name`, `agent_id`, `capabilities`, `brains[].id`) gets 403 on `/api`/`/mcp`. Matching brains are disabled so tasks stop routing to them. See `server/src/core/client-guard.ts` |
+| `server.blockedClients` | — | Client denylist enforced regardless of the API key: `{ips: [...], names: [...]}`. A matching source IP gets 403 on every path; a `names` substring (case-insensitive) in the User-Agent / `X-Cowork-Client` header, MCP `clientInfo.name`, or tool-call identity args (`agent_name`, `agent_id`, `capabilities`, `agents[].id`) gets 403 on `/api`/`/mcp`. Matching agents are disabled so tasks stop routing to them. See `server/src/core/client-guard.ts` |
 | `paths.agencyAgents` | `./agency-agents` | Path to the agency-agents repo |
 | `platforms.*.enabled` | `true` | Enable/disable individual platforms |
 | `platforms.*.agentsDir` | varies | Where platform-specific agents live on disk |
@@ -233,7 +233,7 @@ Add to your AGY MCP settings:
 ```
 
 **agy quota meter / token refresh.** To mint Antigravity access tokens, the usage
-probe and `deploy/remote-brain-client.mjs` need Google OAuth client values. These are
+probe and `deploy/remote-agent-client.mjs` need Google OAuth client values. These are
 the public values that ship with the agy and Gemini CLIs. They are not committed. Copy
 [`.env.example`](.env.example) to `~/.cowork/oauth-clients.env`, fill it in, and run
 `chmod 600`. Alternatively, export the same variables in the service environment;
@@ -266,59 +266,111 @@ Output becomes the task `result`; the full transcript is saved as `result.md` in
 task's artifacts dir.
 
 Every task lands in the **Task Inbox**, tagged with the division/agent that ran it and the
-brain it ran on, with its output artifacts attached and filterable by status
+agent it ran on, with its output artifacts attached and filterable by status
 (done · in-progress · pending · wait-input · failed).
 
-![Task Inbox — tasks tagged with division/agent, brain, and downloadable artifacts](docs/images/cowork-tasks.png)
+![Task Inbox — tasks tagged with division/agent, agent, and downloadable artifacts](docs/images/cowork-tasks.png)
 
 ### Two-stage routing
 
-An unassigned task is routed in **two stages** by an orchestrator/classifier brain
+An unassigned task is routed in **two stages** by an orchestrator/classifier agent
 (default `qwen3.8-27b` via Hermes, `orchestration.classifier`):
 
 1. **Division** — pick 1 of 19 divisions (testing, engineering, security, …).
 2. **Agent** — pick 1 of ~285 agents in that division. The chosen agent's
    full `.md` **persona** becomes the system prompt.
 
-The agent then runs on a **brain fallback chain** (below). Skip the classifier by
-targeting directly: `context.agent: "<agent-slug>"` or a special-executor name.
+The agent then runs on a **agent fallback chain** (below). Skip the classifier by
+targeting directly: `context.persona: "<persona-slug>"` or a special-executor name.
 Tag a task `manual` to never auto-execute.
 
-### Executors: special agents + the Agencies
+### Executors: special roles + the Agencies
 
-- **Special executors** (`config.json → orchestration.agents`) — only
-  `orchestrator`, `generalist`, `video`; each is `{description, brains: [...]}`
+- **Special executors** (`config.json → orchestration.roleChains`) — only
+  `orchestrator`, `generalist`, `video`; each is `{description, agents: [...]}`
   with its own chain. `video` runs the ComfyUI **LTX** pipeline
   (`deploy/video-pipeline.sh`; LTX only — never Wan/Hunyuan/SVD).
 - **Agencies agents** — the ~285 personas in the `agency-agents` submodule, grouped
   into 19 divisions. They have no chain of their own; they run on the division's
   chain if one is set, else the global default.
 
-### Brain fallback chains (`GET /api/chains`)
+### Agent fallback chains (`GET /api/chains`)
 
-- **Global default** — `orchestration.defaultChain`; drag-reorder in the **Brains**
+- **Global default** — `orchestration.defaultChain`; drag-reorder in the **Agents**
   view (`PUT /api/chains/default`).
 - **Per-division override** — `orchestration.divisionChains[<division>]`; set/clear
   in the **Agents** view (`PUT /api/chains/division/:division`; empty = use default).
 
 A chain runs top → bottom: the task runs on `chain[0]`; on failure the dispatcher
-**hands over** to `chain[1]`, then `[2]`… recording the failed brain on the task
+**hands over** to `chain[1]`, then `[2]`… recording the failed agent on the task
 each attempt, until success or the chain is exhausted. Pin a single task to one
-brain with `context.brain: "<id>"`.
+agent with `context.agent: "<id>"`.
 
 The **Agents** view exposes the per-division chain for every division — drag to reorder,
-`＋ add brain…`, or reset to the global default. No template edits, no restart.
+`＋ add agent…`, or reset to the global default. No template edits, no restart.
 
-![Agents view — per-division brain fallback chains, editable inline](docs/images/cowork-agents.png)
+![Routing view — per-division agent fallback chains, editable inline](docs/images/cowork-roles.png)
 
-## Brains — named execution identities (model × platform × location)
+## Vocabulary
 
-`config.json → orchestration.brains` (`GET /api/brains`) names each brain a chain
-can reference. The **Brains** view lists every registered brain — its platform
+| Term | Meaning | Where you see it |
+|------|---------|------------------|
+| **Agent** | One model on one CLI on one machine: the thing that runs a task. Example: `local-cc-opus-5-5`. | `orchestration.agents`, `context.agent`, `/api/agents`, Agents page |
+| **Thinking** | How hard an agent reasons on a run. A parameter of the run, never part of an agent id. | `context.thinking`, `agents.<id>.thinking`, `orchestration.defaultThinking` |
+| **Persona** | A roster specialist the run takes on. Example: `engineering-sre`. | `context.persona`, `orchestration.personaChains`, Personas page |
+| **Role** | A named chain of agents for a built-in job (`orchestrator`, `generalist`, `video`). | `orchestration.roleChains`, Routing page |
+| **Worker** | A connected client that registers agents and claims their tasks. | `/api/workers`, Workers page, `register_agent` |
+
+`register_agent`, `deregister_agent` and their `agent_id` / `agent_name` arguments keep their names so
+connected clients don't break: `agent_id` is the **worker's** registration id, not an id from `agents`.
+
+## Thinking level
+
+Agent ids no longer carry a level: `local-agy-gemini-3.8-flash` replaces the `-high`, `-medium` and `-low`
+variants. A run's level comes from the first of these that is set:
+
+1. the task's `context.thinking`
+2. the agent's `thinking`
+3. `orchestration.defaultThinking`
+4. `medium`
+
+Levels are `low`, `medium`, `high`, `xhigh` and `max`. Set one on the New task, Edit, Re-run, Reassign and
+Continue dialogs, per agent on the Agents page, or through the API:
+
+```bash
+curl -X POST "$COWORK/api/inbox" -H 'Content-Type: application/json' -d '{
+  "title": "...", "description": "...", "from": {"platform": "cli", "agent": "me"}, "to": {},
+  "context": {"agent": "local-cc-opus-5-5", "thinking": "high"}
+}'
+curl -X PATCH "$COWORK/api/agents/local-cc-opus-5-5/thinking" -H 'Content-Type: application/json' -d '{"thinking": "high"}'
+```
+
+| exec | How the level is applied |
+|------|--------------------------|
+| claude | `--effort <level>` |
+| codex | `-c model_reasoning_effort="<level>"` (`max` runs as `xhigh`) |
+| agy | model slug `<model>-<level>` (`xhigh` and `max` run as `high`; `gpt-oss-120b` only has `medium`) |
+| hermes | `--reasoning <level>`, only when a level was set explicitly (`xhigh` and `max` run as `high`) |
+| dsh, ollama, script | no reasoning control, so the level is ignored |
+
+### Upgrading from the old naming
+
+A hub upgraded from the `brain` naming needs its state migrated once, with the server stopped:
+`node scripts/migrate-agent-naming.mjs` (`deploy/cutover-agent-naming.sh` does this on a host running the
+systemd units, then moves clients to `cowork-local-agent@`).
+
+Clients on the old contract keep working: the hub translates their old field names at the door
+(`server/legacy-aliases.json`, read only by `server/src/legacy-wire.ts`) and answers with `agent_aliases` so they
+can update. `GET /api/legacy-wire` counts how often that still happens. Once it stays at zero, delete those two files.
+
+## Agents — named execution identities (model × platform × location)
+
+`config.json → orchestration.agents` (`GET /api/agents`) names each agent a chain
+can reference. The **Agents** view lists every registered agent — its platform
 (`claude` / `agy` / `hermes`), underlying model, location, and whether it was
 `auto`-registered by a connecting client — with one-click deregister:
 
-![Brains view — every registered execution identity, model, and location](docs/images/cowork-brains.png)
+![Agents view — every registered execution identity, model, and location](docs/images/cowork-agents.png)
 
 | Alias | Location | Runs |
 |-------|----------|------|
@@ -330,26 +382,26 @@ can reference. The **Brains** view lists every registered brain — its platform
 | `remote-ai-code-gen-cc-opus-4-8` / `-sonnet-5` / `-fable-5` | remote | Claude Code on the ai-code-gen machine |
 | `remote-<host>-cc-sonnet-5-5` | remote | Claude Code on another machine |
 
-Brain ids carry the **model version** (`local-cc-opus-5-5`, not `local-cc-opus`) so the
-model a brain runs is readable from its id; only `-default` brains, which follow the
+Agent ids carry the **model version** (`local-cc-opus-5-5`, not `local-cc-opus`) so the
+model an agent runs is readable from its id; only `-default` agents, which follow the
 account default, are unversioned.
 
 **Naming convention — the prefix names the machine, `location` names the runner.**
-The `local-`/`remote-` id prefix says **which machine the brain executes on**:
+The `local-`/`remote-` id prefix says **which machine the agent executes on**:
 `local-` = this host (it can see `/home/wayne`, `~/.priv`, the GPU), `remote-` =
 another machine (`remote-<host>-…`). The separate `location` field says **who
 starts it**: `local` = the dispatcher spawns it, `remote` = a client claims it from
 the inbox. The two usually agree, but not always — `local-codex-*` runs on this
 host yet has `location: remote` because the codex client claims its tasks. Code must
 read `location`, never infer it from the prefix. DeepSeek
-brains are retired — any id matching `/deepseek/i` is scrubbed from the registry on
-load (see `DENYLISTED_BRAIN_RE`), so never put `deepseek` in a new id.
+agents are retired — any id matching `/deepseek/i` is scrubbed from the registry on
+load (see `DENYLISTED_AGENT_RE`), so never put `deepseek` in a new id.
 
-**Renamed ids keep working.** `BRAIN_ID_ALIASES` in `server/src/config.ts` (plus an
-optional `orchestration.brainAliases` in config) maps retired ids to their canonical
-id. Old ids in an on-disk config, a task's `context.brain` pin, or a client's
-registration all resolve to the canonical brain. A client that still declares an
-old id keeps receiving its tasks under that id (`clientId` on the brain), until it
+**Renamed ids keep working.** `AGENT_ID_ALIASES` in `server/src/config.ts` (plus an
+optional `orchestration.agentAliases` in config) maps retired ids to their canonical
+id. Old ids in an on-disk config, a task's `context.agent` pin, or a client's
+registration all resolve to the canonical agent. A client that still declares an
+old id keeps receiving its tasks under that id (`clientId` on the agent), until it
 re-declares the canonical one. Renames (2026-10-07, and codex again on 2026-11-03):
 
 | Retired id | Canonical id |
@@ -358,91 +410,91 @@ re-declares the canonical one. Renames (2026-10-07, and codex again on 2026-11-0
 | `remote-codex-default` / `-gpt-5-6-terra` / `-gpt-5-6-luna` / `-gpt-6-luna` | `local-codex-default` / `-gpt-5-6-terra` / `-gpt-5-6-luna` / `-gpt-6-luna` (2026-11-03: the prefix names the machine, so the 10-07 `local-codex-*` → `remote-codex-*` rename was reversed) |
 | `remote-ai-code-gen-cc-opus` / `-sonnet` / `-fable` | `remote-ai-code-gen-cc-opus-4-8` / `-sonnet-5` / `-fable-5` |
 
-**Local** brains the dispatcher spawns here. **Remote** brains it leaves `pending`
-and **publishes the brain id onto the task's `context.brain`** so that machine's
+**Local** agents the dispatcher spawns here. **Remote** agents it leaves `pending`
+and **publishes the agent id onto the task's `context.agent`** so that machine's
 client can discover and claim it (the client filters `list_inbox` for tasks whose
-`context.brain` is one of its own ids). If no client claims a remote rung within
+`context.agent` is one of its own ids). If no client claims a remote rung within
 `orchestration.remoteGraceMs` (default 60 s), the dispatcher advances to the next
-brain in the chain, so a clientless remote rung never stalls a task.
+agent in the chain, so a clientless remote rung never stalls a task.
 
-**Artifacts** work for both: local brains save files to `$COWORK_ARTIFACTS_DIR`
-(the dispatcher collects them from disk); remote brains save to the same env dir
+**Artifacts** work for both: local agents save files to `$COWORK_ARTIFACTS_DIR`
+(the dispatcher collects them from disk); remote agents save to the same env dir
 and the client **uploads** each file via `POST /api/artifacts/:taskId/:file`.
 Either way they land in `artifacts/<task-id>/` and become downloadable from the
 Inbox. **Outputs** (the task's final deliverables) go in the `outputs/` subfolder
 (`$COWORK_OUTPUTS_DIR`; remote clients upload via `POST /api/outputs/:taskId/:file`)
 and get their own OUTPUTS section on the card, after RESULT and before ARTIFACTS.
 
-**Input files** flow the other way — a person attaches files for the brain to
+**Input files** flow the other way — a person attaches files for the agent to
 **read**. Attach them on any Inbox card ("＋ Attach
 files"); they are stored under `inputs/<task-id>/` and mirrored onto
-`context.inputFiles`. The dispatcher points a **local** brain at their absolute
-paths in the prompt; a **remote** brain client downloads them (`GET /api/inputs/:taskId`)
+`context.inputFiles`. The dispatcher points a **local** agent at their absolute
+paths in the prompt; a **remote** agent client downloads them (`GET /api/inputs/:taskId`)
 before running and lists their local paths in the prompt. Inputs survive a re-run.
 
 **Failed tasks & re-run.** When a task exhausts its whole fallback chain (every
-brain failed verification) it finishes flagged `failed: true`. The Inbox groups
+agent failed verification) it finishes flagged `failed: true`. The Inbox groups
 these under a red **"failed"** filter (kept out of the green "done" count) and
 offers a confirm-gated **↻ Re-run** that resets the task to `pending` from the top
 of its chain (`POST /api/inbox/:id/rerun`) — preserving its brief and attached inputs.
 
-### Auto-registered brains (clients-capability protocol)
+### Auto-registered agents (clients-capability protocol)
 
-A connecting MCP client DECLARES the brains it can run via the `register_agent`
-tool's `brains` field; the server auto-adds them to the registry (marked `dynamic`,
+A connecting MCP client DECLARES the agents it can run via the `register_agent`
+tool's `agents` field; the server auto-adds them to the registry (marked `dynamic`,
 owned by that client). One machine can offer several models at once. Auto-registered
-brains persist and are removed **only** by `deregister_agent` or the Brains view
+agents persist and are removed **only** by `deregister_agent` or the Agents view
 (never on heartbeat timeout); removal cascades out of the default chain, every
-division chain, and every special agent. Manage all of this from the dashboard's
-**Agents** and **Brains** views.
+division chain, and every special role. Manage all of this from the dashboard's
+**Agents** and **Agents** views.
 
-### Wiring a remote brain machine
+### Wiring a remote agent machine
 
-`deploy/remote-brain-client.mjs` is a zero-dependency (Node 18+) Cowork **MCP**
+`deploy/remote-agent-client.mjs` is a zero-dependency (Node 18+) Cowork **MCP**
 client that does exactly that loop. Its header comment documents every env var.
 
-**Quickest — run it directly** (foreground; good for a first test). One brain:
+**Quickest — run it directly** (foreground; good for a first test). One agent:
 
 ```bash
 git clone https://github.com/slashman413/cowork
 COWORK_URL=http://<cowork-host>:6868 EXEC=claude MODEL=claude-sonnet-5-5 \
-  BRAIN_ID=remote-<host>-cc-sonnet-5-5 \
-  node cowork/deploy/remote-brain-client.mjs
+  AGENT_ID=remote-<host>-cc-sonnet-5-5 \
+  node cowork/deploy/remote-agent-client.mjs
 ```
 
-Several brains from one machine (declares them all; each becomes a targetable brain):
+Several agents from one machine (declares them all; each becomes a targetable agent):
 
 ```bash
 COWORK_URL=http://<cowork-host>:6868 EXEC=claude HOST=<host> \
-  BRAINS='[{"id":"remote-<host>-cc-opus-5-5","model":"claude-opus-5-5"},
+  AGENTS='[{"id":"remote-<host>-cc-opus-5-5","model":"claude-opus-5-5"},
            {"id":"remote-<host>-cc-sonnet-5-5","model":"claude-sonnet-5-5"}]' \
-  node cowork/deploy/remote-brain-client.mjs
+  node cowork/deploy/remote-agent-client.mjs
 ```
 
 **As a boot service** (recommended for permanent machines):
 
 ```bash
-mkdir -p ~/.config/cowork-remote-brain
-cp cowork/deploy/remote-brain-client.env.example ~/.config/cowork-remote-brain/aicodegen.env
-# edit: COWORK_URL, BRAINS (or BRAIN_ID), EXEC, HOST, COWORK_CLIENT_JS
-cp cowork/deploy/cowork-remote-brain@.service ~/.config/systemd/user/
-systemctl --user daemon-reload && systemctl --user enable --now cowork-remote-brain@aicodegen
+mkdir -p ~/.config/cowork-remote-agent
+cp cowork/deploy/remote-agent-client.env.example ~/.config/cowork-remote-agent/aicodegen.env
+# edit: COWORK_URL, AGENTS (or AGENT_ID), EXEC, HOST, COWORK_CLIENT_JS
+cp cowork/deploy/cowork-remote-agent@.service ~/.config/systemd/user/
+systemctl --user daemon-reload && systemctl --user enable --now cowork-remote-agent@aicodegen
 ```
 
-It connects to `COWORK_URL/mcp`, `register_agent`s (declaring its `BRAINS`, which
+It connects to `COWORK_URL/mcp`, `register_agent`s (declaring its `AGENTS`, which
 auto-register into the registry), then polls and claims only tasks whose
-`context.brain` is one of its brain ids, runs the matching `EXEC`/`MODEL`, and
+`context.agent` is one of its agent ids, runs the matching `EXEC`/`MODEL`, and
 `complete_task`s with its result and uploaded artifacts — appearing in **Connections** like any other
-client. **Flexible**: the same script serves any brain by changing env only.
-**Scalable**: add machines/brains by adding `<name>.env` files; claims are atomic
-(single-process compare-and-set) so even multiple clients on the *same* brain id
+client. **Flexible**: the same script serves any agent by changing env only.
+**Scalable**: add machines/agents by adding `<name>.env` files; claims are atomic
+(single-process compare-and-set) so even multiple clients on the *same* agent id
 never double-run a task — first claim wins.
 
 Every connected client shows up live in the **Connections** view — grouped by platform,
-listing the brains it offers, its idle/busy state, and a per-session tally of how many
-tasks each brain has run vs. submitted:
+listing the agents it offers, its idle/busy state, and a per-session tally of how many
+tasks each agent has run vs. submitted:
 
-![Connections view — live MCP clients, the brains they offer, and per-brain invocation counters](docs/images/cowork-connections.png)
+![Connections view — live MCP clients, the agents they offer, and per-agent invocation counters](docs/images/cowork-connections.png)
 
 The always-on coordinator agent shown in **Connections** as `cowork/orchestrator`
 polls the inbox, two-stage-routes unassigned tasks, reclaims orphans, and
@@ -451,8 +503,8 @@ dispatches; transient per-task workers appear as e.g.
 while running.
 
 CEO flow: tell Hermes (e.g. via Discord) an idea → Hermes creates ONE task with
-`context.agent: "orchestrator"` → the orchestrator decomposes it into subtasks via
-`POST /api/inbox` → each subtask is two-stage-routed to an agent on its brain
+`context.persona: "orchestrator"` → the orchestrator decomposes it into subtasks via
+`POST /api/inbox` → each subtask is two-stage-routed to an agent on its agent
 chain → results and artifacts appear live on the dashboard.
 
 ### LLM classifier — no task left behind
@@ -461,7 +513,7 @@ An unassigned task (e.g. a free-text idea filed straight from Discord) no longer
 stalls: the dispatcher runs the **two-stage LLM router** (default qwen3.8-27b
 via Hermes, `orchestration.classifier` in config.json) that reads the task, picks
 a division, then an agent, which then dispatches normally on that agent's
-brain chain. Tag a task `manual` to skip both routing and dispatch.
+agent chain. Tag a task `manual` to skip both routing and dispatch.
 
 ### Stale-claim reclaim
 
@@ -497,12 +549,12 @@ address, not a URL). A non-loopback host always requires a key: set `server.apiK
 (or `COWORK_API_KEY`), or use the one generated into `api-key` beside the config on first
 start. Log the dashboard in once with `http://<host-ip>:6868/?apiKey=<key>` (it sets a
 same-site cookie). `server.allowUnauthenticated: true` opts out; anyone who can reach the port
-can then create tasks for your brains.
+can then create tasks for your agents.
 
 **Moving a running open hub to a key without locking anyone out:** set the key *and* keep
 `allowUnauthenticated: true`. That is soft (migration) mode: a valid key is accepted, a wrong key
 gets 401, and keyless requests still pass but are listed at `GET /api/auth/keyless` (key required).
-Give the key to every client (brain clients: `COWORK_API_KEY`; MCP configs: an
+Give the key to every client (agent clients: `COWORK_API_KEY`; MCP configs: an
 `Authorization: Bearer <key>` header, e.g. `deploy/install-skill.sh --key <key>`; dashboards:
 `/?apiKey=<key>` once). Dispatched tasks get `COWORK_API_KEY` in their env automatically. When
 `/api/auth/keyless` stays empty, drop `allowUnauthenticated` and restart to enforce.
@@ -601,15 +653,15 @@ Once connected, agents have access to these tools:
 
 | Tool | Description |
 |------|-------------|
-| `register_agent` | Register this client; optionally DECLARE the `brains` it can run |
-| `deregister_agent` | Remove this client and cascade-remove every brain it registered |
+| `register_agent` | Register this client; optionally DECLARE the `agents` it can run |
+| `deregister_agent` | Remove this client and cascade-remove every agent it registered |
 | `heartbeat` | Update status and current task |
 | `get_roster` | Search ~285 agents across 19 divisions |
 | `create_task` | Create a task for another agent/platform |
 | `claim_task` | Claim a pending inbox task |
 | `complete_task` | Mark a task as done with results |
 | `list_inbox` | List inbox tasks with status/platform filters |
-| `get_dashboard` | Get full dashboard data (active agents, inbox stats, etc.) |
+| `get_dashboard` | Get full dashboard data (active workers, inbox stats, etc.) |
 | `create_goal` / `list_goals` / `get_goal` / `update_goal_progress` | Long-lived, phase-tracked Goals driven toward a yes/no success criterion |
 | `obsidian_info` / `obsidian_search` / `obsidian_read` / `obsidian_list` | Shared Obsidian knowledge base (when a vault is configured) |
 | `integrations` | Integrate a GitHub / open-source repository (list, add, install, …) |
@@ -658,7 +710,7 @@ division or agent, plus **Dry run** (inspect the resolved plan) and **Run** cont
   reusable and inspectable instead of an LLM re-planning from scratch every time.
 - **`orchestrated`** — **adaptive & orchestrator-driven.** The steps are a
   *library* of candidate moves; nothing is planned up front. After each step
-  finishes, the **orchestrator brain decides the next step automatically** from
+  finishes, the **orchestrator agent decides the next step automatically** from
   the `goal` + the results so far — or answers `DONE`. The path taken adapts to
   what comes back. Every decision (the step it chose + its rationale) is logged to
   `workflow-runs/<runId>.json` and rendered as a **decision log** in the dashboard.
@@ -695,7 +747,7 @@ and render its DAG with per-node live status. Templates are validated on load
 `dependsOn` forever); a template that fails validation is skipped rather than
 crashing the list, and the reason is surfaced in the dashboard (and at
 `GET /api/workflows-invalid`) so a malformed template is easy to fix. Steps can
-pin an `agent`, `division`, or `brain`, or leave them off and let the router pick.
+pin an `agent`, `division`, or `agent`, or leave them off and let the router pick.
 
 ### Orchestrated (adaptive) mode
 
@@ -721,8 +773,8 @@ decision on its next tick, then one more after each step completes:
 }
 ```
 
-The orchestrator brain (the router model — `orchestration.classifier`, else the
-first local runnable brain in the orchestrator/default chain) is prompted with the
+The orchestrator agent (the router model — `orchestration.classifier`, else the
+first local runnable agent in the orchestrator/default chain) is prompted with the
 goal, the completed steps and their results, and the remaining candidates; it
 replies with one step key or `DONE`. `orchestration.maxWorkflowSteps` (default 12)
 force-finishes a run whose orchestrator never says `DONE`.
@@ -742,9 +794,9 @@ reconstruction, and the orchestrated decision loop) is covered by a test suite �
 ### Shipped company workflows
 
 The `workflows/` directory ships a set of realistic, cross-functional company
-pipelines. Each step pins a **`division`** or **`agent`** (never a `brain`), so
-the brain **fallback chain for every role stays editable from the dashboard's
-Agents view** (`orchestration.agents[*].brains` for special agents;
+pipelines. Each step pins a **`division`** or **`agent`** (never a `agent`), so
+the agent **fallback chain for every role stays editable from the dashboard's
+Agents view** (`orchestration.roleChains[*].agents` for special roles;
 `divisionChains[*]` / `defaultChain` for agents) — change who runs a step
 without touching the template.
 
@@ -775,8 +827,8 @@ The Web UI uses these endpoints (also available for scripts/integrations):
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/status` | Dashboard overview data |
-| `GET` | `/api/agents` | All active agents (id → name) |
-| `GET` | `/api/connections` | Live MCP clients (heartbeat) + per-brain ran/submitted counters |
+| `GET` | `/api/agents` | All active workers (id → name) |
+| `GET` | `/api/connections` | Live MCP clients (heartbeat) + per-agent ran/submitted counters |
 | `GET` | `/api/inbox?status=pending` | Inbox tasks (filterable) |
 | `POST` | `/api/inbox` | Create a new task; optional `inputs: [{token,name}]` attaches uploaded files |
 | `PATCH` | `/api/inbox/:id` | Claim or complete a task |
@@ -790,11 +842,11 @@ The Web UI uses these endpoints (also available for scripts/integrations):
 | `GET` | `/api/workflow-runs` / `/api/workflow-runs/:runId` | Runs for the run view (DAG grouped from tasks; orchestrated from run records + decision log) |
 | `GET` | `/api/roster?division=engineering` | Agencies (filterable) |
 | `GET` | `/api/roster-divisions` | Agencies grouped by division (for the Agents view) |
-| `GET` | `/api/dispatcher` | Special agents + brains + defaultChain + divisionChains + running |
-| `GET`/`PUT` | `/api/chains`, `/chains/default`, `/chains/division/:div` | Read/edit brain fallback chains |
-| `GET`/`PUT`/`DELETE` | `/api/brains`, `/api/brains/:id` | Brain registry (cascades on delete) |
-| `GET`/`PUT`/`DELETE` | `/api/agents-config`, `/api/agents-config/:name` | Special-executor chains |
-| `GET`/`POST` | `/api/artifacts/:taskId`, `/:taskId/:file` | List/download; POST (raw body) uploads a file from a remote brain |
+| `GET` | `/api/dispatcher` | Special roles + agents + defaultChain + divisionChains + running |
+| `GET`/`PUT` | `/api/chains`, `/chains/default`, `/chains/division/:div` | Read/edit agent fallback chains |
+| `GET`/`PUT`/`DELETE` | `/api/agents`, `/api/agents/:id` | Agent registry (cascades on delete) |
+| `GET`/`PUT`/`DELETE` | `/api/roles-config`, `/api/roles-config/:name` | Special-executor chains |
+| `GET`/`POST` | `/api/artifacts/:taskId`, `/:taskId/:file` | List/download; POST (raw body) uploads a file from a remote agent |
 | `GET` | `/api/config` | Current configuration |
 | `GET` | `/api/events` | SSE event stream |
 
@@ -807,17 +859,17 @@ cowork/
 ├── config.json              # TEMPLATE only — real config at ~/.cowork/config.json
 ├── README.md                # This file
 ├── PROTOCOL.md              # Protocol specification
-├── JOIN-AS-A-BRAIN.md       # Onboarding for a remote brain client
+├── JOIN-AS-AN-AGENT.md       # Onboarding for a remote agent client
 ├── agency-agents/           # git SUBMODULE — the Agencies (~285 agents)
 ├── workflows/               # Workflow templates (*.json) — DAG + orchestrated
 ├── workflow-runs/           # Orchestrated run records + decision logs (gitignored)
 ├── server/                  # MCP Server + Web UI
 │   ├── src/                 # TypeScript source
 │   └── public/              # Web UI (HTML/CSS/JS)
-├── deploy/                  # systemd units, remote-brain client, presets, skills
+├── deploy/                  # systemd units, remote-agent client, presets, skills
 ├── inbox/                   # Task queue (JSON files, auto-managed)
 ├── artifacts/               # Per-task OUTPUT files (audio/video/md), downloadable
-├── inputs/                  # Per-task INPUT files a person attached for the brain (gitignored)
+├── inputs/                  # Per-task INPUT files a person attached for the agent (gitignored)
 ├── decisions/               # Decision log
 └── .status/                 # Runtime state (auto-managed)
 ```
@@ -843,7 +895,7 @@ MCP tools interactively.
 # Check server status
 curl http://localhost:6868/api/status | jq
 
-# List active agents
+# List active workers
 curl http://localhost:6868/api/agents | jq
 
 # List pending inbox tasks
@@ -965,5 +1017,5 @@ package: advanced workflows, priority support and lifetime updates. It is also p
 
 ## License
 
-[MIT](LICENSE) © 2026 slashman413. The core server, dashboard and remote-brain client are
+[MIT](LICENSE) © 2026 slashman413. The core server, dashboard and remote-agent client are
 free and open source; Cowork Pro (above) is the separate paid add-on.

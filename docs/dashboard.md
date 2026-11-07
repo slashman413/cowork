@@ -15,8 +15,8 @@ Nav sections, page order, labels and the Overview's widgets come from **`layout.
 | [Inbox](#inbox) | Tasks | `GET/POST /api/inbox`, `PATCH /api/inbox/:id` |
 | [Recipes](#recipes) | Recipes | `GET/POST/PUT/DELETE /api/recipes*`, `POST /api/recipes/:id/run`, `POST /api/inbox/:id/rating` |
 | [Calendar](#calendar) | Calendar | `GET /api/calendar`, `POST /api/inbox/:id/edit`, `POST /api/inbox/:id/run-now` |
-| [Agents](#agents) | Routing | `GET/PUT /api/agents-config`, `/api/chains*` |
-| [Brains](#brains) | Brains | `GET/PUT/DELETE /api/brains*` |
+| [Routing](#routing) | Routing | `GET/PUT /api/roles-config`, `/api/chains*` |
+| [Agents](#agents) | Agents | `GET/PUT/DELETE /api/agents*` |
 | [Agencies](#agencies) | Personas | `GET /api/roster`, `/api/roster-divisions` |
 | [Connections](#connections) | Workers | `GET /api/connections` |
 | [Configuration](#configuration) | Configuration | `GET /api/config` |
@@ -58,10 +58,10 @@ keeps serving the last good layout.
       [{ "type": "stats", "items": ["openTasks", "waitingInput", "failedTasks", "uptime"] }],
       { "minWidth": 320, "widgets": [
         { "type": "services", "title": "Models", "categories": ["APIs & MCP"], "compact": true },
-        { "type": "note", "title": "Runbook", "text": "**Brain down?** check `docker ps`." }
+        { "type": "note", "title": "Runbook", "text": "**Agent down?** check `docker ps`." }
       ] }
     ] },
-    "models": { "type": "portal", "label": "Models", "icon": "brain-circuit",
+    "models": { "type": "portal", "label": "Models", "icon": "agent-circuit",
                 "categories": ["APIs & MCP"], "intro": "Inference endpoints on this host." },
     "portal": { "type": "portal", "label": "All services" },
     "config": { "hidden": true }                // off the nav, #config still works
@@ -75,7 +75,7 @@ keeps serving the last good layout.
   `{ "minWidth": px, "widgets": [...] }` (auto-fit grid, wraps below `minWidth`).
 - `portal` — any id, any number. Shows `portal.json` cards, optionally narrowed by
   `categories` and/or `keys`; `intro` (markdown) replaces the default blurb.
-- App pages — `tasks`, `recipes`, `calendar`, `goals`, `routing`, `brains`,
+- App pages — `tasks`, `recipes`, `calendar`, `goals`, `routing`, `agents`,
   `personas`, `workers`, `config`. Fixed ids, each matching its nav label (other code
   deep-links to `#tasks/<id>`). The pre-2026-10-16 ids `inbox`, `team`, `roster` and
   `connections` are still accepted in a layout file and as URLs (old bookmarks
@@ -90,7 +90,7 @@ keeps serving the last good layout.
 |------|---------|-------|
 | `sysbar` | `tiles`: `cpu` `gpu` `memory` `thermal` (order kept); `hideUnavailable` | host load tiles + drill-down dialogs; hide the GPU/temp tile on hosts without one |
 | `stats` | `items`: `workers` `openTasks` `personas` `failedTasks` `waitingInput` `scheduled` `uptime` | counter cards |
-| `dispatcher` | — | dispatcher state, running tasks, role → brain chain |
+| `dispatcher` | — | dispatcher state, running tasks, role → agent chain |
 | `activity` | `limit` 1–30 | live SSE event feed |
 | `platforms` | — | per-platform up/down |
 | `services` | `categories`, `keys`, `compact` | portal.json cards (or a compact list) with live status dots |
@@ -122,7 +122,7 @@ The at-a-glance overview (`GET /api/status` → `DashboardData`):
     the top processes by resident memory.
   - **Temp** — every thermal zone plus GPU temperature.
 
-- **Active agents** — how many MCP clients are currently registered.
+- **Active workers** — how many MCP clients are currently registered.
 - **Inbox summary** — counts for `pending`, `scheduled`, `waitingInput`,
   `inProgress`, `completed`, and `failed` (tasks that exhausted their fallback
   chain).
@@ -187,7 +187,7 @@ The task queue and the heart of the operator view. Each card is a `Task`
   deliberately held out of scheduling until a person submits answers.
 - `scheduled` — a future `scheduledAt` launch time; released to `pending` when due.
 - `pending` — eligible for routing/claiming.
-- `claimed` / `in-progress` — a brain is (or is about to be) working it.
+- `claimed` / `in-progress` — an agent is (or is about to be) working it.
 - `done` — completed and verified.
 - `rejected` / `failed` — `failed: true` marks a task that exhausted its whole
   fallback chain; the UI groups these red and offers a confirm-gated re-run.
@@ -212,14 +212,14 @@ dispatcher, verifier and handover treat it like any other task.
 
 - **Capture:** a finished, non-failed task card has **★ Save as recipe**. The editor
   shows the brief: select a phrase and press *Make field* to turn every occurrence into
-  a `{{key}}` fill-in. The agent, brain (*suggested*, or *always* when locked), tier,
+  a `{{key}}` fill-in. The agent, agent (*suggested*, or *always* when locked), tier,
   acceptance criteria, timebox, tags and input files carry over. Input files are copied
   into the recipe.
 - **Library:** cards show the score ("9/10 good"), the last 10 runs as dots, run
   count, median duration and last run. You can search, sort by most used, best rated
   or newest, and favourite a recipe.
 - **Run sheet:** only the recipe's fields, prefilled with the values you used last.
-  Brain is *Auto* unless the recipe is locked. *More options* has extra instructions
+  Agent is *Auto* unless the recipe is locked. *More options* has extra instructions
   for this run, a start time and the recurrence editor, so a recipe can become a
   recurring task.
 - **Feedback:** tasks made from a recipe get a "from recipe" chip and 👍/👎. A 👎
@@ -253,42 +253,42 @@ Backed by `GET /api/calendar?from=ISO&to=ISO`. Full UX spec and data contract:
 
 ---
 
-## Agents
+## Routing
 
 Edit **who runs what** without touching code. Two kinds of worker:
 
 - **Special (non-Agencies) executors** — `orchestrator` (router/decomposer),
   `generalist` (fallback), `video` (media pipeline). Each has its own ordered
-  **brain fallback chain** (`orchestration.agents[*].brains`), edited here
-  (`GET/PUT/DELETE /api/agents-config`).
+  **agent fallback chain** (`orchestration.roleChains[*].agents`), edited here
+  (`GET/PUT/DELETE /api/roles-config`).
 - **Agencies agents** — resolved through **chains**: the global `defaultChain`, a
   per-division override (`divisionChains[*]`), or a per-agent override
   (`agentChains[*]`, highest precedence). Edited via `GET/PUT /api/chains`,
   `/chains/default`, `/chains/division/:div`.
 
-A chain is an **ordered list of brain ids**: `brains[0]` is tried first, and on
-failed verification the dispatcher hands the task to `brains[1]`, then `brains[2]`,
+A chain is an **ordered list of agent ids**: `agents[0]` is tried first, and on
+failed verification the dispatcher hands the task to `agents[1]`, then `agents[2]`,
 and so on. Chains are drag-sortable in the UI. This is why shipped agents pin a
-`division`/`agent` and never a `brain` — you retune execution here, live.
+`division`/`agent` and never a `agent` — you retune execution here, live.
 
 ---
 
-## Brains
+## Agents
 
-The **brain registry** (`GET/PUT/DELETE /api/brains`). A *brain* is a concrete
+The **agent registry** (`GET/PUT/DELETE /api/agents`). A *agent* is a concrete
 execution identity — a specific model on a specific platform at a specific
-location (`BrainConfig`):
+location (`AgentConfig`):
 
-- **local** brains (`location: "local"`) are spawned by the dispatcher itself
+- **local** agents (`location: "local"`) are spawned by the dispatcher itself
   (`exec`: `claude` / `hermes` / `agy` / `codex` / `ollama` / `script`, plus
   `model`/`command`).
-- **remote** brains (`location: "remote"`) are left in the inbox for that remote
+- **remote** agents (`location: "remote"`) are left in the inbox for that remote
   MCP client to claim itself (`host` is a routing hint).
 
-Brains can be configured by hand or **auto-registered** by a connecting MCP client
+Agents can be configured by hand or **auto-registered** by a connecting MCP client
 (`dynamic: true`) with an `env` manifest of machine-detected facts (paths, tools,
 credential *names*, net, traits) so the router can avoid landing a task on a host
-that lacks what it needs. Deleting a brain cascades — it's removed from every chain
+that lacks what it needs. Deleting an agent cascades — it's removed from every chain
 that referenced it.
 
 ---
@@ -307,14 +307,14 @@ it to learn which specialist a `division`/`agent` pin will reach.
 
 Live MCP clients and their usage (`GET /api/connections`). Shows:
 
-- each connected client (by heartbeat) and the brains it offers;
-- per-brain **ran / submitted** counters;
-- for brains whose `exec` has a queryable rate limit (claude, codex, …), the
-  **usage windows** — percent used and reset time — from `BrainUsage`
-  (local brains probed by the server; remote brains self-report via heartbeat).
-  Brains with no external quota (hermes/ollama/script) stay hidden here.
+- each connected client (by heartbeat) and the agents it offers;
+- per-agent **ran / submitted** counters;
+- for agents whose `exec` has a queryable rate limit (claude, codex, …), the
+  **usage windows** — percent used and reset time — from `AgentUsage`
+  (local agents probed by the server; remote agents self-report via heartbeat).
+  Agents with no external quota (hermes/ollama/script) stay hidden here.
 
-Use this to see who's actually online and how close a metered brain is to its cap.
+Use this to see who's actually online and how close a metered agent is to its cap.
 
 ---
 
@@ -322,12 +322,12 @@ Use this to see who's actually online and how close a metered brain is to its ca
 
 The current server configuration (`GET /api/config`), including `paths`,
 `platforms`, `services`, `inbox`, and the full `orchestration` block (chains,
-brains, classifier, verifier, `maxConcurrent`, `pollIntervalMs`, `taskTimeoutMs`,
+agents, classifier, verifier, `maxConcurrent`, `pollIntervalMs`, `taskTimeoutMs`,
 stale/hard claim bounds, etc.). This view is the read model for
-the settings the Agents and Brains pages edit.
+the settings the Routing and Agents pages edit.
 
 ---
 
 *See also: [../README.md](../README.md) for the project overview and quick start,
 [../PROTOCOL.md](../PROTOCOL.md) for the task protocol, and
-[../JOIN-AS-A-BRAIN.md](../JOIN-AS-A-BRAIN.md) for connecting a remote brain.*
+[../JOIN-AS-AN-AGENT.md](../JOIN-AS-AN-AGENT.md) for connecting a remote agent.*

@@ -2,8 +2,8 @@
  * PR shepherd (pstack opening-a-pr / babysit / shipping, report §5).
  * Everything here runs without a GitHub token: URL detection, the escalation
  * filter, the merge-policy decision and the pr-watch task spec. The steps that
- * need `gh` (status query, approve, merge) are executed by the pr-watch brain
- * and are gated by `mode`; in 'shadow' mode the brain only comments/reports.
+ * need `gh` (status query, approve, merge) are executed by the pr-watch agent
+ * and are gated by `mode`; in 'shadow' mode the agent only comments/reports.
  */
 import type { PrAutomationConfig, Task } from '../types.js';
 
@@ -82,7 +82,7 @@ export function decidePrAction(input: {
   if (input.verdict === 'FAIL') {
     return (input.fixRounds ?? 0) >= (cfg.maxFixRounds ?? 2)
       ? { action: 'escalate', why: 'verifier FAIL after max fix rounds' }
-      : { action: 'fix', why: 'verifier FAIL — send findings back to the author brain' };
+      : { action: 'fix', why: 'verifier FAIL — send findings back to the author agent' };
   }
   if (!input.verifiedPatchId || input.verifiedPatchId !== input.headPatchId) {
     return { action: 'wait', why: 'patch-id drift — re-verify the current head' };
@@ -126,7 +126,7 @@ export function prWatchTaskSpec(ref: PrRef, parent: Task, cfg?: PrAutomationConf
   };
 }
 
-/** Forgejo pr-watch: the brain only reviews; every forge write (comment,
+/** Forgejo pr-watch: the agent only reviews; every forge write (comment,
  *  approve, merge) goes through the policy-enforcing pr-shepherd CLI. */
 function forgejoWatchSpec(ref: PrRef, parent: Task, cfg: PrAutomationConfig | undefined, mode: string) {
   const cli = `npx tsx server/src/cli/pr-shepherd.ts --pr ${ref.url}`;

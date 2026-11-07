@@ -34,7 +34,7 @@ function makeStore(): { store: Store; root: string; inbox: string } {
   for (const p of Object.values(paths)) fs.mkdirSync(p, { recursive: true });
   const config = {
     paths, platforms: {},
-    orchestration: { brains: { 'local-x': { location: 'local', exec: 'hermes' } } },
+    orchestration: { agents: { 'local-x': { location: 'local', exec: 'hermes' } } },
   } as unknown as Config;
   return { store: new Store(config, new EventBus()), root, inbox: paths.inbox };
 }

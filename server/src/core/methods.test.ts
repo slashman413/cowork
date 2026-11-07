@@ -88,7 +88,7 @@ test('isMethodCardActive: honors enabled flag and defaults cards to shadow', () 
   assert.equal(isMethodCardActive({ enabled: false, cards: { 'bug-fix': 'on' } }, 'bug-fix'), false);
 });
 
-test('renderMethodPrompt: local brains get full vendored path; remote brains get only inline card', () => {
+test('renderMethodPrompt: local agents get full vendored path; remote agents get only inline card', () => {
   const cfg = { enabled: true, cards: { 'bug-fix': 'on' } } as const;
 
   const localLines = renderMethodPrompt({
@@ -119,9 +119,9 @@ test('renderMethodPrompt: local brains get full vendored path; remote brains get
 test('buildPrompt integrates method card when turned on and omits when shadow', () => {
   const store = {
     getTask: () => null,
-    getAgentPersona: () => null,
+    getPersona: () => null,
     inputsPath: () => '/tmp/inputs',
-    getActiveAgents: () => []
+    getActiveWorkers: () => []
   };
 
   const baseConfig: Config = {
@@ -142,9 +142,9 @@ test('buildPrompt integrates method card when turned on and omits when shadow', 
       taskTimeoutMs: 300000,
       defaultRole: 'generalist',
       agents: {},
-      brains: {
-        'local-test-brain': { location: 'local', description: 'test', exec: 'hermes' },
-        'remote-test-brain': { location: 'remote', description: 'test' }
+      agents: {
+        'local-test-agent': { location: 'local', description: 'test', exec: 'hermes' },
+        'remote-test-agent': { location: 'remote', description: 'test' }
       },
       methods: {
         enabled: true,
@@ -158,7 +158,7 @@ test('buildPrompt integrates method card when turned on and omits when shadow', 
 
   const dispatcher = new Dispatcher(baseConfig, store as any, {} as any);
 
-  // 1. Task with 'feature' playbook ('on') on local brain
+  // 1. Task with 'feature' playbook ('on') on local agent
   const taskOn: Task = {
     id: 'test-task-1',
     title: 'Implement widget',
@@ -168,18 +168,18 @@ test('buildPrompt integrates method card when turned on and omits when shadow', 
   } as any;
 
   const promptOn = (dispatcher as any).buildPrompt(taskOn, {
-    agent: 'engineer',
+    persona: 'engineer',
     isRoster: false,
-    brainId: 'local-test-brain'
+    agentId: 'local-test-agent'
   });
   assert.match(promptOn, /# Method\n# Method: feature/);
   assert.match(promptOn, /Optional reading \(full skill\): .*vendor\/pstack\/skills/);
 
-  // 2. Same task on remote brain ('on') -> no optional reading path
+  // 2. Same task on remote agent ('on') -> no optional reading path
   const promptRemote = (dispatcher as any).buildPrompt(taskOn, {
-    agent: 'engineer',
+    persona: 'engineer',
     isRoster: false,
-    brainId: 'remote-test-brain'
+    agentId: 'remote-test-agent'
   });
   assert.match(promptRemote, /# Method\n# Method: feature/);
   assert.doesNotMatch(promptRemote, /Optional reading \(full skill\)/);
@@ -194,9 +194,9 @@ test('buildPrompt integrates method card when turned on and omits when shadow', 
   } as any;
 
   const promptShadow = (dispatcher as any).buildPrompt(taskShadow, {
-    agent: 'engineer',
+    persona: 'engineer',
     isRoster: false,
-    brainId: 'local-test-brain'
+    agentId: 'local-test-agent'
   });
   assert.doesNotMatch(promptShadow, /# Method/);
 
@@ -210,9 +210,9 @@ test('buildPrompt integrates method card when turned on and omits when shadow', 
   } as any;
 
   const promptNone = (dispatcher as any).buildPrompt(taskNone, {
-    agent: 'engineer',
+    persona: 'engineer',
     isRoster: false,
-    brainId: 'local-test-brain'
+    agentId: 'local-test-agent'
   });
   assert.doesNotMatch(promptNone, /# Method/);
 });
@@ -236,22 +236,22 @@ test('G3/G4: repo config.json lists every playbook card under orchestration.meth
   }
 });
 
-// ── G10: context.skill honoured for local and remote brains ──────────────
+// ── G10: context.skill honoured for local and remote agents ──────────────
 import { renderSkillPrompt, REMOTE_SKILL_INLINE_BYTES } from './pstack-gates.js';
 import { pstackHarness as g10Harness } from './pstack-test-harness.js';
 
 const G10_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', '..', '..');
 
-test('G10 renderSkillPrompt: local brain gets the vendored SKILL.md path', () => {
+test('G10 renderSkillPrompt: local agent gets the vendored SKILL.md path', () => {
   const lines = renderSkillPrompt({ repoRoot: G10_ROOT, skill: 'interrogate', isLocal: true });
   assert.equal(lines[0], '# Skill');
   assert.ok(lines.join('\n').includes(path.join(G10_ROOT, 'vendor/pstack/skills/interrogate/SKILL.md')));
 });
 
-test('G10 renderSkillPrompt: remote brain gets ≤1.2 KB inline, no local path', () => {
+test('G10 renderSkillPrompt: remote agent gets ≤1.2 KB inline, no local path', () => {
   const lines = renderSkillPrompt({ repoRoot: G10_ROOT, skill: 'interrogate', isLocal: false });
   const body = lines.join('\n');
-  assert.ok(!body.includes(G10_ROOT), 'no local filesystem path for a remote brain');
+  assert.ok(!body.includes(G10_ROOT), 'no local filesystem path for a remote agent');
   assert.ok(Buffer.byteLength(lines[2]) <= REMOTE_SKILL_INLINE_BYTES + 20);
 });
 
@@ -264,10 +264,10 @@ test('G10 renderSkillPrompt: unknown / unsafe names render nothing', () => {
 test('G10 buildPrompt: context.skill reaches local and remote prompts', () => {
   const h = g10Harness();
   h.config.paths.artifacts = path.join(G10_ROOT, 'artifacts');   // repoRoot = artifacts/..
-  (h.config.orchestration.brains as any)['remote-x-cc-opus'] = { location: 'remote', exec: 'claude', model: 'claude-opus-5-5' };
-  const t = h.mk({ agent: 'engineer', skill: 'blast-radius' });
-  const local = (h.dispatcher as any).buildPrompt(t, { agent: 'engineer', isRoster: false, exec: 'claude', brainId: 'local-cc-opus-5-5' });
+  (h.config.orchestration.agents as any)['remote-x-cc-opus'] = { location: 'remote', exec: 'claude', model: 'claude-opus-5-5' };
+  const t = h.mk({ persona: 'engineer', skill: 'blast-radius' });
+  const local = (h.dispatcher as any).buildPrompt(t, { persona: 'engineer', isRoster: false, exec: 'claude', agentId: 'local-cc-opus-5-5' });
   assert.match(local, /# Skill[\s\S]*vendor\/pstack\/skills\/blast-radius\/SKILL\.md/);
-  const remote = (h.dispatcher as any).buildPrompt(t, { agent: 'engineer', isRoster: false, exec: 'claude', brainId: 'remote-x-cc-opus' });
+  const remote = (h.dispatcher as any).buildPrompt(t, { persona: 'engineer', isRoster: false, exec: 'claude', agentId: 'remote-x-cc-opus' });
   assert.match(remote, /# Skill\nApply pstack skill `blast-radius`/);
 });
