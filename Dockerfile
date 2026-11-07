@@ -28,6 +28,7 @@ COPY server/package.json server/legacy-aliases.json ./server/
 COPY server/public ./server/public
 COPY agency-agents ./agency-agents
 COPY workflows ./workflows
+COPY scripts/migrate-agent-naming.mjs ./scripts/
 COPY config.json PROTOCOL.md CONVENTIONS.md JOIN-AS-AN-AGENT.md LICENSE ./
 # Container template: runtime dirs under /data, no Obsidian vault, no local dispatcher.
 # It is seeded to $COWORK_CONFIG on first start, after which /data/config.json is yours;

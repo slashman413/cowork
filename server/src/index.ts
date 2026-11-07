@@ -7,7 +7,7 @@ import http from 'http';
 import https from 'https';
 import { createMultiplexedServer } from './core/server-listener.js';
 import { createCompression } from './core/compression.js';
-import { activeConfigPath, loadConfig, persistRegistries, removeAgentCascade, restoreClientAgents } from './config.js';
+import { activeConfigPath, loadConfig, migrateLegacyNamingOnBoot, persistRegistries, removeAgentCascade, restoreClientAgents } from './config.js';
 import { EventBus } from './core/events.js';
 import { Store } from './core/store.js';
 import { Dispatcher } from './core/dispatcher.js';
@@ -40,6 +40,7 @@ import { AUTH_COOKIE, KeylessLog, keyMatches, readCookie, resolveApiKey } from '
 import { ClientGuard } from './core/client-guard.js';
 
 async function main() {
+  migrateLegacyNamingOnBoot();
   const config = loadConfig();
   const eventBus = new EventBus();
   const store = new Store(config, eventBus);

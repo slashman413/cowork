@@ -103,9 +103,16 @@ function migrateConfig(file) {
   const c = readJson(file);
   const o = c.orchestration || {};
   if (o.brains || o.agentChains || (o.agents && Object.values(o.agents).some(a => a && Array.isArray(a.brains)))) {
-    if (o.agents) { o.roleChains = o.agents; delete o.agents; }
-    if (o.agentChains) { o.personaChains = o.agentChains; delete o.agentChains; }
+    // A new server run on the old config before this migration can have written empty
+    // roleChains/personaChains, and registered clients' agents among the role chains.
     const registry = {};
+    const roleChains = { ...(o.roleChains || {}) };
+    for (const [k, v] of Object.entries(o.agents || {})) {
+      if (v && Array.isArray(v.brains ?? v.agents)) roleChains[k] = v; else registry[k] = v;
+    }
+    delete o.agents;
+    o.roleChains = roleChains;
+    if (o.agentChains) { o.personaChains = { ...o.agentChains, ...(o.personaChains || {}) }; delete o.agentChains; }
     for (const [id, a] of Object.entries(o.brains || {})) {
       const canon = stripId(id);
       if (registry[canon]) { bump('config:merged-agents'); continue; }      // x-high, x-medium, x-low → first wins

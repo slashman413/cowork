@@ -1,4 +1,5 @@
 import fs from 'fs';
+import { execFileSync } from 'child_process';
 import { splitThinkingSuffix } from './core/thinking.js';
 import path from 'path';
 import os from 'os';
@@ -158,6 +159,39 @@ export function applyPsDefaults(orch: Config['orchestration']): string[] {
   if (!orch.prAutomation) { orch.prAutomation = structuredClone(PS_DEFAULTS.prAutomation); filled.push('prAutomation'); }
   else orch.prAutomation = { ...structuredClone(PS_DEFAULTS.prAutomation), ...orch.prAutomation };
   return filled;
+}
+
+/** A config still in the pre-2026-11 `brain` shape, where `orchestration.agents` meant role chains. */
+function hasLegacyNaming(raw: any): boolean {
+  const o = raw?.orchestration;
+  if (!o) return false;
+  return !!(o.brains || o.agentChains || Object.values(o.agents || {}).some((a: any) => Array.isArray(a?.brains)));
+}
+
+/**
+ * Bring a hub on the old naming to the agent naming, once, before anything reads its
+ * state. A new server on an old config reads the role chains as the agent registry and
+ * ignores the real one, so no task can ever run. Call this before loadConfig, which
+ * would write that misread back to disk, and only from the server process: the
+ * migration needs the server stopped. A failure aborts the start rather than boot a hub
+ * that cannot run anything.
+ */
+export function migrateLegacyNamingOnBoot(configPath: string = activeConfigPath()): boolean {
+  let raw: any;
+  try { raw = JSON.parse(fs.readFileSync(configPath, 'utf-8')); } catch { return false; }
+  if (!hasLegacyNaming(raw)) return false;
+
+  const stateRoot = path.dirname(resolvePath(raw.paths?.inbox || defaultConfig.paths.inbox));
+  const stateDirs = ['inbox', 'goals', 'recipes', '.status', 'decisions'].filter(d => fs.existsSync(path.join(stateRoot, d)));
+  const backupDir = path.join(path.dirname(configPath), 'backups');
+  const backup = path.join(backupDir, `agent-naming-boot-${new Date().toISOString().replace(/[-:.]/g, '')}.tar.gz`);
+  fs.mkdirSync(backupDir, { recursive: true });
+  execFileSync('tar', ['-czf', backup, '-C', path.dirname(configPath), path.basename(configPath), '-C', stateRoot, ...stateDirs], { stdio: 'pipe' });
+
+  const script = path.resolve(rootDir, 'scripts/migrate-agent-naming.mjs');
+  const out = execFileSync(process.execPath, [script, '--repo', stateRoot, '--config', configPath], { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
+  console.log(`Migrated ${configPath} and its state to the agent naming (backup: ${backup}): ${out.replace(/\s+/g, ' ')}`);
+  return true;
 }
 
 export function loadConfig(): Config {

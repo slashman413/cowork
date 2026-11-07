@@ -355,9 +355,11 @@ curl -X PATCH "$COWORK/api/agents/local-cc-opus-5-5/thinking" -H 'Content-Type: 
 
 ### Upgrading from the old naming
 
-A hub upgraded from the `brain` naming needs its state migrated once, with the server stopped:
-`node scripts/migrate-agent-naming.mjs` (`deploy/cutover-agent-naming.sh` does this on a host running the
-systemd units, then moves clients to `cowork-local-agent@`).
+A hub upgraded from the `brain` naming migrates itself: on start, the server detects the old config shape, backs up
+the config and state to `backups/agent-naming-boot-*.tar.gz` next to the config, and runs
+`scripts/migrate-agent-naming.mjs` before loading anything. So `git pull && deploy/redeploy.sh` is enough. Local
+clients still on `cowork-local-brain@` keep working under that unit; `deploy/cutover-agent-naming.sh` moves them to
+`cowork-local-agent@`.
 
 Clients on the old contract keep working: the hub translates their old field names at the door
 (`server/legacy-aliases.json`, read only by `server/src/legacy-wire.ts`) and answers with `agent_aliases` so they
