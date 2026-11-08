@@ -25,6 +25,7 @@ import { SystemMetrics } from './core/system-metrics.js';
 import { UsagePoller, isMeteredExec } from './core/usage-probe.js';
 import { probeServices, unitState } from './core/service-probe.js';
 import { PortalStore } from './core/portal-config.js';
+import { setChain, ChainEditError, EDITABLE_TIERS, type ChainKind } from './core/chain-edit.js';
 import { LayoutStore } from './core/layout-config.js';
 import { systemDetails, DETAIL_KINDS, type DetailKind } from './core/system-details.js';
 import { controlService } from './core/service-control.js';
@@ -373,42 +374,22 @@ async function main() {
     res.json({ from: new Date(from).toISOString(), to: new Date(to).toISOString(), count: rows.length, rulings: rows });
   });
 
-  const validChain = (agents: any): string[] => {
-    if (!Array.isArray(agents)) throw new Error('agents (string[]) required');
-    const reg = config.orchestration.agents || {};
-    const bad = agents.filter((b: string) => !reg[b]);
-    if (bad.length) throw new Error(`unknown agent(s): ${bad.join(', ')}`);
-    return agents;
+  // Every chain write goes through core/chain-edit.ts: unknown ids are rejected and
+  // a disabled agent cannot be newly added, so all pages share one rule set.
+  const putChain = (kind: ChainKind, key: string, req: any, res: any, description?: string) => {
+    try {
+      const agents = setChain(config.orchestration, kind, key, req.body?.agents, description);
+      persistRegistries(config);
+      res.json({ ok: true, kind, key, agents });
+    } catch (e: any) { res.status(e instanceof ChainEditError ? 400 : 500).json({ error: e.message }); }
   };
-  app.put('/api/chains/default', (req, res) => {
-    try {
-      config.orchestration.defaultChain = validChain(req.body?.agents);
-      persistRegistries(config);
-      res.json({ ok: true, defaultChain: config.orchestration.defaultChain });
-    } catch (e: any) { res.status(400).json({ error: e.message }); }
-  });
-  app.put('/api/chains/division/:division', (req, res) => {
-    try {
-      config.orchestration.divisionChains = config.orchestration.divisionChains || {};
-      const agents = validChain(req.body?.agents);
-      if (agents.length) config.orchestration.divisionChains[req.params.division] = agents;
-      else delete config.orchestration.divisionChains[req.params.division];   // empty = use default
-      persistRegistries(config);
-      res.json({ ok: true, division: req.params.division, agents });
-    } catch (e: any) { res.status(400).json({ error: e.message }); }
-  });
-  // Per-roster-agent override. Empty agents[] clears it (agent falls back to its
-  // division's chain, then the global default).
-  app.put('/api/chains/persona/:persona', (req, res) => {
-    try {
-      config.orchestration.personaChains = config.orchestration.personaChains || {};
-      const agents = validChain(req.body?.agents);
-      if (agents.length) config.orchestration.personaChains[req.params.persona] = agents;
-      else delete config.orchestration.personaChains[req.params.persona];
-      persistRegistries(config);
-      res.json({ ok: true, persona: req.params.persona, agents });
-    } catch (e: any) { res.status(400).json({ error: e.message }); }
-  });
+  app.put('/api/chains/default', (req, res) => putChain('default', '', req, res));
+  // Empty agents[] clears a division / persona override (falls back to division, then default).
+  app.put('/api/chains/division/:division', (req, res) => putChain('division', req.params.division, req, res));
+  app.put('/api/chains/persona/:persona', (req, res) => putChain('persona', req.params.persona, req, res));
+  // Work-role tiers (mechanical / standard / judgment); `review` is derived at runtime.
+  app.put('/api/chains/tier/:tier', (req, res) => putChain('tier', req.params.tier, req, res));
+  app.get('/api/chains/tiers', (_req, res) => res.json({ editable: EDITABLE_TIERS }));
 
   // ── Roster grouped by division (for the Agents view) ───────────────────────
   app.get('/api/roster-divisions', (_req, res) => {
@@ -946,20 +927,8 @@ async function main() {
   // ── Agents registry (worker profiles with an ordered agent chain) ──────────
   app.get('/api/roles-config', (_req, res) => res.json(config.orchestration.roleChains || {}));
 
-  app.put('/api/roles-config/:name', (req, res) => {
-    try {
-      const name = req.params.name;
-      const { description, agents } = req.body || {};
-      if (!Array.isArray(agents)) throw new Error('agents (string[]) is required');
-      const registry = config.orchestration.agents || {};
-      const bad = agents.filter((b: string) => !registry[b]);
-      if (bad.length) throw new Error(`unknown agent(s): ${bad.join(', ')}`);
-      config.orchestration.roleChains = config.orchestration.roleChains || {};
-      config.orchestration.roleChains[name] = { description: String(description || name), agents };
-      persistRegistries(config);
-      res.json({ ok: true, name, agent: config.orchestration.roleChains[name] });
-    } catch (e: any) { res.status(400).json({ error: e.message }); }
-  });
+  app.put('/api/roles-config/:name', (req, res) =>
+    putChain('role', req.params.name, req, res, req.body?.description));
 
   app.delete('/api/roles-config/:name', (req, res) => {
     delete (config.orchestration.roleChains || {})[req.params.name];

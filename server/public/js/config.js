@@ -124,7 +124,10 @@
     /** Agent ids + every value seen per key name (suggestions for free-text fields). */
     _cfgIndexValues() {
       const s = this._cfg;
-      s.agents = Object.keys(s.work.orchestration?.agents || {});
+      const reg = s.work.orchestration?.agents || {};
+      s.agents = Object.keys(reg);
+      // Chain pickers offer only enabled agents (same rule as Routing / Agents pages).
+      s.enabledAgents = s.agents.filter((id) => !reg[id]?.disabled);
       s.seen = new Map();
       const walk = (o, key) => {
         if (Array.isArray(o)) return o.forEach((x) => walk(x, key));
@@ -266,7 +269,7 @@
           ${isChain ? `<span class="cfg-chip-n">${i + 1}</span>` : ''}${esc(typeof x === 'string' ? x : JSON.stringify(x))}
           <button type="button" data-chipdel="${esc(pk)}" data-idx="${i}" aria-label="Remove ${esc(String(x))}">×</button></span>`).join('');
       const adder = isChain
-        ? `<select class="cfg-input cfg-chip-add" data-chipadd="${esc(pk)}"><option value="">＋ add agent…</option>${s.agents.filter((b) => !arr.includes(b)).map((b) => `<option>${esc(b)}</option>`).join('')}</select>`
+        ? `<select class="cfg-input cfg-chip-add" data-chipadd="${esc(pk)}"><option value="">＋ add agent…</option>${(s.enabledAgents || s.agents).filter((b) => !arr.includes(b)).map((b) => `<option>${esc(b)}</option>`).join('')}</select>`
         : `<input class="cfg-input cfg-chip-add" data-chipadd="${esc(pk)}" data-num="${arr.length && arr.every((x) => typeof x === 'number') ? 1 : ''}" placeholder="＋ add, press Enter">`;
       return `<div class="cfg-chips${isChain ? ' is-chain' : ''}" data-chips="${esc(pk)}">${chips || '<span class="cfg-empty-inline">empty</span>'}${adder}</div>${isChain && arr.length > 1 ? '<span class="cfg-hint">Tried in order — drag to reorder.</span>' : ''}`;
     },

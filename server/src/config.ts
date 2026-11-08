@@ -324,6 +324,7 @@ export function persistRegistries(config: Config): void {
   disk.orchestration.defaultChain = config.orchestration.defaultChain;
   disk.orchestration.divisionChains = config.orchestration.divisionChains;
   disk.orchestration.personaChains = config.orchestration.personaChains;
+  if (config.orchestration.tiers) disk.orchestration.tiers = config.orchestration.tiers;
   fs.writeFileSync(configPath, JSON.stringify(disk, null, 2));
 }
 
@@ -358,6 +359,11 @@ export function removeAgentCascade(config: Config, id: string): number {
       else delete orch.personaChains![agent];   // emptied → fall back to division/default
       scrubbed++;
     }
+  }
+  // And the work-role tiers, so a deregistered agent is not left in mechanical/standard/judgment.
+  for (const [tier, chain] of Object.entries(orch.tiers || {})) {
+    const next = chain.filter(b => b !== id);
+    if (next.length !== chain.length) { orch.tiers![tier] = next; scrubbed++; }
   }
   persistRegistries(config);
   return scrubbed;

@@ -616,18 +616,76 @@ function selectableAgentIds(agents) {
 }
 
 /**
- * One rung of an agent fallback chain: draggable, in the translucent chip style.
- * Used by both the Agents default chain and every Agents chain so reordering
- * looks and behaves the same everywhere.
+ * Shared agent-chain editor — the ONE renderer for every fallback chain (Agents
+ * default chain, Routing roles/tiers/divisions/personas), so all of them read the
+ * same live agent registry the Agents page edits:
+ *  - the "+ add" picker offers only ENABLED agents not already in the chain
+ *    (selectableAgentIds), so it tracks Enable/Disable on the Agents page;
+ *  - a chip whose agent is disabled is shown muted + struck through ("skipped"),
+ *    a deregistered one in red, matching what the dispatcher actually does
+ *    (it strips disabled rungs, server/src/core/dispatcher.ts chainFor).
  */
-function chainChip(agent, i, total, known) {
-  const c = known ? AGENT_COLOR : AGENT_BAD_COLOR;
-  return `<span class="dchip" draggable="true" data-agent="${esc(agent)}"
-    title="${known ? `rung ${i + 1} of ${total} — drag to reorder` : 'unknown agent (deregistered)'}"
-    style="display:inline-flex;align-items:center;gap:6px;cursor:grab;background:${c}18;border:1px solid ${c}40;color:${c};padding:4px 9px;border-radius:8px;font-size:0.8rem;margin:3px">
-    <i data-lucide="grip-vertical" style="width:12px;height:12px;opacity:.5"></i>
-    <b style="opacity:.6">${i + 1}</b> ${esc(agent)}${known ? '' : ' ⚠'}
-    <a data-rm="${esc(agent)}" title="remove" style="cursor:pointer">✕</a></span>`;
+function chainAgentState(agents, id) {
+  const a = agents?.[id];
+  return !a ? 'unknown' : a.disabled ? 'disabled' : 'ok';
+}
+
+/** Enabled ids in `chain` — the rungs the dispatcher will really try. */
+function effectiveChain(chain, agents) {
+  return (chain || []).filter(id => chainAgentState(agents, id) === 'ok');
+}
+
+/** One rung: draggable, ✕ to remove. `editable:false` renders a read-only chip. */
+function chainChip(agent, i, total, agents, editable = true) {
+  const st = chainAgentState(agents, agent);
+  const c = st === 'unknown' ? AGENT_BAD_COLOR : st === 'disabled' ? '#94A3B8' : AGENT_COLOR;
+  const title = st === 'unknown' ? 'unknown agent (deregistered) — remove it'
+    : st === 'disabled' ? 'disabled on the Agents page — skipped at dispatch'
+    : editable ? `rung ${i + 1} of ${total} — drag to reorder` : `rung ${i + 1} of ${total}`;
+  return `<span class="dchip"${editable ? ' draggable="true"' : ''} data-agent="${esc(agent)}" title="${esc(title)}"
+    style="display:inline-flex;align-items:center;gap:6px;cursor:${editable ? 'grab' : 'default'};background:${c}18;border:1px ${editable ? 'solid' : 'dashed'} ${c}40;color:${c};padding:4px 9px;border-radius:8px;font-size:0.8rem;margin:3px">
+    ${editable ? '<i data-lucide="grip-vertical" style="width:12px;height:12px;opacity:.5"></i>' : ''}
+    <b style="opacity:.6">${i + 1}</b> <span${st === 'disabled' ? ' style="text-decoration:line-through"' : ''}>${esc(agent)}</span>${st === 'unknown' ? ' ⚠' : st === 'disabled' ? ' <span style="font-size:0.68rem">(disabled)</span>' : ''}
+    ${editable ? `<a data-rm="${esc(agent)}" title="remove" aria-label="remove ${esc(agent)}" style="cursor:pointer">✕</a>` : ''}</span>`;
+}
+
+const CHAIN_SELECT_STYLE = 'padding:4px 6px;background:var(--bg-tertiary);border:1px solid var(--bg-tertiary);border-radius:8px;color:inherit;font-size:0.78rem';
+
+/** "+ add" picker: enabled agents not yet in `chain`, plus a count of hidden disabled ones. */
+function chainAddSelect(chain, agents, attrs, label = '+ add agent…') {
+  const ids = selectableAgentIds(agents).filter(id => !(chain || []).includes(id));
+  const off = Object.keys(agents || {}).filter(id => agents[id]?.disabled && !(chain || []).includes(id)).length;
+  if (!ids.length) {
+    return `<span style="font-size:0.75rem;color:var(--text-muted)">${(chain || []).length ? 'every enabled agent is in this chain' : 'no enabled agents — enable one on the Agents page'}</span>`;
+  }
+  return `<select ${attrs} style="${CHAIN_SELECT_STYLE}"><option value="">${esc(label)}</option>${ids.map(b => `<option value="${esc(b)}">${esc(b)}</option>`).join('')}${off ? `<option value="" disabled>— ${off} disabled agent${off > 1 ? 's' : ''} hidden —</option>` : ''}</select>`;
+}
+
+/** Warning line when nothing in a chain can actually run. */
+function chainWarning(chain, agents) {
+  if (!(chain || []).length) return '';
+  if (effectiveChain(chain, agents).length) return '';
+  return `<div style="font-size:0.75rem;color:${AGENT_BAD_COLOR};margin:2px 0">⚠ every agent in this chain is disabled or unknown — tasks routed here will fail</div>`;
+}
+
+/** Editable chain: chips (drag/✕) + add picker. Wire with App#wireChainEditor. */
+function chainEditor(chain, agents, ctx, { emptyText = 'none — add an agent →', addLabel } = {}) {
+  const list = chain || [];
+  return `<div class="chain-editor" data-ctx="${esc(ctx)}">
+    <div class="chain-row" style="margin:4px 0;min-height:30px;display:flex;flex-wrap:wrap;align-items:center">${
+      list.map((b, i) => chainChip(b, i, list.length, agents)).join('')
+      || `<span style="color:var(--text-muted);font-size:0.8rem">${esc(emptyText)}</span>`}</div>
+    ${chainWarning(list, agents)}
+    ${chainAddSelect(list, agents, `data-chain-add="${esc(ctx)}"`, addLabel)}
+  </div>`;
+}
+
+/** Read-only chain (inherited from a parent), shown dashed. */
+function chainPreview(chain, agents) {
+  const list = chain || [];
+  return list.length
+    ? `<div style="display:flex;flex-wrap:wrap;align-items:center;margin:4px 0">${list.map((b, i) => chainChip(b, i, list.length, agents, false)).join('')}</div>${chainWarning(list, agents)}`
+    : '<div style="font-size:0.8rem;color:var(--text-muted);margin:4px 0">(empty)</div>';
 }
 
 /**
@@ -2293,8 +2351,9 @@ class App {
   wireChainDnd(container, save) {
     if (!container) return;
     const ids = () => [...container.querySelectorAll('.dchip')].map(c => c.dataset.agent);
+    const before = ids().join('\n');
     let dragged = null;
-    container.querySelectorAll('.dchip').forEach(c => {
+    container.querySelectorAll('.dchip[draggable="true"]').forEach(c => {
       c.addEventListener('dragstart', () => { dragged = c; c.style.opacity = '.4'; });
       c.addEventListener('dragend', () => { c.style.opacity = ''; dragged = null; });
       c.addEventListener('dragover', (e) => {
@@ -2305,10 +2364,33 @@ class App {
       });
     });
     container.addEventListener('dragover', (e) => e.preventDefault());
-    container.addEventListener('drop', (e) => { e.preventDefault(); save(ids()); });
+    // Only this container's own chips reorder it; a drop from another chain, or a
+    // drop that left the order unchanged, is not a save.
+    container.addEventListener('drop', (e) => {
+      e.preventDefault();
+      if (ids().join('\n') !== before) save(ids());
+    });
     container.querySelectorAll('[data-rm]').forEach(a => a.addEventListener('click', (e) => {
       e.stopPropagation();
       save(ids().filter(b => b !== a.dataset.rm));
+    }));
+  }
+
+  /**
+   * Wire every `chainEditor()` under `root`: drag/✕ on its chips and its "+ add"
+   * picker. `getChain(ctx)` returns the current list; `save(ctx, list)` persists.
+   * Also wires bare `[data-chain-add]` pickers (e.g. "+ override with…" starters).
+   */
+  wireChainEditors(root, getChain, save) {
+    root.querySelectorAll('.chain-editor').forEach(ed =>
+      this.wireChainDnd(ed.querySelector('.chain-row'), (arr) => save(ed.dataset.ctx, arr)));
+    root.querySelectorAll('[data-chain-add]').forEach(sel => sel.addEventListener('change', () => {
+      const id = sel.value; if (!id) return;
+      const ctx = sel.dataset.chainAdd;
+      const arr = getChain(ctx);
+      if (!arr.includes(id)) arr.push(id);
+      sel.disabled = true;
+      save(ctx, arr);
     }));
   }
 
@@ -3224,82 +3306,128 @@ class App {
     const [special, agents, chains, divisions] = await Promise.all([
       this.api.get('/roles-config'), this.api.get('/agents'), this.api.get('/chains'), this.api.get('/roster-divisions')
     ]);
-    const opts = Object.keys(agents).map(b => `<option value="${esc(b)}">${esc(b)}</option>`).join('');
-    // Same drag-to-reorder chain UI as the Agents view's default chain.
-    const chainRow = (arr, ctx) => {
-      const list = arr || [];
-      return `<div class="chain-row" data-ctx="${ctx}" style="margin:4px 0;min-height:30px">${
-        list.map((b, i) => chainChip(b, i, list.length, !!agents[b])).join('')
-        || '<span style="color:var(--text-muted);font-size:0.8rem">none — add an agent →</span>'}</div>
-      <select data-add="${ctx}" style="padding:4px;background:var(--bg-tertiary);border:1px solid var(--bg-tertiary);border-radius:8px;color:inherit;font-size:0.78rem"><option value="">+ add agent…</option>${opts}</select>`;
+    const tiers = chains.tiers || {};
+    const TIERS = [
+      ['mechanical', 'Mechanical', 'Lookups, formatting, simple edits.'],
+      ['standard', 'Standard', 'Most features, fixes and research.'],
+      ['judgment', 'Judgment', 'Architecture, prose, hard calls; also prepended when a gated step escalates.'],
+    ];
+    const defaultChain = chains.defaultChain || [];
+    const enabledCount = selectableAgentIds(agents).length;
+    const totalCount = Object.keys(agents).length;
+    const h3 = (title, hint) => `<h3 style="font-size:0.9rem;margin:var(--space-lg) 0 6px">${title}${hint ? ` <span style="font-size:0.72rem;color:var(--text-muted);font-weight:400">${hint}</span>` : ''}</h3>`;
+    const card = (body, attrs = '') => `<div class="card" style="margin-bottom:var(--space-md)" ${attrs}>${body}</div>`;
+    const head = (title, right) => `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><strong>${title}</strong>${right || ''}</div>`;
+    const muted = (t) => `<span style="font-size:0.75rem;color:var(--text-muted)">${t}</span>`;
+    const link = (attr, label) => `<a ${attr} style="cursor:pointer;font-size:0.72rem;color:var(--text-muted)">${label}</a>`;
+
+    // Ctx strings: "<kind>:<key>". Parsed once here; every save/lookup uses this.
+    const parse = (ctx) => { const i = ctx.indexOf(':'); return i < 0 ? [ctx, ''] : [ctx.slice(0, i), ctx.slice(i + 1)]; };
+    const chainOf = (ctx) => {
+      const [kind, key] = parse(ctx);
+      return ([...(kind === 'role' ? special[key]?.agents
+        : kind === 'tier' ? tiers[key]
+        : kind === 'default' ? defaultChain
+        : kind === 'div' ? chains.divisionChains?.[key]
+        : kind === 'persona' ? chains.personaChains?.[key] : null) || []]);
     };
 
-    const specialCards = Object.entries(special).map(([n, a]) => `
-      <div class="card" style="margin-bottom:var(--space-md)">
-        <div style="display:flex;justify-content:space-between;align-items:center"><strong>${esc(n)}</strong>${badge('special', '#0EA5E9')}</div>
-        <p style="font-size:0.8rem;color:var(--text-muted);margin:4px 0">${esc(a.description || '')}</p>
-        ${chainRow(a.agents, 'role:' + n)}
-      </div>`).join('');
+    const roleCards = Object.entries(special).map(([n, a]) => card(
+      head(esc(n), badge('role', '#0EA5E9'))
+      + `<p style="font-size:0.8rem;color:var(--text-muted);margin:4px 0">${esc(a.description || '')}</p>`
+      + chainEditor(a.agents, agents, 'role:' + n))).join('');
 
-    // One persona's row: an explicit per-persona chain override wins over the
-    // division chain and the global default. With no override the agent inherits
-    // (shown muted) and offers a one-click "+ override with…" starter.
-    const personaRow = (a) => {
-      const own = chains.personaChains?.[a.slug];
-      const inherits = (chains.divisionChains?.[a.division] && 'division chain') || 'default chain';
-      return `<div style="padding:6px 0;border-top:1px solid var(--bg-tertiary)">
+    const tierCards = TIERS.map(([t, label, hint]) => card(
+      head(esc(label), badge('tier', '#8B5CF6'))
+      + `<p style="font-size:0.8rem;color:var(--text-muted);margin:4px 0">${esc(hint)} Tried first, then the persona's normal chain.</p>`
+      + chainEditor(tiers[t], agents, 'tier:' + t))).join('');
+
+    const personaRow = (p, division) => {
+      const own = chains.personaChains?.[p.slug];
+      const parent = chains.divisionChains?.[division] ? 'division chain' : 'default chain';
+      return `<div class="persona-row" data-name="${esc(((p.name || '') + ' ' + p.slug).toLowerCase())}" style="padding:6px 0;border-top:1px solid var(--bg-tertiary)">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
-          <span style="font-size:0.82rem">${a.emoji ? esc(a.emoji) + ' ' : ''}${esc(a.name || a.slug)}</span>
-          <span style="font-size:0.7rem;color:var(--text-muted)">${own ? 'own chain' : 'inherits ' + inherits}</span>
+          <span style="font-size:0.82rem">${p.emoji ? esc(p.emoji) + ' ' : ''}${esc(p.name || p.slug)}</span>
+          ${own ? `<span>${badge('own chain', AGENT_COLOR)} ${link(`data-reset="persona:${esc(p.slug)}"`, '↺ reset to ' + parent)}</span>`
+            : `<span style="display:flex;gap:8px;align-items:center">${muted('inherits ' + parent)}${chainAddSelect([], agents, `data-chain-add="persona:${esc(p.slug)}"`, '+ override with…')}</span>`}
         </div>
-        ${own ? chainRow(own, 'roster:' + a.slug) + `<a data-reset-persona="${esc(a.slug)}" style="cursor:pointer;font-size:0.72rem;color:var(--text-muted)">↺ reset to inherited</a>`
-          : `<select data-add="roster:${esc(a.slug)}" style="margin-top:4px;padding:4px;background:var(--bg-tertiary);border:1px solid var(--bg-tertiary);border-radius:8px;color:inherit;font-size:0.78rem"><option value="">+ override with…</option>${opts}</select>`}
+        ${own ? chainEditor(own, agents, 'persona:' + p.slug) : ''}
       </div>`;
     };
 
-    const divCards = Object.entries(divisions).sort().map(([d, info]) => {
+    const divCards = Object.entries(divisions).sort(([a], [b]) => a.localeCompare(b)).map(([d, info]) => {
       const override = chains.divisionChains?.[d];
-      const personaList = (info.personas || []).map(a => personaRow({ ...a, division: d })).join('');
-      return `<div class="card" style="margin-bottom:var(--space-md)">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
-          <strong>${esc(info.label || d)}</strong>
-          <span style="font-size:0.75rem;color:var(--text-muted)">${info.personas.length} personas${override ? '' : ' · uses default chain'}</span>
-        </div>
-        ${override ? chainRow(override, 'div:' + d) + `<a data-reset="${esc(d)}" style="cursor:pointer;font-size:0.72rem;color:var(--text-muted)">↺ reset to default</a>`
-          : `<div style="margin:4px 0;font-size:0.8rem;color:var(--text-muted)">${(chains.defaultChain || []).join(' → ') || '(no default)'}</div>
-             <select data-add="div:${esc(d)}" style="padding:4px;background:var(--bg-tertiary);border:1px solid var(--bg-tertiary);border-radius:8px;color:inherit;font-size:0.78rem"><option value="">+ override with…</option>${opts}</select>`}
-        <details style="margin-top:8px"><summary style="cursor:pointer;font-size:0.75rem;color:var(--text-muted)">Per-persona overrides (${info.personas.length})</summary>
-          ${personaList || '<div style="font-size:0.78rem;color:var(--text-muted);padding:6px 0">no personas</div>'}
-        </details>
-      </div>`;
+      const personas = info.personas || [];
+      const nOwn = personas.filter(p => chains.personaChains?.[p.slug]).length;
+      return card(
+        head(esc(info.label || d), `<span style="display:flex;gap:6px;align-items:center">${muted(`${personas.length} personas${nOwn ? ` · ${nOwn} own chain${nOwn > 1 ? 's' : ''}` : ''}`)}${override ? badge('override', AGENT_COLOR) : badge('default chain', '#94A3B8')}</span>`)
+        + (override
+          ? chainEditor(override, agents, 'div:' + d) + link(`data-reset="div:${esc(d)}"`, '↺ reset to default chain')
+          : `<div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px">Uses the default chain:</div>${chainPreview(defaultChain, agents)}`
+            + chainAddSelect([], agents, `data-chain-add="div:${esc(d)}"`, '+ override with…'))
+        + `<details data-div="${esc(d)}" style="margin-top:8px"><summary style="cursor:pointer;font-size:0.75rem;color:var(--text-muted)">Per-persona overrides (${nOwn}/${personas.length})</summary>
+            ${personas.map(p => personaRow(p, d)).join('') || '<div style="font-size:0.78rem;color:var(--text-muted);padding:6px 0">no personas</div>'}
+          </details>`,
+        `data-div-card="${esc(d)}" data-name="${esc(((info.label || '') + ' ' + d).toLowerCase())}"`);
     }).join('');
 
     this.contentEl.innerHTML = `
-      <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:var(--space-md)">The orchestrator routes each task to a specialist in one of these divisions; the specialist runs on its division's chain (or the global default). Special executors run directly. Changes save instantly.</p>
-      <h3 style="font-size:0.9rem;margin:var(--space-md) 0 6px">Special executors</h3>${specialCards}
-      <h3 style="font-size:0.9rem;margin:var(--space-lg) 0 6px">Divisions <span style="font-size:0.72rem;color:var(--text-muted);font-weight:400">(agent chain override per division)</span></h3>${divCards}`;
+      <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:6px">Each task runs on an <b>agent fallback chain</b>, tried in order until one succeeds. Which chain: a special <b>role</b> uses its own; otherwise a <b>persona</b> override wins over its <b>division</b>, then the <b>default</b>. A tier-tagged task tries its <b>tier</b> first. Changes save instantly.</p>
+      <p style="font-size:0.78rem;color:var(--text-muted);margin-bottom:var(--space-md)">${enabledCount} of ${totalCount} agents enabled — pickers list only enabled agents; disabled ones in a chain are shown struck through and skipped. Enable/disable on the <a href="#agents">Agents</a> page.</p>
+      ${h3('Special roles', '— run directly, not via a persona')}${roleCards || muted('none configured')}
+      ${h3('Default chain', '— same chain as on the Agents page')}${card(chainEditor(defaultChain, agents, 'default:', { emptyText: 'empty — tasks with no override have nowhere to run' }))}
+      ${h3('Work-role tiers', '— the router picks a tier per task; <i>review</i> is derived from these at runtime')}${tierCards}
+      ${h3('Divisions', '— chain override per division and per persona')}
+      <input id="routing-filter" class="roster-search" placeholder="Filter divisions / personas…" style="margin-bottom:var(--space-md)">
+      <div id="routing-divs">${divCards}</div>
+      <div id="routing-nomatch" class="empty-state" style="display:none"><p>No division or persona matches.</p></div>`;
 
     const save = async (ctx, arr) => {
-      if (ctx.startsWith('role:')) { const n = ctx.slice(6); await this.api.put(`/roles-config/${encodeURIComponent(n)}`, { description: special[n].description, agents: arr }); }
-      else if (ctx.startsWith('roster:')) { const s = ctx.slice(7); await this.api.put(`/chains/persona/${encodeURIComponent(s)}`, { agents: arr }); }
-      else { const dv = ctx.slice(4); await this.api.put(`/chains/division/${encodeURIComponent(dv)}`, { agents: arr }); }
+      const [kind, key] = parse(ctx);
+      const k = encodeURIComponent(key);
+      try {
+        if (kind === 'role') await this.api.put(`/roles-config/${k}`, { description: special[key]?.description, agents: arr });
+        else if (kind === 'tier') await this.api.put(`/chains/tier/${k}`, { agents: arr });
+        else if (kind === 'default') await this.api.put('/chains/default', { agents: arr });
+        else if (kind === 'div') await this.api.put(`/chains/division/${k}`, { agents: arr });
+        else if (kind === 'persona') await this.api.put(`/chains/persona/${k}`, { agents: arr });
+        else throw new Error(`unknown chain "${ctx}"`);
+      } catch (e) { this.toast('chain not saved', e.message); }
+      // Re-render but keep the user's place: scroll, open persona lists, filter.
+      const scroll = this.contentEl.scrollTop;
+      const open = [...this.contentEl.querySelectorAll('details[data-div][open]')].map(x => x.dataset.div);
+      const filter = this.contentEl.querySelector('#routing-filter')?.value || '';
       await this.renderTeam();
+      open.forEach(d => this.contentEl.querySelector(`details[data-div="${CSS.escape(d)}"]`)?.setAttribute('open', ''));
+      const f = this.contentEl.querySelector('#routing-filter');
+      if (f && filter) { f.value = filter; f.dispatchEvent(new Event('input')); }
+      this.contentEl.scrollTop = scroll;
     };
-    const chainOf = (ctx) => ctx.startsWith('role:') ? (special[ctx.slice(6)].agents || []).slice()
-      : ctx.startsWith('roster:') ? (chains.personaChains?.[ctx.slice(7)] || []).slice()
-      : (chains.divisionChains?.[ctx.slice(4)] || []).slice();
 
-    // Drag to reorder / ✕ to remove — identical to the Agents default chain.
-    this.contentEl.querySelectorAll('.chain-row').forEach(row =>
-      this.wireChainDnd(row, (arr) => save(row.dataset.ctx, arr)));
+    this.wireChainEditors(this.contentEl, chainOf, save);
     if (window.lucide) window.lucide.createIcons();
-    this.contentEl.querySelectorAll('[data-add]').forEach(sel => sel.addEventListener('change', (e) => {
-      const ctx = e.target.dataset.add; const b = e.target.value; if (!b) return;
-      const arr = chainOf(ctx); if (!arr.includes(b)) arr.push(b);
-      save(ctx, arr);
-    }));
-    this.contentEl.querySelectorAll('[data-reset]').forEach(a => a.addEventListener('click', () => save('div:' + a.dataset.reset, [])));
-    this.contentEl.querySelectorAll('[data-reset-persona]').forEach(a => a.addEventListener('click', () => save('roster:' + a.dataset.resetPersona, [])));
+    this.contentEl.querySelectorAll('[data-reset]').forEach(a => a.addEventListener('click', () => save(a.dataset.reset, [])));
+
+    // Filter: a division matches by name (shows all its personas) or via any persona.
+    this.contentEl.querySelector('#routing-filter').addEventListener('input', (e) => {
+      const q = e.target.value.trim().toLowerCase();
+      let shown = 0;
+      this.contentEl.querySelectorAll('[data-div-card]').forEach(c => {
+        const divHit = !q || c.dataset.name.includes(q);
+        let personaHit = false;
+        c.querySelectorAll('.persona-row').forEach(r => {
+          const hit = divHit || r.dataset.name.includes(q);
+          r.style.display = hit ? '' : 'none';
+          if (q && r.dataset.name.includes(q)) personaHit = true;
+        });
+        const vis = divHit || personaHit;
+        c.style.display = vis ? '' : 'none';
+        if (vis) shown++;
+        const det = c.querySelector('details');
+        if (q && personaHit && !divHit && det) det.open = true;
+      });
+      this.contentEl.querySelector('#routing-nomatch').style.display = shown ? 'none' : '';
+    });
   }
 
   // ── Agents (model × platform × location registry) ──────────────────────
@@ -3307,16 +3435,11 @@ class App {
   async renderAgents() {
     const [agents, chains, dispatcherInfo] = await Promise.all([this.api.get('/agents'), this.api.get('/chains'), this.api.get('/dispatcher').catch(() => ({}))]);
     const defaultThinking = dispatcherInfo.defaultThinking || 'medium';
-    // Default fallback chain — drag to reorder; saves on drop.
-    const dchain = chains.defaultChain || [];
-    const chainChips = dchain.map((b, i) => chainChip(b, i, dchain.length, !!agents[b])).join('')
-      || '<span style="color:var(--text-muted);font-size:0.8rem">empty — add an agent below</span>';
-    const notInChain = Object.keys(agents).filter(b => !(chains.defaultChain || []).includes(b));
+    // Default fallback chain — the shared chain editor (same one the Routing page uses).
     const defaultChainCard = `
       <div class="card" style="margin-bottom:var(--space-lg)">
-        <div style="font-size:0.9rem;font-weight:600">Default fallback chain <span style="font-size:0.72rem;color:var(--text-muted);font-weight:400">— drag to reorder; agents use this unless their division overrides it</span></div>
-        <div id="dchain" style="margin:8px 0;min-height:34px">${chainChips}</div>
-        <select id="dchain-add" style="padding:5px;background:var(--bg-tertiary);border:1px solid var(--bg-tertiary);border-radius:8px;color:inherit;font-size:0.8rem"><option value="">+ add to chain…</option>${notInChain.map(b => `<option value="${esc(b)}">${esc(b)}</option>`).join('')}</select>
+        <div style="font-size:0.9rem;font-weight:600">Default fallback chain <span style="font-size:0.72rem;color:var(--text-muted);font-weight:400">— drag to reorder; used unless a division or persona overrides it (see <a href="#routing">Routing</a>)</span></div>
+        ${chainEditor(chains.defaultChain, agents, 'default', { emptyText: 'empty — add an agent below', addLabel: '+ add to chain…' })}
       </div>`;
     const row = (id, b) => `
       <div class="card" style="margin-bottom:var(--space-md)${b.disabled ? ';opacity:0.55' : ''}">
@@ -3355,15 +3478,14 @@ class App {
     if (window.lucide) window.lucide.createIcons();
 
     // ── Default chain: drag-to-reorder + add/remove, persisted on change ──────
-    const saveDefault = async (arr) => {
-      try { await this.api.put('/chains/default', { agents: arr }); this.renderAgents(); }
-      catch (e) { this.toast('error', e.message); }
+    const saveDefault = async (_ctx, arr) => {
+      try { await this.api.put('/chains/default', { agents: arr }); }
+      catch (e) { this.toast('chain not saved', e.message); }
+      const scroll = this.contentEl.scrollTop;
+      await this.renderAgents();
+      this.contentEl.scrollTop = scroll;
     };
-    this.wireChainDnd(this.contentEl.querySelector('#dchain'), saveDefault);
-    this.contentEl.querySelector('#dchain-add')?.addEventListener('change', (e) => {
-      const b = e.target.value; if (!b) return;
-      saveDefault([...(chains.defaultChain || []), b]);
-    });
+    this.wireChainEditors(this.contentEl, () => [...(chains.defaultChain || [])], saveDefault);
 
     this.contentEl.querySelector('#nb-save').addEventListener('click', async () => {
       const g = id => this.contentEl.querySelector(`#nb-${id}`).value.trim();
