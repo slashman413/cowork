@@ -51,7 +51,7 @@
     "integrations": {
       "url": "/integrations.html",
       "label": "Integrations",
-      "description": "Turn a GitHub / open-source repo into a cowork capability: fetch, security-audit, then install as an agent skill or a sandboxed portal plugin (or have an agent wrap a CLI/MCP server as a skill).",
+      "description": "Turn a git / open-source repo into a cowork capability: fetch, security-audit, then install as an agent skill or a sandboxed portal plugin (or have an agent wrap a CLI/MCP server as a skill).",
       "icon": "puzzle",
       "category": "APIs & MCP",
       "enabled": true,

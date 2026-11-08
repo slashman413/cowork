@@ -95,7 +95,7 @@ Files a person attached to your task are listed in your prompt and live in
 (1) irreversible or destructive; (2) about security or credentials; (3) an
 outward-facing publish/merge that norms say to confirm; or (4) every path forward is a
 guess. Otherwise decide, keep going, and record each call in the result as
-`RULING: <decision> — <why> — <cost if wrong>`. §5's GitHub archive/visibility/workflow
+`RULING: <decision> — <why> — <cost if wrong>`. §5's git repository archive/visibility/workflow
 rule stays a hard stop.
 
 **Progress ledger (`progress.md`).** Long or multi-step tasks keep
@@ -110,17 +110,17 @@ lines. At T-5 min of your timebox, write `progress.md` and return partial result
   improvements that the brief did not ask for.
 - Do not create new cowork tasks unless the brief asks you to decompose work.
 - Do not install system packages or change machine state as a side effect.
-- **Never archive, unarchive, delete, or change the visibility of a GitHub repo, and
+- **Never archive, unarchive, delete, or change the visibility of a git repo, and
   never disable a workflow**, unless the CEO explicitly approved that specific repo or
   workflow. These actions stop scheduled jobs. Propose them as action items with
   evidence (last commit, last workflow run, live Pages status, maintaining-overall
-  status) and let the CEO decide. (Added 2026-10-05 after the daily GitHub review
+  status) and let the CEO decide. (Added 2026-10-05 after the daily repository review
   archived 66 repos without approval.)
 
 ## 6. Credential tasks MUST use a local agent (Inc 6 rule)
 
 Any task that needs access to the **local filesystem** — especially credentials under
-`~/.priv/` (Cloudflare, Gumroad, Twitter/X, YouTube, GitHub tokens, Mautic, NAS) or
+`~/.priv/` (Cloudflare, Gumroad, Twitter/X, YouTube, Git tokens, Mautic, NAS) or
 any `/home/wayne/` path — must run on a **local agent** (`local-hermes-qwen3.8-27b`).
 
 - **Remote agents on other machines (e.g. `remote-ai-code-gen-cc-opus-4-8`) cannot

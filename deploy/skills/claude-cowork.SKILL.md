@@ -12,7 +12,7 @@ description: Coordinate with other AI agents (Hermes, Antigravity/Gemini, Codex,
 
 The `cowork` MCP server (https://localhost:6868/mcp, systemd user service `cowork-mcp`)
 is the shared coordination hub for every AI agent on this box. Repo:
-`~/workspace/github/slashman413/cowork`. Dashboard: https://localhost:6868/
+`~/workspace/cowork`. Dashboard: https://localhost:6868/
 (remote: LAN or Tailscale IP on :6868). Live config: `~/.cowork/config.json` — the
 repo's `config.json` is a **template only**; all dashboard/API edits persist to the
 live copy, no restart needed.
@@ -273,7 +273,7 @@ event — both are wrong). Consume with `curl -kN`.
 systemctl --user {status,restart} cowork-mcp        # server
 journalctl --user -u cowork-mcp -f
 curl -sk https://localhost:6868/api/status | jq              # health
-cd ~/workspace/github/slashman413/cowork/server && npm test   # engine tests
+cd ~/workspace/cowork/server && npm test   # engine tests
 ```
 
 Pitfalls: `/mcp` is MCP, `/api` is REST — don't mix. Every request needs

@@ -59,7 +59,7 @@ Tasks are stored as JSON files in the `inbox/` directory:
   "status": "pending",
   "skill": "code-handoff",
   "context": {
-    "repo": "slashman413/saas-starter",
+    "repo": "example/saas-starter",
     "branch": "main"
   },
   "tags": ["refactor", "auth"],

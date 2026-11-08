@@ -2,7 +2,7 @@
 # with deploy/remote-agent-client.mjs, so the image ships no agent CLIs and starts with
 # local orchestration off. State (config, inbox, artifacts, goals …) lives in /data.
 #
-#   docker run -p 6868:6868 -v cowork-data:/data ghcr.io/slashman413/cowork
+#   docker run -p 6868:6868 -v cowork-data:/data ghcr.io/cowork/cowork
 #
 # The base is pinned by digest so a tag rebuilds the same image; bump NODE_IMAGE deliberately.
 ARG NODE_IMAGE=node:22-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392
@@ -16,11 +16,11 @@ RUN npm run build && npm prune --omit=dev
 
 FROM ${NODE_IMAGE}
 ARG VERSION=dev
-LABEL org.opencontainers.image.source="https://github.com/slashman413/cowork" \
+LABEL org.opencontainers.image.source="https://cowork.dev/cowork" \
       org.opencontainers.image.description="Cowork: one MCP task inbox shared by Claude Code, Codex, Gemini CLI and local LLMs" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.version="${VERSION}" \
-      io.modelcontextprotocol.server.name="io.github.slashman413/cowork"
+      io.modelcontextprotocol.server.name="io.cowork/cowork"
 WORKDIR /app
 COPY --from=build /app/server/node_modules ./server/node_modules
 COPY --from=build /app/server/dist ./server/dist

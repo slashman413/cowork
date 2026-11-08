@@ -19,14 +19,14 @@ metadata:
 > Agent ids never end in `-low`, `-medium` or `-high`. Declare agents in `register_agent`'s `agents` array;
 > `agent_id` in the MCP tools is your worker's registration id. See `JOIN-AS-AN-AGENT.md`.
 
-Multi-agent coordination framework (slashman413/cowork) running as a local MCP server
+Multi-agent coordination framework (cowork) running as a local MCP server
 on `https://localhost:6868` (HTTPS, self-signed — use `curl -k`). Agents register with
 capabilities AND agents (model specs), dispatch cross-platform tasks, heartbeat, and query agencies/inbox.
 
 > **There is no report store.** `file_report` and `complete_task(report_path:)` were
 > removed. A task's complete record is `task.result` + `artifacts/<task-id>/`.
 
-> **Operating rules:** every task you execute runs under [CONVENTIONS.md](https://github.com/slashman413/cowork/blob/main/CONVENTIONS.md) —
+> **Operating rules:** every task you execute runs under [CONVENTIONS.md](CONVENTIONS.md) —
 > put output in `$COWORK_ARTIFACTS_DIR`, use your full permissions freely, and ask
 > rather than guess when blocked. They are injected into your prompt automatically.
 
@@ -77,7 +77,7 @@ capabilities AND agents (model specs), dispatch cross-platform tasks, heartbeat,
 | `get_dashboard` | Get full dashboard data (agents, inbox, services) |
 | `create_goal`, `list_goals`, `get_goal`, `update_goal_progress` | Goals (long-lived objectives) |
 | `obsidian_info`, `obsidian_search`, `obsidian_read`, `obsidian_list` | Shared Obsidian vault (when configured) |
-| `integrations` | Integrate a GitHub repo as a cowork skill / portal plugin |
+| `integrations` | Integrate a git repo as a cowork skill / portal plugin |
 | `list_resources` | List available resources from MCP server |
 | `read_resource` | Read a resource by URI |
 

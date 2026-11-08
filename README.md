@@ -37,7 +37,7 @@ shown in context throughout this README.
 | Antigravity (AGY) | Built-in + skills | `SKILL.md` |
 | Hermes Agent | 39 skills | `SKILL.md` + triggers |
 | Gemini CLI | Converted from source | `.md` subagents |
-| GitHub Copilot | Same as Claude | `.md` agents |
+| Copilot | Same as Claude | `.md` agents |
 | Codex | Converted | `.toml` agents |
 | Cursor | Converted | `.mdc` rules |
 | + 7 more | See agency-agents repo | Various formats |
@@ -54,7 +54,7 @@ shown in context throughout this README.
   `cowork/agency-agents` (the Agencies — 285 personas). Clone with submodules:
 
   ```bash
-  git clone --recurse-submodules https://github.com/slashman413/cowork
+  git clone --recurse-submodules https://cowork.dev/cowork
   # already cloned without it? initialise the submodule:
   git submodule update --init
   ```
@@ -82,7 +82,7 @@ to do it by hand.
 ### Container (hub only)
 
 ```bash
-docker run -d -p 6868:6868 -v cowork-data:/data ghcr.io/slashman413/cowork:1.0.1
+docker run -d -p 6868:6868 -v cowork-data:/data ghcr.io/cowork/cowork:1.0.1
 docker logs <container>   # first start prints the generated API key once
 ```
 
@@ -93,7 +93,7 @@ and all state live in the `/data` volume. `/api` and `/mcp` always require a key
 with `-e COWORK_API_KEY=…`, or the server generates one on first start, saves it to
 `/data/api-key` and prints it once. Clients send `Authorization: Bearer <key>` (the agent client
 reads `COWORK_API_KEY`); open `http://<host>:6868/?apiKey=<key>` once to log the dashboard in. Images are
-built from `v*` tags by `.github/workflows/release.yml` on a digest-pinned base.
+built from `v*` tags by the release workflow on a digest-pinned base.
 
 ### 1. Install Dependencies
 
@@ -458,7 +458,7 @@ client that does exactly that loop. Its header comment documents every env var.
 **Quickest — run it directly** (foreground; good for a first test). One agent:
 
 ```bash
-git clone https://github.com/slashman413/cowork
+git clone https://cowork.dev/cowork
 COWORK_URL=http://<cowork-host>:6868 EXEC=claude MODEL=claude-sonnet-5-5 \
   AGENT_ID=remote-<host>-cc-sonnet-5-5 \
   node cowork/deploy/remote-agent-client.mjs
@@ -666,7 +666,7 @@ Once connected, agents have access to these tools:
 | `get_dashboard` | Get full dashboard data (active workers, inbox stats, etc.) |
 | `create_goal` / `list_goals` / `get_goal` / `update_goal_progress` | Long-lived, phase-tracked Goals driven toward a yes/no success criterion |
 | `obsidian_info` / `obsidian_search` / `obsidian_read` / `obsidian_list` | Shared Obsidian knowledge base (when a vault is configured) |
-| `integrations` | Integrate a GitHub / open-source repository (list, add, install, …) |
+| `integrations` | Integrate a git / open-source repository (list, add, install, …) |
 
 ### Example: Cross-Platform Task Dispatch
 
@@ -804,9 +804,9 @@ without touching the template.
 
 | Workflow | Mode | What it does |
 |----------|------|--------------|
-| `idea-to-launch` | dag | The flagship. CEO brief → market research + perspectives → PM spec → architecture → **engineers build the real product & push to GitHub with GH Actions** → marketing promos + email auto-replies → sales enablement → finance model → Chief-of-Staff go/no-go review. `params: idea` |
+| `idea-to-launch` | dag | The flagship. CEO brief → market research + perspectives → PM spec → architecture → **engineers build the real product & push to git with CI Actions** → marketing promos + email auto-replies → sales enablement → finance model → Chief-of-Staff go/no-go review. `params: idea` |
 | `product-spec` | dag | PM writes a build-ready PRD, fed by user research + engineering feasibility, then cut into a shippable first sprint. `params: idea` |
-| `build-and-ship` | dag | Take a spec → architect → dispatch engineers to build real code → wire the GitHub Actions CI pipeline → code review → push & verify the pipeline is green. `params: spec` |
+| `build-and-ship` | dag | Take a spec → architect → dispatch engineers to build real code → wire the CI pipeline → code review → push & verify the pipeline is green. `params: spec` |
 | `feedback-to-roadmap` | dag | Raw feedback from an employee/customer → triage → synthesize into themes → PM initiatives → prioritized roadmap → dispatch the "Now" items as real work. `params: feedback` |
 | `gtm-campaign` | dag | Marketing + sales wire a launch: offer & promo angles → email sequences **+ inbound auto-reply rules** → content → sales enablement → success metrics. `params: product` |
 | `finance-close` | dag | The accounting cycle: bookkeeper reconciles → FP&A variance → forward model → CFO sign-off + board summary. `params: period` |
@@ -1014,11 +1014,11 @@ restart; set `0` to rescan on every query, or a larger value to reduce disk work
 
 ### Cowork Pro
 
-[Cowork Pro ($59)](https://slashmaster6.gumroad.com/l/cowork-pro?utm_source=github&utm_medium=readme) is the production
+[Cowork Pro ($59)](https://slashmaster6.gumroad.com/l/cowork-pro?utm_source=cowork&utm_medium=readme) is the production
 package: advanced workflows, priority support and lifetime updates. It is also part of the
-[AI Developer Stack Bundle ($79)](https://slashmaster6.gumroad.com/l/ai-dev-stack?utm_source=github&utm_medium=readme).
+[AI Developer Stack Bundle ($79)](https://slashmaster6.gumroad.com/l/ai-dev-stack?utm_source=cowork&utm_medium=readme).
 
 ## License
 
-[MIT](LICENSE) © 2026 slashman413. The core server, dashboard and remote-agent client are
+[MIT](LICENSE) © 2026 Cowork. The core server, dashboard and remote-agent client are
 free and open source; Cowork Pro (above) is the separate paid add-on.

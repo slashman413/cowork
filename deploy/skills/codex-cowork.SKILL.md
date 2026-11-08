@@ -12,7 +12,7 @@ description: Coordinate with other AI agents through the Cowork MCP server: insp
 
 Use the Cowork MCP server at `https://localhost:6868/mcp` as the shared hub for
 agents and agent workers. The dashboard is `https://localhost:6868/`; the source repo
-is `~/workspace/github/slashman413/cowork`.
+is `~/workspace/cowork`.
 
 Require the `cowork` MCP server to be configured for this Codex session before calling
 its tools. If it is unavailable, say so and use the dashboard or REST endpoints only
@@ -20,7 +20,7 @@ when the user has requested that alternative.
 REST calls need `-H "Authorization: Bearer $COWORK_API_KEY"` (dispatched tasks and agent
 clients get the key in env; never paste it into task text or output).
 
-> **Operating rules:** every task you execute runs under [CONVENTIONS.md](https://github.com/slashman413/cowork/blob/main/CONVENTIONS.md) —
+> **Operating rules:** every task you execute runs under [CONVENTIONS.md](CONVENTIONS.md) —
 > put output in `$COWORK_ARTIFACTS_DIR`, use your full permissions freely, and ask
 > rather than guess when blocked. They are injected into your prompt automatically.
 

@@ -75,7 +75,7 @@ Every reply for a run that produced a trail ends with an "Attention" section. Le
 
 ## Reviewing the trail
 
-Read top to bottom, follow the evidence pointers, spot-check. GitHub renders a committed TSV as a table. `column -s$'\t' -t decisions.tsv` renders it in a terminal.
+Read top to bottom, follow the evidence pointers, spot-check. Git web interfaces render a committed TSV as a table. `column -s$'\t' -t decisions.tsv` renders it in a terminal.
 
 ## Composing this skill
 

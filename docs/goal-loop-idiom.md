@@ -68,7 +68,7 @@ The criterion flips true the moment a concrete artifact **exists**. Short, cheap
 default budget (24) is fine. The loop is event-driven: one phase emitted → audited → next.
 
 > **`/goal`** *Ship a new single-page web tool*
-> **Success (Yes/No):** Is the tool merged on its local Forgejo main and live on GitHub Pages with a working index.html, og.png, and README?
+> **Success (Yes/No):** Is the tool merged on its local Forgejo main and live on static Pages with a working index.html, og.png, and README?
 > **Phases:** Scope & check competitors → Build on a Forgejo branch → Add og.png/README/footer → Land via a verified Forgejo PR + push to every remote → Verify the Pages URL loads
 > **`/loop`** *(event-driven):* "Emit the current phase's real build work, let the Judger audit it, then plan or emit the next phase. Don't stop while any phase is unaudited."
 > **Stops when:** the tool is live with a working index.html, og.png, and README.
@@ -96,8 +96,8 @@ default budget (24) is fine. The loop is event-driven: one phase emitted → aud
   `FORGE_LANDING` (pstack `opening-a-pr` + `shipping`): repo on Forgejo
   (`wayne/<repo>`), branch, ready PR with a Conventional Commits title, a PASS verdict
   on the current head SHA from an agent that did not write the code, squash merge,
-  read-back as merged, then fast-forward main and push to every remote. GitHub stays a
-  push mirror because the user declined `gh` for GitHub (see).
+  read-back as merged, then fast-forward main and push to every remote. Upstream stays a
+  push mirror because the user declined `gh` for the remote forge (see).
 - `goal-templates.test.ts` guards both: every served template carries its driver and
   every pstack rule; every code-producing template carries `FORGE_LANDING` and a
   Forgejo landing phase; no template tells the loop to use `gh`.

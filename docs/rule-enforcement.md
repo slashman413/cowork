@@ -33,14 +33,14 @@ Levels: **Enforced** = a code path blocks or corrects the violation ·
 | 5 | One task, one deliverable; no side quests | P0-3 brief `scope` / `acceptance` injected; spec verifier (shadow) judges scope | Partial |
 | 5 | Don't create cowork tasks unless the brief asks | Nothing checks it (task-create API has no parent/brief gate) | **Unenforced** |
 | 5 | Don't install system packages / change machine state | Nothing checks it | **Unenforced** |
-| 5 | Never archive / unarchive / delete / change visibility of a GitHub repo or disable a workflow without CEO approval | Nothing in cowork checks it (prose + incident note only) | **Unenforced** |
+| 5 | Never archive / unarchive / delete / change visibility of a git repo or disable a workflow without CEO approval | Nothing in cowork checks it (prose + incident note only) | **Unenforced** |
 | 6 | Credential / local-filesystem tasks run on `local-hermes-qwen3.8-27b` | WF-3 agent `env` manifests are recorded (`registerAgent`), but the router-side `requires` filter is **not wired** yet. Only a manual `context.agent` pin works. | **Unenforced** |
 | 6 | A remote agent without access reports a routing error, not a fake result | Result verifier + spec verifier (shadow) | Partial |
 
 **Count (2026-10-20):** 21 rules: 5 Enforced, 9 Partial, 6 Unenforced (§3 ×2,
 §5 ×3, §6 routing), 1 n/a. The strongest structural candidates for these are already
 on the correct-loop menu: the `env-requires` filter for §6, and a router rule or
-workflow gate for the §5 GitHub actions.
+workflow gate for the §5 repository actions.
 
 ## How a new rule gets enforced
 

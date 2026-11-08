@@ -26,7 +26,7 @@ installed on your machine (`claude`, `hermes`, `agy`, `codex`, `ollama`) and dec
 agents for you — no agent settings needed:
 
 ```bash
-git clone https://github.com/slashman413/cowork
+git clone https://cowork.dev/cowork
 NODE_EXTRA_CA_CERTS=cowork-cert.pem \
 COWORK_URL=https://<cowork-host>:6868 HOST=<your-hostname> \
   node cowork/deploy/remote-agent-client.mjs

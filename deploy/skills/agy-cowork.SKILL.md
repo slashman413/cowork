@@ -19,7 +19,7 @@ glass.
 > **There is no report store.** `file_report` and `complete_task(report_path:)` were
 > removed. A task's complete record is `task.result` + `artifacts/<task-id>/`.
 
-> **Operating rules:** every task you execute runs under [CONVENTIONS.md](https://github.com/slashman413/cowork/blob/main/CONVENTIONS.md) —
+> **Operating rules:** every task you execute runs under [CONVENTIONS.md](CONVENTIONS.md) —
 > put output in `$COWORK_ARTIFACTS_DIR`, use your full permissions freely, and ask
 > rather than guess when blocked. They are injected into your prompt automatically.
 
@@ -43,8 +43,8 @@ glass.
   `{ "mcpServers": { "cowork": { "url": "https://localhost:6868/mcp" } } }`
 - **Agent client service**: `cowork-local-agent@agy.service` (systemd user unit)
   - Config: `~/.config/cowork-local-agent/agy.env`
-  - Script: `~/workspace/github/slashman413/cowork/deploy/remote-agent-client.mjs`
-- **Cowork repo**: `~/workspace/github/slashman413/cowork/`
+  - Script: `~/workspace/cowork/deploy/remote-agent-client.mjs`
+- **Cowork repo**: `~/workspace/cowork/`
 - `agency-agents` — a git submodule at `./agency-agents` (init: `git submodule update --init`)
 
 ## Key Paths
@@ -55,7 +55,7 @@ glass.
 | `~/.cowork/config.json` | Server configuration (port, agents, chains, orchestration) |
 | `~/.config/cowork-local-agent/agy.env` | Agent client env (COWORK_URL, AGENTS, EXEC, HOST) |
 | `~/.config/systemd/user/cowork-local-agent@.service` | Systemd template unit |
-| `~/workspace/github/slashman413/cowork/` | Source repo |
+| `~/workspace/cowork/` | Source repo |
 | `inbox/` | Task queue (JSON files, server-owned — never edit by hand) |
 | `artifacts/<task-id>/` | Per-task OUTPUT files — write yours here; downloadable from the Inbox |
 | `inputs/<task-id>/` | Per-task INPUT files a person attached — read-only |

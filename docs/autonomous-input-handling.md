@@ -34,7 +34,7 @@ keyed by field id, or an honest `escalate`. Answers are submitted via the same
    `escalate` — leaving the task parked for a human — for any decision a person
    must physically make or that is irreversible/high-stakes: a browser OAuth
    re-auth, entering a password/2FA, spending real money or approving a fee, an
-   owner-only console toggle (e.g. enabling GitHub Pages), or deleting production
+   owner-only console toggle (e.g. enabling hosted Pages), or deleting production
    data. The orchestrator cannot click a browser button or spend money, so
    answering those would be a lie (CONVENTIONS.md rule 4). An escalated task
    records `context.autoAnswer.escalateReason` and is not retried.
