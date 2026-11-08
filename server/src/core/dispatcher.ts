@@ -20,6 +20,7 @@ import { renderMethodPrompt } from './methods.js';
 import { sharpenPending, renderSkillPrompt, reviewMode, panelFallbackAcceptance, parseArena, pickArenaAgents, arenaPlan } from './pstack-gates.js';
 import { extractPrUrls, openedPrUrls, prInScope, prWatchTaskSpec } from './pr-automation.js';
 import { shouldSharpenTask, sharpenTask, mergeSharpenedContext } from './sharpener.js';
+import { resolveWorkRoles, workRolesPromptBlock, guessWorkRole, workRoleContext } from './work-roles.js';
 import { taskTier, mergeTierChain, reviewChain, agentFamily, type TierName } from './tiers.js';
 import { canonicalAgentId } from '../config.js';
 import { STREAMING_EXECS, streamArgs, createStreamRenderer, claudeUsage, flatUsage, lastAssistantText } from './progress-stream.js';
@@ -896,16 +897,34 @@ export class Dispatcher {
     (async () => {
       try {
         if (!divisions.length) { this.assignPersona(task, 'generalist', undefined); return; }
+        // Work roles (setup-pstack port, core/work-roles.ts): the same reply also
+        // names the KIND of work, which picks the tier (agents) and thinking level.
+        const wr = this.config.orchestration.workRoles;
+        const roles = wr?.enabled ? resolveWorkRoles(wr) : null;
         const divPrompt =
-          `You route work in a multi-agent company. Pick the ONE best division for this task.\n\n` +
+          `You route work in a multi-agent company. Pick the ONE best division for this task` +
+          (roles ? `, and the ONE work role that describes it.` : `.`) + `\n\n` +
           `Task: ${task.title}\n${task.description}\n\n` +
           `Divisions:\n` + divisions.map(d => `- ${d}: ${divMeta[d]?.label || d}`).join('\n') +
-          `\n\nReply with ONLY the division id.`;
+          (roles ? `\n\nWork roles:\n${workRolesPromptBlock(roles)}\n\nReply with ONLY the division id and the work role id, e.g. "engineering bug-fix".`
+                 : `\n\nReply with ONLY the division id.`);
         const divOut = await this.askRouter(divPrompt, timeout);
-        const division = this.pickLast(divisions, divOut) || divisions[0];
+        const roleId = roles
+          ? (this.pickLast(Object.keys(roles), divOut) || guessWorkRole(`${task.title}\n${task.description}`, roles))
+          : undefined;
+        const extra = roles && roleId ? workRoleContext(roleId, roles, task.context, wr?.budget) : {};
+        const pickedDivision = this.pickLast(divisions, divOut);
+        // An empty / unparseable reply used to mean divisions[0] and its first
+        // persona (every task went to academic/academic-statistician while the
+        // router's CLI printed nothing). Fall back to the generalist instead.
+        if (!pickedDivision) {
+          console.warn(`Dispatcher: router gave no division for ${task.id} (reply ${JSON.stringify(divOut.slice(0, 80))}) — generalist`);
+          this.assignPersona(task, cls?.fallbackRole || 'generalist', undefined, extra); return;
+        }
+        const division = pickedDivision;
 
         const personasIn = this.store.personasInDivision(division);
-        if (!personasIn.length) { this.assignPersona(task, 'generalist', undefined); return; }
+        if (!personasIn.length) { this.assignPersona(task, 'generalist', undefined, extra); return; }
         const agPrompt =
           `Pick the ONE best agent in the "${division}" division for this task.\n\n` +
           `Task: ${task.title}\n${task.description}\n\n` +
@@ -914,7 +933,7 @@ export class Dispatcher {
           `\n\nReply with ONLY the slug.`;
         const agOut = await this.askRouter(agPrompt, timeout);
         const chosenSlug = this.pickLast(personasIn.map(a => a.slug), agOut) || personasIn[0].slug;
-        this.assignPersona(task, chosenSlug, division);
+        this.assignPersona(task, chosenSlug, division, extra);
       } catch {
         this.assignPersona(task, 'generalist', undefined);
       } finally {
@@ -937,12 +956,15 @@ export class Dispatcher {
     return best;
   }
 
-  private assignPersona(task: Task, persona: string, division: string | undefined): void {
+  private assignPersona(task: Task, persona: string, division: string | undefined, extra: Record<string, any> = {}): void {
     const fresh = this.store.getTask(task.id);
     if (fresh && fresh.status === 'pending') {
-      fresh.context = { ...(fresh.context || {}), persona, ...(division ? { division } : {}), routedBy: this.routerModel().model };
+      // Re-check against the FRESH context: a tier/thinking set while routing ran wins.
+      const wr = extra.workRole ? workRoleContext(extra.workRole, resolveWorkRoles(this.config.orchestration.workRoles), fresh.context, this.config.orchestration.workRoles?.budget) : {};
+      fresh.context = { ...(fresh.context || {}), persona, ...(division ? { division } : {}), ...wr, routedBy: this.routerModel().model };
       this.store.saveTask(fresh);
-      console.log(`Dispatcher: routed task ${task.id} -> ${division ? division + '/' : ''}${persona}`);
+      console.log(`Dispatcher: routed task ${task.id} -> ${division ? division + '/' : ''}${persona}` +
+        (wr.workRole ? ` [${wr.workRole}${wr.tier ? ' tier=' + wr.tier : ''}${wr.thinking ? ' thinking=' + wr.thinking : ''}]` : ''));
     }
   }
 

@@ -295,7 +295,7 @@ export interface ClassifierConfig {
   /** When true, the dispatcher uses an LLM to assign a role to any pending
    *  task that has no role/tag/skill match, so free-text tasks never stall. */
   enabled: boolean;
-  exec: 'claude' | 'hermes' | 'agy';
+  exec: 'claude' | 'hermes' | 'agy' | 'codex' | 'dsh' | 'ollama';
   model: string;
   /** Role used when the LLM's answer doesn't match a configured role. */
   fallbackRole: string;
@@ -408,6 +408,10 @@ export interface OrchestrationConfig {
    *  on the tier list followed by its normal chain. `review` is resolved at
    *  runtime to a different model family than the executor (core/tiers.ts). */
   tiers?: Record<string, string[]>;
+  /** Work roles (setup-pstack port, core/work-roles.ts): the router also names the
+   *  KIND of work, which sets context.tier + context.thinking (capped by budget)
+   *  when the task did not set them. */
+  workRoles?: import('./core/work-roles.js').WorkRolesConfig;
   /** Brief sharpener at intake (PS-1): pre-pass on a cheap agent to generate acceptance criteria. */
   sharpener?: SharpenerConfig;
   /** PS-7: at goal phase close, a different-family agent reviews the phase's
