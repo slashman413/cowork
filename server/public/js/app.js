@@ -721,7 +721,7 @@ class App {
     // the listener.
     document.addEventListener('click', (e) => {
       const card = e.target.closest('.task-card');
-      if (!card || e.target.closest('button, a, input, label, select, textarea, .copyable')) return;
+      if (!card || e.target.closest('button, a, input, label, select, textarea, .copyable, pre[data-progress]')) return;
       this.toggleTaskFiles(card.dataset.task);
     });
     // Keyboard access for the same toggle (the files head row carries
@@ -1002,6 +1002,10 @@ class App {
     if (caret) caret.textContent = open ? '▸' : '▾';
     const head = wrap.querySelector('.task-files-head');
     if (head) head.setAttribute('aria-expanded', open ? 'false' : 'true');
+    // Opening a running card: jump its live log to the newest line (scrollTop
+    // updates made while the block was hidden did nothing).
+    const pre = !open && wrap.querySelector('[data-progress]');
+    if (pre) pre.scrollTop = pre.scrollHeight;
   }
 
   /**
@@ -2393,7 +2397,18 @@ class App {
     // Which persona + agent ran it (item 5), or the requested assignment.
     const personaLabel = c.ranPersona ? (c.ranDivision ? `${c.ranDivision} / ${c.ranPersona}` : c.ranPersona)
       : (c.division ? `${c.division} / ${c.persona || '?'}` : (c.persona || c.role || ''));
-    const agentLabel = c.ranAgent || c.agent || '';
+    // While a task runs, ranAgent is not written yet (it lands at completion) and an
+    // auto-routed task has no context.agent — so prefer the dispatcher's claim-time
+    // stamp (liveAgent / liveThinking), then the pin, then the claiming worker.
+    const isRunning = t.status === 'in-progress' || t.status === 'claimed';
+    const agentLabel = (isRunning ? (c.liveAgent || c.agent || (t.claimedBy ? this.workerLabel(t.claimedBy) : '')) : '')
+      || c.ranAgent || c.agent || '';
+    const thinkingLabel = isRunning ? (c.liveThinking || c.thinking || '') : (c.thinking || '');
+    // Running cards ALWAYS show both badges; unknown values get explicit fallbacks.
+    const agentBadge = agentLabel ? badge(agentLabel, '#0EA5E9')
+      : (isRunning ? `<span class="badge" title="No agent recorded for this run yet (routing, or claimed by a client that did not report one)" style="background:#94A3B818; color:#94A3B8; border:1px solid #94A3B840">agent: unassigned</span>` : '');
+    const thinkingBadge = thinkingLabel ? badge(`thinking: ${thinkingLabel}`, '#64748B')
+      : (isRunning ? `<span class="badge" title="No thinking level set on the task — the run uses the agent's default (else medium)" style="background:#64748B18; color:#64748B; border:1px solid #64748B40">thinking: default</span>` : '');
     // Fallback trail: agents that failed verification and were handed over.
     const failedAgents = Array.isArray(c.failedAgents) ? c.failedAgents : [];
     const failed = isTaskFailed(t);
@@ -2463,7 +2478,8 @@ class App {
     // (1) IN-PROGRESS — a live progress-log window streaming what the agent is
     // doing right now. Filled + auto-scrolled by pollInboxProgress() polling
     // GET /inbox/:id/progress (the tail of artifacts/<id>/progress.log).
-    const isRunning = t.status === 'in-progress' || t.status === 'claimed';
+    // It rides INSIDE the collapsible block (hidden by default, tap the card to
+    // show / hide) like RESULT / OUTPUTS; the poller keeps filling it while hidden.
     const progressHtml = isRunning ? `<div class="task-progress" style="margin:4px 0 8px; border:1px solid var(--border-hover); border-radius:10px; overflow:hidden; background:var(--bg-tertiary)">
       <div style="display:flex; align-items:center; gap:7px; padding:6px 10px; font-size:0.74rem; text-transform:uppercase; letter-spacing:.03em; color:#0EA5E9; border-bottom:1px solid var(--border-hover)">
         <span class="progress-pulse" data-progress-pulse="${esc(t.id)}" style="width:8px;height:8px;border-radius:50%;background:#0EA5E9;display:inline-block;animation:progressPulse 1.4s ease-in-out infinite"></span>
@@ -2506,7 +2522,7 @@ class App {
         ${t.status === 'scheduled' && t.scheduledAt ? badge(`⏰ ${new Date(t.scheduledAt).toLocaleString()}`, '#6366F1') : ''}
         ${t.recurrence ? badge(`🔁 ${describeRecurrence(t.recurrence)}`, '#3B82F6')
           : t.loopIntervalHours ? badge(`🔁 every ${t.loopIntervalHours}h`, '#3B82F6') : ''}
-        ${personaLabel ? badge(personaLabel, '#7C3AED') : ''}${agentLabel ? badge(agentLabel, '#0EA5E9') : ''}${c.thinking ? badge(`thinking: ${c.thinking}`, '#64748B') : ''}
+        ${personaLabel ? badge(personaLabel, '#7C3AED') : ''}${agentBadge}${thinkingBadge}
         ${t.interaction && t.interaction.status !== 'submitted' ? badge('⌛ awaiting input', '#EAB308') : ''}
         ${t.interaction && t.interaction.status === 'submitted' ? badge('✓ input received', '#22C55E') : ''}
         ${inputsRaw.length ? badge(`📎 ${inputsRaw.length}`, '#0EA5E9') : ''}
@@ -2518,7 +2534,6 @@ class App {
       <div style="margin:7px 0 3px"><strong style="font-size:1.02rem">${esc(t.title)}</strong></div>
       ${chainHtml}
       ${pendingHtml}
-      ${progressHtml}
       ${autoRerunHtml}
       <div class="task-meta" style="display:block; margin:2px 0 4px">${esc(t.from?.platform || '?')}/${esc(t.from?.agent || '?')} · <span title="${esc(t.createdAt || '')}">${timeAgo(t.createdAt)}</span>
         ${failed ? `<button class="btn" data-rerun-task="${esc(t.id)}" data-agent="${esc(c.agentAuto ? '' : (c.agent || ''))}" title="Re-run this task — pick which agent claims it"
@@ -2584,16 +2599,18 @@ class App {
         const filesOpen = this.taskFilesOpen ? this.taskFilesOpen.has(t.id) : false;
         const nFiles = (hasResult ? 1 : 0) + outs.length + Math.max(arts.length, t.artifactsTotal || 0) + inputs.length;
         const headParts = [];
+        if (progressHtml) headParts.push('live progress');
         if (nFiles) headParts.push(`${nFiles} file${nFiles === 1 ? '' : 's'}`);
-        else if (!interactionHtml) headParts.push('Details');
+        else if (!interactionHtml && !progressHtml) headParts.push('Details');
         if (hasAcceptance) headParts.push('acceptance');
         if (canAttach) headParts.push('＋ attach');
         if (interactionHtml) headParts.push('input');
         return `<div class="task-files" data-task-files="${esc(t.id)}"${filesOpen ? '' : ' hidden'} style="margin-top:2px">
-          <div class="task-files-head" role="button" tabindex="0" aria-expanded="${filesOpen}" title="Tap the card to show / hide the task ID, acceptance criteria, files & input form" style="display:flex; align-items:center; gap:5px; padding:4px 0; cursor:pointer; user-select:none">
+          <div class="task-files-head" role="button" tabindex="0" aria-expanded="${filesOpen}" title="Tap the card to show / hide the live progress, task ID, acceptance criteria, files & input form" style="display:flex; align-items:center; gap:5px; padding:4px 0; cursor:pointer; user-select:none">
             <span class="task-files-caret" style="font-size:0.72rem; color:var(--text-muted)">${filesOpen ? '▾' : '▸'}</span>
             <span style="font-size:0.72rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:.03em">${headParts.join(' · ')}</span>
           </div>
+          ${progressHtml}
           ${idsHtml}
           ${acceptanceHtml}
           ${resultHtml}

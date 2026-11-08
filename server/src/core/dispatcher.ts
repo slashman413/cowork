@@ -1675,7 +1675,7 @@ export class Dispatcher {
     // humanInput as a dedicated "answers" section (below), and the brief fields
     // as their own sections — drop them from the raw context dump so they aren't
     // duplicated or lost as noise in the JSON blob.
-    for (const k of ['personaPrompt', 'agentAuto', 'remoteWaitSince', 'dispatched', 'attempts', 'personaName', 'ranPersona', 'ranDivision', 'ranAgent', 'isRoster', 'inputFiles', 'humanInput', 'awaitingInput', 'inputQuestions', 'backgroundWait', 'specVerdict', 'specFindings', 'gate', 'gateFindings', 'gateReviewFor', 'gateStepKey', 'gateRound', 'gateMaxRounds', 'judgeFamily', 'judgeAgent', 'escalated', 'escalatedAtRound', 'escalatedAgent', 'acceptanceSource', 'outsideCheck', 'deliverable', 'playbook', 'openChoices', 'sharpen', 'usage', 'usageArm', ...BRIEF_KEYS]) delete shownCtx[k];
+    for (const k of ['personaPrompt', 'agentAuto', 'remoteWaitSince', 'dispatched', 'attempts', 'personaName', 'ranPersona', 'ranDivision', 'ranAgent', 'liveAgent', 'liveThinking', 'isRoster', 'inputFiles', 'humanInput', 'awaitingInput', 'inputQuestions', 'backgroundWait', 'specVerdict', 'specFindings', 'gate', 'gateFindings', 'gateReviewFor', 'gateStepKey', 'gateRound', 'gateMaxRounds', 'judgeFamily', 'judgeAgent', 'escalated', 'escalatedAtRound', 'escalatedAgent', 'acceptanceSource', 'outsideCheck', 'deliverable', 'playbook', 'openChoices', 'sharpen', 'usage', 'usageArm', ...BRIEF_KEYS]) delete shownCtx[k];
     // The brief contract (P0-3 / P1-3) gets its own sections right under the task text.
     // Default timeboxMin = taskTimeoutMs / 60000 - 5 (e.g. 50 min cap → 45 min timebox).
     const timeoutMs = Number(this.config.orchestration?.taskTimeoutMs) || 3_000_000;
@@ -2698,7 +2698,14 @@ export class Dispatcher {
     const claimed = this.store.claimTask({ taskId: task.id, workerId: this.workerId, internal: true });
     if (!claimed) return;
     // Mark the claim as dispatcher-owned so startup handover can reclaim it
-    claimed.context = { ...(claimed.context || {}), dispatched: true };
+    // and stamp WHICH agent + thinking level this run uses, so the in-progress
+    // card can show them while it runs (ranAgent is only written at completion,
+    // and an auto-routed task has no context.agent / context.thinking of its own).
+    claimed.context = {
+      ...(claimed.context || {}), dispatched: true,
+      liveAgent: plan.agentId || plan.label,
+      liveThinking: this.thinkingFor(normalizeThinking(claimed.context?.thinking) || plan.thinking)
+    };
     this.store.saveTask(claimed);
 
     // Surface the worker as its own active agent so the dashboard shows WHO

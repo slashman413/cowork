@@ -1051,7 +1051,7 @@ export class Store {
     delete ctx.agentAuto;
     delete ctx.claimCount; delete ctx.lastClaimAt; delete ctx.failedCount;
     delete ctx.remoteWaitSince;
-    delete ctx.ranPersona; delete ctx.ranDivision; delete ctx.ranAgent; delete ctx.isRoster;
+    delete ctx.ranPersona; delete ctx.ranDivision; delete ctx.ranAgent; delete ctx.isRoster; delete ctx.liveAgent; delete ctx.liveThinking;
     delete ctx.specVerdict; delete ctx.specFindings;
     delete ctx.dispatched; delete ctx.inputFiles;
     delete ctx.humanInput; delete ctx.awaitingInput; delete ctx.inputQuestions;
@@ -1196,7 +1196,7 @@ export class Store {
     ctx.attempts = 0;
     ctx.dispatched = false;
     delete ctx.remoteWaitSince;
-    delete ctx.ranPersona; delete ctx.ranDivision; delete ctx.ranAgent; delete ctx.isRoster;
+    delete ctx.ranPersona; delete ctx.ranDivision; delete ctx.ranAgent; delete ctx.isRoster; delete ctx.liveAgent; delete ctx.liveThinking;
     delete ctx.specVerdict; delete ctx.specFindings;
 
     task.context = ctx;
@@ -1336,7 +1336,7 @@ export class Store {
         delete c.failedAgents;
         delete c.agentAuto;
         delete c.remoteWaitSince;
-        delete c.ranPersona; delete c.ranDivision; delete c.ranAgent; delete c.isRoster;
+        delete c.ranPersona; delete c.ranDivision; delete c.ranAgent; delete c.isRoster; delete c.liveAgent; delete c.liveThinking;
         task.context = c;
         delete task.failed;
         delete task.result;

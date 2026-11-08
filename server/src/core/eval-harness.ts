@@ -211,7 +211,7 @@ export function selectReplayTasks(tasks: Task[], family: string, n = 5, seed = '
 // ── Replay prompt ────────────────────────────────────────────────────────────
 
 /** Context keys that are dispatcher bookkeeping, not part of the brief. */
-const INTERNAL_CTX = ['personaPrompt', 'agentAuto', 'remoteWaitSince', 'dispatched', 'attempts', 'personaName', 'ranPersona', 'ranDivision', 'ranAgent', 'isRoster', 'inputFiles', 'humanInput', 'awaitingInput', 'inputQuestions', 'backgroundWait', 'specVerdict', 'specFindings', 'acceptance', 'verify', 'timeboxMin', 'scope', 'dependsOn', 'workflowRunId', 'stepKey', 'pendingReason', 'pendingReasonAt', 'agent', 'autoRerun', 'rateLimited', 'handover', 'verdict'];
+const INTERNAL_CTX = ['personaPrompt', 'agentAuto', 'remoteWaitSince', 'dispatched', 'attempts', 'personaName', 'ranPersona', 'ranDivision', 'ranAgent', 'liveAgent', 'liveThinking', 'isRoster', 'inputFiles', 'humanInput', 'awaitingInput', 'inputQuestions', 'backgroundWait', 'specVerdict', 'specFindings', 'acceptance', 'verify', 'timeboxMin', 'scope', 'dependsOn', 'workflowRunId', 'stepKey', 'pendingReason', 'pendingReasonAt', 'agent', 'autoRerun', 'rateLimited', 'handover', 'verdict'];
 
 export interface ReplayPromptInput {
   rules: string;
