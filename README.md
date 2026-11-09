@@ -19,15 +19,28 @@ Jump to: [Quick Start](#quick-start) · [Connecting agents](#connecting-ai-agent
 
 ## Screenshots
 
-One dark-themed **single pane of glass** for the whole operation: live host metrics
-(CPU / GPU / memory / temp), open-task and Agencies counters, the dispatcher's current
-role → model chains, and a real-time activity feed.
+One dark-themed **single pane of glass** for the whole operation. The **Overview** shows live
+host metrics (CPU / GPU / memory / temp), active workers, open tasks and personas, a
+7-day quality panel (pass rate, retries, wait-input, timeouts), the latest agent
+**rulings**, the dispatcher's role → model chains, and a real-time activity feed.
 
 ![Cowork dashboard — metrics, counters, dispatcher chains, and live activity](docs/images/cowork-dashboard.png)
 
-The [Task Inbox](#task-execution--the-dispatcher), [Agents](#agents--named-execution-identities-model--platform--location),
-and [Connections](#wiring-a-remote-agent-machine) views are
-shown in context throughout this README.
+The sidebar groups every view: **Operations** (Overview, Portal, Tasks, Recipes, Calendar,
+Goals), **AI Fleet** (Routing, Agents, Personas) and **System** (Workers, Configuration).
+The [Tasks](#task-execution--the-dispatcher), [Routing](#agent-fallback-chains-get-apichains),
+[Agents](#agents--named-execution-identities-model--platform--location) and
+[Workers](#wiring-a-remote-agent-machine) views are shown in context throughout this README.
+
+| **Calendar** — scheduled tasks and recurring routines by week | **Goals** — long-running goals with phases, decisions and budget |
+|---|---|
+| ![Calendar view — week grid of scheduled and recurring tasks](docs/images/cowork-calendar.png) | ![Goals view — an achieved goal with done-when criteria, phases and progress](docs/images/cowork-goals.png) |
+| **Recipes** — saved tasks you re-run with one click | **Personas** — ~285 expert personas, searchable by division |
+| ![Recipes view — saved recurring tasks with run counts and Run buttons](docs/images/cowork-recipes.png) | ![Personas view — expert persona cards grouped by division](docs/images/cowork-personas.png) |
+| **Portal** — one-click launcher for local web services | **Obsidian Vault** — the shared, readable knowledge base |
+| ![Portal view — cards for Obsidian Vault, DeepTutor, Video Studio, File Browser and more](docs/images/cowork-portal.png) | ![Obsidian vault viewer — notes tree and a rendered note](docs/images/cowork-obsidian.png) |
+| **Integrations** — audited GitHub repos installed as skills / MCP / portal cards | **Configuration** — every setting, editable live |
+| ![Integrations page — add a repository, audit results, installed skills](docs/images/cowork-integrations.png) | ![Configuration view — orchestration settings and default chain](docs/images/cowork-config.png) |
 
 ## Supported Platforms
 
@@ -306,10 +319,10 @@ A chain runs top → bottom: the task runs on `chain[0]`; on failure the dispatc
 each attempt, until success or the chain is exhausted. Pin a single task to one
 agent with `context.agent: "<id>"`.
 
-The **Agents** view exposes the per-division chain for every division — drag to reorder,
+The **Routing** view exposes the per-division chain for every division — drag to reorder,
 `＋ add agent…`, or reset to the global default. No template edits, no restart.
 
-![Routing view — per-division agent fallback chains, editable inline](docs/images/cowork-roles.png)
+![Routing view — special executors and per-division agent fallback chains, editable inline](docs/images/cowork-roles.png)
 
 ## Vocabulary
 
@@ -486,19 +499,19 @@ systemctl --user daemon-reload && systemctl --user enable --now cowork-remote-ag
 It connects to `COWORK_URL/mcp`, `register_agent`s (declaring its `AGENTS`, which
 auto-register into the registry), then polls and claims only tasks whose
 `context.agent` is one of its agent ids, runs the matching `EXEC`/`MODEL`, and
-`complete_task`s with its result and uploaded artifacts — appearing in **Connections** like any other
+`complete_task`s with its result and uploaded artifacts — appearing in **Workers** like any other
 client. **Flexible**: the same script serves any agent by changing env only.
 **Scalable**: add machines/agents by adding `<name>.env` files; claims are atomic
 (single-process compare-and-set) so even multiple clients on the *same* agent id
 never double-run a task — first claim wins.
 
-Every connected client shows up live in the **Connections** view — grouped by platform,
+Every connected client shows up live in the **Workers** view — grouped by platform,
 listing the agents it offers, its idle/busy state, and a per-session tally of how many
 tasks each agent has run vs. submitted:
 
-![Connections view — live MCP clients, the agents they offer, and per-agent invocation counters](docs/images/cowork-connections.png)
+![Workers view — local agent usage meters, live MCP clients, and per-agent invocation counters](docs/images/cowork-connections.png)
 
-The always-on coordinator agent shown in **Connections** as `cowork/orchestrator`
+The always-on coordinator agent shown in **Workers** as `cowork/orchestrator`
 polls the inbox, two-stage-routes unassigned tasks, reclaims orphans, and
 dispatches; transient per-task workers appear as e.g.
 `testing / Workflow Optimizer · local-hermes-qwen3.8-27b` or `video · local-comfy-ltx`
@@ -696,13 +709,8 @@ AGY Agent calls:
 A **workflow** is a version-controlled template (`workflows/<id>.json`). It runs
 in one of two modes, chosen per template with `"mode"`:
 
-The **Workflows** view renders each template as a live graph — sequential fan-through
-pipelines and parallel fan-out/fan-in diamonds alike — with every step pinned to a
-division or agent, plus **Dry run** (inspect the resolved plan) and **Run** controls:
-
-| `build-and-ship` — a 5-step engineering pipeline | `expand-perspectives` — parallel multi-lens fan-out → synthesis |
-|---|---|
-| ![Build & Ship workflow — architect → build → CI → review → push](docs/images/cowork-workflows-1.png) | ![Expand Perspectives and Feedback → Roadmap workflows](docs/images/cowork-workflows-2.png) |
+Workflows are run through the MCP tools and the REST API (see below); each step is
+pinned to a division or agent and becomes an ordinary task in the **Tasks** view.
 
 
 - **`dag`** (default) — **static & deterministic.** The steps form a DAG wired by
