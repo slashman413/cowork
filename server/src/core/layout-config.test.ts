@@ -35,7 +35,7 @@ test('bad pages/widgets/options are dropped with an error; good ones survive', (
       home: {
         type: 'dashboard',
         rows: [
-          [{ type: 'sysbar', tiles: ['cpu', 'disk'] }, { type: 'bogus' }],
+          [{ type: 'sysbar', tiles: ['cpu', 'floppy'] }, { type: 'bogus' }],
           { minWidth: 5, widgets: [{ type: 'activity', limit: 99, color: 'red' }, { type: 'note' }] },
           [{ type: 'services', categories: ['Dev', 3], span: 9 }],
         ],

@@ -1992,6 +1992,7 @@ class App {
       cpu:     ['cpu',  'cpu',          'CPU'],
       gpu:     ['gpu',  'gpu',          'GPU'],
       memory:  ['mem',  'memory-stick', 'Memory'],
+      disk:    ['disk', 'hard-drive',   'Disk'],
       thermal: ['temp', 'thermometer',  'Core Temp'],
     };
     // Each tile is a button that opens its drill-down dialog (openSysDetail).
@@ -2032,6 +2033,7 @@ class App {
     };
     const pct = (n) => (n == null ? '—' : `${n}%`);
     const mb = (n) => (n == null ? '—' : n >= 1024 ? `${(n / 1024).toFixed(1)} GB` : `${Math.round(n)} MB`);
+    const gb = (n) => (n == null ? '—' : n >= 1024 ? `${(n / 1024).toFixed(2)} TB` : `${Math.round(n)} GB`);
 
     // CPU
     const cpu = s.cpu || {};
@@ -2054,6 +2056,11 @@ class App {
     // Memory
     const m = s.memory || {};
     set('mem', pct(m.usage), m.usage, `${mb(m.usedMb)}/${mb(m.totalMb)}`);
+
+    // Disk — root filesystem capacity.
+    const dk = s.disk || {};
+    set('disk', pct(dk.usage), dk.usage,
+      dk.totalGb == null ? 'unavailable' : `${gb(dk.usedGb)}/${gb(dk.totalGb)} · ${dk.mount || '/'}`, dk.totalGb != null);
 
     // Core temperature — meter scaled against a 100°C ceiling.
     const t = cpu.temperature;
@@ -2089,6 +2096,7 @@ class App {
       cpu:     { title: 'CPU',         icon: 'cpu' },
       gpu:     { title: 'GPU',         icon: 'gpu' },
       memory:  { title: 'Memory',      icon: 'memory-stick' },
+      disk:    { title: 'Disk',        icon: 'hard-drive' },
       thermal: { title: 'Temperature', icon: 'thermometer' },
     }[kind];
     if (!meta) return;
@@ -2218,6 +2226,24 @@ class App {
       ])
       + section('Top processes <span class="sysd-muted">by resident memory</span>',
           procTable(d.processes, [{ h: 'RSS', f: r => mb(r.rssMb) }]));
+    }
+
+    if (kind === 'disk') {
+      const gb = (n) => (n == null ? '—' : n >= 1024 ? `${(n / 1024).toFixed(2)} TB` : `${n} GB`);
+      const mounts = (d.mounts || []).map(m => `
+        <div class="sysd-therm" title="${esc(m.device)} · ${esc(m.fstype)}">
+          <span class="mono">${esc(m.mount)} <span class="sysd-muted">${esc(m.device.replace('/dev/', ''))} · ${esc(m.fstype)}</span></span>
+          ${meter(m.usage)}<b>${pct(m.usage)}</b>
+        </div>
+        <div class="sysd-legend"><span>Used ${gb(m.usedGb)}</span><span>Free ${gb(m.availGb)}</span><span>Total ${gb(m.totalGb)}</span></div>`).join('');
+      const storage = (d.storage || []).length ? `
+        <div class="sysd-table-wrap"><table class="sysd-table">
+          <thead><tr><th>Dir</th><th>Path</th><th class="num">Size</th></tr></thead>
+          <tbody>${d.storage.map(r => `<tr><td>${esc(r.name)}</td><td class="mono">${esc(r.path)}</td>
+            <td class="num mono">${r.sizeMb == null ? '<span class="sysd-muted">measuring…</span>' : mb(r.sizeMb)}</td></tr>`).join('')}</tbody>
+        </table></div>` : '<p class="sysd-muted">No cowork data dirs found.</p>';
+      return section('Filesystems', mounts || '<p class="sysd-muted">No block devices found.</p>')
+        + section('Cowork data <span class="sysd-muted">sizes refresh every minute · finished scheduled runs auto-purge (Settings → Inbox)</span>', storage);
     }
 
     if (kind === 'gpu') {

@@ -43,6 +43,8 @@ export type CompletionGuard = (task: Task, result?: string) => Promise<Completio
 /** Statuses in which a recurring scheduler's run-child is still in flight
  *  (queued, running, waiting on a person, or deferred on background work). */
 const OUTSTANDING_RUN_STATUSES = new Set(['pending', 'claimed', 'in-progress', 'wait-input', 'scheduled']);
+/** Default for inbox.purgeScheduledRunsAfterDays (0 disables the auto-purge). */
+export const DEFAULT_PURGE_SCHEDULED_RUNS_DAYS = 3;
 /** Default for orchestration.scheduler.maxPendingBacklog (0 disables the hold). */
 const DEFAULT_MAX_PENDING_BACKLOG = 30;
 
@@ -1611,11 +1613,15 @@ export class Store {
    * The dashboard therefore warns before deleting. Pass dryRun to preview
    * exactly what would go.
    */
-  public purgeTasks(opts: { olderThanDays?: number; dryRun?: boolean } = {}): {
+  public purgeTasks(opts: { olderThanDays?: number; dryRun?: boolean; scheduledRunsOnly?: boolean } = {}): {
     purged: Array<{ id: string; title: string; completedAt?: string }>;
     keptCount: number; dryRun: boolean;
   } {
     const days = opts.olderThanDays ?? 30;
+    // scheduledRunsOnly: the auto-purge of spawned recurring runs — only `done`
+    // tasks carrying context.scheduledParentId qualify (the recurring parent
+    // itself never has that key, so it is never touched).
+    const onlyRuns = !!opts.scheduledRunsOnly;
     const cutoff = Date.now() - days * 86400000;
     const keepTags = new Set(['keep', 'important', 'pinned']);
     const purged: Array<{ id: string; title: string; completedAt?: string }> = [];
@@ -1626,7 +1632,9 @@ export class Store {
       && fs.existsSync(path.join(goalsDir, `${goalId}.json`));
 
     for (const task of this.listTasks({})) {
-      const finished = task.status === 'done' || task.status === 'rejected';
+      const finished = onlyRuns
+        ? task.status === 'done' && !!task.context?.scheduledParentId
+        : task.status === 'done' || task.status === 'rejected';
       const when = new Date(task.completedAt || task.createdAt).getTime();
       const tagged = (task.tags || []).some(t => keepTags.has(String(t).toLowerCase()));
       // Artifacts no longer keep a task alive — old finished tasks go regardless.
@@ -1636,9 +1644,21 @@ export class Store {
       if (!opts.dryRun) this.deleteTask(task.id);
     }
     if (!opts.dryRun && purged.length) {
-      console.log(`Store: purged ${purged.length} finished task(s) older than ${days}d: ${purged.map(p => p.id.slice(0, 8)).join(' ')}`);
+      console.log(`Store: purged ${purged.length} finished ${onlyRuns ? 'scheduled run' : 'task'}(s) older than ${days}d: ${purged.map(p => p.id.slice(0, 8)).join(' ')}`);
     }
     return { purged, keptCount, dryRun: !!opts.dryRun };
+  }
+
+  /**
+   * Auto-purge `done` runs spawned by scheduled (recurring) tasks once they are
+   * older than inbox.purgeScheduledRunsAfterDays (default 3; 0 disables), so a
+   * daily job doesn't keep piling up task files + artifacts forever. Same keep
+   * rules as purgeTasks (keep/important/pinned tags, live goals).
+   */
+  public purgeScheduledRuns(opts: { dryRun?: boolean } = {}) {
+    const raw = Number(this.config.inbox?.purgeScheduledRunsAfterDays ?? DEFAULT_PURGE_SCHEDULED_RUNS_DAYS);
+    if (!Number.isFinite(raw) || raw <= 0) return { purged: [], keptCount: 0, dryRun: !!opts.dryRun, disabled: true };
+    return { ...this.purgeTasks({ olderThanDays: raw, dryRun: opts.dryRun, scheduledRunsOnly: true }), disabled: false };
   }
 
   /** Persist arbitrary task mutations (handover, retries). */

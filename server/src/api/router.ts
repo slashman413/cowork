@@ -193,7 +193,9 @@ export function createApiRouter(store: Store, eventBus: EventBus): Router {
   // swallowed as a task id. Pass dryRun to preview.
   router.post('/inbox/purge', (req, res) => {
     try {
-      const { olderThanDays, dryRun } = req.body || {};
+      const { olderThanDays, dryRun, scheduledRuns } = req.body || {};
+      // scheduledRuns: run the scheduled-run auto-purge now (inbox.purgeScheduledRunsAfterDays).
+      if (scheduledRuns) return res.json(store.purgeScheduledRuns({ dryRun: !!dryRun }));
       res.json(store.purgeTasks({
         olderThanDays: olderThanDays === undefined ? undefined : Number(olderThanDays),
         dryRun: !!dryRun

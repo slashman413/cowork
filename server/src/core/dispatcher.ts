@@ -498,6 +498,7 @@ export class Dispatcher {
   }
 
   private lastWorktreePrune = 0;
+  private lastScheduledRunPurge = 0;
 
   private tick(): void {
     if (this.stopped || !this.workerId) return;
@@ -556,6 +557,15 @@ export class Dispatcher {
         if (n.length) console.log(`Dispatcher: pruned ${n.length} stale worktree(s): ${n.join(', ')}`);
       }
     } catch (e) { console.error('Dispatcher: worktree prune failed this tick:', e); }
+
+    // Auto-purge finished scheduled runs past inbox.purgeScheduledRunsAfterDays
+    // (default 3d) so recurring jobs don't eat disk forever. Throttled to hourly.
+    try {
+      if (Date.now() - this.lastScheduledRunPurge > 3600_000) {
+        this.lastScheduledRunPurge = Date.now();
+        (this.store as any).purgeScheduledRuns?.();
+      }
+    } catch (e) { console.error('Dispatcher: scheduled-run purge failed this tick:', e); }
 
     try { this.driveGoals(); }
     catch (e) { console.error('Dispatcher: driveGoals failed this tick:', e); }

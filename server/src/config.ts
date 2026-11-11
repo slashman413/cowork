@@ -64,6 +64,7 @@ const defaultConfig: Config = {
   },
   inbox: {
     autoArchiveDays: 30,
+    purgeScheduledRunsAfterDays: 3,
     maxRetries: 3
   },
   orchestration: {

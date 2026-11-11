@@ -15,8 +15,8 @@ const pexecFile = promisify(execFile);
  * missing and the matching field just comes back null / empty.
  */
 
-export type DetailKind = 'cpu' | 'gpu' | 'memory' | 'thermal';
-export const DETAIL_KINDS = new Set<DetailKind>(['cpu', 'gpu', 'memory', 'thermal']);
+export type DetailKind = 'cpu' | 'gpu' | 'memory' | 'thermal' | 'disk';
+export const DETAIL_KINDS = new Set<DetailKind>(['cpu', 'gpu', 'memory', 'thermal', 'disk']);
 
 export interface ProcRow {
   pid: number;
@@ -338,12 +338,63 @@ async function thermalDetails() {
   return { kind: 'thermal' as const, zones, gpus };
 }
 
-export async function systemDetails(kind: DetailKind) {
+// ── Disk ────────────────────────────────────────────────────────────────────
+/** Real block-device mounts from /proc/mounts (one row per device). */
+function blockMounts(): { device: string; mount: string; fstype: string }[] {
+  const seen = new Set<string>();
+  const out: { device: string; mount: string; fstype: string }[] = [];
+  for (const line of (read('/proc/mounts') || '').split('\n')) {
+    const [device, mount, fstype] = line.split(' ');
+    if (!device?.startsWith('/dev/') || !mount || seen.has(device)) continue;
+    if (/^(squashfs|iso9660|overlay|tmpfs)$/.test(fstype)) continue;
+    seen.add(device);
+    out.push({ device, mount: mount.replace(/\\040/g, ' '), fstype });
+  }
+  if (!out.length) out.push({ device: '?', mount: '/', fstype: '?' });
+  return out;
+}
+
+// `du` over the artifacts tree (tens of GB) takes seconds, and the dialog polls
+// every 2.5s — so sizes are cached for a minute and refreshed in the background.
+const DU_TTL_MS = 60_000;
+const duCache = new Map<string, { at: number; mb: number | null; pending?: boolean }>();
+function duMb(dir: string): number | null {
+  const hit = duCache.get(dir);
+  if (!hit || (Date.now() - hit.at > DU_TTL_MS && !hit.pending)) {
+    const entry = { at: hit?.at ?? 0, mb: hit?.mb ?? null, pending: true };
+    duCache.set(dir, entry);
+    execFile('du', ['-sk', dir], { timeout: 120_000, maxBuffer: 1 << 20 }, (err, stdout) => {
+      const kb = num(String(stdout || '').split(/\s+/)[0]);
+      duCache.set(dir, { at: Date.now(), mb: kb == null ? (err ? null : 0) : round(kb / 1024, 0) });
+    });
+  }
+  return duCache.get(dir)?.mb ?? null;
+}
+
+async function diskDetails(paths: Record<string, string> = {}) {
+  const mounts = blockMounts().map((m) => {
+    try {
+      const st = fs.statfsSync(m.mount);
+      const gb = (blocks: number) => round((blocks * st.bsize) / 1073741824, 1);
+      const used = st.blocks - st.bfree;
+      return { ...m, totalGb: gb(st.blocks), usedGb: gb(used), availGb: gb(st.bavail),
+               usage: used + st.bavail > 0 ? round((used / (used + st.bavail)) * 100) : null };
+    } catch { return { ...m, totalGb: null, usedGb: null, availGb: null, usage: null }; }
+  });
+  // Cowork's own runtime dirs — what the task purge actually frees.
+  const storage = ['artifacts', 'inbox', 'inputs', 'goals', 'workflowRuns']
+    .filter((k) => typeof paths[k] === 'string' && fs.existsSync(paths[k]))
+    .map((k) => ({ name: k, path: paths[k], sizeMb: duMb(paths[k]) }));
+  return { kind: 'disk' as const, mounts, storage };
+}
+
+export async function systemDetails(kind: DetailKind, opts: { paths?: Record<string, string> } = {}) {
   const at = new Date().toISOString();
   switch (kind) {
     case 'cpu': return { at, ...(await cpuDetails()) };
     case 'gpu': return { at, ...(await gpuDetails()) };
     case 'memory': return { at, ...(await memoryDetails()) };
     case 'thermal': return { at, ...(await thermalDetails()) };
+    case 'disk': return { at, ...(await diskDetails(opts.paths)) };
   }
 }

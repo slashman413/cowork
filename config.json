@@ -41,7 +41,8 @@
   },
   "inbox": {
     "autoArchiveDays": 30,
-    "maxRetries": 3
+    "maxRetries": 3,
+    "purgeScheduledRunsAfterDays": 3
   },
   "orchestration": {
     "enabled": true,

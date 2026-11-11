@@ -587,6 +587,10 @@ export interface Config {
   inbox: {
     autoArchiveDays: number;
     maxRetries: number;
+    /** Auto-delete `done` runs spawned by scheduled (recurring) tasks after this
+     *  many days, artifacts included (keep/important/pinned tags and live goals
+     *  exempt). 0 disables. Default 3. */
+    purgeScheduledRunsAfterDays?: number;
   };
   orchestration: OrchestrationConfig;
 }

@@ -31,7 +31,7 @@ test('containerIdFromCgroup handles systemd and cgroupfs docker paths', () => {
 });
 
 test('every detail kind returns without throwing on this host', async () => {
-  for (const kind of ['cpu', 'memory', 'gpu', 'thermal'] as const) {
+  for (const kind of ['cpu', 'memory', 'gpu', 'thermal', 'disk'] as const) {
     const d: any = await systemDetails(kind);
     assert.equal(d.kind, kind);
     assert.ok(d.at);

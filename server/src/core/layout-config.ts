@@ -68,7 +68,7 @@ const APP_PAGE_DEFAULTS: Record<string, { label: string; icon: string }> = {
   config: { label: 'Configuration', icon: 'settings' },
 };
 
-export const SYS_TILES = ['cpu', 'gpu', 'memory', 'thermal'] as const;
+export const SYS_TILES = ['cpu', 'gpu', 'memory', 'disk', 'thermal'] as const;
 export const STAT_ITEMS = ['workers', 'openTasks', 'personas', 'failedTasks', 'waitingInput', 'scheduled', 'uptime'] as const;
 /** Widget type → allowed option keys (anything else is reported and dropped). */
 const WIDGETS: Record<string, readonly string[]> = {

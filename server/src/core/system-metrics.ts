@@ -49,6 +49,14 @@ export interface SystemSnapshot {
     memoryTotalMb: number | null;
     temperature: number | null;
   } | null;
+  /** Root filesystem (`/`) capacity in GB, or null fields when statfs fails. */
+  disk: {
+    mount: string;
+    usedGb: number | null;
+    totalGb: number | null;
+    /** Percent 0–100 used (of the space non-root users can get), or null. */
+    usage: number | null;
+  };
   platform: string;
 }
 
@@ -93,6 +101,7 @@ export class SystemMetrics {
       memory: { usedMb: null, totalMb: null, usage: null },
       gpus: [],
       gpu: null,
+      disk: { mount: '/', usedGb: null, totalGb: null, usage: null },
       platform: `${os.type()} ${os.release()} ${os.arch()}`,
     };
   }
@@ -124,6 +133,7 @@ export class SystemMetrics {
       memory,
       gpus: this.gpus,
       gpu: gpuAgg,
+      disk: sampleDisk('/'),
       platform: `${os.type()} ${os.release()} ${os.arch()}`,
     };
   }
@@ -237,6 +247,27 @@ export class SystemMetrics {
         }
       }
     );
+  }
+}
+
+// ── Disk (statfs, cheap) ─────────────────────────────────────────────────────
+/** Capacity of the filesystem holding `mount`, `df`-style (used = total − free,
+ *  usage % against used + available so the root-reserved blocks count as full). */
+export function sampleDisk(mount: string): SystemSnapshot['disk'] {
+  try {
+    const st = fs.statfsSync(mount);
+    const total = st.blocks * st.bsize;
+    const used = (st.blocks - st.bfree) * st.bsize;
+    const avail = st.bavail * st.bsize;
+    if (!total) return { mount, usedGb: null, totalGb: null, usage: null };
+    return {
+      mount,
+      usedGb: round(used / 1073741824, 1),
+      totalGb: round(total / 1073741824, 1),
+      usage: used + avail > 0 ? round((used / (used + avail)) * 100, 1) : null,
+    };
+  } catch {
+    return { mount, usedGb: null, totalGb: null, usage: null };
   }
 }
 

@@ -413,7 +413,7 @@ async function main() {
   app.get('/api/system/details/:kind', async (req, res) => {
     const kind = req.params.kind as DetailKind;
     if (!DETAIL_KINDS.has(kind)) return res.status(400).json({ error: `unknown kind "${kind}"` });
-    try { res.json(await systemDetails(kind)); }
+    try { res.json(await systemDetails(kind, { paths: config.paths as any })); }
     catch (e: any) { res.status(500).json({ error: e.message }); }
   });
 
