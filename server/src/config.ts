@@ -136,7 +136,7 @@ export const PS_DEFAULTS = {
   prAutomation: {
     enabled: true,
     mode: 'shadow' as const,
-    repos: ['slashman413/cowork'],
+    repos: [], // no default target repo; set orchestration.prAutomation.repos per install
     label: 'cowork-auto',
     escalatePaths: [
       'auth', 'secret', '.priv', 'deploy/', '.github/workflows/', 'config.json',

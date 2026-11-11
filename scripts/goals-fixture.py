@@ -6,12 +6,13 @@ run or touch live data. The UX harness's mutating flows run only against this.
 
 Usage: goals-fixture.py <repo-with-server> [--port 16868]   (runs until killed)
 """
-import argparse, json, os, shutil, subprocess, tempfile
+import argparse, json, os, shutil, subprocess, tempfile, pathlib
 
 ap = argparse.ArgumentParser()
 ap.add_argument('repo')
 ap.add_argument('--port', type=int, default=16868)
-ap.add_argument('--live', default=os.path.expanduser('~/workspace/github/slashman413/cowork'))
+# Default live store is the checkout this script ships in (its repo root).
+ap.add_argument('--live', default=str(pathlib.Path(__file__).resolve().parent.parent))
 a = ap.parse_args()
 
 tmp = tempfile.mkdtemp(prefix='goals-fixture-')

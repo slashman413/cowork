@@ -46,7 +46,7 @@ test('Forgejo PR URLs are detected; only configured hosts are in scope', () => {
   assert.equal(prInScope(evil, cfg), false, 'unknown forge host must not be called');
   assert.equal(openedPrUrls(`see ${BASE}/cowork/pr-sandbox/pulls/3`).length, 0, 'quoted URL does not spawn a watcher');
   assert.equal(modeFor('cowork/pr-sandbox', cfg), 'merge');
-  assert.equal(modeFor('slashman413/cowork', cfg), 'shadow');
+  assert.equal(modeFor('acme/widget', cfg), 'shadow');
 });
 
 test('Forgejo pr-watch spec routes all writes through the pr-shepherd CLI', () => {

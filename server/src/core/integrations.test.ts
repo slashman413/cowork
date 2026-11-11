@@ -7,12 +7,12 @@ import { parseRepoRef, detectRepo, defaultWrapAgent, Integrations, dirSizeBytes 
 
 test('integrations: parseRepoRef validates and extracts repo metadata', () => {
   // owner/repo
-  const r1 = parseRepoRef('slashman413/cowork');
+  const r1 = parseRepoRef('acme/widget');
   assert.equal(r1.host, 'github.com');
-  assert.equal(r1.owner, 'slashman413');
-  assert.equal(r1.repo, 'cowork');
-  assert.equal(r1.url, 'https://github.com/slashman413/cowork.git');
-  assert.equal(r1.id, 'slashman413__cowork');
+  assert.equal(r1.owner, 'acme');
+  assert.equal(r1.repo, 'widget');
+  assert.equal(r1.url, 'https://github.com/acme/widget.git');
+  assert.equal(r1.id, 'acme__widget');
 
   // with ref
   const r2 = parseRepoRef('facebook/react#v18.2.0');
@@ -21,12 +21,12 @@ test('integrations: parseRepoRef validates and extracts repo metadata', () => {
   assert.equal(r2.ref, 'v18.2.0');
 
   // git@ SCP format
-  const rScp = parseRepoRef('git@github.com:slashman413/cowork.git');
+  const rScp = parseRepoRef('git@github.com:acme/widget.git');
   assert.equal(rScp.host, 'github.com');
-  assert.equal(rScp.owner, 'slashman413');
-  assert.equal(rScp.repo, 'cowork');
-  assert.equal(rScp.url, 'https://github.com/slashman413/cowork.git');
-  assert.equal(rScp.id, 'slashman413__cowork');
+  assert.equal(rScp.owner, 'acme');
+  assert.equal(rScp.repo, 'widget');
+  assert.equal(rScp.url, 'https://github.com/acme/widget.git');
+  assert.equal(rScp.id, 'acme__widget');
 
   // full github URL with tree and subpath
   const r3 = parseRepoRef('https://github.com/anthropics/skills/tree/main/skills/browser');

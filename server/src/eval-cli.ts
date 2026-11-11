@@ -14,7 +14,6 @@
  * Progress goes to stderr; stdout is the step's result (the report, for judge/run).
  */
 import fs from 'fs';
-import os from 'os';
 import path from 'path';
 import http from 'http';
 import https from 'https';
@@ -150,8 +149,6 @@ function repoRoots(cfg: Config): string[] {
     const p = path.join(parent, d);
     if (fs.existsSync(path.join(p, '.git'))) out.add(p);
   }
-  const blog = path.join(os.homedir(), 'slashman413');
-  if (fs.existsSync(path.join(blog, '.git'))) out.add(blog);
   return [...out].sort();
 }
 

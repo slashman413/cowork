@@ -9,10 +9,11 @@ otherwise it reports INCONCLUSIVE and does not ship.
 
 Usage: goals-token-baseline.py [--root <cowork dir>] [--since YYYY-MM-DD]
 """
-import argparse, collections, glob, json, os, statistics
+import argparse, collections, glob, json, os, statistics, pathlib
 
 ap = argparse.ArgumentParser()
-ap.add_argument('--root', default=os.path.expanduser('~/workspace/github/slashman413/cowork'))
+# Default root is the checkout this script ships in (its repo root).
+ap.add_argument('--root', default=str(pathlib.Path(__file__).resolve().parent.parent))
 ap.add_argument('--since', default='')
 a = ap.parse_args()
 

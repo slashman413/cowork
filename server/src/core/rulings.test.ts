@@ -43,10 +43,10 @@ test('auto-answer decisions are logged with an AUTO-ANSWER prefix and not re-log
 
 test('legacy auto-answered task falls back to its submitted interaction packet', () => {
   const t = task({ interaction: { status: 'submitted', submittedBy: 'orchestrator (auto-answer)', submittedAt: '2026-10-19T09:00:00.000Z',
-    fields: [{ id: 'f1', type: 'text', label: 'Which account?', value: 'slashman413' }] } as any });
+    fields: [{ id: 'f1', type: 'text', label: 'Which account?', value: 'acme' }] } as any });
   const rows = rulingRowsForTask(t);
   assert.equal(rows.length, 1);
-  assert.equal(rows[0].ruling, 'AUTO-ANSWER: Which account? → slashman413');
+  assert.equal(rows[0].ruling, 'AUTO-ANSWER: Which account? → acme');
   // A human answer is not a ruling.
   t.interaction!.submittedBy = 'wayne';
   assert.equal(rulingRowsForTask(t).length, 0);
