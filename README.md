@@ -38,7 +38,7 @@ The [Tasks](#task-execution--the-dispatcher), [Routing](#agent-fallback-chains-g
 | **Recipes** — saved tasks you re-run with one click | **Personas** — ~285 expert personas, searchable by division |
 | ![Recipes view — saved recurring tasks with run counts and Run buttons](docs/images/cowork-recipes.png) | ![Personas view — expert persona cards grouped by division](docs/images/cowork-personas.png) |
 | **Portal** — one-click launcher for local web services | **Obsidian Vault** — the shared, readable knowledge base |
-| ![Portal view — cards for Obsidian Vault, DeepTutor, Video Studio, File Browser and more](docs/images/cowork-portal.png) | ![Obsidian vault viewer — notes tree and a rendered note](docs/images/cowork-obsidian.png) |
+| ![Portal view — cards for Obsidian Vault, Video Studio, File Browser and more](docs/images/cowork-portal.png) | ![Obsidian vault viewer — notes tree and a rendered note](docs/images/cowork-obsidian.png) |
 | **Integrations** — audited GitHub repos installed as skills / MCP / portal cards | **Configuration** — every setting, editable live |
 | ![Integrations page — add a repository, audit results, installed skills](docs/images/cowork-integrations.png) | ![Configuration view — orchestration settings and default chain](docs/images/cowork-config.png) |
 
