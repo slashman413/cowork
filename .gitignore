@@ -42,6 +42,9 @@ reports/
 # root despite the per-task cwd; ignore those at the ROOT only, so a real file in a
 # subdirectory is never silently hidden.
 server/*.py
+# ComfyUI scratch/debug scripts consolidated into server/scripts/ (moved out of the
+# server/ root on 2026-07-26) — still local-only, still ignored.
+server/scripts/
 /*.py
 /*.db
 /__pycache__/
