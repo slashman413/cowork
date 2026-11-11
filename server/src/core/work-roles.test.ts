@@ -21,7 +21,8 @@ test('budget is a ceiling, labels match setup-pstack', () => {
 });
 
 test('role ids never collide with division ids (one reply carries both)', () => {
-  const divisions = JSON.parse(fs.readFileSync(path.resolve(import.meta.dirname, '../../../agency-agents/divisions.json'), 'utf8')).divisions;
+  // Vendored snapshot of agency-agents/divisions.json so CI has no sibling-repo dependency.
+  const divisions = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, '__fixtures__/divisions.json'), 'utf8')).divisions;
   const ids = Array.isArray(divisions) ? divisions.map((d: any) => d.id || d) : Object.keys(divisions);
   for (const r of Object.keys(DEFAULT_WORK_ROLES)) assert.ok(!ids.includes(r), `${r} is also a division id`);
 });
