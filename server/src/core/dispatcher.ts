@@ -32,6 +32,7 @@ import { codeTaskRepo, ensureWorktree, writeWorktreeDiff, pruneStaleWorktrees } 
 import { lintArtifacts, lintReason, resolveSloplint, OUTPUTS_SUBDIR } from './artifact-lint.js';
 import { listArtifactFiles } from './artifact-list.js';
 import { isAgyModelRejection, diagnoseAgyModelFailure, listAgyModels } from './agy-models.js';
+import { dshFailureReason } from './dsh-failure.js';
 
 /** Remove ANSI CSI/OSC escape sequences and lone carriage returns. */
 // eslint-disable-next-line no-control-regex
@@ -2996,7 +2997,7 @@ export class Dispatcher {
       // (running.delete above) and execute() is fire-and-forget, so it only delays
       // this task's own completion — never other tasks' dispatch or completion.
       const classified = await classifyCliFailure(
-        { exec: plan.exec, model: plan.exec === 'agy' ? agyModelSlug(plan.model, this.thinkingFor(normalizeThinking(task.context?.thinking) || plan.thinking)) : plan.model, text: output.text, stderr: output.stderr },
+        { exec: plan.exec, model: plan.exec === 'agy' ? agyModelSlug(plan.model, this.thinkingFor(normalizeThinking(task.context?.thinking) || plan.thinking)) : plan.model, text: output.text, stderr: output.stderr, cwd: agentCwd, startedMs: attemptStartedMs },
         detVerdict, verdict.reason || output.text.slice(0, 300));
       let failReason = classified.failReason;
       if (classified.agyDiag) console.warn(`Dispatcher: ${plan.agentId} — ${classified.agyDiag}`);
@@ -3130,16 +3131,25 @@ export class Dispatcher {
  * agy rejects valid models when its catalog fetch fails (503/429): tell that
  * transient outage (rate-limit class → auto re-run on reset) from a retired
  * model. Only agy's own short error output qualifies, not a deliverable quoting it.
+ * dsh: when the run itself failed (deterministic gate), the reason is the last
+ * turn/end error code from the progress plugin's stderr line or the dsh session
+ * log (core/dsh-failure.ts), not the first line of stdout. A quality-gate
+ * rejection of a clean dsh run keeps the verifier's reason.
  */
 export async function classifyCliFailure(
-  run: { exec?: string; model?: string; text: string; stderr?: string },
+  run: { exec?: string; model?: string; text: string; stderr?: string; cwd?: string; startedMs?: number },
   det: VerifyVerdict,
   reason: string,
   listModels: () => Promise<string[] | null> = listAgyModels,
+  dshHome?: string,
 ): Promise<{ failReason: string; rateLimited: boolean; agyDiag?: string }> {
   let failReason = reason;
   let rateLimited = isCliRateLimitSignal({ gateFailed: !det.ok, gateReason: det.reason, stderr: run.stderr });
   let agyDiag: string | undefined;
+  if (run.exec === 'dsh' && !det.ok) {
+    const dsh = dshFailureReason(run, dshHome);
+    if (dsh) failReason = dsh;
+  }
   if (run.exec === 'agy' && isAgyModelRejection(run.text)) {
     const diag = diagnoseAgyModelFailure(run.model || '', run.text, await listModels());
     if (diag) {

@@ -190,6 +190,17 @@ export function apply(ctx) {
           }
           break;
         }
+        case 'turn/end': {
+          // Machine-readable failure line: the dispatcher's classifyCliFailure
+          // (server/src/core/dsh-failure.ts) puts this code on the task card.
+          const r = event.data?.reason;
+          if (r?.kind === 'error') {
+            const err = r.error || r.failure || {};
+            const msg = String(err.message || '').replace(/\s+/g, ' ').trim();
+            write(`[${ts()}] ✗ dsh turn/end error code=${err.code || 'ERROR'}: ${clip(msg, 400)}\n`);
+          }
+          break;
+        }
         case 'assistant/chunk': {
           const d = event.data || {};
           const chunk = d.chunk || {};
