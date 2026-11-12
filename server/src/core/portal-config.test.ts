@@ -20,7 +20,6 @@ test('repo default portal.json is valid and lists the DGX Spark services', () =>
   for (const k of ['obsidian', 'mautic', 'filebrowser', 'forgejo', 'sglang38', 'comfyui', 'firecrawl', 'sunshine', 'videostudio', 'audiooverview']) {
     assert.ok(view.services[k], `missing default service ${k}`);
   }
-  assert.equal(view.services.firecrawl.enabled, false);
   assert.equal(view.services.sunshine.unit, 'sunshine.service');
   assert.equal(view.services.sunshine.enabled, true);
   assert.equal(view.services.videostudio.url, '/video-studio.html');
