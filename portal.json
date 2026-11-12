@@ -3,14 +3,13 @@
   "accent": "#2563EB",
   "categories": [
     "Knowledge",
-    "Marketing",
-    "Files",
     "Dev",
-    "Automation",
-    "Ops",
-    "APIs & MCP",
-    "Explore",
-    "Other"
+    "Files",
+    "Multimedia",
+    "Services",
+    "Marketing",
+    "Design",
+    "Remote"
   ],
   "services": {
     "videostudio": {
@@ -18,7 +17,7 @@
       "label": "Video Studio 影片工作室",
       "description": "Code-rendered films: pick one of 59 lemo-opuscar styles, write a brief, a Claude agent directs and renders the MP4.",
       "icon": "clapperboard",
-      "category": "Marketing",
+      "category": "Multimedia",
       "enabled": true,
       "probe": false
     },
@@ -27,7 +26,7 @@
       "label": "Audio Overview 語音導讀",
       "description": "Turn a task output, an Obsidian note or pasted text into a narrated or two-host audio overview (edge-tts).",
       "icon": "headphones",
-      "category": "Marketing",
+      "category": "Multimedia",
       "enabled": true,
       "probe": false
     },
@@ -36,7 +35,7 @@
       "label": "Shotcraft 鏡頭工坊",
       "description": "Cinematic product videos with the video-shotcraft skill: pick shots from 124 recipe cards, then create a task, schedule or goal.",
       "icon": "film",
-      "category": "Marketing",
+      "category": "Multimedia",
       "enabled": true,
       "probe": false
     },
@@ -53,7 +52,7 @@
       "label": "Integrations",
       "description": "Turn a git / open-source repo into a cowork capability: fetch, security-audit, then install as an agent skill or a sandboxed portal plugin (or have an agent wrap a CLI/MCP server as a skill).",
       "icon": "puzzle",
-      "category": "APIs & MCP",
+      "category": "Dev",
       "enabled": true,
       "probe": false
     },
@@ -86,15 +85,16 @@
       "label": "SGLang (Qwen3.8-27B)",
       "description": "Local SGLang OpenAI-compatible inference server — Qwen3.8-27B NVFP4 + DFlash2, :8001.",
       "icon": "cpu",
-      "category": "APIs & MCP",
-      "enabled": true
+      "category": "Services",
+      "enabled": true,
+      "order": 101
     },
     "comfyui": {
       "url": "http://localhost:8188",
       "label": "ComfyUI",
       "description": "Local ComfyUI node-based image / audio generation server.",
       "icon": "image",
-      "category": "APIs & MCP",
+      "category": "Multimedia",
       "enabled": true
     },
     "firecrawl": {
@@ -102,24 +102,16 @@
       "label": "Firecrawl",
       "description": "Web scraping / crawling API for LLM pipelines.",
       "icon": "flame",
-      "category": "APIs & MCP",
-      "enabled": false
-    },
-    "godseye": {
-      "url": "http://localhost:4173",
-      "label": "God's Eye View 上帝之眼",
-      "description": "即時 3D 地球情報台 — 航班、船舶、衛星、地震、CCTV（繁中外掛，Tailscale :4173）。",
-      "icon": "globe",
-      "category": "Explore",
+      "category": "Services",
       "enabled": true,
-      "unit": "gods-eye-view.service"
+      "order": 100
     },
     "sunshine": {
       "url": "https://localhost:47990",
       "label": "Sunshine",
       "description": "Self-hosted game stream and remote desktop host for Moonlight.",
       "icon": "sun",
-      "category": "Ops",
+      "category": "Remote",
       "enabled": true,
       "probe": "http://localhost:47989/serverinfo",
       "unit": "sunshine.service",
