@@ -26,6 +26,7 @@ import { taskTier, mergeTierChain, reviewChain, agentFamily, type TierName } fro
 import { canonicalAgentId } from '../config.js';
 import { STREAMING_EXECS, streamArgs, createStreamRenderer, claudeUsage, flatUsage, lastAssistantText } from './progress-stream.js';
 import { briefPersona } from './persona-brief.js';
+import { wantsPersonaRouting } from './persona-routing.js';
 import { agyModelSlug, DEFAULT_THINKING, normalizeThinking, splitThinkingSuffix, thinkingArgs, type ThinkingLevel } from './thinking.js';
 import { ClaudeProfile } from './claude-profile.js';
 import { killProcessTree } from './proc-tree.js';
@@ -759,6 +760,9 @@ export class Dispatcher {
     // Canonicalised so a task pinned to a retired agent id before a rename still runs on it.
     const ctxAgent = typeof task.context?.agent === 'string' ? canonicalAgentId(this.config, task.context.agent) : undefined;
     if (ctxAgent && agents[ctxAgent] && !agents[ctxAgent].disabled && !task.context?.agentAuto) {
+      // A small-model pin with no persona yet: route first so the router picks a
+      // persona (the pin stays); the next tick runs it on the pinned agent.
+      if (!personaName && wantsPersonaRouting(agents[ctxAgent])) return { action: 'route' };
       return this.agentPlan(personaName, division, ctxAgent, agents[ctxAgent], { pinned: true, attempt, chainLen: 0 });
     }
 

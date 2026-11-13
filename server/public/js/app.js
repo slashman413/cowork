@@ -1352,14 +1352,12 @@ class App {
     const content = document.getElementById('modal-content');
     if (!container || !content) return;
     let agents = {};
-    let divisions = {};
     let usage = {};
     let pstack = { playbooks: ['investigation', 'bug-fix', 'feature', 'research-report', 'content', 'ops-change',
       'technical-writing', 'perf-issue', 'refactoring', 'prototype', 'runtime-forensics', 'eval', 'opening-a-pr', 'babysit'], skills: [] };
     // Feeds are optional — missing registry/roster degrades to Auto.
     await Promise.all([
       this.api.get('/agents').then(r => { agents = r || {}; }).catch(() => {}),
-      this.api.get('/roster-divisions').then(r => { divisions = r || {}; }).catch(() => {}),
       this.api.get('/connections').then(r => { usage = r?.usage || {}; }).catch(() => {}),
       this.api.get('/pstack').then(r => { pstack = r || pstack; }).catch(() => {})
     ]);
@@ -1376,8 +1374,6 @@ class App {
         const note = until ? ` — ⏳ rate-limited until ${until.toLocaleString()}` : '';
         return `<option value="${esc(b)}">${esc(b + note)}</option>`;
       })).join('');
-    const divOpts = [`<option value="">🎭 Auto — let the router pick the persona</option>`]
-      .concat(Object.entries(divisions).sort().map(([d, i]) => `<option value="${esc(d)}">${esc(i.label || d)} (${i.personas.length})</option>`)).join('');
     const fieldStyle = 'width:100%; padding:9px 10px; background:var(--bg-tertiary); border:1px solid var(--border-color); border-radius:8px; color:inherit; font:inherit; font-size:0.9rem';
     const labelStyle = 'display:block; font-size:0.72rem; text-transform:uppercase; letter-spacing:.04em; color:var(--text-muted); margin:0 0 6px';
     content.innerHTML = `
@@ -1387,11 +1383,6 @@ class App {
       <input id="nt-title" style="${fieldStyle}; margin-bottom:12px" placeholder="Short imperative title…" autocomplete="off">
       <label style="${labelStyle}" for="nt-desc">Brief (markdown) <span style="color:#EF4444">*</span></label>
       <textarea id="nt-desc" rows="6" style="${fieldStyle}; margin-bottom:12px; resize:vertical" placeholder="What should the agent do? Include acceptance criteria."></textarea>
-      <label style="${labelStyle}">Persona <span style="text-transform:none; letter-spacing:0">(optional — pick a division, then the persona that studies the files & does the work)</span></label>
-      <div class="modal-row" style="margin-bottom:12px">
-        <div><select id="nt-div" style="${fieldStyle}">${divOpts}</select></div>
-        <div><select id="nt-persona" style="${fieldStyle}" disabled><option value="">— none —</option></select></div>
-      </div>
       <div class="modal-row" style="margin-bottom:12px">
         <div>
           <label style="${labelStyle}" for="nt-priority">Priority</label>
@@ -1427,7 +1418,7 @@ class App {
       <select id="nt-agent" style="${fieldStyle}; margin-bottom:12px">${opts}</select>
       <label style="${labelStyle}" for="nt-thinking">Thinking</label>
       <select id="nt-thinking" style="${fieldStyle}; margin-bottom:12px">${thinkingOptions()}</select>
-      <label style="${labelStyle}">Input files <span style="text-transform:none; letter-spacing:0">(optional — attached for the persona/agent to study)</span></label>
+      <label style="${labelStyle}">Input files <span style="text-transform:none; letter-spacing:0">(optional — attached for the agent to study)</span></label>
       <div id="nt-attachments" style="display:none; flex-wrap:wrap; gap:6px; margin-bottom:8px"></div>
       <input type="file" id="nt-files" multiple style="display:none">
       <button class="btn" id="nt-attach" type="button" style="font-size:0.8rem; display:inline-flex; align-items:center; gap:6px"><i data-lucide="paperclip" style="width:14px;height:14px"></i> Attach files</button>
@@ -1476,18 +1467,6 @@ class App {
       errEl.textContent = '';
     }));
 
-    // Division → agent: the agent list is scoped to the chosen division, matching
-    // the two-stage roster picker in Chat. Empty division = auto-route.
-    const divEl = content.querySelector('#nt-div');
-    const personaEl = content.querySelector('#nt-persona');
-    divEl.onchange = () => {
-      const info = divEl.value ? divisions[divEl.value] : null;
-      const personaOpts = info ? info.personas.slice().sort((a, b) => a.name.localeCompare(b.name))
-        .map(a => `<option value="${esc(a.slug)}">${esc(a.name)}</option>`).join('') : '';
-      personaEl.innerHTML = `<option value="">— any persona in this division —</option>${personaOpts}`;
-      personaEl.disabled = !info;
-    };
-
     // Files are staged client-side and uploaded on Create (mirrors the Chat
     // composer), so a cancelled modal leaves no orphaned uploads.
     const staged = [];
@@ -1522,18 +1501,15 @@ class App {
       if (!description) { showError('Brief is required — tell the agent what to do.', descEl); return; }
       const agent = content.querySelector('#nt-agent').value;
       const thinking = content.querySelector('#nt-thinking').value;
-      const division = divEl.value;
-      const persona = personaEl.value;
       // datetime-local gives a LOCAL wall-clock string; toISOString converts it
       // to the UTC instant the server schedules on. Empty = run now (default).
       const when = content.querySelector('#nt-when').value;
       const recurrence = readRecurrence(content, 'nt-rec');
-      // Context mirrors Chat: a named agent wins (dispatcher derives its division
-      // + persona); otherwise a bare division scopes the router. Agent pins on top.
+      // The persona is never picked here: the orchestrator's router chooses one per
+      // task (also for a small pinned model, see core/persona-routing.ts).
       const context = {};
       if (agent) context.agent = agent;
       if (thinking) context.thinking = thinking;
-      if (persona) context.persona = persona; else if (division) context.division = division;
       // pstack triggers (G9): playbook card, review gate, explicit skill.
       const method = content.querySelector('#nt-method').value;
       const review = content.querySelector('#nt-review').value;
@@ -1563,8 +1539,7 @@ class App {
         await this.api.post('/inbox', body);
         submitting = false;
         close();
-        const target = persona ? `persona ${persona}` : division ? `${divisions[division]?.label || division} division` : null;
-        const routeNote = agent ? `pinned to ${agent}` : target ? `routed to ${target}` : 'auto-routed via the agent chain';
+        const routeNote = agent ? `pinned to ${agent}` : 'auto-routed via the agent chain';
         const fileNote = inputs.length ? ` · ${inputs.length} file(s) attached` : '';
         this.toast('task created', `${when ? `Scheduled for ${new Date(when).toLocaleString()}` : 'Queued'} — ${routeNote}${fileNote}.`);
         if (this.currentView === 'tasks') this.renderInbox();
@@ -1596,16 +1571,13 @@ class App {
     catch (err) { this.toast('error', err.message); return; }
     if (!task) { this.toast('error', 'Task not found'); return; }
     if (!isTaskEditable(task)) { this.toast('cannot edit', `Task is ${task.status} — only tasks that are not running or pending can be edited.`); return; }
-    let agents = {}, divisions = {}, usage = {};
+    let agents = {}, usage = {};
     await Promise.all([
       this.api.get('/agents').then(r => { agents = r || {}; }).catch(() => {}),
-      this.api.get('/roster-divisions').then(r => { divisions = r || {}; }).catch(() => {}),
       this.api.get('/connections').then(r => { usage = r?.usage || {}; }).catch(() => {})
     ]);
     const ctx = task.context || {};
     const curAgent = ctx.agentAuto ? '' : (ctx.agent || '');
-    const curDivision = ctx.division || '';
-    const curPersona = ctx.persona || '';
     // A pin to a now-disabled agent resolves to Auto at dispatch (the dispatcher
     // treats a disabled pin as absent), so it's not offered here either.
     const curAgentSelectable = curAgent && !agents[curAgent]?.disabled;
@@ -1615,8 +1587,6 @@ class App {
         const note = until ? ` — ⏳ rate-limited until ${until.toLocaleString()}` : '';
         return `<option value="${esc(b)}"${b === curAgent ? ' selected' : ''}>${esc(b + note)}</option>`;
       })).join('');
-    const divOpts = [`<option value=""${curDivision ? '' : ' selected'}>🎭 Auto — let the router pick the persona</option>`]
-      .concat(Object.entries(divisions).sort().map(([d, i]) => `<option value="${esc(d)}"${d === curDivision ? ' selected' : ''}>${esc(i.label || d)} (${i.personas.length})</option>`)).join('');
     const prioOpts = ['normal', 'low', 'high', 'urgent']
       .map(p => `<option value="${p}"${(task.priority || 'normal') === p ? ' selected' : ''}>${p}</option>`).join('');
     const fieldStyle = 'width:100%; padding:9px 10px; background:var(--bg-tertiary); border:1px solid var(--border-color); border-radius:8px; color:inherit; font:inherit; font-size:0.9rem';
@@ -1634,11 +1604,6 @@ class App {
       ${(ctx.acceptance && Array.isArray(ctx.acceptance)) ? `
       <label style="${labelStyle}">Acceptance criteria (one per line) ${ctx.acceptanceSource === 'sharpened' ? '<span class="badge" style="background:#0EA5E918; color:#0EA5E9; border:1px solid #0EA5E940; font-size:0.65rem; text-transform:none">sharpened</span>' : ''}</label>
       <textarea id="et-acceptance" rows="4" style="${fieldStyle}; margin-bottom:12px; resize:vertical">${esc(ctx.acceptance.join('\n'))}</textarea>` : ''}
-      <label style="${labelStyle}">Persona <span style="text-transform:none; letter-spacing:0">(optional — division, then persona)</span></label>
-      <div style="display:flex; gap:8px; margin-bottom:12px">
-        <select id="et-div" style="${fieldStyle}; flex:1">${divOpts}</select>
-        <select id="et-persona" style="${fieldStyle}; flex:1"><option value="">— none —</option></select>
-      </div>
       <label style="${labelStyle}">Priority</label>
       <select id="et-priority" style="${fieldStyle}; margin-bottom:12px">${prioOpts}</select>
       <label style="${labelStyle}">Run at <span style="text-transform:none; letter-spacing:0">(optional — ${finished ? 'set a future time to re-run; ' : ''}leave empty to run now)</span></label>
@@ -1666,19 +1631,6 @@ class App {
     content.querySelector('#et-cancel').onclick = close;
     container.querySelector('.modal-backdrop').onclick = close;
 
-    // Division → agent (scoped list), pre-selecting the task's current agent.
-    const divEl = content.querySelector('#et-div');
-    const personaEl = content.querySelector('#et-persona');
-    const fillPersonas = (selectSlug) => {
-      const info = divEl.value ? divisions[divEl.value] : null;
-      const personaOpts = info ? info.personas.slice().sort((a, b) => a.name.localeCompare(b.name))
-        .map(a => `<option value="${esc(a.slug)}"${a.slug === selectSlug ? ' selected' : ''}>${esc(a.name)}</option>`).join('') : '';
-      personaEl.innerHTML = `<option value="">— any persona in this division —</option>${personaOpts}`;
-      personaEl.disabled = !info;
-    };
-    fillPersonas(curPersona);
-    divEl.onchange = () => fillPersonas('');
-
     content.querySelector('#et-ok').onclick = async () => {
       const title = content.querySelector('#et-title').value.trim();
       const description = content.querySelector('#et-desc').value.trim();
@@ -1686,17 +1638,20 @@ class App {
       if (!description) { content.querySelector('#et-desc').style.borderColor = '#EF4444'; return; }
       const agent = content.querySelector('#et-agent').value;
       const thinking = content.querySelector('#et-thinking').value;
-      const division = divEl.value;
-      const persona = personaEl.value;
       const when = content.querySelector('#et-when').value;
       const recurrence = readRecurrence(content, 'et-rec');
       const accEl = content.querySelector('#et-acceptance');
       const acceptance = accEl ? accEl.value.split('\n').map(s => s.trim()).filter(Boolean) : undefined;
       const okBtn = content.querySelector('#et-ok');
       okBtn.disabled = true;
-      // context mirrors createTask: a named agent wins (dispatcher derives its
-      // division); otherwise a bare division scopes the router. '' clears a pin.
-      const context = { agent, thinking, persona: persona || '', division: persona ? '' : division };
+      // No persona picker: the orchestrator chooses it. When the title or brief
+      // changed, clear the routed persona so the router re-picks for the new work;
+      // otherwise leave it as-is. '' clears the agent pin.
+      const context = { agent, thinking };
+      if (title !== (task.title || '') || description !== (task.description || '').trim()) {
+        context.persona = '';
+        context.division = '';
+      }
       const body = {
         title, description,
         priority: content.querySelector('#et-priority').value,
@@ -2670,7 +2625,7 @@ class App {
           style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#22C55E;border-color:#22C55E66">⑂ Merge</button>
         <button class="btn" data-worktree-discard="${esc(t.id)}" title="Discard this task's worktree and delete branch ${esc(t.worktree.branch)}"
           style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#EF4444;border-color:#EF444466">🗑 Discard</button>` : ''}
-        ${isTaskEditable(t) ? `<button class="btn" data-edit-task="${esc(t.id)}" title="Edit this task — change its title, brief, persona/agent, schedule and loop interval, then save"
+        ${isTaskEditable(t) ? `<button class="btn" data-edit-task="${esc(t.id)}" title="Edit this task — change its title, brief, agent, thinking, schedule and loop interval, then save"
           style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#0EA5E9;border-color:#0EA5E966">✎ Edit</button>` : ''}</div>
       ${this.recipeTaskCardHTML ? this.recipeTaskCardHTML(t, failed) : ''}
       ${parentLink ? `<div style="padding:4px 0 2px; font-size:0.72rem">${parentLink}</div>` : ''}

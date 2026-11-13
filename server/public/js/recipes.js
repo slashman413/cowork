@@ -7,8 +7,11 @@
  *
  *   Library   grid of cards — score ("9/10 good"), last 10 runs as dots, Run
  *   Run sheet only the recipe's fields, agent (Auto / last good agent), schedule
- *   Editor    capture from a task card ("★ Save as recipe") or edit: select a
- *             phrase in the brief → "Make field" turns every occurrence into {{key}}
+ *   Editor    write from scratch ("＋ New recipe"), capture from a task card
+ *             ("★ Save as recipe") or edit: select a phrase in the brief → "Make
+ *             field" turns every occurrence into {{key}}; "Add field" inserts a
+ *             blank at the cursor. "How it runs" = agent + thinking (+ timebox);
+ *             the persona is always the orchestrator's pick.
  *   Detail    Runs / Brief / Origin / History tabs (#recipes/<id>)
  *
  * Task cards: "★ Save as recipe" on good finished tasks; recipe-made tasks get a
@@ -83,6 +86,24 @@
     return { kept: () => saved.filter((n) => on.has(n)), files };
   };
 
+  /**
+   * Agent + Thinking pickers — the same "who runs it, how hard it thinks" setup
+   * the New-task dialog has. The persona is never picked: the orchestrator's
+   * router chooses one per run. `extra` adds the agent that made the good run
+   * when it is no longer in the registry, so a saved pin is never silently lost.
+   */
+  const runSetupHTML = (prefix, ids, { agent = '', thinking = '', goodAgent = '', autoLabel = 'Auto (router picks)' } = {}) => {
+    const list = [['', autoLabel], ...(agent && !ids.includes(agent) ? [[agent, agent]] : []), ...ids.map((b) => [b, b])];
+    const agentOpts = list.map(([v, l]) => `<option value="${esc(v)}"${v === agent ? ' selected' : ''}>${esc(l)}${v && v === goodAgent ? ' · made the good run' : ''}</option>`).join('');
+    return `<div class="rcp-row rcp-row-wrap">
+      <label class="rcp-field rcp-grow"><span>Agent</span><select id="${prefix}-agent" class="rcp-in">${agentOpts}</select></label>
+      <label class="rcp-field rcp-grow"><span>Thinking</span><select id="${prefix}-thinking" class="rcp-in">${thinkingOptions(thinking)}</select></label>
+    </div>`;
+  };
+
+  /** A blank recipe for "＋ New recipe" (written by hand, no origin task). */
+  const blankRecipe = () => ({ name: '', icon: 'chef-hat', purpose: '', title: '', brief: '', fields: [], carry: { agentMode: 'suggest', inputs: [] } });
+
   Object.assign(App.prototype, {
     _rcpModal(html, wide) {
       const container = document.getElementById('modal-container'), content = document.getElementById('modal-content');
@@ -105,12 +126,13 @@
           <div class="rcp-top">
             <div>
               <h2 class="rcp-h">Recipes</h2>
-              <p class="rcp-sub">Tasks that went well, saved to run again with one click. Make one from any finished task: <b>★ Save as recipe</b>.</p>
+              <p class="rcp-sub">Tasks that went well, saved to run again with one click. Write one with <b>New recipe</b>, or save any finished task with <b>★ Save as recipe</b>.</p>
             </div>
             <div class="rcp-tools">
               <label class="rcp-search"><i data-lucide="search"></i><input id="rcp-q" type="search" placeholder="Search recipes" value="${esc(st.q)}"></label>
               <select id="rcp-sort" class="rcp-select" aria-label="Sort">${SORTS.map(([v, l]) => `<option value="${v}"${v === st.sort ? ' selected' : ''}>${l}</option>`).join('')}</select>
-              <button class="btn rcp-fav-filter${st.fav ? ' on' : ''}" id="rcp-fav" title="Favourites only" aria-pressed="${st.fav}"><i data-lucide="star"></i></button>
+              <button class="btn rcp-fav-filter${st.fav ? ' on' : ''}" id="rcp-fav" title="Favourites only" aria-label="Favourites only" aria-pressed="${st.fav}"><i data-lucide="star"></i></button>
+              <button class="btn btn-primary rcp-new" id="rcp-new" title="Write a new recipe from scratch"><i data-lucide="plus"></i>New recipe</button>
             </div>
           </div>
           <div id="rcp-grid" class="rcp-grid"></div>
@@ -125,8 +147,8 @@
         const grid = this.contentEl.querySelector('#rcp-grid');
         if (!list.length) {
           grid.innerHTML = `<div class="rcp-empty"><i data-lucide="chef-hat"></i><h3>No recipes yet</h3>
-            <p>Recipes are made from tasks that went well. Open a finished task and press <b>★ Save as recipe</b>: you pick which words change each time, and Cowork keeps the agent, agent and checks that worked.</p>
-            <a class="btn btn-primary" href="#tasks">Go to Tasks</a></div>`;
+            <p>Write a reusable brief with blanks to fill in each run, or open a finished task and press <b>★ Save as recipe</b> to keep the agent, thinking level and checks that worked.</p>
+            <div class="rcp-empty-actions"><button class="btn btn-primary" data-rcp-new><i data-lucide="plus"></i>New recipe</button><a class="btn" href="#tasks">Go to Tasks</a></div></div>`;
         } else if (!rows.length) {
           grid.innerHTML = `<div class="rcp-empty"><p>No recipe matches.</p></div>`;
         } else {
@@ -158,6 +180,7 @@
       page.querySelector('#rcp-q').oninput = (e) => { st.q = e.target.value; draw(); };
       page.querySelector('#rcp-sort').onchange = (e) => { st.sort = e.target.value; draw(); };
       page.querySelector('#rcp-fav').onclick = () => { st.fav = !st.fav; this.renderRecipes(); };
+      page.querySelector('#rcp-new').onclick = () => this.recipeEditor(blankRecipe(), { edit: false });
       page.onclick = async (e) => {
         const fav = e.target.closest('[data-rcp-fav]'), run = e.target.closest('[data-rcp-run]'), card = e.target.closest('[data-rcp]');
         if (fav) {
@@ -167,6 +190,7 @@
           return this.renderRecipes();
         }
         if (run) { e.stopPropagation(); return this.recipeRunSheet(byId(run.dataset.rcpRun)); }
+        if (e.target.closest('[data-rcp-new]')) return this.recipeEditor(blankRecipe(), { edit: false });
         if (card) location.hash = `#recipes/${card.dataset.rcp}`;
       };
       page.onkeydown = (e) => { if (e.key === 'Enter' && e.target.matches('[data-rcp]')) location.hash = `#recipes/${e.target.dataset.rcp}`; };
@@ -189,15 +213,15 @@
         return `<input id="${id}" class="rcp-in" type="${f.type === 'number' ? 'number' : f.type === 'date' ? 'date' : 'text'}" value="${v}">`;
       };
       const agentDefault = r.carry.agentMode === 'lock' ? (r.carry.agent || '') : '';
-      const agentOpts = [['', 'Auto (router picks)'], ...(r.carry.agent && !ids.includes(r.carry.agent) ? [[r.carry.agent, r.carry.agent]] : []), ...ids.map((b) => [b, b])]
-        .map(([v, l]) => `<option value="${esc(v)}"${v === agentDefault ? ' selected' : ''}>${esc(l)}${v && v === r.carry.agent ? ' · made the good run' : ''}</option>`).join('');
+      const setup = runSetupHTML('rcp-run', r.carry.agent && !ids.includes(r.carry.agent) ? [r.carry.agent, ...ids] : ids,
+        { agent: agentDefault, thinking: r.carry.thinking || '', goodAgent: r.origin ? r.carry.agent : '' });
       const { content, close } = this._rcpModal(`
         <div class="rcp-modal-head"><span class="rcp-icon"><i data-lucide="${esc(r.icon)}"></i></span>
           <div><h3>${esc(r.name)}</h3><p class="rcp-modal-sub">${esc(r.purpose || 'Fill in the fields and run.')}</p></div></div>
         <form id="rcp-run-form" class="rcp-form">
           ${r.fields.length ? r.fields.map((f) => `<label class="rcp-field"><span>${esc(f.label)}${f.required ? '' : ' <em>(optional)</em>'}</span>${fieldInput(f)}</label>`).join('')
             : '<p class="rcp-note">This recipe has no fields: it runs exactly as saved.</p>'}
-          <label class="rcp-field"><span>Agent</span><select id="rcp-agent" class="rcp-in">${agentOpts}</select></label>
+          ${setup}
           <div class="rcp-field"><span>Input files <em>(untick to leave a saved file out of this run; attached files are for this run only)</em></span><div id="rcp-run-files"></div></div>
           <details class="rcp-adv"><summary>More options</summary>
             <label class="rcp-field"><span>Extra instructions <em>(optional, this run only)</em></span><textarea id="rcp-extra" class="rcp-in" rows="3"></textarea></label>
@@ -213,7 +237,9 @@
         e.preventDefault();
         const values = {};
         for (const f of r.fields) values[f.key] = content.querySelector(`#rcp-v-${f.key}`).value;
-        const body = { values, agent: content.querySelector('#rcp-agent').value };
+        // Thinking is always sent: the picker starts on the recipe's level, so
+        // "Default" here explicitly means the agent's own default for this run.
+        const body = { values, agent: content.querySelector('#rcp-run-agent').value, thinking: content.querySelector('#rcp-run-thinking').value };
         const extra = content.querySelector('#rcp-extra').value.trim();
         if (extra) body.extra = extra;
         const at = content.querySelector('#rcp-at').value;
@@ -224,6 +250,7 @@
         if (skip.length) body.skipInputs = skip;
         const go = content.querySelector('#rcp-go');
         go.disabled = true;
+        go.setAttribute('aria-busy', 'true');
         try {
           if (runFiles.files.length) body.inputs = await this.uploadInputFiles(runFiles.files);
           const t = await this.api.post(`/recipes/${encodeURIComponent(r.id)}/run`, body);
@@ -232,7 +259,7 @@
           close();
           this.toast('recipe started', `${t.title} — ${t.status === 'scheduled' ? 'scheduled' : 'queued'}.`);
           location.hash = `#tasks/${t.id}`;
-        } catch (err) { content.querySelector('#rcp-err').textContent = err.message; go.disabled = false; }
+        } catch (err) { content.querySelector('#rcp-err').textContent = err.message; go.disabled = false; go.removeAttribute('aria-busy'); }
       };
     },
 
@@ -247,7 +274,8 @@
         : '<p class="rcp-note">No runs yet. Press Run to make the first one.</p>';
       const carry = r.carry;
       const facts = [
-        ['Persona', carry.persona || 'router picks'], ['Agent', carry.agent ? `${carry.agent} (${carry.agentMode === 'lock' ? 'always' : 'suggested'})` : 'router picks'],
+        ['Agent', carry.agent ? `${carry.agent} (${carry.agentMode === 'lock' ? 'always' : 'suggested'})` : 'router picks'],
+        ['Thinking', carry.thinking || 'agent default'],
         ['Tier', carry.tier], ['Timebox', carry.timeboxMin ? `${carry.timeboxMin} min` : null],
         ['Input files', carry.inputs.length ? carry.inputs.join(', ') : null],
       ].filter(([, v]) => v);
@@ -298,40 +326,49 @@
       catch (err) { this.toast('error', err.message); }
     },
 
-    recipeEditor(draft, { edit }) {
+    async recipeEditor(draft, { edit }) {
       const d = JSON.parse(JSON.stringify(draft));
       d.carry ||= { agentMode: 'suggest', inputs: [] };
-      const keep = { persona: !!d.carry.persona, agent: !!d.carry.agent, tier: !!d.carry.tier, timeboxMin: !!d.carry.timeboxMin };
-      const carryRows = [
-        ['persona', 'Persona', d.carry.persona], ['agent', 'Agent', d.carry.agent], ['tier', 'Tier', d.carry.tier],
-        ['timeboxMin', 'Timebox', d.carry.timeboxMin ? `${d.carry.timeboxMin} min` : ''],
-      ].filter(([, , v]) => v);
+      d.fields ||= [];
+      const scratch = !edit && !d.origin;   // "＋ New recipe": written by hand
+      let agents = {};
+      try { agents = await this.api.get('/agents'); } catch { /* Auto only */ }
+      const ids = selectableAgentIds(agents);
+      // Tier is the only carried setting without its own picker below.
+      const carryRows = [['tier', 'Tier', d.carry.tier]].filter(([, , v]) => v);
       const fileNotes = [
         d.carryOmitted?.length ? `${d.carryOmitted.length} more artifact${d.carryOmitted.length === 1 ? '' : 's'} not carried: over the size/count limit.` : '',
         d.carrySkipped?.length ? `${d.carrySkipped.length} result, data or media file${d.carrySkipped.length === 1 ? '' : 's'} left out: only code and config are carried. Attach them again if every run needs them.` : '',
       ].filter(Boolean).join(' ');
       const { content, close } = this._rcpModal(`
-        <h3>${edit ? `Edit recipe <span class="rcp-ver">v${d.version}</span>` : '★ Save as recipe'}</h3>
-        <p class="rcp-modal-sub">${edit ? 'Changing the brief, fields or settings saves a new version with a fresh score.' : 'Keep what worked, and choose the words that change from run to run.'}</p>
+        <h3>${edit ? `Edit recipe <span class="rcp-ver">v${d.version}</span>` : scratch ? 'New recipe' : '★ Save as recipe'}</h3>
+        <p class="rcp-modal-sub">${edit ? 'Changing the brief, fields or settings saves a new version with a fresh score.'
+          : scratch ? 'Write a brief once, leave blanks for what changes, and run it again with one click.'
+          : 'Keep what worked, and choose the words that change from run to run.'}</p>
         <div class="rcp-form">
           <div class="rcp-step"><span class="rcp-num">1</span><b>Name it</b></div>
           <div class="rcp-row">
-            <label class="rcp-field rcp-grow"><span>Name</span><input id="rcp-name" class="rcp-in" maxlength="80" value="${esc(d.name)}"></label>
+            <label class="rcp-field rcp-grow"><span>Name <b class="rcp-req-mark" aria-hidden="true">*</b></span><input id="rcp-name" class="rcp-in" maxlength="80" required aria-describedby="rcp-name-err" placeholder="e.g. Weekly competitor digest" value="${esc(d.name)}"><small class="rcp-ferr" id="rcp-name-err" role="alert"></small></label>
           </div>
           <div class="rcp-icons" role="radiogroup" aria-label="Icon">${ICONS.map((i) => `<button type="button" role="radio" aria-checked="${i === d.icon}" class="rcp-icon-pick${i === d.icon ? ' on' : ''}" data-icon="${i}" title="${i}"><i data-lucide="${i}"></i></button>`).join('')}</div>
           <label class="rcp-field"><span>What it's for <em>(one line)</em></span><input id="rcp-purpose" class="rcp-in" maxlength="160" placeholder="e.g. Monthly audit of the Gumroad catalog" value="${esc(d.purpose)}"></label>
 
-          <div class="rcp-step"><span class="rcp-num">2</span><b>Pick what changes each run</b></div>
-          <p class="rcp-note">Select a word or phrase in the brief and press <b>Make field</b>. Every copy of it becomes a blank you fill in when you run the recipe.</p>
-          <label class="rcp-field"><span>Task title</span><input id="rcp-title" class="rcp-in" value="${esc(d.title)}"></label>
-          <label class="rcp-field"><span>Brief</span><textarea id="rcp-brief" class="rcp-in rcp-brief" rows="9" spellcheck="false">${esc(d.brief)}</textarea></label>
-          <div class="rcp-makefield"><button type="button" class="btn" id="rcp-mk" disabled><i data-lucide="text-cursor-input"></i>Make field</button><span class="rcp-muted" id="rcp-sel">Select text in the title or brief first.</span></div>
+          <div class="rcp-step"><span class="rcp-num">2</span><b>${scratch ? 'Write the brief, mark what changes' : 'Pick what changes each run'}</b></div>
+          <p class="rcp-note">${scratch ? 'Tell the agent what to do and what done looks like. ' : ''}Select a word or phrase and press <b>Make field</b> (every copy becomes a blank you fill in at run time), or press <b>Add field</b> to drop a new blank at the cursor.</p>
+          <label class="rcp-field"><span>Task title <em>(optional, defaults to the name)</em></span><input id="rcp-title" class="rcp-in" placeholder="e.g. Competitor digest: {{topic}}" value="${esc(d.title)}"></label>
+          <label class="rcp-field"><span>Brief <b class="rcp-req-mark" aria-hidden="true">*</b></span><textarea id="rcp-brief" class="rcp-in rcp-brief" rows="9" spellcheck="false" required aria-describedby="rcp-brief-err" placeholder="What should the agent do? Include acceptance criteria and where the output goes.">${esc(d.brief)}</textarea><small class="rcp-ferr" id="rcp-brief-err" role="alert"></small></label>
+          <div class="rcp-makefield"><button type="button" class="btn" id="rcp-mk" disabled><i data-lucide="text-cursor-input"></i>Make field</button><button type="button" class="btn" id="rcp-add-field"><i data-lucide="plus"></i>Add field</button><span class="rcp-muted" id="rcp-sel">Select text in the title or brief to make it a field.</span></div>
           <div id="rcp-fields" class="rcp-fields"></div>
 
-          <div class="rcp-step"><span class="rcp-num">3</span><b>Keep what worked</b></div>
+          <div class="rcp-step"><span class="rcp-num">3</span><b>How it runs</b></div>
+          <p class="rcp-note">Who runs it and how hard it thinks. The orchestrator picks the best persona for every run, so there is nothing to choose there.</p>
+          ${runSetupHTML('rcp-e', ids, { agent: d.carry.agent || '', thinking: d.carry.thinking || '', goodAgent: scratch ? '' : d.carry.agent, autoLabel: 'Auto (router picks each run)' })}
+          <div class="rcp-row rcp-row-wrap">
+            <label class="rcp-field rcp-timebox"><span>Timebox <em>(minutes, optional)</em></span><input id="rcp-e-timebox" class="rcp-in" type="number" min="1" step="1" inputmode="numeric" placeholder="none" value="${d.carry.timeboxMin || ''}"></label>
+          </div>
+          <label class="rcp-switch" id="rcp-lock-row"><input type="checkbox" id="rcp-lock"${d.carry.agentMode === 'lock' ? ' checked' : ''}><span>Always use the selected agent<br><em>Off: the router picks an agent each run (can be cheaper), and the selected agent is one tap away on the Run sheet.</em></span></label>
           ${carryRows.length ? `<div class="rcp-carry">${carryRows.map(([k, l, v]) => `
-            <label class="rcp-check"><input type="checkbox" data-keep="${k}"${keep[k] ? ' checked' : ''}><span><b>${l}</b> <span class="rcp-muted">${esc(v)}</span></span></label>`).join('')}</div>` : '<p class="rcp-note">Nothing to carry over: the router picks agent.</p>'}
-          ${d.carry.agent ? `<label class="rcp-switch"><input type="checkbox" id="rcp-lock"${d.carry.agentMode === 'lock' ? ' checked' : ''}><span>Always use <b>${esc(d.carry.agent)}</b><br><em>Off: Cowork's router picks an agent each run (can be cheaper), and ${esc(d.carry.agent)} is one tap away.</em></span></label>` : ''}
+            <label class="rcp-check"><input type="checkbox" data-keep="${k}" checked><span><b>${l}</b> <span class="rcp-muted">${esc(v)}</span></span></label>`).join('')}</div>` : ''}
 
           <div class="rcp-step"><span class="rcp-num">4</span><b>Acceptance checks</b></div>
           <p class="rcp-note">What a good result must have. The verifier checks every run against these. One check per line; leave empty for none.</p>
@@ -341,10 +378,28 @@
           <p class="rcp-note">Files every run gets in its inputs folder. Attach new ones, or × to remove one; a file with the same name replaces the saved one.${fileNotes ? ` <span class="rcp-muted">${esc(fileNotes)}</span>` : ''}</p>
           <div id="rcp-files"></div>
           <div class="rcp-err" id="rcp-err"></div>
-          <div class="rcp-modal-actions"><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn btn-primary" id="rcp-save">${edit ? 'Save changes' : '★ Save recipe'}</button></div>
+          <div class="rcp-modal-actions"><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn btn-primary" id="rcp-save">${edit ? 'Save changes' : scratch ? 'Create recipe' : '★ Save recipe'}</button></div>
         </div>`, true);
       const $ = (s) => content.querySelector(s);
       const files = fileList(content, '#rcp-files', d.carry.inputs || []);
+      // "Always use" only means something with a specific agent selected.
+      const syncLock = () => {
+        const has = !!$('#rcp-e-agent').value;
+        $('#rcp-lock').disabled = !has;
+        if (!has) $('#rcp-lock').checked = false;
+        $('#rcp-lock-row').classList.toggle('is-disabled', !has);
+      };
+      $('#rcp-e-agent').onchange = syncLock;
+      syncLock();
+      // Inline, per-field validation (cleared as soon as the user types).
+      const fieldErr = (id, msg) => {
+        const el = $(`#${id}`), out = $(`#${id}-err`);
+        if (out) out.textContent = msg || '';
+        el.setAttribute('aria-invalid', msg ? 'true' : 'false');
+        if (msg) { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); el.focus({ preventScroll: true }); }
+      };
+      for (const id of ['rcp-name', 'rcp-brief']) $(`#${id}`).addEventListener('input', () => fieldErr(id, ''));
+      if (scratch) setTimeout(() => $('#rcp-name').focus(), 0);
       let lastFocus = $('#rcp-brief');
       const drawFields = () => {
         $('#rcp-fields').innerHTML = d.fields.length ? d.fields.map((f, i) => `
@@ -371,7 +426,7 @@
       const onSel = () => {
         const s = selText();
         $('#rcp-mk').disabled = !s || /[{}]/.test(s);
-        $('#rcp-sel').textContent = s ? `“${s.length > 40 ? s.slice(0, 40) + '…' : s}”` : 'Select text in the title or brief first.';
+        $('#rcp-sel').textContent = s ? `“${s.length > 40 ? s.slice(0, 40) + '…' : s}”` : 'Select text in the title or brief to make it a field.';
       };
       for (const el of [$('#rcp-brief'), $('#rcp-title')]) {
         el.addEventListener('focus', () => (lastFocus = el));
@@ -387,6 +442,25 @@
         $('#rcp-title').value = $('#rcp-title').value.split(s).join(ph);
         d.fields.push({ key, label: labelFrom(key), type: s.length > 80 ? 'longtext' : /^\d+(\.\d+)?$/.test(s) ? 'number' : 'text', default: s, required: true });
         drawFields(); onSel();
+      };
+      // Add field: a fresh blank at the cursor (or the end of the brief), for
+      // recipes written from scratch where there is no example text to select.
+      $('#rcp-add-field').onmousedown = (e) => e.preventDefault();
+      $('#rcp-add-field').onclick = () => {
+        const taken = d.fields.map((f) => f.key);
+        let n = 1;
+        while (taken.includes(`field_${n}`)) n++;
+        const key = `field_${n}`, ph = `{{${key}}}`;
+        const el = lastFocus || $('#rcp-brief');
+        const a = el.selectionStart ?? el.value.length, b = el.selectionEnd ?? a;
+        el.value = el.value.slice(0, a) + ph + el.value.slice(b);
+        el.focus();
+        el.setSelectionRange(a + ph.length, a + ph.length);
+        d.fields.push({ key, label: `Field ${n}`, type: 'text', required: true });
+        drawFields();
+        const row = $(`#rcp-fields [data-i="${d.fields.length - 1}"] [data-f="label"]`);
+        if (row) { row.focus(); row.select(); }
+        fieldErr('rcp-brief', '');
       };
       $('#rcp-fields').addEventListener('input', (e) => {
         const row = e.target.closest('[data-i]'), f = d.fields[row?.dataset.i], k = e.target.dataset.f;
@@ -408,20 +482,28 @@
       $('#rcp-save').onclick = async () => {
         const kept = (k) => content.querySelector(`[data-keep="${k}"]`)?.checked;
         const c = d.carry;
+        const name = $('#rcp-name').value.trim(), brief = $('#rcp-brief').value;
+        if (!name) return fieldErr('rcp-name', 'Give the recipe a name.');
+        if (!brief.trim()) return fieldErr('rcp-brief', 'Write the brief: what should the agent do?');
+        const agent = $('#rcp-e-agent').value;
+        const timebox = Number($('#rcp-e-timebox').value);
         const body = {
-          ...d, name: $('#rcp-name').value.trim(), purpose: $('#rcp-purpose').value.trim(),
-          title: $('#rcp-title').value.trim(), brief: $('#rcp-brief').value,
+          ...d, name, purpose: $('#rcp-purpose').value.trim(),
+          title: $('#rcp-title').value.trim() || name, brief,
           carry: {
-            persona: kept('persona') ? c.persona : undefined, division: kept('persona') ? c.division : undefined,
-            agent: kept('agent') ? c.agent : undefined, agentMode: kept('agent') && $('#rcp-lock')?.checked ? 'lock' : 'suggest',
+            // No persona/division: the orchestrator picks the persona per run.
+            agent: agent || undefined, agentMode: agent && $('#rcp-lock').checked ? 'lock' : 'suggest',
+            thinking: $('#rcp-e-thinking').value || undefined,
             tier: kept('tier') ? c.tier : undefined,
             acceptance: $('#rcp-acc').value.split('\n').map((x) => x.trim().replace(/^[-*•]\s+/, '')).filter(Boolean),
-            timeboxMin: kept('timeboxMin') ? c.timeboxMin : undefined, priority: c.priority, tags: c.tags,
+            timeboxMin: Number.isFinite(timebox) && timebox > 0 ? Math.round(timebox) : undefined, priority: c.priority, tags: c.tags,
             inputs: files.kept(),
           },
         };
         const btn = $('#rcp-save');
         btn.disabled = true;
+        btn.setAttribute('aria-busy', 'true');
+        btn.textContent = edit ? 'Saving…' : 'Creating…';
         try {
           if (files.files.length) {
             btn.textContent = 'Uploading files…';
@@ -429,12 +511,12 @@
           }
           const saved = edit ? await this.api.put(`/recipes/${encodeURIComponent(d.id)}`, body) : await this.api.post('/recipes', body);
           close();
-          this.toast(edit ? 'recipe saved' : 'recipe created', edit ? `${saved.name} is now v${saved.version}.` : `${saved.name} is in Recipes, ready to run.`);
+          this.toast(edit ? 'recipe saved' : 'recipe created', edit ? `${saved.name} is ${saved.version === d.version ? 'saved' : `now v${saved.version}`}.` : `${saved.name} is in Recipes, ready to run.`);
           if (this.currentView === 'recipes') this.renderRecipes();
           else if (this.currentView === 'tasks') this.renderInbox();
         } catch (err) {
-          $('#rcp-err').textContent = err.message; btn.disabled = false;
-          btn.textContent = edit ? 'Save changes' : '★ Save recipe';
+          $('#rcp-err').textContent = err.message; btn.disabled = false; btn.removeAttribute('aria-busy');
+          btn.textContent = edit ? 'Save changes' : scratch ? 'Create recipe' : '★ Save recipe';
         }
       };
     },

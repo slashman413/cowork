@@ -110,6 +110,10 @@ export interface AgentConfig {
    *  views translate context.agent back to it so that client can still find and
    *  claim its tasks. Cleared as soon as the client re-declares the canonical id. */
   clientId?: string;
+  /** Persona routing when a task is PINNED to this agent (core/persona-routing.ts).
+   *  Unset = automatic: small models (≤70B params, e.g. qwen3.8-27b) get a
+   *  router-picked persona, larger ones run the bare brief. 'always' / 'never' override. */
+  personaRouting?: 'always' | 'never';
 }
 
 /** Environment capability manifest for an agent (WF-3 §B-I). All fields are

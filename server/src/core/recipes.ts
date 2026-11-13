@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import type { Task } from '../types.js';
+import { normalizeThinking, type ThinkingLevel } from './thinking.js';
 
 /**
  * Recipes — reusable tasks. A task that came back with a good result is saved as
@@ -35,9 +36,13 @@ export interface RecipeField {
 }
 
 export interface RecipeCarry {
+  /** Legacy (pre 2026-11-13): never pinned anything — the orchestrator picks the
+   *  persona per run. Ignored by instantiate(); kept so old files still load. */
   persona?: string;
   division?: string;
   agent?: string;
+  /** Thinking level for every run (low|medium|high|xhigh|max); unset = agent default. */
+  thinking?: ThinkingLevel;
   /** lock = always pin carry.agent; suggest = let the router pick (default) —
    *  the run sheet still offers carry.agent as a one-tap choice. */
   agentMode: 'lock' | 'suggest';
@@ -275,6 +280,7 @@ export function normalizeRecipe(input: any, now = new Date().toISOString()): Rec
   const carry: RecipeCarry = {
     persona: str(c.persona), division: str(c.division), agent: str(c.agent),
     agentMode: c.agentMode === 'lock' ? 'lock' : 'suggest',
+    thinking: normalizeThinking(c.thinking),
     tier: str(c.tier),
     acceptance: Array.isArray(c.acceptance) ? c.acceptance.map((s: any) => String(s).trim()).filter(Boolean) : undefined,
     timeboxMin: Number.isFinite(Number(c.timeboxMin)) && Number(c.timeboxMin) > 0 ? Math.round(Number(c.timeboxMin)) : undefined,
@@ -326,6 +332,8 @@ export interface InstantiateOptions {
   extra?: string;
   /** '' = auto-route, '<id>' = pin that agent, undefined = follow the recipe's agentMode. */
   agent?: string;
+  /** '' = agent default, a level = this run only, undefined = the recipe's carry.thinking. */
+  thinking?: string;
   /** 👎 notes from earlier runs, newest first — injected as "Known pitfalls". */
   pitfalls?: string[];
   scheduledAt?: string;
@@ -346,8 +354,10 @@ export function instantiate(recipe: Recipe, opts: InstantiateOptions = {}): Omit
   const context: Record<string, any> = {
     recipe: { id: recipe.id, version: recipe.version, name: recipe.name, values },
   };
-  if (c.division) context.division = c.division;
+  // No persona/division pin: the orchestrator's router picks the persona per run.
   if (agent) context.agent = agent;
+  const thinking = opts.thinking !== undefined ? normalizeThinking(opts.thinking) : c.thinking;
+  if (thinking) context.thinking = thinking;
   if (c.tier) context.tier = c.tier;
   if (c.acceptance?.length) context.acceptance = c.acceptance;
   if (c.timeboxMin) context.timeboxMin = c.timeboxMin;
@@ -356,7 +366,7 @@ export function instantiate(recipe: Recipe, opts: InstantiateOptions = {}): Omit
     title: renderTemplate(recipe.title, values).slice(0, 200) || recipe.name,
     description,
     from: { platform: 'dashboard', agent: 'recipe' },
-    to: c.persona ? { agent: c.persona } : {},
+    to: {},
     priority: c.priority || 'normal',
     context,
     tags: [...new Set([...(c.tags || []), `recipe:${recipe.id}`])],
@@ -390,8 +400,8 @@ export function draftFromTask(
     brief: brief.replace(VAR_RE, (m) => m.replace(/[{}]/g, '')),
     fields: [],
     carry: {
-      persona: task.to?.agent, division: ctx.division,
       agent: ctx.ranAgent || ctx.agent, agentMode: 'suggest',
+      thinking: ctx.thinking || ctx.liveThinking,
       tier: ctx.tier, acceptance: ctx.acceptance, timeboxMin: ctx.timeboxMin,
       priority: task.priority,
       tags: (task.tags || []).filter(t => !t.startsWith('recipe:')),
