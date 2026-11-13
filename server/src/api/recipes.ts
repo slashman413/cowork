@@ -8,12 +8,13 @@ import { Recipes, carryInputNames, draftFromTask, instantiate, recipeStats, reci
  *   GET    /recipes                     — library, each with derived stats
  *   GET    /recipes/:id                 — one recipe + stats, versions, runs
  *   POST   /recipes/draft-from-task/:id — editable draft from a finished task (saves nothing)
- *   POST   /recipes                     — save a draft as a recipe (copies the origin task's inputs + artifacts;
+ *   POST   /recipes                     — save a recipe: a draft from a task (copies the origin task's inputs + artifacts)
+ *                                          or one written from scratch on the Recipes page (no origin;
  *                                          addInputs: [{token,name}] adds uploaded files)
  *   PUT    /recipes/:id                 — edit; brief/fields/carry changes bump the version (addInputs as above;
  *                                          dropping a name from carry.inputs removes that file)
  *   DELETE /recipes/:id                 — archive (soft)
- *   POST   /recipes/:id/run             — { values, extra?, agent?, scheduledAt?, recurrence?,
+ *   POST   /recipes/:id/run             — { values, extra?, agent?, thinking?, scheduledAt?, recurrence?,
  *                                          skipInputs?: names, inputs?: [{token,name}] (this run only) } → task
  *   POST   /inbox/:id/rating            — { good, note? } 👍/👎 on a task (feeds recipe stats)
  */
@@ -92,6 +93,7 @@ export function createRecipeRouter(recipes: Recipes, store: Store): Router {
         values: body.values && typeof body.values === 'object' ? body.values : {},
         extra: typeof body.extra === 'string' ? body.extra : undefined,
         agent: typeof body.agent === 'string' ? body.agent : undefined,
+        thinking: typeof body.thinking === 'string' ? body.thinking : undefined,
         pitfalls: recipePitfalls(r, allTasks()),
         scheduledAt: typeof body.scheduledAt === 'string' ? body.scheduledAt : undefined,
         recurrence: body.recurrence ?? undefined,

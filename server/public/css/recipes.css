@@ -158,3 +158,21 @@ label.rcp-file { padding-right: 10px; cursor: pointer; }
 .rcp-attach { display: inline-flex; align-items: center; gap: 6px; font-size: 0.8rem; }
 .rcp-attach svg { width: 14px; height: 14px; }
 .rcp-acc { resize: vertical; line-height: 1.5; }
+
+/* ── New recipe + "How it runs" (agent / thinking) — 2026-11-13 ── */
+.rcp-new { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.rcp-new svg, .rcp-empty-actions svg { width: 14px; height: 14px; }
+.rcp-empty-actions { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+.rcp-empty-actions .btn { display: inline-flex; align-items: center; gap: 6px; }
+.rcp-row-wrap { flex-wrap: wrap; }
+.rcp-row-wrap > .rcp-grow { min-width: min(100%, 220px); }
+.rcp-timebox { width: 200px; max-width: 100%; }
+.rcp-req-mark { color: var(--status-error); font-weight: 600; }
+.rcp-ferr { color: var(--status-error); font-size: 0.76rem; min-height: 0; }
+.rcp-ferr:empty { display: none; }
+.rcp-in[aria-invalid="true"] { border-color: var(--status-error); }
+.rcp-in[aria-invalid="true"]:focus { box-shadow: 0 0 0 3px color-mix(in srgb, var(--status-error) 25%, transparent); }
+.rcp-switch.is-disabled { opacity: .55; cursor: not-allowed; }
+.rcp-makefield { flex-wrap: wrap; }
+.btn[aria-busy="true"] { cursor: progress; opacity: .75; }
+@media (max-width: 640px) { .rcp-new { flex: none; } .rcp-tools { flex-wrap: wrap; } }

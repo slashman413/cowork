@@ -58,7 +58,10 @@ test('instantiate: suggest mode auto-routes, lock pins, override wins', () => {
   assert.deepEqual(t.context!.acceptance, ['table of products']);
   assert.equal(t.context!.timeboxMin, 30);
   assert.deepEqual(t.context!.recipe, { id: r.id, version: 1, name: 'Catalog audit', values: { store: 'gumroad', month: 'Oct' } });
-  assert.equal(t.to.agent, 'analyst');
+  // The persona is never pinned by a recipe — the orchestrator picks it per run.
+  assert.equal(t.to.agent, undefined);
+  assert.equal(t.context!.division, undefined);
+  assert.equal(t.context!.thinking, undefined);
   assert.ok(t.tags!.includes(`recipe:${r.id}`));
 
   const locked = normalizeRecipe({ ...base, carry: { ...base.carry, agentMode: 'lock' } });
@@ -269,4 +272,30 @@ test('carryInputNames drops the runner noise a continuation seeded as inputs', (
   assert.deepEqual(carryInputNames(task({ context: { continuedFrom: 'prev', inputFiles } })), ['report-2024.pdf', 'outputs.md']);
   // A user's own attachments on an ordinary task are carried as-is.
   assert.deepEqual(carryInputNames(task({ context: { inputFiles: ['result.md'] } })), ['result.md']);
+});
+
+test('recipe thinking: carried level applies, a run override wins, junk is dropped', () => {
+  const r = normalizeRecipe({ ...base, carry: { ...base.carry, thinking: 'HIGH' } });
+  assert.equal(r.carry.thinking, 'high');
+  assert.equal(instantiate(r, { values: { month: 'Oct' } }).context!.thinking, 'high');
+  assert.equal(instantiate(r, { values: { month: 'Oct' }, thinking: 'max' }).context!.thinking, 'max');
+  assert.equal(instantiate(r, { values: { month: 'Oct' }, thinking: '' }).context!.thinking, undefined);
+  assert.equal(normalizeRecipe({ ...base, carry: { ...base.carry, thinking: 'turbo' } }).carry.thinking, undefined);
+});
+
+test('a hand-written recipe (no origin task) normalizes and runs', () => {
+  const r = normalizeRecipe({ name: 'Weekly digest', brief: 'Summarise {{topic}} news.', title: 'Digest: {{topic}}',
+    fields: [{ key: 'topic', label: 'Topic', type: 'text' }], carry: { agentMode: 'suggest', inputs: [] } });
+  assert.equal(r.origin, undefined);
+  const t = instantiate(r, { values: { topic: 'AI' } });
+  assert.equal(t.title, 'Digest: AI');
+  assert.equal(t.description, 'Summarise AI news.');
+});
+
+test('draftFromTask carries the thinking level but no persona', () => {
+  const d = draftFromTask(task({ id: 'th', title: 'x', description: 'y', to: { agent: 'analyst' },
+    context: { thinking: 'xhigh', persona: 'engineering-backend', division: 'engineering' } }));
+  assert.equal(d.carry.thinking, 'xhigh');
+  assert.equal(d.carry.persona, undefined);
+  assert.equal(d.carry.division, undefined);
 });

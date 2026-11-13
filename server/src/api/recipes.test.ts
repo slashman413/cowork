@@ -52,7 +52,7 @@ test('recipe API: capture a done task, run it, rate it', async () => {
     const draft = await call('POST', `/recipes/draft-from-task/${origin.id}`);
     assert.equal(draft.status, 200);
     assert.deepEqual(draft.json.carry.inputs, ['skus.csv']);
-    assert.equal(draft.json.carry.persona, 'analyst');
+    assert.equal(draft.json.carry.persona, undefined);   // the orchestrator picks the persona per run
 
     // The user turns "October" into a field in the editor, then saves.
     const saved = await call('POST', '/recipes', {
@@ -77,7 +77,7 @@ test('recipe API: capture a done task, run it, rate it', async () => {
     assert.deepEqual(t.context?.acceptance, ['table of products']);
     assert.equal(t.context?.recipe?.id, id);
     assert.ok(t.tags?.includes(`recipe:${id}`));
-    assert.equal(t.to?.agent, 'analyst');
+    assert.equal(t.to?.agent, undefined);
     assert.equal(t.context?.agent, undefined, 'suggest mode leaves routing to the router');
 
     // Finish + 👎 with a note → stats, and the note rides along on the next run.
