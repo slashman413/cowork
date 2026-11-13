@@ -27,7 +27,8 @@ host metrics (CPU / GPU / memory / temp), active workers, open tasks and persona
 ![Cowork dashboard — metrics, counters, dispatcher chains, and live activity](docs/images/cowork-dashboard.png)
 
 The sidebar groups every view: **Operations** (Overview, Portal, Tasks, Recipes, Calendar,
-Goals), **AI Fleet** (Routing, Agents, Personas) and **System** (Workers, Configuration).
+Goals), **AI Fleet** (Routing, Agents) and **System** (Workers, Configuration). Integrations
+(skills, MCP servers and persona packs) have their own page, `/integrations.html`.
 The [Tasks](#task-execution--the-dispatcher), [Routing](#agent-fallback-chains-get-apichains),
 [Agents](#agents--named-execution-identities-model--platform--location) and
 [Workers](#wiring-a-remote-agent-machine) views are shown in context throughout this README.
@@ -35,12 +36,12 @@ The [Tasks](#task-execution--the-dispatcher), [Routing](#agent-fallback-chains-g
 | **Calendar** — scheduled tasks and recurring routines by week | **Goals** — long-running goals with phases, decisions and budget |
 |---|---|
 | ![Calendar view — week grid of scheduled and recurring tasks](docs/images/cowork-calendar.png) | ![Goals view — an achieved goal with done-when criteria, phases and progress](docs/images/cowork-goals.png) |
-| **Recipes** — saved tasks you re-run with one click | **Personas** — ~285 expert personas, searchable by division |
-| ![Recipes view — saved recurring tasks with run counts and Run buttons](docs/images/cowork-recipes.png) | ![Personas view — expert persona cards grouped by division](docs/images/cowork-personas.png) |
+| **Recipes** — saved tasks you re-run with one click | **Integrations** — audited git repos installed as skills / MCP / persona packs / portal cards |
+| ![Recipes view — saved recurring tasks with run counts and Run buttons](docs/images/cowork-recipes.png) | ![Integrations page — add a repository, audit results, installed skills](docs/images/cowork-integrations.png) |
 | **Portal** — one-click launcher for local web services | **Obsidian Vault** — the shared, readable knowledge base |
 | ![Portal view — cards for Obsidian Vault, Video Studio, File Browser and more](docs/images/cowork-portal.png) | ![Obsidian vault viewer — notes tree and a rendered note](docs/images/cowork-obsidian.png) |
-| **Integrations** — audited GitHub repos installed as skills / MCP / portal cards | **Configuration** — every setting, editable live |
-| ![Integrations page — add a repository, audit results, installed skills](docs/images/cowork-integrations.png) | ![Configuration view — orchestration settings and default chain](docs/images/cowork-config.png) |
+| **Configuration** — every setting, editable live | |
+| ![Configuration view — orchestration settings and default chain](docs/images/cowork-config.png) | |
 
 ## Supported Platforms
 
@@ -53,7 +54,7 @@ The [Tasks](#task-execution--the-dispatcher), [Routing](#agent-fallback-chains-g
 | Copilot | Same as Claude | `.md` agents |
 | Codex | Converted | `.toml` agents |
 | Cursor | Converted | `.mdc` rules |
-| + 7 more | See agency-agents repo | Various formats |
+| + 7 more | See the agency-agents persona pack | Various formats |
 
 ---
 
@@ -74,7 +75,7 @@ The [Tasks](#task-execution--the-dispatcher), [Routing](#agent-fallback-chains-g
 
 ### Fast path — two scripts (recommended)
 
-From the repo root, after cloning with submodules (above):
+From the repo root of your clone:
 
 ```bash
 # 1. Build + launch the server (installs deps, builds, starts a systemd user service)
@@ -108,6 +109,10 @@ with `-e COWORK_API_KEY=…`, or the server generates one on first start, saves 
 reads `COWORK_API_KEY`); open `http://<host>:6868/?apiKey=<key>` once to log the dashboard in. Images are
 built from `v*` tags by the release workflow on a digest-pinned base.
 
+Once the hub is up, open **Integrations** (or `GET /api/integrations/defaults`) to check that the
+default persona and skill packs finished provisioning. Until the persona pack is installed, the
+router has no personas to pick from.
+
 ### 1. Install Dependencies
 
 ```bash
@@ -136,11 +141,9 @@ Edit `~/.cowork/config.json` to match your environment:
     "apiKey": null          // ← Set a string to require API key auth (see below for null)
   },
   "paths": {
-    "agencyAgents": "./agency-agents",  // ← Path to agency-agents repo
     "inbox": "./inbox",
     "status": "./.status",
     "decisions": "./decisions",
-    "workflows": "./workflows",
     "artifacts": "./artifacts",
     "inputs": "./inputs"
   }
@@ -159,7 +162,9 @@ Edit `~/.cowork/config.json` to match your environment:
 | `server.apiKey` | `null` | API key for /api and /mcp. When null and `host` is not loopback, a key is generated into `api-key` beside the config and printed once |
 | `server.allowUnauthenticated` | `false` | Serve a non-loopback host with no key (also `COWORK_ALLOW_NO_AUTH=1`). Only for a trusted, firewalled network |
 | `server.blockedClients` | — | Client denylist enforced regardless of the API key: `{ips: [...], names: [...]}`. A matching source IP gets 403 on every path; a `names` substring (case-insensitive) in the User-Agent / `X-Cowork-Client` header, MCP `clientInfo.name`, or tool-call identity args (`agent_name`, `agent_id`, `capabilities`, `agents[].id`) gets 403 on `/api`/`/mcp`. Matching agents are disabled so tasks stop routing to them. See `server/src/core/client-guard.ts` |
-| `paths.agencyAgents` | `./agency-agents` | Path to the agency-agents repo |
+| `paths.agencyAgents` | unset | Optional. Pins the roster to one local persona checkout; when unset, personas come from every installed persona-pack integration |
+| `integrations.defaults` | built-in list | Repos provisioned once on first start (persona pack + skill packs) |
+
 | `platforms.*.enabled` | `true` | Enable/disable individual platforms |
 | `platforms.*.agentsDir` | varies | Where platform-specific agents live on disk |
 | `services.*.enabled` | `false` | Enable/disable service health monitoring |
@@ -289,40 +294,57 @@ agent it ran on, with its output artifacts attached and filterable by status
 An unassigned task is routed in **two stages** by an orchestrator/classifier agent
 (default `qwen3.8-27b` via Hermes, `orchestration.classifier`):
 
-1. **Division** — pick 1 of 19 divisions (testing, engineering, security, …).
+1. **Division** — pick 1 of 19 divisions (testing, engineering, security, …). With
+   `orchestration.workRoles.enabled` the same reply also names a **work role**
+   (`mechanical`, `feature`, `bug-fix`, `perf-issue`, `research`, `prose`, `hardest`),
+   which sets the task's `context.tier` and `context.thinking` unless the task set them
+   (thinking is capped by `workRoles.budget`: small = medium, medium = high,
+   large = xhigh, unlimited = max).
 2. **Persona** — pick 1 of ~285 personas in that division. The chosen persona's
-   full `.md` **persona** becomes the system prompt.
+   `.md` file becomes the system prompt. If the router names no persona (empty reply,
+   classifier off), a keyword matcher (`core/persona-match.ts`) picks one; if the reply
+   can't be parsed at all, the task goes to `classifier.fallbackRole` (`generalist`).
 
-The persona then runs on an **agent fallback chain** (below). Skip the classifier by
-targeting directly: `context.persona: "<persona-slug>"` or a special-executor name.
-Tag a task `manual` to never auto-execute.
+A persona shapes the **prompt** only; the agent that runs it comes from the fallback
+chain (below). Skip the router by targeting directly: `context.persona: "<persona-slug>"`
+or a special-executor name. Tag a task `manual` to never auto-execute.
 
-### Executors: special roles + the Agencies
+A task **pinned** to an agent (`context.agent`) skips agent selection. If that agent runs a
+small model (≤ 70B parameters, parsed from the model id, e.g. `qwen3.8-27b`) and the task
+has no persona, the router still runs first so the pinned agent gets a persona. Override
+per agent with `orchestration.agents.<id>.personaRouting: "always" | "never"`.
+
+### Executors: special roles + personas
 
 - **Special executors** (`config.json → orchestration.roleChains`) — only
   `orchestrator`, `generalist`, `video`; each is `{description, agents: [...]}`
   with its own chain. `video` runs the ComfyUI **LTX** pipeline
   (`deploy/video-pipeline.sh`; LTX only — never Wan/Hunyuan/SVD).
-- **Agencies personas** — the ~285 personas in the `agency-agents` submodule, grouped
-  into 19 divisions. They have no chain of their own; they run on the division's
-  chain if one is set, else the global default.
+- **Personas** — the ~285 personas from the installed persona-pack integrations
+  (default: `msitarzewski/agency-agents`, cloned under `~/.cowork/integrations/`),
+  grouped into 19 divisions. They have no chain of their own: per-division and
+  per-persona chains were removed on 2026-11-13, and `divisionChains` /
+  `personaChains` in an old config are ignored.
 
 ### Agent fallback chains (`GET /api/chains`)
 
-- **Global default** — `orchestration.defaultChain`; drag-reorder in the **Agents**
+- **Global default** — `orchestration.defaultChain`; drag-reorder in the **Routing**
   view (`PUT /api/chains/default`).
-- **Per-division override** — `orchestration.divisionChains[<division>]`; set/clear
-  in the **Agents** view (`PUT /api/chains/division/:division`; empty = use default).
+- **Tier lists** — `orchestration.tiers.<mechanical|standard|judgment>`
+  (`GET /api/chains/tiers`, `PUT /api/chains/tier/:tier`). A task with a `context.tier`
+  (set by hand or by its work role) tries its tier's agents first, then the default chain.
+- **Special executors** — `orchestration.roleChains.<role>.agents`
+  (`/api/roles-config/:name`).
 
 A chain runs top → bottom: the task runs on `chain[0]`; on failure the dispatcher
 **hands over** to `chain[1]`, then `[2]`… recording the failed agent on the task
 each attempt, until success or the chain is exhausted. Pin a single task to one
 agent with `context.agent: "<id>"`.
 
-The **Routing** view exposes the per-division chain for every division — drag to reorder,
-`＋ add agent…`, or reset to the global default. No template edits, no restart.
+The **Routing** view edits the special-executor chains, the tier lists and the default
+chain: drag to reorder or `＋ add agent…`. Changes apply live, with no restart.
 
-![Routing view — special executors and per-division agent fallback chains, editable inline](docs/images/cowork-roles.png)
+![Routing view — special executors and agent fallback chains, editable inline](docs/images/cowork-roles.png)
 
 ## Vocabulary
 
@@ -330,7 +352,8 @@ The **Routing** view exposes the per-division chain for every division — drag 
 |------|---------|------------------|
 | **Agent** | One model on one CLI on one machine: the thing that runs a task. Example: `local-cc-opus-5-5`. | `orchestration.agents`, `context.agent`, `/api/agents`, Agents page |
 | **Thinking** | How hard an agent reasons on a run. A parameter of the run, never part of an agent id. | `context.thinking`, `agents.<id>.thinking`, `orchestration.defaultThinking` |
-| **Persona** | A roster specialist the run takes on. Example: `engineering-sre`. | `context.persona`, `orchestration.personaChains`, Personas page |
+| **Persona** | A roster specialist the run takes on. It shapes the prompt, not the agent choice. Example: `engineering-sre`. | `context.persona`, `get_roster`, persona-pack integrations |
+| **Work role** | The kind of work the router judged a task to be; sets its tier + thinking. Example: `bug-fix`. | `orchestration.workRoles`, `context.tier` |
 | **Role** | A named chain of agents for a built-in job (`orchestrator`, `generalist`, `video`). | `orchestration.roleChains`, Routing page |
 | **Worker** | A connected client that registers agents and claims their tasks. | `/api/workers`, Workers page, `register_agent` |
 
@@ -394,8 +417,12 @@ can reference. The **Agents** view lists every registered agent — its platform
 | `local-cc-opus-5-5` / `-sonnet-5-5` / `-fable-5-1` | local | Claude Code on that model |
 | `local-agy-*` / `local-comfy-ltx` | local | Antigravity/Gemini / ComfyUI-LTX video |
 | `local-codex-gpt-6-luna` / `-gpt-5-6-terra` / `-gpt-5-6-luna` / `-default` | remote | Codex on this host, claimed by the codex client |
-| `remote-ai-code-gen-cc-opus-4-8` / `-sonnet-5` / `-fable-5` | remote | Claude Code on the ai-code-gen machine |
+| `local-script-eval-harness` | local | The `eval-prompt-change` harness (`exec: script`) |
+| `remote-ai-code-gen-cc-*` | remote | Claude Code on the ai-code-gen machine |
 | `remote-<host>-cc-sonnet-5-5` | remote | Claude Code on another machine |
+
+This table is an example. Read the live set with `GET /api/agents`.
+
 
 Agent ids carry the **model version** (`local-cc-opus-5-5`, not `local-cc-opus`) so the
 model an agent runs is readable from its id; only `-default` agents, which follow the
@@ -460,8 +487,8 @@ tool's `agents` field; the server auto-adds them to the registry (marked `dynami
 owned by that client). One machine can offer several models at once. Auto-registered
 agents persist and are removed **only** by `deregister_agent` or the Agents view
 (never on heartbeat timeout); removal cascades out of the default chain, every
-division chain, and every special role. Manage all of this from the dashboard's
-**Agents** and **Agents** views.
+tier list, and every special role. Manage all of this from the dashboard's
+**Agents** and **Routing** views.
 
 ### Wiring a remote agent machine
 
@@ -471,7 +498,7 @@ client that does exactly that loop. Its header comment documents every env var.
 **Quickest — run it directly** (foreground; good for a first test). One agent:
 
 ```bash
-git clone https://cowork.dev/cowork
+git clone <cowork-repo-url> cowork   # the git remote your hub was installed from
 COWORK_URL=http://<cowork-host>:6868 EXEC=claude MODEL=claude-sonnet-5-5 \
   AGENT_ID=remote-<host>-cc-sonnet-5-5 \
   node cowork/deploy/remote-agent-client.mjs
@@ -519,16 +546,17 @@ while running.
 
 CEO flow: tell Hermes (e.g. via Discord) an idea → Hermes creates ONE task with
 `context.persona: "orchestrator"` → the orchestrator decomposes it into subtasks via
-`POST /api/inbox` → each subtask is two-stage-routed to an agent on its agent
-chain → results and artifacts appear live on the dashboard.
+`POST /api/inbox` → each subtask is two-stage-routed (persona + work role) and runs on
+its tier/default chain → results and artifacts appear live on the dashboard.
 
 ### LLM classifier — no task left behind
 
 An unassigned task (e.g. a free-text idea filed straight from Discord) no longer
 stalls: the dispatcher runs the **two-stage LLM router** (default qwen3.8-27b
 via Hermes, `orchestration.classifier` in config.json) that reads the task, picks
-a division, then an agent, which then dispatches normally on that agent's
-agent chain. Tag a task `manual` to skip both routing and dispatch.
+a division (plus a work role), then a persona, and the task dispatches normally on
+its tier/default chain. Tag a task `manual` to skip both routing and dispatch.
+
 
 ### Stale-claim reclaim
 
@@ -704,131 +732,21 @@ AGY Agent calls:
 
 ---
 
-## Workflows — declarative pipelines, two execution modes
+## Recipes and Goals — repeatable and long-running work
 
-A **workflow** is a version-controlled template (`workflows/<id>.json`). It runs
-in one of two modes, chosen per template with `"mode"`:
+The declarative **Workflows** engine (`workflows/*.json`, `/api/workflows*`, the
+Workflows tab) was removed on 2026-11-02. Its jobs are covered by:
 
-Workflows are run through the MCP tools and the REST API (see below); each step is
-pinned to a division or agent and becomes an ordinary task in the **Tasks** view.
-
-
-- **`dag`** (default) — **static & deterministic.** The steps form a DAG wired by
-  `dependsOn`; the whole graph is expanded into inbox tasks up front and the
-  dispatcher walks it in dependency order. No new execution engine: expansion just
-  pre-wires the tasks the dispatcher runs anyway. A multi-step job becomes
-  reusable and inspectable instead of an LLM re-planning from scratch every time.
-- **`orchestrated`** — **adaptive & orchestrator-driven.** The steps are a
-  *library* of candidate moves; nothing is planned up front. After each step
-  finishes, the **orchestrator agent decides the next step automatically** from
-  the `goal` + the results so far — or answers `DONE`. The path taken adapts to
-  what comes back. Every decision (the step it chose + its rationale) is logged to
-  `workflow-runs/<runId>.json` and rendered as a **decision log** in the dashboard.
-
-### DAG mode
-
-A template is a list of steps; each step is a task with a stable `key` that other
-steps reference in `dependsOn` (resolved to real task ids at run time):
-
-```json
-{
-  "id": "content-pipeline",
-  "params": ["topic"],
-  "steps": [
-    { "key": "research", "title": "Research: {{topic}}", "division": "marketing" },
-    { "key": "draft",    "title": "Draft {{topic}}", "division": "marketing", "dependsOn": ["research"] },
-    { "key": "review",   "title": "Review {{topic}}", "agent": "code-reviewer", "dependsOn": ["draft"] },
-    { "key": "publish",  "title": "Publish {{topic}}", "division": "marketing", "dependsOn": ["review"] }
-  ]
-}
-```
-
-Run it (or **dry-run** to inspect the resolved plan without creating anything):
-
-```bash
-curl -s -X POST localhost:6868/api/workflows/content-pipeline/run \
-  -H 'content-type: application/json' -d '{"params":{"topic":"RISC-V laptops"}}'
-```
-
-Every task a run creates carries `context.workflowId`, `context.workflowRunId`,
-and `context.stepKey` so the **Workflows** tab in the dashboard can group a run
-and render its DAG with per-node live status. Templates are validated on load
-(unique keys, deps exist, and the graph is **acyclic** — a cycle would deadlock
-`dependsOn` forever); a template that fails validation is skipped rather than
-crashing the list, and the reason is surfaced in the dashboard (and at
-`GET /api/workflows-invalid`) so a malformed template is easy to fix. Steps can
-pin a `persona`, `division`, or `agent`, or leave them off and let the router pick.
-
-### Orchestrated (adaptive) mode
-
-Set `"mode": "orchestrated"`, give the template a `goal`, and list the steps as a
-candidate library (`dependsOn` becomes an optional hint used to wire a step's
-inputs when its upstream has already run). Running it writes a run record and
-creates **no tasks** — the dispatcher's orchestrator loop makes the first
-decision on its next tick, then one more after each step completes:
-
-```json
-{
-  "id": "adaptive-research",
-  "mode": "orchestrated",
-  "goal": "Produce a decision-ready brief answering: {{question}}",
-  "params": ["question"],
-  "steps": [
-    { "key": "scope",     "title": "Scope the question", "division": "operations" },
-    { "key": "survey",    "title": "Broad survey", "division": "operations" },
-    { "key": "deep-dive", "title": "Deep dive on the crux" },
-    { "key": "counter",   "title": "Steelman the opposing view" },
-    { "key": "brief",     "title": "Write the decision brief" }
-  ]
-}
-```
-
-The orchestrator agent (the router model — `orchestration.classifier`, else the
-first local runnable agent in the orchestrator/default chain) is prompted with the
-goal, the completed steps and their results, and the remaining candidates; it
-replies with one step key or `DONE`. `orchestration.maxWorkflowSteps` (default 12)
-force-finishes a run whose orchestrator never says `DONE`.
-
-Both modes stamp every task with `context.workflowId`, `context.workflowRunId`,
-and `context.stepKey` so the **Workflows** tab groups a run and renders it live —
-a DAG for static runs, a decision timeline for adaptive ones. Templates are
-validated on load (unique keys, deps exist, and — for DAG mode — the graph is
-**acyclic**); a template that fails validation is skipped rather than crashing the
-list, and the reason is surfaced in the dashboard (and at
-`GET /api/workflows-invalid`).
-
-The engine (validation, cycle detection, topological expansion, DAG wiring, run
-reconstruction, and the orchestrated decision loop) is covered by a test suite —
-`cd server && npm test`.
-
-### Shipped company workflows
-
-The `workflows/` directory ships a set of realistic, cross-functional company
-pipelines. Each step pins a **`division`** or **`persona`** (never an `agent`), so
-the agent **fallback chain for every role stays editable from the dashboard's
-Agents view** (`orchestration.roleChains[*].agents` for special roles;
-`divisionChains[*]` / `defaultChain` for agents) — change who runs a step
-without touching the template.
-
-| Workflow | Mode | What it does |
-|----------|------|--------------|
-| `idea-to-launch` | dag | The flagship. CEO brief → market research + perspectives → PM spec → architecture → **engineers build the real product & push to git with CI Actions** → marketing promos + email auto-replies → sales enablement → finance model → Chief-of-Staff go/no-go review. `params: idea` |
-| `product-spec` | dag | PM writes a build-ready PRD, fed by user research + engineering feasibility, then cut into a shippable first sprint. `params: idea` |
-| `build-and-ship` | dag | Take a spec → architect → dispatch engineers to build real code → wire the CI pipeline → code review → push & verify the pipeline is green. `params: spec` |
-| `feedback-to-roadmap` | dag | Raw feedback from an employee/customer → triage → synthesize into themes → PM initiatives → prioritized roadmap → dispatch the "Now" items as real work. `params: feedback` |
-| `gtm-campaign` | dag | Marketing + sales wire a launch: offer & promo angles → email sequences **+ inbound auto-reply rules** → content → sales enablement → success metrics. `params: product` |
-| `finance-close` | dag | The accounting cycle: bookkeeper reconciles → FP&A variance → forward model → CFO sign-off + board summary. `params: period` |
-| `expand-perspectives` | dag | Researchers deep-dive an idea from four independent lenses (first-principles, precedent, contrarian, second-order) in parallel, then synthesize a decision-ready perspective map. `params: idea` |
-| `adaptive-research` | orchestrated | Adaptive deep research — the orchestrator drills only where the goal needs it. `params: question` |
-| `plan-execution` | orchestrated | Turns a plan into dispatched jobs and drives them to verified completion. `params: plan` |
-| `content-pipeline` | dag | Research → draft → review → publish. `params: topic` |
-| `product-brief` | dag | Market + tech + risk fan-out → one-page go/no-go brief. `params: idea` |
-
-```bash
-# Run the flagship end-to-end company workflow:
-curl -s -X POST localhost:6868/api/workflows/idea-to-launch/run \
-  -H 'content-type: application/json' -d '{"params":{"idea":"a self-hosted receipts scanner"}}'
-```
+- **Recipes** — a task saved from a good run, or written from scratch with **New recipe**,
+  with `{{fields}}` you fill in per run. A recipe carries its agent, thinking level and
+  timebox; the Run sheet can override agent and thinking for one run
+  (`POST /api/recipes/:id/run` with `{values, agent, thinking, scheduledAt, recurrence}`).
+  Recipes don't pin a persona: the router picks one per run.
+- **Goals** — a long-lived objective with a yes/no success criterion and phases, driven by
+  the Achiever loop until it is met (`create_goal`, `/api/goals`). See
+  [docs/goals-redesign.md](docs/goals-redesign.md) and [docs/goal-loop-idiom.md](docs/goal-loop-idiom.md).
+- **Orchestrator decomposition** — a task with `context.persona: "orchestrator"` splits
+  itself into subtasks through `POST /api/inbox`.
 
 ## REST API
 
@@ -847,17 +765,21 @@ The Web UI uses these endpoints (also available for scripts/integrations):
 | `GET`/`POST` | `/api/inbox/:id/inputs` | List / attach input files to an existing task (`{inputs:[{token,name}]}`) |
 | `POST` | `/api/uploads?name=<file>` | Stage an uploaded file (raw body) → `{token}` to pass as a task input |
 | `GET` | `/api/inputs/:taskId`, `/:taskId/:file` | List / download a task's attached input files |
-| `GET` | `/api/workflows` / `/api/workflows/:id` | Declarative workflow templates (validated) |
-| `GET` | `/api/workflows-invalid` | Templates that failed to load, with the reason (JSON/validation errors) |
-| `POST` | `/api/workflows/:id/run` | Start a run: expand a DAG template into tasks, or begin an orchestrated run; `{ params, dryRun }` |
-| `GET` | `/api/workflow-runs` / `/api/workflow-runs/:runId` | Runs for the run view (DAG grouped from tasks; orchestrated from run records + decision log) |
-| `GET` | `/api/roster?division=engineering` | Agencies (filterable) |
-| `GET` | `/api/roster-divisions` | Agencies grouped by division (for the Agents view) |
-| `GET` | `/api/dispatcher` | Special roles + agents + defaultChain + divisionChains + running |
-| `GET`/`PUT` | `/api/chains`, `/chains/default`, `/chains/division/:div` | Read/edit agent fallback chains |
+| `POST` | `/api/inbox/:id/pause`, `/resume` (or `/api/tasks/pause\|resume` with `{taskId}`) | Pause a task (stops a running agent) / resume it with its context intact |
+| `GET` | `/api/tasks/paused` | Paused tasks |
+| `GET` | `/api/roster?division=engineering` | Personas from the installed persona packs (filterable) |
+| `GET` | `/api/roster-divisions` | Personas grouped by division |
+| `GET` | `/api/dispatcher` | Special roles + agents + defaultChain + running |
+| `GET`/`PUT` | `/api/chains`, `/chains/default`, `/chains/tiers`, `/chains/tier/:tier` | Read/edit the default chain and tier lists |
 | `GET`/`PUT`/`DELETE` | `/api/agents`, `/api/agents/:id` | Agent registry (cascades on delete) |
-| `GET`/`PUT`/`DELETE` | `/api/roles-config`, `/api/roles-config/:name` | Special-executor chains |
+| `PATCH` | `/api/agents/:id/enable`, `/disable`, `/thinking` | Toggle an agent, set its default thinking level |
+| `GET` / `PUT`/`DELETE` | `/api/roles-config` / `/api/roles-config/:name` | Special-executor chains |
+| `GET`/`POST` | `/api/recipes`, `/api/recipes/:id` (`PUT`/`DELETE`), `/api/recipes/:id/run`, `/api/recipes/draft-from-task/:taskId` | Saved recipes |
+| `GET`/`POST` | `/api/goals`, `/api/goals/:id` (`PATCH`/`DELETE`), `/goals/:id/activate\|pause\|block`, `/goals/templates` | Goals |
+| `GET` | `/api/calendar` | Scheduled + recurring tasks for the Calendar view |
+| `GET`/`POST` | `/api/integrations`, `/api/integrations/:id/:action`, `/api/integrations/defaults`, `/api/integrations/defaults/provision` | Integrations (skills, MCP, persona packs); verify / re-run first-run provisioning |
 | `GET`/`POST` | `/api/artifacts/:taskId`, `/:taskId/:file` | List/download; POST (raw body) uploads a file from a remote agent |
+| `GET`/`POST` | `/api/outputs/:taskId`, `/:taskId/:file` | Same, for the task's `outputs/` deliverables |
 | `GET` | `/api/config` | Current configuration |
 | `GET` | `/api/events` | SSE event stream |
 
@@ -871,9 +793,10 @@ cowork/
 ├── README.md                # This file
 ├── PROTOCOL.md              # Protocol specification
 ├── JOIN-AS-AN-AGENT.md       # Onboarding for a remote agent client
-├── agency-agents/           # git SUBMODULE — the Agencies (~285 personas)
-├── workflows/               # Workflow templates (*.json) — DAG + orchestrated
-├── workflow-runs/           # Orchestrated run records + decision logs (gitignored)
+├── CONVENTIONS.md           # Operating rules injected into every dispatched task
+├── layout.json / portal.json # Dashboard nav + widgets / Portal cards (live copies in ~/.cowork/)
+├── methods/                 # Playbook cards the sharpener attaches to a task
+├── vendor/pstack/           # Vendored pstack skills
 ├── server/                  # MCP Server + Web UI
 │   ├── src/                 # TypeScript source
 │   └── public/              # Web UI (HTML/CSS/JS)
@@ -881,8 +804,14 @@ cowork/
 ├── inbox/                   # Task queue (JSON files, auto-managed)
 ├── artifacts/               # Per-task OUTPUT files (audio/video/md), downloadable
 ├── inputs/                  # Per-task INPUT files a person attached for the agent (gitignored)
+├── goals/                   # Goal aggregates (runtime, gitignored)
 ├── decisions/               # Decision log
 └── .status/                 # Runtime state (auto-managed)
+
+~/.cowork/
+├── config.json              # Real per-server config
+├── integrations.json        # Integration registry
+└── integrations/            # Cloned integrations, incl. the persona pack(s)
 ```
 
 ---
@@ -912,7 +841,7 @@ curl http://localhost:6868/api/workers | jq
 # List pending inbox tasks
 curl "http://localhost:6868/api/inbox?status=pending" | jq
 
-# Browse engineering agents in Agencies
+# Browse engineering personas
 curl "http://localhost:6868/api/roster?division=engineering" | jq
 
 # Watch real-time events
@@ -969,11 +898,9 @@ curl -X POST http://localhost:6868/mcp \
     "apiKey": null
   },
   "paths": {
-    "agencyAgents": "./agency-agents",
     "inbox": "./inbox",
     "status": "./.status",
     "decisions": "./decisions",
-    "workflows": "./workflows",
     "artifacts": "./artifacts",
     "inputs": "./inputs"
   },
@@ -1014,9 +941,10 @@ without editing any file):
 COWORK_CONFIG=~/.cowork/config.staging.json COWORK_PORT=6900 npm start
 ```
 
-The Agencies catalog is cached in memory and rescanned at most once per `COWORK_ROSTER_TTL_MS`
-(default 30000). New agents / a submodule bump propagate within that window with no
-restart; set `0` to rescan on every query, or a larger value to reduce disk work.
+The persona catalog is cached in memory and rescanned at most once per `COWORK_ROSTER_TTL_MS`
+(default 30000). A newly installed or updated persona pack propagates within that window with no
+restart;
+ set `0` to rescan on every query, or a larger value to reduce disk work.
 
 ---
 

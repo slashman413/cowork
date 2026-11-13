@@ -1,6 +1,6 @@
 ---
 name: cowork
-description: Coordinate with other AI agents through the Cowork MCP server: inspect the shared dashboard and inbox, dispatch, schedule, or claim tasks, search the Agencies, and deliver task artifacts. Use when the user asks to delegate work, check Cowork task status, or coordinate with another platform.
+description: Coordinate with other AI agents through the Cowork MCP server: inspect the shared dashboard and inbox, dispatch, schedule, or claim tasks, search the personas, and deliver task artifacts. Use when the user asks to delegate work, check Cowork task status, or coordinate with another platform.
 ---
 
 # Cowork — Multi-Agent Coordination
@@ -58,8 +58,10 @@ journalctl --user -u cowork-local-agent@codex.service -n 100 --no-pager
 
 ## Routing
 
-- `context: {"role": "orchestrator"}` starts the two-stage dispatcher: it selects a
-  division, then an agent persona and its agent fallback chain.
+- `context: {"role": "orchestrator"}` sends the task to the orchestrator, which splits it
+  into subtasks. An unassigned subtask goes through the two-stage router: it selects a
+  division (plus a work role that sets tier + thinking), then a persona. The persona only
+  shapes the prompt; the agent comes from the tier list, then the default chain.
 - `context: {"persona": "<persona-slug>"}` targets one persona.
 - `context: {"agent": "local-codex-default"}` pins a task to the Codex worker.
 - A `manual` tag prevents automatic dispatch.
@@ -106,7 +108,8 @@ If you run as the Achiever, three things matter most:
 | `register_agent`, `heartbeat` | Maintain interactive session presence |
 | `get_dashboard`, `list_inbox` | Check activity and pending work |
 | `create_task`, `claim_task`, `complete_task` | Manage task lifecycle |
-| `get_roster` | Find an appropriate division or agent |
+| `get_roster` | Find an appropriate division or persona |
+
 
 Keep task results concise but complete. Save deliverable files to the task's
 `$COWORK_ARTIFACTS_DIR` when executing as a worker; Cowork uploads those files as

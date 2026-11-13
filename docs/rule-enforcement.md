@@ -20,7 +20,7 @@ Levels: **Enforced** = a code path blocks or corrects the violation ·
 | 1 | No separate "report" store | No report endpoint/store exists (structural) | Enforced |
 | 2 | Full permissions, used deliberately | A grant, not a constraint. Nothing checks "deliberately". | n/a |
 | 3 | `inputs/<id>/` is read-only | Nothing checks it (no chmod, no write check) | **Unenforced** |
-| 3 | Never touch `inbox/`, `.status/`, `workflow-runs/` | Nothing checks it | **Unenforced** |
+| 3 | Never touch `inbox/`, `.status/`, `workflow-runs/` (a leftover runtime dir; the Workflows engine was removed 2026-11-02) | Nothing checks it | **Unenforced** |
 | 4 | Say plainly when you can't do the task; no fabricated success | Result verifier: deterministic checks + LLM gate (`result-verifier.ts`); spec verifier P1-1 in **shadow** (flags but does not reject) | Partial |
 | 4 | `NEEDS_INPUT:` parks on wait-input | `detectInputRequest` → `store.parkForInput`; ADR-009 auto-answer then answers non-human-only questions | Enforced |
 | 4 | Never return a rate-limit / quota notice as the deliverable | `DEFAULT_FAIL_PATTERNS` + `isRateLimitFailure` reject and hand over; the Store agent cooldown (`Store.noteAgentRateLimited` / `agentCooldownUntil`, decided from CLI signals; it replaced the P0-1 `agent-cooldown.ts` breaker) stops re-dispatch to the limited agent | Enforced |
@@ -39,18 +39,22 @@ Levels: **Enforced** = a code path blocks or corrects the violation ·
 
 **Count (2026-10-20):** 21 rules: 5 Enforced, 9 Partial, 6 Unenforced (§3 ×2,
 §5 ×3, §6 routing), 1 n/a. The strongest structural candidates for these are already
-on the correct-loop menu: the `env-requires` filter for §6, and a router rule or
-workflow gate for the §5 repository actions.
+on the correct-loop menu: the `env-requires` filter for §6, and a router rule for the
+§5 repository actions (the workflow gate it used to list went with the Workflows engine).
 
 ## How a new rule gets enforced
 
 The remedy menu in `server/src/core/correct-loop.ts` is ordered structure first:
 
-1. **router rule**: `orchestration.agentChains` / `divisionChains`
+1. **router rule**: still written as `orchestration.personaChains` / `divisionChains` in
+   `correct-loop.ts`, but the dispatcher ignores both since 2026-11-13. Until the menu is
+   updated, apply a router rule as a tier-list or `defaultChain` change, or disable the agent
 2. **agent cooldown**: Store cooldown (`Store.noteAgentRateLimited`) + `orchestration.autoRerunRateLimited`
 3. **agent `env` requires-filter** (WF-3)
 4. **verifier failPattern**: `orchestration.verifier.failPatterns`
-5. **workflow gate**: `workflows/*.json` step `gate` (P1-2)
+5. **workflow gate**: obsolete. `workflows/*.json` was removed on 2026-11-02, and
+   `correct-loop.ts` still lists it
+
 6. **acceptance criterion**: brief `acceptance` / `scope` (P0-3)
 7. **CONVENTIONS.md prose note**: last resort, and it must pass the
    `eval-prompt-change` A/B harness (P2-1)

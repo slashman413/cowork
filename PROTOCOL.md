@@ -78,7 +78,13 @@ Tasks are stored as JSON files in the `inbox/` directory:
 scheduled ─┐
 wait-input ┴→ pending → claimed → in-progress → done
                                                → rejected
+(any open status) ⇄ paused
 ```
+
+`paused` — a person paused the task (dashboard **Pause**, `POST /api/inbox/:id/pause`
+or `POST /api/tasks/pause {taskId}`). A running agent is stopped and the task is held
+out of scheduling. **Resume** (`/resume`) puts it back to `scheduled`, `wait-input` or
+`pending`, whichever it came from, with its context intact.
 
 `wait-input` — a task carrying an unanswered human-in-the-loop `interaction`
 packet. It is deliberately held OUT of the `pending` pool, so the orchestrator
@@ -138,19 +144,18 @@ A task can say how it will be judged. All four fields are optional and live
 
 The dispatcher renders them as `# Acceptance criteria`, `# How to verify`,
 `# Timebox` and `# Scope` prompt sections (not in the context JSON). A wrong
-shape returns 400. Workflow steps declare the same keys at step level and
-expansion copies them into each task's context. Orchestrator subtasks are
+shape returns 400. Orchestrator subtasks are
 expected to carry `acceptance` + `verify`; a missing `acceptance` is logged and
 counted in `decisions/lessons.jsonl` as `kind: "brief-missing-acceptance"`
 (warning only, not rejected yet).
 
 ### Agent tier (`context.tier`)
 
-`context.tier` (or a workflow step's `tier`) is one of `mechanical`,
-`standard`, `judgment` or `review`. When the task has no pinned
-`context.agent` and its agent has no `agentChains` override, it runs on
-`orchestration.tiers[<tier>]` first, then its normal chain (duplicates
-dropped, disabled agents stripped). `review` picks agents of a different model
+`context.tier` is one of `mechanical`, `standard`, `judgment` or `review`. It is
+set by hand or, with `orchestration.workRoles.enabled`, by the router's work role
+(e.g. `bug-fix` → `standard`, `hardest` → `judgment`). When the task has no pinned
+`context.agent`, it runs on `orchestration.tiers[<tier>]` first, then the default
+chain (duplicates dropped, disabled agents stripped). `review` picks agents of a different model
 family than `context.reviewOf`: Gemini judges Claude, and opus-class judges
 Gemini and qwen. Without `reviewOf` it uses the judgment list. An unknown tier
 returns 400. A task with no tier keeps its chain unchanged. Measured by
@@ -174,7 +179,7 @@ The Cowork MCP Server exposes these tools via Streamable HTTP at `/mcp`:
 | `register_agent` | Register an agent session; optionally DECLARE runnable `agents` |
 | `deregister_agent` | Remove the agent and cascade-remove every agent it registered |
 | `heartbeat` | Update agent status; may carry `usage` — the client's self-measured rate-limit snapshot per agent (`{ exec, windows: [{ label, usedPct, resetsAt }], at }`), shown as meters on the Connections cards. Only metered execs (claude/codex) report; hermes/ollama/script have no quota and send nothing |
-| `get_roster` | Query the Agencies (~285 personas across 19 divisions) |
+| `get_roster` | Query the personas of the installed persona packs (~285 across 19 divisions) |
 | `create_task` | Create a cross-platform task; optional `scheduled_at` (ISO 8601) parks it as `scheduled` until launch time (default: run now); optional `recurrence` (or legacy `loop_interval_hours`) makes it repeat on a flexible cadence (minutes/hours/daily/weekly/monthly/cron) |
 | `claim_task` | Claim a pending task |
 | `complete_task` | Mark task as done |
@@ -188,7 +193,10 @@ The Cowork MCP Server exposes these tools via Streamable HTTP at `/mcp`:
 `persona` (a persona slug or special-executor name → skip the classifier),
 `agent` (pin one agent id; the dispatcher also *publishes* the target remote agent
 here so its client can claim the task), and `division` (override the routed
-division). With none set, the two-stage router picks division → agent.
+division). With none set, the two-stage router picks division → persona (plus a
+work role, which sets `tier` and `thinking`), and the task runs on its tier list and
+then `orchestration.defaultChain`. A pinned agent on a small model (≤ 70B) still
+gets a router-picked persona unless the agent sets `personaRouting: "never"`.
 
 **Code tasks / worktrees** — if `context.repo` (aliases `repoPath`, `workdir`, `cwd`) names a
 directory inside a git repo, the agent runs in its own worktree `<repo>/.worktrees/<task-id>`
@@ -206,12 +214,15 @@ type names are **camelCase** and each frame is `{ type, payload, timestamp }`
 
 | Event | Payload |
 |-------|---------|
-| `agentRegistered` | `{ agent }` |
-| `heartbeat` | `{ agentId, status, currentTask? }` |
+| `workerRegistered` | `{ worker }` |
+| `heartbeat` | `{ workerId, status, currentTask? }` |
 | `taskCreated` | `{ task }` |
-| `taskClaimed` | `{ task, agentId }` |
+| `taskClaimed` | `{ task, workerId }` |
 | `taskCompleted` | `{ task }` |
 | `taskDeleted` | `{ taskId, status? }` |
+| `taskPaused` | `{ task, from }` |
+| `taskResumed` | `{ task }` |
+| `goalUpdated` | `{ goalId }` |
 | `agentExecuted` | `{ agentId, exec, taskId }` |
 
 Subscribe with `curl -N http://localhost:6868/api/events` (no buffering). There is
@@ -229,7 +240,9 @@ no `agent_disconnected` event — a client that stops heartbeating is pruned sil
 | GET | `/api/tasks` | Same list and filters as `/api/inbox`, wrapped as `{tasks}` |
 | POST | `/api/inbox` | Create task |
 | PATCH | `/api/inbox/:id` | Claim or complete task |
-| GET | `/api/roster` | Agencies (query: division, search) |
+| POST | `/api/inbox/:id/pause`, `/api/inbox/:id/resume` | Pause / resume a task |
+| GET | `/api/roster` | Personas (query: division, search) |
 | GET | `/api/roster/divisions` | Division metadata |
+
 | GET | `/api/config` | Current configuration |
 | GET | `/api/events` | SSE event stream |

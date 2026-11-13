@@ -12,14 +12,17 @@ Nav sections, page order, labels and the Overview's widgets come from **`layout.
 |------|-------|--------------------------|
 | [Overview](#overview) | Overview | `GET /api/status`, `GET /api/system`, `GET /api/system/details/:kind` |
 | [Portal](#portal) | Portal | `GET /api/portal` (portal.json) + `GET /api/services` |
-| [Inbox](#inbox) | Tasks | `GET/POST /api/inbox`, `PATCH /api/inbox/:id` |
+| [Inbox](#inbox) | Tasks | `GET/POST /api/inbox`, `PATCH /api/inbox/:id`, `POST /api/inbox/:id/pause\|resume` |
 | [Recipes](#recipes) | Recipes | `GET/POST/PUT/DELETE /api/recipes*`, `POST /api/recipes/:id/run`, `POST /api/inbox/:id/rating` |
 | [Calendar](#calendar) | Calendar | `GET /api/calendar`, `POST /api/inbox/:id/edit`, `POST /api/inbox/:id/run-now` |
+| Goals | Goals | `GET/POST /api/goals`, `/api/goals/:id*` (see [goals-redesign.md](goals-redesign.md)) |
 | [Routing](#routing) | Routing | `GET/PUT /api/roles-config`, `/api/chains*` |
 | [Agents](#agents) | Agents | `GET/PUT/DELETE /api/agents*` |
-| [Agencies](#agencies) | Personas | `GET /api/roster`, `/api/roster-divisions` |
 | [Connections](#connections) | Workers | `GET /api/connections` |
 | [Configuration](#configuration) | Configuration | `GET /api/config` |
+
+The **Integrations** page (`/integrations.html`, `GET/POST /api/integrations*`) is outside the
+nav layout. It installs skills, MCP servers and **persona packs**; see [Personas](#personas).
 
 All pages consume the live SSE event stream (`GET /api/events`) so cards update in
 place as tasks are created, claimed, and completed.
@@ -76,10 +79,11 @@ keeps serving the last good layout.
 - `portal` — any id, any number. Shows `portal.json` cards, optionally narrowed by
   `categories` and/or `keys`; `intro` (markdown) replaces the default blurb.
 - App pages — `tasks`, `recipes`, `calendar`, `goals`, `routing`, `agents`,
-  `personas`, `workers`, `config`. Fixed ids, each matching its nav label (other code
+  `workers`, `config`. Fixed ids, each matching its nav label (other code
   deep-links to `#tasks/<id>`). The pre-2026-10-16 ids `inbox`, `team`, `roster` and
   `connections` are still accepted in a layout file and as URLs (old bookmarks
-  redirect to the new hash); a
+  redirect to the new hash). The removed pages `chat`, `personas` and `roster`
+  (Personas moved into Integrations on 2026-11-13) are dropped from a layout; a
   section can name them without an entry under `pages`, an entry only overrides
   `label`/`icon`/`hidden`. One the layout never mentions is appended to a
   **More** section, so a page added in a later release is never invisible.
@@ -127,7 +131,7 @@ The at-a-glance overview (`GET /api/status` → `DashboardData`):
   `inProgress`, `completed`, and `failed` (tasks that exhausted their fallback
   chain).
 - **Platform status** — per-platform up/down.
-- **Agencies count** and **uptime**.
+- **Personas count** and **uptime**.
 
 Use it to confirm the server is live and to see the shape of the queue before
 diving into the Inbox.
@@ -188,6 +192,9 @@ The task queue and the heart of the operator view. Each card is a `Task`
 - `scheduled` — a future `scheduledAt` launch time; released to `pending` when due.
 - `pending` — eligible for routing/claiming.
 - `claimed` / `in-progress` — an agent is (or is about to be) working it.
+- `paused` — a person paused it (**Pause** on the card; the **Paused** filter lists
+  them). A running agent is stopped; **Resume** returns it to `scheduled`,
+  `wait-input` or `pending` with its brief, context and artifacts intact.
 - `done` — completed and verified.
 - `rejected` / `failed` — `failed: true` marks a task that exhausted its whole
   fallback chain; the UI groups these red and offers a confirm-gated re-run.
@@ -197,6 +204,7 @@ What you can do here:
 - **Create** a task (`POST /api/inbox`), optionally attaching uploaded files
   (`POST /api/uploads` → token → `inputs: [{token, name}]`).
 - **Claim / complete** (`PATCH /api/inbox/:id`).
+- **Pause / resume** a task (`POST /api/inbox/:id/pause`, `/resume`).
 - **Re-run** a failed task (`POST /api/inbox/:id/rerun`) — reset to pending from
   the top of its chain, keeping its inputs.
 - **Attach inputs** to an existing task (`GET/POST /api/inbox/:id/inputs`).
@@ -212,14 +220,19 @@ dispatcher, verifier and handover treat it like any other task.
 
 - **Capture:** a finished, non-failed task card has **★ Save as recipe**. The editor
   shows the brief: select a phrase and press *Make field* to turn every occurrence into
-  a `{{key}}` fill-in. The agent, agent (*suggested*, or *always* when locked), tier,
-  acceptance criteria, timebox, tags and input files carry over. Input files are copied
-  into the recipe.
+  a `{{key}}` fill-in. The agent (*suggested*, or *always* when locked), thinking level,
+  tier, acceptance criteria, timebox, tags and input files carry over. Input files are
+  copied into the recipe. Recipes don't carry a persona: the router picks one per run.
+- **New recipe:** the **New recipe** button (and the empty-library prompt) opens a blank
+  editor. *Add field* inserts a `{{blank}}` at the cursor; step 3, *How it runs*, sets
+  Agent, Thinking, Timebox and the *always use* switch.
 - **Library:** cards show the score ("9/10 good"), the last 10 runs as dots, run
   count, median duration and last run. You can search, sort by most used, best rated
   or newest, and favourite a recipe.
 - **Run sheet:** only the recipe's fields, prefilled with the values you used last.
-  Agent is *Auto* unless the recipe is locked. *More options* has extra instructions
+  Agent is *Auto* unless the recipe is locked; the sheet also has Agent and Thinking
+  pickers for a one-run override. *More options* has extra instructions
+
   for this run, a start time and the recurrence editor, so a recipe can become a
   recurring task.
 - **Feedback:** tasks made from a recipe get a "from recipe" chip and 👍/👎. A 👎
@@ -255,21 +268,24 @@ Backed by `GET /api/calendar?from=ISO&to=ISO`. Full UX spec and data contract:
 
 ## Routing
 
-Edit **who runs what** without touching code. Two kinds of worker:
+Edit **who runs what** without touching code. Three kinds of chain:
 
-- **Special (non-Agencies) executors** — `orchestrator` (router/decomposer),
-  `generalist` (fallback), `video` (media pipeline). Each has its own ordered
-  **agent fallback chain** (`orchestration.roleChains[*].agents`), edited here
-  (`GET/PUT/DELETE /api/roles-config`).
-- **Agencies agents** — resolved through **chains**: the global `defaultChain`, a
-  per-division override (`divisionChains[*]`), or a per-agent override
-  (`agentChains[*]`, highest precedence). Edited via `GET/PUT /api/chains`,
-  `/chains/default`, `/chains/division/:div`.
+- **Special executors** — `orchestrator` (router/decomposer), `generalist`
+  (fallback), `video` (media pipeline). Each has its own ordered **agent fallback
+  chain** (`orchestration.roleChains[*].agents`), edited here
+  (`GET /api/roles-config`, `PUT/DELETE /api/roles-config/:name`).
+- **Tier lists** — `orchestration.tiers.<mechanical|standard|judgment>`
+  (`GET /api/chains/tiers`, `PUT /api/chains/tier/:tier`). A task with a `context.tier`
+  (set by hand or by the router's work role) tries its tier's agents first.
+- **Default chain** — `orchestration.defaultChain` (`PUT /api/chains/default`): what
+  every other task runs on, after its tier list.
 
 A chain is an **ordered list of agent ids**: `agents[0]` is tried first, and on
 failed verification the dispatcher hands the task to `agents[1]`, then `agents[2]`,
-and so on. Chains are drag-sortable in the UI. This is why shipped agents pin a
-`division`/`persona` and never an `agent` — you retune execution here, live.
+and so on. Chains are drag-sortable in the UI. Personas don't pick the agent: the
+per-division and per-persona chains (`divisionChains`, `personaChains`,
+`/api/chains/division/:div`) were removed on 2026-11-13, so a persona only shapes the
+prompt and you retune execution here, live.
 
 ---
 
@@ -293,13 +309,16 @@ that referenced it.
 
 ---
 
-## Agencies
+## Personas
 
-The full catalog of specialist agents (`GET /api/roster`, filterable by division;
-`GET /api/roster-divisions` groups them for this view). Each `AgentCard` carries a
-slug, name, description, emoji/color/vibe, and division. This is the pool the
-two-stage router picks from when a task isn't pinned to a specific agent — browse
-it to learn which specialist a `division`/`persona` pin will reach.
+There is no Personas page any more (removed 2026-11-13). Personas come from
+**persona-pack integrations**: an integration of kind `persona` (agency-agents layout)
+registers its clone as a roster source, and the roster reads every installed pack. The
+default pack, `msitarzewski/agency-agents`, is provisioned on first start with the other
+default integrations; verify with `GET /api/integrations/defaults` and re-run with
+`POST /api/integrations/defaults/provision`. Browse the catalog with `GET /api/roster`
+(filterable by division) and `GET /api/roster-divisions`, or the `get_roster` MCP tool.
+This is the pool the router picks a persona from when a task doesn't name one.
 
 ---
 

@@ -3,11 +3,6 @@
   "name": "io.cowork/cowork",
   "title": "Cowork",
   "description": "Self-hosted MCP task inbox shared by Claude Code, Codex, Gemini CLI and local LLMs.",
-  "repository": {
-    "url": "https://cowork.dev/cowork",
-    "source": "git"
-  },
-  "websiteUrl": "https://cowork.dev",
   "version": "1.0.1",
   "packages": [
     {
