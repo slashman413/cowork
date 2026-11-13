@@ -627,6 +627,11 @@ export interface IntegrationsConfig {
   defaults?: string[];
   /** Run first-run provisioning at boot (default true). */
   provisionDefaults?: boolean;
+  /** Install-advisor agents in fallback order (local agents only). Default
+   *  local-agy-gemini-3.8-flash → local-dsh-qwen3-8-27b. */
+  adviseChain?: string[];
+  /** Thinking level for the advisor run (default high). */
+  adviseThinking?: string;
 }
 
 export interface ShotcraftConfig {

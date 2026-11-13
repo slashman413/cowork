@@ -8,7 +8,7 @@ import http from 'http';
 import https from 'https';
 import { createMultiplexedServer } from './core/server-listener.js';
 import { createCompression } from './core/compression.js';
-import { activeConfigPath, loadConfig, migrateLegacyNamingOnBoot, persistRegistries, removeAgentCascade, restoreClientAgents } from './config.js';
+import { activeConfigPath, canonicalAgentId, loadConfig, migrateLegacyNamingOnBoot, persistRegistries, removeAgentCascade, restoreClientAgents } from './config.js';
 import { EventBus } from './core/events.js';
 import { Store } from './core/store.js';
 import { Dispatcher } from './core/dispatcher.js';
@@ -37,6 +37,7 @@ import { normalizeRecurrence, nextRunAt } from './core/recurrence.js';
 import { Shotcraft, SHOTCRAFT_TAG, GALLERY_URL, ASPECTS as SHOTCRAFT_ASPECTS, LENGTHS as SHOTCRAFT_LENGTHS } from './core/shotcraft.js';
 import { OUTPUTS_SUBDIR } from './core/artifact-lint.js';
 import { sharedIntegrations, defaultAuditTargets, defaultWrapAgent } from './core/integrations.js';
+import { IntegrationJobs, DEFAULT_ADVISE_CHAIN } from './core/integration-jobs.js';
 import { auditPath, mergeReports } from './core/skill-auditor.js';
 import { AUTH_COOKIE, KeylessLog, keyMatches, readCookie, resolveApiKey } from './core/auth.js';
 import { ClientGuard } from './core/client-guard.js';
@@ -680,8 +681,18 @@ async function main() {
     if (!intEnabled()) return res.status(404).json({ error: 'integrations are disabled (config integrations.enabled=false)' });
     next();
   });
+  // Install advisor + install/uninstall jobs (core/integration-jobs.ts).
+  const intJobs = new IntegrationJobs(integrations, store, {
+    chain: () => (config.integrations?.adviseChain?.length ? config.integrations.adviseChain : DEFAULT_ADVISE_CHAIN).map(a => canonicalAgentId(config, a)),
+    thinking: () => config.integrations?.adviseThinking,
+    localAgents: () => localAgents().filter(a => !config.orchestration.agents?.[a]?.disabled),
+  });
+  if (intEnabled()) setInterval(() => intJobs.tick(), 20_000).unref();
   app.get('/api/integrations', (_req, res) => {
+    intJobs.tick();
     res.json({
+      adviseChain: intJobs.adviseChain(),
+      jobs: Object.fromEntries(integrations.list().map(e => [e.id, intJobs.activeJob(e.id)?.id]).filter(([, j]) => j)),
       root: integrations.root, skillsHome: integrations.skillsHome,
       clientSkillDirs: integrations.clientSkillDirs.filter(d => fs.existsSync(d)),
       allowHosts: integrations.allowHosts, wrapAgent: wrapAgentDefault(), agents: localAgents(),
@@ -691,8 +702,21 @@ async function main() {
   app.post('/api/integrations', async (req, res) => {
     try {
       const body = req.body || {};
-      res.status(201).json(await integrations.add(String(body.repo || ''), { install: body.install === true, force: body.force === true }));
+      const entry = await integrations.add(String(body.repo || ''), { install: body.install === true, force: body.force === true });
+      // Dashboard fetches ask the advisor how to install it properly (skipped for
+      // quarantined repos — the operator can still request advice by hand).
+      if (body.advise === true && entry.status !== 'quarantined') {
+        try { return res.status(201).json(intJobs.advise(entry.id)); }
+        catch (err: any) { console.error(`Integrations advise ${entry.id}:`, err.message); }
+      }
+      res.status(201).json(entry);
     } catch (e: any) { res.status(400).json({ error: e.message }); }
+  });
+  app.get('/api/integrations/jobs/:jobId', (req, res) => {
+    const job = intJobs.getJob(String(req.params.jobId));
+    if (!job) return res.status(404).json({ error: 'job not found (jobs live in memory — a server restart drops them)' });
+    const since = Math.max(0, Number(req.query.since) || 0);
+    res.json({ ...job, log: job.log.slice(since), logTotal: job.log.length });
   });
   // Default integrations (first-run provisioning): status + manual re-provision.
   app.get('/api/integrations/defaults', (_req, res) => {
@@ -729,6 +753,10 @@ async function main() {
     const body = req.body || {};
     try {
       switch (req.params.action) {
+        case 'advise': return res.json(intJobs.advise(id, { notes: typeof body.notes === 'string' ? body.notes : undefined }));
+        case 'install-job': return res.status(202).json({ job: intJobs.startInstall(id, { force: body.force === true, usePlan: body.usePlan !== false, skills: Array.isArray(body.skills) ? body.skills.map(String) : undefined }) });
+        case 'uninstall-job': return res.status(202).json({ job: intJobs.startUninstall(id) });
+        case 'remove-job': return res.status(202).json({ job: intJobs.startRemove(id) });
         case 'install': return res.json(integrations.install(id, { force: body.force === true, kinds: Array.isArray(body.kinds) ? body.kinds : undefined, skills: Array.isArray(body.skills) ? body.skills.map(String) : undefined }));
         case 'uninstall': return res.json(integrations.uninstall(id, { purge: body.purge === true }) || { id, purged: true });
         case 'update': return res.json(await integrations.update(id));
