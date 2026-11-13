@@ -1,16 +1,67 @@
-# 🤝 Cowork — one task inbox for Claude Code, Codex, Gemini CLI & Hermes agents
+<div align="center">
 
-**A self-hosted MCP server + web dashboard that lets different AI coding agents share one task
-queue.** Dispatch a task from any of them (or from the UI); a dispatcher routes it to a named
-*agent* (model × CLI × machine), runs it, verifies the result, and falls back to the next agent
-on rate limits. Artifacts, remote machines and cost/usage meters are built in.
+# 🤝 Cowork
 
-- **Mixed-vendor agents, one inbox:** Claude Code, Codex, Gemini CLI / Antigravity, Hermes, Ollama.
-- **Agent routing with fallback chains:** route by role, pin by task, fail over on quota errors.
-- **Plain files on disk:** the task store is files. No database to run.
-- **Remote agents:** another machine joins with one command and offers its models
-  ([JOIN-AS-AN-AGENT.md](JOIN-AS-AN-AGENT.md)):
-  `COWORK_URL=http://<host>:6868 HOST=<you> node cowork/deploy/remote-agent-client.mjs`
+### One Task Inbox for Claude Code, Codex, Gemini CLI & Hermes Agents
+**Self-hosted MCP server & Web Dashboard with auto-fallback chains, remote fleet execution, and zero-database storage.**
+
+[![GitHub Stars](https://img.shields.io/github/stars/slashman413/cowork?style=for-the-badge&color=FFE066&logo=github)](https://github.com/slashman413/cowork/stargazers)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](LICENSE)
+[![MCP Compatible](https://img.shields.io/badge/MCP-Streamable%20HTTP-8A2BE2?style=for-the-badge&logo=anthropic)](https://modelcontextprotocol.io)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge)](https://github.com/slashman413/cowork/pulls)
+
+<br/>
+
+<a href="#quick-start">
+  <img src="docs/images/cowork-dashboard.png" alt="Cowork Live Demo: Multi-Agent Dispatch & Fallback" width="900px" style="border-radius: 8px; box-shadow: 0 8px 30px rgba(0,0,0,0.5);">
+</a>
+
+<br/><br/>
+
+**[⚡ Quick Start](#quick-start)** •
+**[💡 Why Cowork?](#-why-cowork)** •
+**[⚔️ Competitive Comparison](#️-how-cowork-compares)** •
+**[📖 Documentation](docs/)** •
+**[🌐 Live Architecture](#task-execution--the-dispatcher)** •
+**[🤝 Join as a Remote Agent](JOIN-AS-AN-AGENT.md)** •
+**[⭐ Star on GitHub](https://github.com/slashman413/cowork/stargazers)**
+
+</div>
+
+---
+
+### 💡 Why Cowork?
+
+You are using **Claude Code** for development. Two hours into a sprint, you hit the dreaded rate limit:
+> `Error: You have exceeded your current quota. Please wait 4 hours and 12 minutes.`
+
+Your workflow stalls. Your terminal hangs. You switch to Gemini CLI or a local Hermes instance, but you lose your entire task state, intermediate patches, and execution context.
+
+**Cowork solves this in one command.** It is an open-source control plane that connects all your coding agents into one unified task inbox:
+
+- 🔀 **Smart Fallback Chains:** Route tasks from Claude Code ➔ Hermes ➔ Gemini ➔ Ollama. When an API limits out, Cowork transparently hands the work to the next agent in line.
+- 🖥️ **Single-Pane-of-Glass Dark Dashboard:** Live CPU/GPU/memory thermals, running agent status, interactive calendar routines, and direct artifact downloads.
+- 📁 **Zero-Database Simplicity:** Pure JSON and Markdown on disk. No Postgres, Redis, or SQLite migrations to maintain.
+- ⚡ **One-Command Remote Workers:** Harness GPUs or models across laptops, Mac Studios, and cloud boxes:
+  `COWORK_URL=https://hub:6868 HOST=mac-studio node cowork/deploy/remote-agent-client.mjs`
+- 🎭 **285+ Built-in Specialist Personas:** Out-of-the-box routing across 19 departments (Frontend, SRE, Security, Penetration Testing, Data Engineering).
+
+---
+
+## ⚔️ How Cowork Compares
+
+| Feature | **Cowork** | CrewAI / AutoGPT | OpenHands | LangGraph |
+|---|:---:|:---:|:---:|:---:|
+| **Primary Focus** | **Multi-CLI / Multi-Agent Control Plane** | LLM Python Scripts | Headless Dev Container | Graph Logic Framework |
+| **Supports Claude Code & Hermes Native CLIs** | ✅ **Native** | ❌ No | ❌ No | ❌ No |
+| **Auto Quota / Rate-Limit Fallback Chains** | ✅ **Built-in** | ❌ Manual | ❌ No | ⚠️ Custom Code |
+| **Self-Hosted Dark Web UI & Hardware Telemetry** | ✅ **Instant** | ⚠️ Basic | ✅ Web UI | ⚠️ LangSmith (SaaS) |
+| **Model Context Protocol (MCP) Streamable Server**| ✅ **First-class** | ❌ No | ⚠️ Partial | ❌ Custom |
+| **Storage Engine** | **Plain Files / JSON** | SQLite/Postgres | Docker Volume | Postgres/Memory |
+| **Multi-Machine Remote Cluster Joining** | ✅ **1-Line Node CLI** | ❌ Complex | ❌ Docker swarm | ❌ Complex |
+| **Pre-loaded Agent Personas** | **285+ Personas** | 0 (DIY) | 0 (Generalist) | 0 (DIY) |
+
+---
 
 Jump to: [Quick Start](#quick-start) · [Connecting agents](#connecting-ai-agents) ·
 [Dispatcher](#task-execution--the-dispatcher) · [Agents](#agents--named-execution-identities-model--platform--location) ·
@@ -1017,6 +1068,16 @@ COWORK_CONFIG=~/.cowork/config.staging.json COWORK_PORT=6900 npm start
 The Agencies catalog is cached in memory and rescanned at most once per `COWORK_ROSTER_TTL_MS`
 (default 30000). New agents / a submodule bump propagate within that window with no
 restart; set `0` to rescan on every query, or a larger value to reduce disk work.
+
+---
+
+### ⭐ Why Star Cowork?
+
+GitHub stars tell us which agent integrations (Cursor MCP, Windsurf, Roo-Code, Goose) to build next.
+- ⭐ **Star now** to bookmark this project and receive release alerts when new agent adapters drop.
+- 🍴 **Fork** to run an isolated agent fleet for your team or homelab.
+
+[![Star History Chart](https://api.star-history.com/svg?repos=slashman413/cowork&type=Date)](https://star-history.com/#slashman413/cowork&Date)
 
 ---
 
