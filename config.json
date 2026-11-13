@@ -9,7 +9,6 @@
     "tls": null
   },
   "paths": {
-    "agencyAgents": "./agency-agents",
     "inbox": "./inbox",
     "status": "./.status",
     "decisions": "./decisions",

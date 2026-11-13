@@ -44,13 +44,17 @@ function parsePersonaFile(raw: string): { data: Record<string, any>; content: st
   }
 }
 
+/** Where personas come from: one dir, or a resolver re-evaluated on every rescan
+ *  (installed persona-pack integrations change at runtime). */
+export type PersonaSources = string | undefined | (() => Array<string | undefined>);
+
 export class Roster {
-  private repoPath: string;
+  private sources: PersonaSources;
   private personas: PersonaCard[] = [];
   private divisions: any = {};
   private loadedAt = 0;
   // Lightweight cache: every roster query (dashboard, classifier, roster views)
-  // calls loadAll, so we scan the agency-agents dir at most once per TTL instead
+  // calls loadAll, so we scan the persona sources at most once per TTL instead
   // of on every call. A short TTL keeps near-live propagation — a newly added
   // agent or a submodule bump shows up within the window without a server
   // restart — while hot paths just return the in-memory array. Override with
@@ -59,8 +63,25 @@ export class Roster {
     ? Math.max(0, Number(process.env.COWORK_ROSTER_TTL_MS) || 0)
     : 30_000;
 
-  constructor(repoPath: string) {
-    this.repoPath = repoPath;
+  constructor(sources: PersonaSources) {
+    this.sources = sources;
+  }
+
+  /** Existing, de-duplicated persona source dirs. */
+  public roots(): string[] {
+    let list: Array<string | undefined>;
+    try { list = typeof this.sources === 'function' ? this.sources() : [this.sources]; } catch { list = []; }
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const p of list) {
+      if (!p || !fs.existsSync(p)) continue;
+      let real = p;
+      try { real = fs.realpathSync(p); } catch { /* keep p */ }
+      if (seen.has(real)) continue;
+      seen.add(real);
+      out.push(p);
+    }
+    return out;
   }
 
   public loadAll(): PersonaCard[] {
@@ -68,62 +89,69 @@ export class Roster {
     return this.scan();
   }
 
-  /** Rescan the agency-agents directory and refresh the cache. Builds into a
+  /** Rescan every persona source and refresh the cache. Builds into a
    *  local array so a mid-scan error never leaves a partial cache exposed. */
   private scan(): PersonaCard[] {
     const personas: PersonaCard[] = [];
-
-    if (!fs.existsSync(this.repoPath)) {
-      console.warn(`Agency agents repo not found at ${this.repoPath}`);
-      this.personas = personas;
-      this.loadedAt = Date.now();
-      return personas;
+    const divisions: Record<string, any> = {};
+    const slugs = new Set<string>();
+    const roots = this.roots();
+    if (!roots.length) {
+      console.warn('Roster: no persona source installed — add a persona pack (e.g. msitarzewski/agency-agents) on the Integrations page');
     }
+    for (const root of roots) {
+      const divisionsPath = path.join(root, 'divisions.json');
+      if (fs.existsSync(divisionsPath)) {
+        try {
+          const d = JSON.parse(fs.readFileSync(divisionsPath, 'utf-8'));
+          for (const [k, v] of Object.entries(d || {})) if (!divisions[k]) divisions[k] = v;
+        } catch (e) {
+          console.error(`Failed to parse ${divisionsPath}`, e);
+        }
+      }
 
-    const divisionsPath = path.join(this.repoPath, 'divisions.json');
-    if (fs.existsSync(divisionsPath)) {
-      try {
-        this.divisions = JSON.parse(fs.readFileSync(divisionsPath, 'utf-8'));
-      } catch (e) {
-        console.error('Failed to parse divisions.json', e);
+      // Agents live in division subdirectories; top-level *.md are repo docs
+      // (README, SECURITY, CONTRIBUTING, …) and examples/ holds sample output.
+      const personaFiles = globSync('*/**/*.md', {
+        cwd: root,
+        ignore: ['docs/**', 'examples/**', 'scripts/**', 'integrations/**', '**/README.md', '**/SKILL.md', '.*/**']
+      }).sort();
+
+      for (const file of personaFiles) {
+        const fullPath = path.join(root, file);
+        try {
+          const content = fs.readFileSync(fullPath, 'utf-8');
+          const parsed = parsePersonaFile(content);
+          // A persona needs at least a name or description in its frontmatter;
+          // a bare .md (notes, changelogs) in a division dir is not an agent.
+          if (!parsed.data.name && !parsed.data.description) continue;
+
+          const slug = String(parsed.data.slug || path.basename(file, '.md'));
+          if (slugs.has(slug)) continue;   // first source wins on a slug clash
+          slugs.add(slug);
+          const division = path.dirname(file).split(path.sep)[0] || 'unknown';
+          const divisionMeta = divisions[division] || {};
+
+          personas.push({
+            slug,
+            name: parsed.data.name || slug,
+            description: parsed.data.description || '',
+            emoji: parsed.data.emoji,
+            color: parsed.data.color,
+            vibe: parsed.data.vibe,
+            division: division,
+            divisionLabel: divisionMeta.label || division,
+            divisionIcon: divisionMeta.icon,
+            sourcePath: fullPath,
+            platforms: parsed.data.platforms || []
+          });
+        } catch (e) {
+          console.error(`Failed to parse agent file: ${file}`, e);
+        }
       }
     }
 
-    // Agents live in division subdirectories; top-level *.md are repo docs
-    // (README, SECURITY, CONTRIBUTING, …) and examples/ holds sample output.
-    const personaFiles = globSync('*/**/*.md', {
-      cwd: this.repoPath,
-      ignore: ['docs/**', 'examples/**', 'scripts/**', '**/README.md']
-    });
-
-    for (const file of personaFiles) {
-      const fullPath = path.join(this.repoPath, file);
-      try {
-        const content = fs.readFileSync(fullPath, 'utf-8');
-        const parsed = parsePersonaFile(content);
-
-        const slug = path.basename(file, '.md');
-        const division = path.dirname(file).split(path.sep)[0] || 'unknown';
-        const divisionMeta = this.divisions[division] || {};
-
-        personas.push({
-          slug: parsed.data.slug || slug,
-          name: parsed.data.name || slug,
-          description: parsed.data.description || '',
-          emoji: parsed.data.emoji,
-          color: parsed.data.color,
-          vibe: parsed.data.vibe,
-          division: division,
-          divisionLabel: divisionMeta.label || division,
-          divisionIcon: divisionMeta.icon,
-          sourcePath: fullPath,
-          platforms: parsed.data.platforms || []
-        });
-      } catch (e) {
-        console.error(`Failed to parse agent file: ${file}`, e);
-      }
-    }
-
+    this.divisions = divisions;
     this.personas = personas;
     this.loadedAt = Date.now();
     return this.personas;

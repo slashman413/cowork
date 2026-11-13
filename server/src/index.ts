@@ -3,6 +3,7 @@ import { legacyWireMiddleware, legacyWireUses } from './legacy-wire.js';
 import { DEFAULT_THINKING, normalizeThinking, THINKING_LEVELS } from './core/thinking.js';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 import http from 'http';
 import https from 'https';
 import { createMultiplexedServer } from './core/server-listener.js';
@@ -40,9 +41,27 @@ import { auditPath, mergeReports } from './core/skill-auditor.js';
 import { AUTH_COOKIE, KeylessLog, keyMatches, readCookie, resolveApiKey } from './core/auth.js';
 import { ClientGuard } from './core/client-guard.js';
 
+/**
+ * Agents spawned by the dispatcher inherit this process's PATH. A systemd unit's
+ * PATH omits per-user tool dirs, so CLIs that default integrations install there
+ * (gbrain + bun in ~/.bun/bin, agent-browser / npm globals in ~/.local/bin …) were
+ * invisible to every agent. Prepend the ones that exist.
+ */
+function ensureUserBinsOnPath(): void {
+  const home = os.homedir();
+  const want = ['.bun/bin', '.local/bin', '.npm-global/bin', '.cargo/bin', 'go/bin'].map(d => path.join(home, d)).filter(d => fs.existsSync(d));
+  const cur = (process.env.PATH || '').split(':').filter(Boolean);
+  const add = want.filter(d => !cur.includes(d));
+  if (add.length) {
+    process.env.PATH = [...add, ...cur].join(':');
+    console.log(`PATH: added ${add.join(', ')} for spawned agents`);
+  }
+}
+
 async function main() {
   migrateLegacyNamingOnBoot();
   const config = loadConfig();
+  ensureUserBinsOnPath();
   const eventBus = new EventBus();
   const store = new Store(config, eventBus);
 
@@ -334,16 +353,15 @@ async function main() {
       agents: config.orchestration.agents || {},
       defaultThinking: config.orchestration.defaultThinking || DEFAULT_THINKING,
       defaultChain: config.orchestration.defaultChain || [],
-      divisionChains: config.orchestration.divisionChains || {},
       running: dispatcher.getRunning()
     });
   });
 
-  // ── Agent fallback chains (global default + per-division + per-agent) ───────
+  // ── Agent fallback chains (global default + work-role tiers) ───────────────
+  // Per-division / per-persona chains were removed with the Personas page:
+  // personas shape the prompt only; tiers + the default chain pick the agent.
   app.get('/api/chains', (_req, res) => res.json({
     defaultChain: config.orchestration.defaultChain || [],
-    divisionChains: config.orchestration.divisionChains || {},
-    personaChains: config.orchestration.personaChains || {},
     tiers: config.orchestration.tiers || {}
   }));
 
@@ -384,14 +402,16 @@ async function main() {
     } catch (e: any) { res.status(e instanceof ChainEditError ? 400 : 500).json({ error: e.message }); }
   };
   app.put('/api/chains/default', (req, res) => putChain('default', '', req, res));
-  // Empty agents[] clears a division / persona override (falls back to division, then default).
-  app.put('/api/chains/division/:division', (req, res) => putChain('division', req.params.division, req, res));
-  app.put('/api/chains/persona/:persona', (req, res) => putChain('persona', req.params.persona, req, res));
   // Work-role tiers (mechanical / standard / judgment); `review` is derived at runtime.
   app.put('/api/chains/tier/:tier', (req, res) => putChain('tier', req.params.tier, req, res));
   app.get('/api/chains/tiers', (_req, res) => res.json({ editable: EDITABLE_TIERS }));
 
-  // ── Roster grouped by division (for the Agents view) ───────────────────────
+  // The standalone Personas page is gone — personas are an installed integration now.
+  for (const legacy of ['/personas', '/personas.html', '/roster', '/roster.html']) {
+    app.get(legacy, (_req, res) => res.redirect(301, '/integrations.html'));
+  }
+
+  // ── Roster grouped by division (persona picker in the New/Edit task dialogs) ─
   app.get('/api/roster-divisions', (_req, res) => {
     const roster = store.getRoster();
     const meta = store.getDivisions() || {};
@@ -674,6 +694,29 @@ async function main() {
       res.status(201).json(await integrations.add(String(body.repo || ''), { install: body.install === true, force: body.force === true }));
     } catch (e: any) { res.status(400).json({ error: e.message }); }
   });
+  // Default integrations (first-run provisioning): status + manual re-provision.
+  app.get('/api/integrations/defaults', (_req, res) => {
+    const list = integrations.verifyDefaults();
+    res.json({ ok: list.every(d => d.ok), personas: store.getRoster().length, defaults: list });
+  });
+  app.post('/api/integrations/defaults/provision', async (_req, res) => {
+    try {
+      const list = await integrations.ensureDefaults({ log: m => console.log(`Integrations: ${m}`) });
+      res.json({ ok: list.every(d => d.ok), defaults: list });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+  // First run: once the server is up, provision the defaults in the background
+  // (clones can take minutes; each default is seeded once, so later boots are no-ops).
+  if (intEnabled() && config.integrations?.provisionDefaults !== false) {
+    setTimeout(() => {
+      integrations.ensureDefaults({ log: m => console.log(`Integrations: ${m}`) })
+        .then(list => {
+          const bad = list.filter(d => !d.ok);
+          console.log(`Integrations: defaults ${list.length - bad.length}/${list.length} ready` + (bad.length ? ` — not ready: ${bad.map(d => `${d.input} (${d.problem})`).join('; ')}` : ''));
+        })
+        .catch(e => console.error('Integrations: default provisioning failed:', e));
+    }, Number(process.env.COWORK_DEFAULTS_DELAY_MS ?? 10_000)).unref();
+  }
   app.post('/api/integrations/audit', (req, res) => {
     try {
       const targets = defaultAuditTargets(config.integrations || {});

@@ -20,7 +20,7 @@ test('repo default layout.json is valid and reproduces the built-in nav', () => 
   assert.equal(v.defaultPage, 'overview');
   assert.deepEqual(v.sections.map((s) => s.label), ['Operations', 'AI Fleet', 'System']);
   assert.deepEqual(v.sections.flatMap((s) => s.pages),
-    ['overview', 'portal', 'tasks', 'recipes', 'calendar', 'goals', 'routing', 'agents', 'personas', 'workers', 'config']);
+    ['overview', 'portal', 'tasks', 'recipes', 'calendar', 'goals', 'routing', 'agents', 'workers', 'config']);
   assert.equal(v.pages.overview.type, 'dashboard');
   assert.deepEqual(v.pages.overview.rows!.map((r) => r.widgets.map((w) => w.type)),
     [['sysbar'], ['stats'], ['quality'], ['rulings'], ['dispatcher', 'activity'], ['platforms']]);
@@ -117,7 +117,8 @@ test('pre-rename app-page ids (inbox/team/roster/connections) migrate to the new
   }, 'mem');
   assert.deepEqual(v.errors, []);
   assert.equal(v.defaultPage, 'tasks');
-  assert.deepEqual(v.sections[0].pages, ['tasks', 'team', 'personas', 'workers', 'mine']);
+  // `roster` (→ personas) is a retired page now (personas moved to Integrations): skipped, no error.
+  assert.deepEqual(v.sections[0].pages, ['tasks', 'team', 'workers', 'mine']);
   assert.equal(v.pages.tasks.label, 'My Tasks');
   assert.equal(v.pages.workers.type, 'workers');
   assert.equal(v.pages.team.type, 'dashboard');

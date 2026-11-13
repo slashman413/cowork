@@ -63,14 +63,14 @@ The [Tasks](#task-execution--the-dispatcher), [Routing](#agent-fallback-chains-g
 
 - **Node.js** ≥ 20 (tested with v22)
 - **npm** ≥ 10
-- The [agency-agents](./agency-agents) repo — bundled as a **git submodule** at
-  `cowork/agency-agents` (the Agencies — 285 personas). Clone with submodules:
-
-  ```bash
-  git clone --recurse-submodules https://cowork.dev/cowork
-  # already cloned without it? initialise the submodule:
-  git submodule update --init
-  ```
+- Nothing else to clone. Personas and skills are **integrations**: on first run, once
+  the server is up, it provisions the default integrations in the background —
+  `msitarzewski/agency-agents` (persona pack the router picks from per task),
+  `garrytan/gbrain`, `addyosmani/agent-skills`, `anthropics/skills`,
+  `vercel-labs/agent-browser`, `backnotprop/pstack`, `pbakaus/impeccable`,
+  `Nutlope/hallmark`, `multica-ai/andrej-karpathy-skills`. Check them with
+  `GET /api/integrations/defaults` (or the Integrations page); override the list with
+  `integrations.defaults` in config.
 
 ### Fast path — two scripts (recommended)
 

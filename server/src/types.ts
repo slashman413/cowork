@@ -551,7 +551,10 @@ export interface Config {
     tls?: { certFile: string; keyFile: string } | null;
   };
   paths: {
-    agencyAgents: string;
+    /** @deprecated Personas now come from installed persona-pack integrations
+     *  (Integrations page, kind "persona"). Still read as an extra persona dir
+     *  when set and present on disk, for hosts that kept a local checkout. */
+    agencyAgents?: string;
     inbox: string;
     /** Per-task output files, downloadable from the Inbox. */
     artifacts: string;
@@ -615,6 +618,11 @@ export interface IntegrationsConfig {
   maxRepoMB?: number;
   /** Agent pre-selected for "wrap with an agent" tasks (must be a LOCAL agent — Rule 6). */
   wrapAgent?: string;
+  /** Repos provisioned on first run (owner/repo or URL). Absent = DEFAULT_INTEGRATIONS;
+   *  [] disables first-run provisioning. */
+  defaults?: string[];
+  /** Run first-run provisioning at boot (default true). */
+  provisionDefaults?: boolean;
 }
 
 export interface ShotcraftConfig {
@@ -776,7 +784,7 @@ export interface Task {
    *  `scheduled` = a task whose `scheduledAt` launch time is still in the future.
    *  Like `wait-input` it is held OUT of the pending pool (never claimed, routed,
    *  or dispatched); the dispatcher releases it to `pending` when its time comes. */
-  status: 'wait-input' | 'scheduled' | 'pending' | 'claimed' | 'in-progress' | 'done' | 'rejected';
+  status: 'wait-input' | 'scheduled' | 'pending' | 'claimed' | 'in-progress' | 'paused' | 'done' | 'rejected';
   skill?: string;
   /** Free-form; carries the brief contract (acceptance/verify/timeboxMin/scope — {@link TaskBrief}). */
   context?: Record<string, any>;
@@ -837,6 +845,8 @@ export interface DashboardData {
     /** Tasks parked on `wait-input` — blocked awaiting a person's answers. */
     waitingInput: number;
     inProgress: number;
+    /** Tasks a person paused (held out of scheduling until resumed). */
+    paused?: number;
     completed: number;
     /** Finished tasks that exhausted their fallback chain (task.failed === true). */
     failed: number;
@@ -855,6 +865,8 @@ export interface CoworkEventPayloads {
   heartbeat: { workerId: string; status: string; currentTask?: string };
   agentExecuted: { agentId: string; exec: string; taskId: string };
   taskDeleted: { taskId: string; status?: string };
+  taskPaused: { task: Task; from: string };
+  taskResumed: { task: Task };
 }
 
 

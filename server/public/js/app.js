@@ -257,7 +257,7 @@ function inboxPillLabel(f, status) {
     done: Math.max(0, (s.completed || 0) - (s.failed || 0)),
     'in-progress': s.inProgress || 0, pending: s.pending || 0,
     scheduled: s.scheduled || 0,
-    'wait-input': s.waitingInput || 0, failed: s.failed || 0
+    'wait-input': s.waitingInput || 0, paused: s.paused || 0, failed: s.failed || 0
   } : null;
   const n = counts && f ? counts[f] : null;
   return (f === '' ? 'All' : f) + (n !== null && n !== undefined ? ` ${n}` : '');
@@ -455,7 +455,7 @@ function describeRecurrence(rec) {
 }
 
 const STATUS_COLORS = {
-  'wait-input': '#A855F7', scheduled: '#6366F1', pending: '#EAB308', claimed: '#0EA5E9', 'in-progress': '#0EA5E9',
+  'wait-input': '#A855F7', scheduled: '#6366F1', pending: '#EAB308', claimed: '#0EA5E9', 'in-progress': '#0EA5E9', paused: '#F59E0B',
   done: '#22C55E', rejected: '#EF4444',
   idle: '#94A3B8', working: '#22C55E', blocked: '#EF4444'
 };
@@ -853,7 +853,7 @@ class App {
       // Mirrors the repo layout.json, so an older server without /api/layout
       // (or a failed fetch) still gets the familiar nav.
       const app = { tasks: ['Tasks', 'inbox'], recipes: ['Recipes', 'chef-hat'], calendar: ['Calendar', 'calendar-days'],
-        goals: ['Goals', 'target'], routing: ['Routing', 'bot'], agents: ['Agents', 'cpu'], personas: ['Personas', 'users-round'],
+        goals: ['Goals', 'target'], routing: ['Routing', 'bot'], agents: ['Agents', 'cpu'],
         workers: ['Workers', 'plug'], config: ['Configuration', 'settings'] };
       const pages = {
         overview: { id: 'overview', type: 'dashboard', label: 'Overview', icon: 'layout-dashboard',
@@ -864,14 +864,16 @@ class App {
       for (const [id, [label, icon]] of Object.entries(app)) pages[id] = { id, type: id, label, icon };
       this.layout = { brand: { title: 'Cowork', icon: 'zap', footer: 'Cowork Server' }, defaultPage: 'overview', pages,
         sections: [{ label: 'Operations', pages: ['overview', 'portal', 'tasks', 'recipes', 'calendar', 'goals'] },
-                   { label: 'AI Fleet', pages: ['routing', 'agents', 'personas'] },
+                   { label: 'AI Fleet', pages: ['routing', 'agents'] },
                    { label: 'System', pages: ['workers', 'config'] }],
         errors: [], fallback: e.message };
       console.warn('layout.json unavailable, using built-in default:', e.message);
     }
     // The Chat page was retired 2026-10-30; a server that predates that still lists it.
+    // The Personas page was retired 2026-11-13 — personas are an installed integration now.
     delete this.layout.pages?.chat;
-    for (const s of this.layout.sections || []) s.pages = (s.pages || []).filter(id => id !== 'chat');
+    delete this.layout.pages?.personas;
+    for (const s of this.layout.sections || []) s.pages = (s.pages || []).filter(id => id !== 'chat' && id !== 'personas');
     this.layout.sections = (this.layout.sections || []).filter(s => s.pages.length);
     this.renderNav();
   }
@@ -1734,7 +1736,9 @@ class App {
     // deep links working unless a layout defines a page with that id, and
     // rewrite the address bar to the canonical URL. Unknown ids land on the
     // default page rather than a blank view.
-    const legacy = { dashboard: 'overview', inbox: 'tasks', team: 'routing', roster: 'personas', connections: 'workers' };
+    const legacy = { dashboard: 'overview', inbox: 'tasks', team: 'routing', connections: 'workers' };
+    // Retired Personas page: personas live on the Integrations page now.
+    if ((view === 'personas' || view === 'roster') && !pages[view]) { location.href = '/integrations.html'; return; }
     if (Object.hasOwn(legacy, view) && !pages[view]) {
       history.replaceState(null, '', '#' + [legacy[view], ...rest].join('/'));
       return this.navigate();
@@ -1786,7 +1790,6 @@ class App {
         case 'goals': await this.renderGoals(); break;
         case 'routing': await this.renderTeam(); break;
         case 'agents': await this.renderAgents(); break;
-        case 'personas': await this.renderRoster(); break;
         case 'config': await this.renderConfig(); break;
         default: await this.renderDashboard(this.currentPage); break;
       }
@@ -2652,6 +2655,10 @@ class App {
           return `<button class="btn" data-reassign-task="${esc(t.id)}" data-agent="${esc(c.agentAuto ? '' : (c.agent || ''))}" title="Reassign — move this not-yet-started task to another agent"
           style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:${col};border-color:${col}66">⇄ Reassign${cooling ? ' agent' : ''}</button>`;
         })() : ''}
+        ${['pending', 'claimed', 'in-progress', 'scheduled', 'wait-input'].includes(t.status) ? `<button class="btn" data-pause-task="${esc(t.id)}" title="Pause — move this task to the Paused queue (a running agent is stopped; brief, context and artifacts are kept). Resume it any time."
+          style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#F59E0B;border-color:#F59E0B66">⏸ Pause</button>` : ''}
+        ${t.status === 'paused' ? `<button class="btn" data-resume-task="${esc(t.id)}" title="Resume — put this task back where it was (${esc(c.pausedFrom || 'pending')}) so it runs again"
+          style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#22C55E;border-color:#22C55E66">▶ Resume</button>` : ''}
         ${t.status === 'scheduled' ? `<button class="btn" data-run-now-task="${esc(t.id)}" title="Run now — release this scheduled task immediately instead of waiting for its run time"
           style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#6366F1;border-color:#6366F166">▶ Run now</button>` : ''}
         ${t.status === 'done' && !failed ? (t.context?.continuedInto
@@ -2794,6 +2801,35 @@ class App {
         try {
           await this.api.post(`/inbox/${encodeURIComponent(id)}/reassign`, { agent: choice.agent, ...(choice.thinking ? { thinking: choice.thinking } : {}) });
           this.toast('reassigned', choice.agent ? `Pinned to ${choice.agent} — dispatched by the next tick.` : 'Auto-routed via the agent chain — dispatched by the next tick.');
+          this.renderInbox();
+        } catch (err) { this.toast('error', err.message); b.disabled = false; }
+      }));
+
+    // Pause / resume — move a task into the Paused queue and back.
+    root.querySelectorAll('[data-pause-task]').forEach(b =>
+      b.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const id = b.dataset.pauseTask;
+        const card = b.closest('[data-task]');
+        const title = card?.dataset.title || id.slice(0, 8);
+        if (!confirm(`Pause this task?\n\n${title}\n\nA running agent is stopped; the task keeps its brief, context and artifacts and waits in the Paused queue until you resume it.`)) return;
+        b.disabled = true;
+        try {
+          const out = await this.api.post(`/inbox/${encodeURIComponent(id)}/pause`, {});
+          this.toast('paused', `Paused (was ${out.from}). Resume it from the Paused filter.`);
+          this.renderInbox();
+        } catch (err) { this.toast('error', err.message); b.disabled = false; }
+      }));
+    root.querySelectorAll('[data-resume-task]').forEach(b =>
+      b.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const id = b.dataset.resumeTask;
+        b.disabled = true;
+        try {
+          const out = await this.api.post(`/inbox/${encodeURIComponent(id)}/resume`, {});
+          this.toast('resumed', out.task?.status === 'scheduled' ? 'Resumed — back on its schedule.'
+            : out.task?.status === 'wait-input' ? 'Resumed — waiting for its questions to be answered.'
+            : 'Resumed — dispatched by the next tick.');
           this.renderInbox();
         } catch (err) { this.toast('error', err.message); b.disabled = false; }
       }));
@@ -2978,7 +3014,7 @@ class App {
 
     // Per-status counts on the filter pills (from the dashboard summary; the
     // "done" pill excludes failed tasks, mirroring the server's done filter).
-    const pills = ['', 'done', 'in-progress', 'pending', 'scheduled', 'wait-input', 'failed'].map(f => {
+    const pills = ['', 'done', 'in-progress', 'pending', 'scheduled', 'wait-input', 'paused', 'failed'].map(f => {
       const label = inboxPillLabel(f, status);
       const active = this.inboxFilter === f;
       const color = f === 'failed' ? '#EF4444' : (STATUS_COLORS[f] || '#94A3B8');
@@ -3292,45 +3328,12 @@ class App {
 
   // ── Reports ────────────────────────────────────────────────────────────
 
-  // ── Roster ─────────────────────────────────────────────────────────────
-
-  async renderRoster() {
-    const roster = await this.api.get('/roster');
-    const byDivision = {};
-    for (const a of roster) (byDivision[a.divisionLabel || a.division || 'other'] ||= []).push(a);
-
-    this.contentEl.innerHTML = `
-      <input id="roster-search" class="roster-search" placeholder="Search ${roster.length} personas…">
-      <div id="roster-list"></div>`;
-
-    const listEl = this.contentEl.querySelector('#roster-list');
-    const render = (filter) => {
-      const f = (filter || '').toLowerCase();
-      listEl.innerHTML = Object.entries(byDivision).map(([div, personas]) => {
-        const hits = f ? personas.filter(a =>
-          a.name.toLowerCase().includes(f) || (a.description || '').toLowerCase().includes(f)) : personas;
-        if (!hits.length) return '';
-        return `<h3 style="margin: var(--space-lg) 0 var(--space-md); font-size:0.95rem">${esc(div)} <span style="color:var(--text-muted); font-size:0.8rem; font-weight:400">(${hits.length})</span></h3>
-          <div class="grid-3">` + hits.map(a => `
-          <div class="card agent-card">
-            <div class="agent-header">
-              <span class="agent-title">${a.emoji ? esc(a.emoji) + ' ' : ''}${esc(a.name)}</span>
-            </div>
-            <p style="font-size:0.83rem; color:var(--text-secondary); margin-top:6px">${esc((a.description || '').slice(0, 140))}</p>
-            ${a.vibe ? `<p style="font-size:0.8rem; font-style:italic; color:var(--text-muted); margin-top:6px">${esc(a.vibe)}</p>` : ''}
-          </div>`).join('') + `</div>`;
-      }).join('') || `<div class="empty-state"><p>No personas match.</p></div>`;
-      createIcons();
-    };
-    render('');
-    this.contentEl.querySelector('#roster-search').addEventListener('input', (e) => render(e.target.value));
-  }
-
   // ── Agents: special executors + roster divisions (with agent chains) ───────
 
   async renderTeam() {
-    const [special, agents, chains, divisions] = await Promise.all([
-      this.api.get('/roles-config'), this.api.get('/agents'), this.api.get('/chains'), this.api.get('/roster-divisions')
+    const [special, agents, chains, integ] = await Promise.all([
+      this.api.get('/roles-config'), this.api.get('/agents'), this.api.get('/chains'),
+      this.api.get('/integrations/defaults').catch(() => null)
     ]);
     const tiers = chains.tiers || {};
     const TIERS = [
@@ -3345,7 +3348,6 @@ class App {
     const card = (body, attrs = '') => `<div class="card" style="margin-bottom:var(--space-md)" ${attrs}>${body}</div>`;
     const head = (title, right) => `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><strong>${title}</strong>${right || ''}</div>`;
     const muted = (t) => `<span style="font-size:0.75rem;color:var(--text-muted)">${t}</span>`;
-    const link = (attr, label) => `<a ${attr} style="cursor:pointer;font-size:0.72rem;color:var(--text-muted)">${label}</a>`;
 
     // Ctx strings: "<kind>:<key>". Parsed once here; every save/lookup uses this.
     const parse = (ctx) => { const i = ctx.indexOf(':'); return i < 0 ? [ctx, ''] : [ctx.slice(0, i), ctx.slice(i + 1)]; };
@@ -3353,9 +3355,7 @@ class App {
       const [kind, key] = parse(ctx);
       return ([...(kind === 'role' ? special[key]?.agents
         : kind === 'tier' ? tiers[key]
-        : kind === 'default' ? defaultChain
-        : kind === 'div' ? chains.divisionChains?.[key]
-        : kind === 'persona' ? chains.personaChains?.[key] : null) || []]);
+        : kind === 'default' ? defaultChain : null) || []]);
     };
 
     const roleCards = Object.entries(special).map(([n, a]) => card(
@@ -3365,48 +3365,19 @@ class App {
 
     const tierCards = TIERS.map(([t, label, hint]) => card(
       head(esc(label), badge('tier', '#8B5CF6'))
-      + `<p style="font-size:0.8rem;color:var(--text-muted);margin:4px 0">${esc(hint)} Tried first, then the persona's normal chain.</p>`
+      + `<p style="font-size:0.8rem;color:var(--text-muted);margin:4px 0">${esc(hint)} Tried first, then the default chain.</p>`
       + chainEditor(tiers[t], agents, 'tier:' + t))).join('');
 
-    const personaRow = (p, division) => {
-      const own = chains.personaChains?.[p.slug];
-      const parent = chains.divisionChains?.[division] ? 'division chain' : 'default chain';
-      return `<div class="persona-row" data-name="${esc(((p.name || '') + ' ' + p.slug).toLowerCase())}" style="padding:6px 0;border-top:1px solid var(--bg-tertiary)">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
-          <span style="font-size:0.82rem">${p.emoji ? esc(p.emoji) + ' ' : ''}${esc(p.name || p.slug)}</span>
-          ${own ? `<span>${badge('own chain', AGENT_COLOR)} ${link(`data-reset="persona:${esc(p.slug)}"`, '↺ reset to ' + parent)}</span>`
-            : `<span style="display:flex;gap:8px;align-items:center">${muted('inherits ' + parent)}${chainAddSelect([], agents, `data-chain-add="persona:${esc(p.slug)}"`, '+ override with…')}</span>`}
-        </div>
-        ${own ? chainEditor(own, agents, 'persona:' + p.slug) : ''}
-      </div>`;
-    };
-
-    const divCards = Object.entries(divisions).sort(([a], [b]) => a.localeCompare(b)).map(([d, info]) => {
-      const override = chains.divisionChains?.[d];
-      const personas = info.personas || [];
-      const nOwn = personas.filter(p => chains.personaChains?.[p.slug]).length;
-      return card(
-        head(esc(info.label || d), `<span style="display:flex;gap:6px;align-items:center">${muted(`${personas.length} personas${nOwn ? ` · ${nOwn} own chain${nOwn > 1 ? 's' : ''}` : ''}`)}${override ? badge('override', AGENT_COLOR) : badge('default chain', '#94A3B8')}</span>`)
-        + (override
-          ? chainEditor(override, agents, 'div:' + d) + link(`data-reset="div:${esc(d)}"`, '↺ reset to default chain')
-          : `<div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px">Uses the default chain:</div>${chainPreview(defaultChain, agents)}`
-            + chainAddSelect([], agents, `data-chain-add="div:${esc(d)}"`, '+ override with…'))
-        + `<details data-div="${esc(d)}" style="margin-top:8px"><summary style="cursor:pointer;font-size:0.75rem;color:var(--text-muted)">Per-persona overrides (${nOwn}/${personas.length})</summary>
-            ${personas.map(p => personaRow(p, d)).join('') || '<div style="font-size:0.78rem;color:var(--text-muted);padding:6px 0">no personas</div>'}
-          </details>`,
-        `data-div-card="${esc(d)}" data-name="${esc(((info.label || '') + ' ' + d).toLowerCase())}"`);
-    }).join('');
+    const personaNote = card(head('Personas', integ ? badge(`${integ.personas} installed`, '#7C3AED') : '')
+      + `<p style="font-size:0.8rem;color:var(--text-muted);margin:4px 0">Personas come from installed persona-pack integrations (default: <code>msitarzewski/agency-agents</code>). The router reads each task brief and picks the matching persona automatically (LLM router, with a keyword match as fallback); the persona shapes the agent's prompt, while the tier + default chain pick the agent. Manage packs on the <a href="/integrations.html">Integrations</a> page.</p>`);
 
     this.contentEl.innerHTML = `
-      <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:6px">Each task runs on an <b>agent fallback chain</b>, tried in order until one succeeds. Which chain: a special <b>role</b> uses its own; otherwise a <b>persona</b> override wins over its <b>division</b>, then the <b>default</b>. A tier-tagged task tries its <b>tier</b> first. Changes save instantly.</p>
+      <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:6px">Each task runs on an <b>agent fallback chain</b>, tried in order until one succeeds. A special <b>role</b> uses its own chain; every other task tries its work-role <b>tier</b> first, then the <b>default</b> chain. Changes save instantly.</p>
       <p style="font-size:0.78rem;color:var(--text-muted);margin-bottom:var(--space-md)">${enabledCount} of ${totalCount} agents enabled — pickers list only enabled agents; disabled ones in a chain are shown struck through and skipped. Enable/disable on the <a href="#agents">Agents</a> page.</p>
       ${h3('Special roles', '— run directly, not via a persona')}${roleCards || muted('none configured')}
       ${h3('Default chain', '— same chain as on the Agents page')}${card(chainEditor(defaultChain, agents, 'default:', { emptyText: 'empty — tasks with no override have nowhere to run' }))}
       ${h3('Work-role tiers', '— the router picks a tier per task; <i>review</i> is derived from these at runtime')}${tierCards}
-      ${h3('Divisions', '— chain override per division and per persona')}
-      <input id="routing-filter" class="roster-search" placeholder="Filter divisions / personas…" style="margin-bottom:var(--space-md)">
-      <div id="routing-divs">${divCards}</div>
-      <div id="routing-nomatch" class="empty-state" style="display:none"><p>No division or persona matches.</p></div>`;
+      ${h3('Personas', '— chosen per task by the router')}${personaNote}`;
 
     const save = async (ctx, arr) => {
       const [kind, key] = parse(ctx);
@@ -3415,45 +3386,15 @@ class App {
         if (kind === 'role') await this.api.put(`/roles-config/${k}`, { description: special[key]?.description, agents: arr });
         else if (kind === 'tier') await this.api.put(`/chains/tier/${k}`, { agents: arr });
         else if (kind === 'default') await this.api.put('/chains/default', { agents: arr });
-        else if (kind === 'div') await this.api.put(`/chains/division/${k}`, { agents: arr });
-        else if (kind === 'persona') await this.api.put(`/chains/persona/${k}`, { agents: arr });
         else throw new Error(`unknown chain "${ctx}"`);
       } catch (e) { this.toast('chain not saved', e.message); }
-      // Re-render but keep the user's place: scroll, open persona lists, filter.
       const scroll = this.contentEl.scrollTop;
-      const open = [...this.contentEl.querySelectorAll('details[data-div][open]')].map(x => x.dataset.div);
-      const filter = this.contentEl.querySelector('#routing-filter')?.value || '';
       await this.renderTeam();
-      open.forEach(d => this.contentEl.querySelector(`details[data-div="${CSS.escape(d)}"]`)?.setAttribute('open', ''));
-      const f = this.contentEl.querySelector('#routing-filter');
-      if (f && filter) { f.value = filter; f.dispatchEvent(new Event('input')); }
       this.contentEl.scrollTop = scroll;
     };
 
     this.wireChainEditors(this.contentEl, chainOf, save);
     if (window.lucide) window.lucide.createIcons();
-    this.contentEl.querySelectorAll('[data-reset]').forEach(a => a.addEventListener('click', () => save(a.dataset.reset, [])));
-
-    // Filter: a division matches by name (shows all its personas) or via any persona.
-    this.contentEl.querySelector('#routing-filter').addEventListener('input', (e) => {
-      const q = e.target.value.trim().toLowerCase();
-      let shown = 0;
-      this.contentEl.querySelectorAll('[data-div-card]').forEach(c => {
-        const divHit = !q || c.dataset.name.includes(q);
-        let personaHit = false;
-        c.querySelectorAll('.persona-row').forEach(r => {
-          const hit = divHit || r.dataset.name.includes(q);
-          r.style.display = hit ? '' : 'none';
-          if (q && r.dataset.name.includes(q)) personaHit = true;
-        });
-        const vis = divHit || personaHit;
-        c.style.display = vis ? '' : 'none';
-        if (vis) shown++;
-        const det = c.querySelector('details');
-        if (q && personaHit && !divHit && det) det.open = true;
-      });
-      this.contentEl.querySelector('#routing-nomatch').style.display = shown ? 'none' : '';
-    });
   }
 
   // ── Agents (model × platform × location registry) ──────────────────────

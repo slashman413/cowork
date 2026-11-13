@@ -37,6 +37,15 @@ export class EventBus extends EventEmitter {
     this.emitEvent('taskDeleted', { taskId, status });
   }
 
+  /** A person paused a task: the dispatcher stops its running agent (if any). */
+  public emitTaskPaused(task: Task, from: string): void {
+    this.emitEvent('taskPaused', { task, from });
+  }
+
+  public emitTaskResumed(task: Task): void {
+    this.emitEvent('taskResumed', { task });
+  }
+
   public emitAgentExecuted(agentId: string, exec: string, taskId: string): void {
     this.emitEvent('agentExecuted', { agentId, exec, taskId });
   }

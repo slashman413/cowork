@@ -48,7 +48,6 @@ const defaultConfig: Config = {
     tls: null
   },
   paths: {
-    agencyAgents: './agency-agents',
     inbox: './inbox',
     artifacts: './artifacts',
     inputs: './inputs',
@@ -291,7 +290,8 @@ export function loadConfig(): Config {
   }
 
   for (const key of Object.keys(config.paths) as (keyof Config['paths'])[]) {
-    config.paths[key] = resolvePath(config.paths[key]);
+    const v = config.paths[key];
+    if (v) (config.paths as Record<string, string | undefined>)[key] = resolvePath(v);
   }
 
   // Resolve TLS cert/key like the other paths so `~` and repo-relative forms work.

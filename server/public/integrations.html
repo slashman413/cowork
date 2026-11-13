@@ -133,7 +133,8 @@
       const isBusy = busy.has(e.id);
       const skills = (e.installed?.skills || []).map(s => `<code>${esc(s.name)}</code>`).join(', ');
       const web = e.installed?.web ? `<a href="${esc(e.installed.web.url)}" target="_blank" rel="noopener">${esc(e.installed.web.url)}</a>` : '';
-      const canWrap = !(d.skills || []).length && (d.kinds || []).some(k => k !== 'web');
+      const personas = e.installed?.personas ? `${e.installed.personas.count} personas (the router picks one per task)` : '';
+      const canWrap = !(d.skills || []).length && !d.personas && (d.kinds || []).some(k => k !== 'web');
       return `<div class="card" data-id="${esc(e.id)}">
         <div class="title"><a href="${esc(e.url.replace(/\.git$/, ''))}" target="_blank" rel="noopener">${esc(e.source)}</a>${e.subpath ? `<span class="muted">/${esc(e.subpath)}</span>` : ''}
           ${statusPill(e.status)} ${verdictPill(a.verdict)}${a.overridden ? '<span class="pill bad">override</span>' : ''}
@@ -141,7 +142,8 @@
           <span class="muted">${esc(e.commit || '')}</span></div>
         ${d.description ? `<div class="muted">${esc(d.description)}</div>` : ''}
         <div class="muted">${d.language ? esc(d.language) + ' · ' : ''}${d.license ? 'license: ' + esc(d.license) + ' · ' : ''}${a.scannedFiles || 0} files audited: ${a.counts.critical || 0} critical / ${a.counts.high || 0} high / ${a.counts.medium || 0} medium${d.mcp ? ' · MCP: ' + esc(d.mcp) : ''}${d.cli ? ' · ' + esc(d.cli) : ''}</div>
-        ${skills || web ? `<div class="muted">Installed: ${skills ? 'skills ' + skills : ''} ${web ? ' · plugin ' + web : ''}</div>` : ''}
+        ${skills || web || personas ? `<div class="muted">Installed: ${skills ? 'skills ' + skills : ''} ${web ? ' · plugin ' + web : ''}${personas ? ' · ' + esc(personas) : ''}</div>` : ''}
+        ${d.personas && !personas ? `<div class="muted">Persona pack found: ${d.personas.count} personas in ${d.personas.divisions.length} divisions — Install to make them routable.</div>` : ''}
         ${(d.skills || []).length && !skills ? `<div class="muted">Skills found: ${(d.skills).map(s => `<code>${esc(s.name)}</code>${s.wrapper ? ' (wrapper)' : ''}`).join(', ')}</div>` : ''}
         ${(e.notes || []).map(n => `<div class="muted">ℹ ${esc(n)}</div>`).join('')}
         ${(a.findings || []).length ? `<details><summary>Audit findings (${a.findings.length})</summary>${findingsHtml(a.findings)}</details>` : ''}
