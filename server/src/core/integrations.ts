@@ -6,6 +6,7 @@ import matter from 'gray-matter';
 import { auditPath, type AuditFinding, type AuditVerdict, type Severity } from './skill-auditor.js';
 import { activePortalPath } from './portal-config.js';
 import type { IntegrationsConfig } from '../types.js';
+import type { InstallPlan, PlanLint, PlanStep } from './install-plan.js';
 
 /**
  * Integrations — turn a GitHub (or any allow-listed git host) repository into a
@@ -65,6 +66,36 @@ export interface Detection {
   language?: string;
 }
 
+/** The AI install advisor's state for one integration (core/integration-jobs.ts). */
+export interface AdviceState {
+  status: 'pending' | 'ready' | 'failed';
+  /** Advisor agents in fallback order, and the index of the one asked now. */
+  chain: string[];
+  attempt: number;
+  agent?: string;
+  taskId?: string;
+  thinking?: string;
+  requestedAt: string;
+  updatedAt: string;
+  plan?: InstallPlan;
+  lint?: PlanLint;
+  error?: string;
+  history: Array<{ agent: string; taskId: string; outcome: string; at: string }>;
+}
+
+/** What an executed install plan left on disk (the uninstall steps are a snapshot). */
+export interface PlanInstallRecord {
+  at: string;
+  agent?: string;
+  method?: string;
+  scope?: string;
+  steps: PlanStep[];
+  uninstall: PlanStep[];
+  locations: Array<{ path: string; exists: boolean }>;
+  verify?: { run: string; ok: boolean };
+  usage?: string;
+}
+
 export interface Integration {
   id: string;
   source: string;
@@ -86,8 +117,17 @@ export interface Integration {
     web?: { portalKey: string; url: string };
     /** Registered as a persona source for the Roster (root dir + persona count). */
     personas?: { root: string; count: number };
+    /** Executed AI install plan (user-profile install outside the skills home). */
+    plan?: PlanInstallRecord;
   };
+  /** AI install advice (requested after Fetch & audit from the dashboard). */
+  advice?: AdviceState;
   notes?: string[];
+}
+
+/** Anything cowork put on disk for this integration. */
+export function hasInstall(i: Pick<Integration, 'installed'>): boolean {
+  return i.installed.skills.length > 0 || !!i.installed.web || !!i.installed.personas || !!i.installed.plan;
 }
 
 interface RegistryFile {
@@ -495,6 +535,17 @@ export class Integrations {
     return entry;
   }
 
+  /** Read-modify-write one entry (used by the advisor / install jobs). */
+  patch(id: string, fn: (e: Integration) => Integration | void): Integration {
+    const doc = this.load();
+    const e = doc.integrations[id];
+    if (!e) throw new Error(`unknown integration ${id}`);
+    const next = fn(e) || e;
+    doc.integrations[id] = next;
+    this.save(doc);
+    return next;
+  }
+
   list(): Integration[] {
     return Object.values(this.load().integrations).sort((a, b) => b.addedAt.localeCompare(a.addedAt));
   }
@@ -532,6 +583,7 @@ export class Integrations {
       // An update of an installed integration refreshes the installed copies too,
       // but only if it still passes the audit (a poisoned update stays quarantined).
       const wasInstalled = !!(prev && (prev.installed.skills.length || prev.installed.web || prev.installed.personas));
+      if (prev?.advice) entry.advice = prev.advice;
       if (opts.install || wasInstalled) {
         if (entry.status === 'quarantined' && !opts.force) return entry;
         // Keep a curated subset curated: refresh only the skills that were installed.
@@ -564,7 +616,7 @@ export class Integrations {
   }
 
   /** (Re-)detect and (re-)audit an entry from what is on disk now. */
-  private analyse(base: Pick<Integration, 'id' | 'source' | 'input' | 'url' | 'ref' | 'subpath' | 'dir' | 'addedAt' | 'installed'>): Integration {
+  private analyse(base: Pick<Integration, 'id' | 'source' | 'input' | 'url' | 'ref' | 'subpath' | 'dir' | 'addedAt' | 'installed' | 'advice'>): Integration {
     const root = this.scanRoot(base);
     const detected = detectRepo(root, this.wrapperDir(base.id));
     const report = auditPath(root, { allow: this.cfg.auditAllow, maxFiles: 3000 });
@@ -573,7 +625,7 @@ export class Integrations {
     const counts = { critical: 0, high: 0, medium: 0 } as Record<Severity, number>;
     for (const f of findings) counts[f.severity]++;
     const verdict: AuditVerdict = counts.critical ? 'quarantine' : counts.high ? 'warn' : 'pass';
-    const isInstalled = base.installed.skills.length > 0 || !!base.installed.web || !!base.installed.personas;
+    const isInstalled = hasInstall(base);
     return {
       ...base,
       fetchedAt: new Date().toISOString(),
@@ -617,7 +669,7 @@ export class Integrations {
     }
     const want = new Set(opts.kinds?.length ? opts.kinds : e.detected.kinds);
     const notes: string[] = [];
-    const installed: Integration['installed'] = { skills: [...e.installed.skills], web: e.installed.web, personas: e.installed.personas };
+    const installed: Integration['installed'] = { skills: [...e.installed.skills], web: e.installed.web, personas: e.installed.personas, ...(e.installed.plan ? { plan: e.installed.plan } : {}) };
 
     if (want.has('skill')) {
       for (const s of e.detected.skills) {
@@ -635,12 +687,12 @@ export class Integrations {
       // Registered, not copied: the Roster reads personas straight from the clone.
       installed.personas = { root: this.scanRoot(e), count: e.detected.personas.count };
     }
-    if ((want.has('mcp') || want.has('cli') || want.has('library')) && !e.detected.skills.length && !e.detected.personas) {
+    if ((want.has('mcp') || want.has('cli') || want.has('library')) && !e.detected.skills.length && !e.detected.personas && !installed.plan) {
       notes.push('No SKILL.md yet — use "Wrap with an agent" to have an engineering agent write one, then Rescan.');
     }
     const next: Integration = {
       ...e, installed, notes,
-      status: installed.skills.length || installed.web || installed.personas ? 'installed' : e.status === 'quarantined' ? 'quarantined' : 'fetched',
+      status: hasInstall({ installed }) ? 'installed' : e.status === 'quarantined' ? 'quarantined' : 'fetched',
       audit: { ...e.audit, ...(e.audit.verdict === 'quarantine' ? { overridden: true } : {}) },
     };
     return this.put(next);
@@ -710,9 +762,16 @@ export class Integrations {
   }
 
   /** Remove exactly what install() created. `purge` also deletes the clone + wrapper + registry entry. */
-  uninstall(id: string, opts: { purge?: boolean } = {}): Integration | null {
+  uninstall(id: string, opts: { purge?: boolean; planUndone?: boolean } = {}): Integration | null {
     const e = this.get(id);
     if (!e) throw new Error(`unknown integration ${id}`);
+    // An executed AI install plan (pipx / npm / cargo … in the user profile) is
+    // undone by its own uninstall steps, which only the job runner executes. Never
+    // forget about it silently: keep the record (or refuse a purge) until it has.
+    const keepPlan = e.installed.plan && !opts.planUndone ? e.installed.plan : undefined;
+    if (keepPlan && opts.purge) {
+      throw new Error(`${id} has user-profile install steps (${keepPlan.method || 'AI plan'}) — uninstall it from the Integrations page first so they are undone`);
+    }
     for (const s of e.installed.skills) {
       for (const link of s.links) {
         try { if (fs.lstatSync(link).isSymbolicLink()) fs.unlinkSync(link); } catch { /* gone */ }
@@ -729,7 +788,11 @@ export class Integrations {
       this.save(doc);
       return null;
     }
-    const next: Integration = { ...e, installed: { skills: [] }, status: e.audit.verdict === 'quarantine' ? 'quarantined' : 'fetched', notes: [] };
+    const next: Integration = {
+      ...e, installed: { skills: [], ...(keepPlan ? { plan: keepPlan } : {}) },
+      status: keepPlan ? 'installed' : e.audit.verdict === 'quarantine' ? 'quarantined' : 'fetched',
+      notes: keepPlan ? ['Skills / portal card removed; the user-profile install steps are still in place — use Uninstall on the Integrations page to undo them.'] : [],
+    };
     doc.integrations[id] = next;
     this.save(doc);
     return next;

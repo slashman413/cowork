@@ -3,15 +3,18 @@
   Integrations — turn a GitHub / open-source repository into a cowork capability
   (ADR-014). Served by the cowork server and launched from the Portal card.
   A thin client over:
-    GET    /api/integrations                    registry + paths + local agents
-    POST   /api/integrations        {repo,install?,force?}   fetch → detect → audit (→ install)
-    POST   /api/integrations/:id/install   {force?}          skills → ~/.agents/skills + client dirs;
-                                                             static web app → /plugins/<id>/ portal card
-    POST   /api/integrations/:id/update|rescan|uninstall {purge?}
-    POST   /api/integrations/:id/wrap      {agent,notes}     create a task: an engineering agent wraps a
-                                                             CLI / MCP server / library as a SKILL.md
+    GET    /api/integrations                         registry + paths + local agents + advise chain + active jobs
+    POST   /api/integrations   {repo,install?,force?,advise?}  fetch → detect → audit (→ built-in install) (→ ask the advisor)
+    POST   /api/integrations/:id/advise     {notes?}         AI install advice: a task on the advise chain
+                                                             (local-agy-gemini-3.8-flash → local-dsh-qwen3-8-27b, thinking high)
+    POST   /api/integrations/:id/install-job {force?,usePlan?}  built-in install + the AI plan's steps, as a job
+    POST   /api/integrations/:id/uninstall-job               undo the plan steps + built-in removal, as a job
+    POST   /api/integrations/:id/remove-job                  uninstall (if installed), then purge the clone
+    GET    /api/integrations/jobs/:jobId?since=N            job steps + streamed log
+    POST   /api/integrations/:id/update|rescan              pull + re-audit / re-detect
+    POST   /api/integrations/:id/wrap      {agent,notes}     an engineering agent wraps a CLI / MCP server as a SKILL.md
     POST   /api/integrations/audit                           audit every installed skill dir
-  Pipeline + security model: server/src/core/integrations.ts, core/skill-auditor.ts.
+  Pipeline + security model: core/integrations.ts, core/integration-jobs.ts, core/install-plan.ts, core/skill-auditor.ts.
 -->
 <html lang="en" data-theme="dark">
 <head>
@@ -20,87 +23,224 @@
   <title>Integrations · Cowork</title>
   <style>
     :root[data-theme="dark"] {
-      --bg: #0b0f17; --panel: #121826; --panel-2: #0e1320; --border: #232c3d;
-      --text: #e6edf7; --muted: #8b98ad; --accent: #6366f1; --accent-soft: #6366f122;
-      --ok: #22c55e; --warn: #eab308; --bad: #ef4444; --run: #0ea5e9;
+      --bg: #0d1219; --panel: #141b25; --panel-2: #10161f; --raise: #1b2431; --border: #253042; --border-2: #33415a;
+      --text: #e4eaf3; --muted: #8995a8; --faint: #5d6a7e;
+      --accent: #6d8cff; --accent-ink: #0d1219; --accent-soft: #6d8cff1f;
+      --ok: #3ccf8e; --ok-soft: #3ccf8e1a; --warn: #f2b84b; --warn-soft: #f2b84b1a; --bad: #f2676a; --bad-soft: #f2676a1a; --run: #4fb6f0; --run-soft: #4fb6f01a;
+      --console: #080b10; --shadow: 0 24px 60px -20px #000c;
     }
     :root[data-theme="light"] {
-      --bg: #f6f8fc; --panel: #ffffff; --panel-2: #eef2f8; --border: #dbe2ee;
-      --text: #1a2130; --muted: #5b6779; --accent: #4f46e5; --accent-soft: #4f46e514;
-      --ok: #16a34a; --warn: #b8860b; --bad: #dc2626; --run: #0284c7;
+      --bg: #f3f5f9; --panel: #ffffff; --panel-2: #f7f9fc; --raise: #eef2f8; --border: #dbe1eb; --border-2: #c5cfdd;
+      --text: #172030; --muted: #586579; --faint: #8b96a8;
+      --accent: #3f5fe0; --accent-ink: #fff; --accent-soft: #3f5fe014;
+      --ok: #138a55; --ok-soft: #138a5514; --warn: #a76a00; --warn-soft: #a76a0014; --bad: #c9363a; --bad-soft: #c9363a12; --run: #0f7ab8; --run-soft: #0f7ab812;
+      --console: #10151d; --shadow: 0 24px 60px -24px #1a253a55;
     }
     * { box-sizing: border-box; }
-    body { margin: 0; font-family: Inter, system-ui, sans-serif; background: var(--bg); color: var(--text); }
-    header { display: flex; align-items: center; gap: 12px; padding: 12px 18px; border-bottom: 1px solid var(--border); background: var(--panel); position: sticky; top: 0; z-index: 5; }
-    header .brand { font-weight: 650; display: flex; gap: 9px; align-items: center; }
-    header .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 12px var(--accent); }
+    html { -webkit-text-size-adjust: 100%; }
+    body { margin: 0; font: 15px/1.5 Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
+    code, .mono { font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace; font-size: .82em; }
+    a { color: var(--accent); text-underline-offset: 2px; }
+    :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+
+    /* header */
+    header { display: flex; align-items: center; gap: 10px; padding: 10px 20px; border-bottom: 1px solid var(--border); background: var(--panel); position: sticky; top: 0; z-index: 5; }
+    header h1 { font-size: 1.02rem; margin: 0; font-weight: 650; letter-spacing: -.01em; }
     header .spacer { flex: 1; }
-    a { color: var(--accent); }
-    .btn, header a.link, header button { color: var(--muted); text-decoration: none; font-size: .85rem; background: none; border: 1px solid var(--border); border-radius: 8px; padding: 6px 11px; cursor: pointer; font-family: inherit; }
-    .btn:hover, header a.link:hover, header button:hover { color: var(--text); border-color: var(--accent); }
-    .btn:disabled { opacity: .5; cursor: not-allowed; }
-    .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
-    .btn.danger:hover { border-color: var(--bad); color: var(--bad); }
-    .btn.sm { font-size: .74rem; padding: 3px 8px; }
-    main { max-width: 1100px; margin: 0 auto; padding: 20px 18px 60px; display: grid; gap: 18px; }
-    .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
-    .panel h2 { margin: 0 0 10px; font-size: 1rem; }
-    .muted { color: var(--muted); font-size: .84rem; }
-    .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-    input[type=text], select, textarea { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-family: inherit; font-size: .9rem; }
-    input[type=text] { flex: 1; min-width: 260px; }
-    textarea { width: 100%; min-height: 60px; }
-    .card { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; background: var(--panel-2); display: grid; gap: 8px; }
-    .card .title { font-weight: 600; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-    .pill { font-size: .7rem; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
-    .pill.ok { color: var(--ok); border-color: var(--ok); } .pill.warn { color: var(--warn); border-color: var(--warn); }
-    .pill.bad { color: var(--bad); border-color: var(--bad); } .pill.run { color: var(--run); border-color: var(--run); }
-    details summary { cursor: pointer; color: var(--muted); font-size: .82rem; }
-    .finding { font-family: ui-monospace, monospace; font-size: .74rem; padding: 3px 0; border-bottom: 1px dashed var(--border); word-break: break-all; }
+    @media (max-width: 520px) { header { flex-wrap: wrap; padding: 10px 14px; } #auditAll { display: none; } main { padding: 16px 12px 60px; } .repo { padding: 14px; } }
+
+    /* buttons */
+    .btn { font: inherit; font-size: .84rem; line-height: 1.2; color: var(--text); background: var(--raise); border: 1px solid var(--border); border-radius: 8px; padding: 7px 12px; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+    .btn:hover { border-color: var(--border-2); }
+    .btn:disabled { opacity: .45; cursor: not-allowed; }
+    .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+    .btn.primary:hover { filter: brightness(1.08); }
+    .btn.ghost { background: none; color: var(--muted); }
+    .btn.ghost:hover { color: var(--text); }
+    .btn.danger { color: var(--bad); background: none; }
+    .btn.danger:hover { border-color: var(--bad); background: var(--bad-soft); }
+    .btn.danger.solid { background: var(--bad); border-color: var(--bad); color: #fff; }
+    .btn.sm { font-size: .78rem; padding: 5px 10px; }
+
+    main { max-width: 1080px; margin: 0 auto; padding: 22px 20px 80px; }
+
+    /* add bar */
+    .add { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 18px; }
+    .add h2 { margin: 0 0 4px; font-size: 1.15rem; font-weight: 650; letter-spacing: -.01em; }
+    .add p.lede { margin: 0 0 14px; color: var(--muted); font-size: .88rem; max-width: 70ch; }
+    .add form { display: flex; gap: 8px; flex-wrap: wrap; }
+    .add input[type=text] { flex: 1 1 340px; font: inherit; font-size: .92rem; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 9px; padding: 10px 12px; }
+    .add input[type=text]:focus { border-color: var(--accent); outline: none; box-shadow: 0 0 0 3px var(--accent-soft); }
+    .add .opts { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 10px; color: var(--muted); font-size: .82rem; }
+    .add .opts label { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
+    .add .fetching { margin-top: 12px; font-size: .85rem; color: var(--run); display: none; align-items: center; gap: 8px; }
+    .add .fetching.on { display: flex; }
+    .spin { width: 13px; height: 13px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: spin .8s linear infinite; flex: none; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* toolbar */
+    .toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 26px 0 12px; }
+    .toolbar h2 { margin: 0 8px 0 0; font-size: 1.02rem; font-weight: 650; }
+    .tabs { display: inline-flex; background: var(--panel); border: 1px solid var(--border); border-radius: 9px; padding: 3px; gap: 2px; }
+    .tabs button { font: inherit; font-size: .8rem; background: none; border: 0; color: var(--muted); padding: 5px 10px; border-radius: 6px; cursor: pointer; }
+    .tabs button[aria-pressed="true"] { background: var(--raise); color: var(--text); }
+    .tabs button .n { color: var(--faint); margin-left: 4px; font-variant-numeric: tabular-nums; }
+    .toolbar input[type=search] { font: inherit; font-size: .82rem; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; width: 190px; }
+    .toolbar .spacer { flex: 1; }
+    .paths { color: var(--faint); font-size: .76rem; margin: -4px 0 14px; }
+    .paths code { color: var(--muted); }
+
+    /* repo rows */
+    #list { display: grid; gap: 12px; }
+    .repo { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px 14px; }
+    .repo.is-quarantined { border-color: color-mix(in srgb, var(--bad) 45%, var(--border)); }
+    .repo-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+    .repo-head .name { font-weight: 650; font-size: 1rem; color: var(--text); text-decoration: none; }
+    .repo-head .name:hover { text-decoration: underline; }
+    .repo-head .sub { color: var(--muted); font-size: .85rem; }
+    .repo-head .commit { color: var(--faint); font-size: .74rem; margin-left: auto; }
+    .tag { font-size: .7rem; padding: 1px 7px; border-radius: 5px; background: var(--raise); color: var(--muted); }
+    .repo .desc { color: var(--muted); font-size: .86rem; margin: 4px 0 0; max-width: 78ch; }
+
+    /* the rail: four real stages */
+    .rail { list-style: none; margin: 14px 0 12px; padding: 0; display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; position: relative; }
+    .rail li { position: relative; padding: 32px 14px 0 0; min-width: 0; }
+    .rail li::before { content: ""; position: absolute; left: 30px; right: 6px; top: 11px; height: 2px; border-radius: 2px; background: var(--border); }
+    .rail li:last-child::before { display: none; }
+    .rail li.done::before { background: color-mix(in srgb, var(--ok) 55%, var(--border)); }
+    .rail .mark { position: absolute; left: 0; top: 0; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-size: .72rem; font-weight: 700; background: var(--panel); border: 2px solid var(--border-2); color: var(--faint); z-index: 1; font-variant-numeric: tabular-nums; }
+    .rail li.done .mark { border-color: var(--ok); background: var(--ok); color: var(--panel); }
+    .rail li.warn .mark { border-color: var(--warn); color: var(--warn); background: var(--warn-soft); }
+    .rail li.bad .mark { border-color: var(--bad); color: var(--bad); background: var(--bad-soft); }
+    .rail li.run .mark { border-color: var(--run); color: var(--run); }
+    .rail li.run .mark::after { content: ""; position: absolute; inset: -5px; border-radius: 50%; border: 2px solid var(--run); border-right-color: transparent; animation: spin 1.1s linear infinite; }
+    .rail .lbl { font-size: .8rem; font-weight: 600; display: block; line-height: 1.35; }
+    .rail .val { font-size: .76rem; color: var(--muted); display: block; line-height: 1.35; overflow-wrap: anywhere; }
+    .rail li.bad .val { color: var(--bad); } .rail li.warn .val { color: var(--warn); }
+    @media (max-width: 720px) {
+      .rail { grid-template-columns: 1fr; gap: 12px; }
+      .rail li { padding: 2px 0 0 36px; }
+      .rail li::before { left: 11px; right: auto; top: 28px; width: 2px; height: calc(100% - 18px); }
+    }
+
+    /* advice block */
+    .advice { border-top: 1px solid var(--border); padding-top: 12px; margin-top: 2px; display: grid; gap: 8px; }
+    .advice .summary { font-size: .88rem; max-width: 80ch; }
+    .advice .meta { font-size: .78rem; color: var(--muted); display: flex; gap: 14px; flex-wrap: wrap; }
+    .note { font-size: .8rem; padding: 7px 10px; border-radius: 8px; border-left: 3px solid var(--warn); background: var(--warn-soft); }
+    .note.bad { border-color: var(--bad); background: var(--bad-soft); }
+    .note.info { border-color: var(--run); background: var(--run-soft); }
+    .where { font-size: .8rem; display: grid; gap: 3px; }
+    .where div { display: flex; gap: 8px; align-items: baseline; }
+    .where .k { color: var(--muted); min-width: 92px; flex: none; }
+    .where code { overflow-wrap: anywhere; }
+    .where .miss { color: var(--warn); }
+    details.findings > summary { cursor: pointer; color: var(--muted); font-size: .8rem; margin-top: 8px; }
+    .finding { font-family: ui-monospace, monospace; font-size: .72rem; padding: 4px 0; border-bottom: 1px dashed var(--border); overflow-wrap: anywhere; }
     .finding b.critical { color: var(--bad); } .finding b.high { color: var(--warn); } .finding b.medium { color: var(--muted); }
-    #msg { min-height: 1.2em; font-size: .85rem; }
-    #msg.err { color: var(--bad); } #msg.ok { color: var(--ok); }
-    #list { display: grid; gap: 10px; }
-    code { font-size: .8rem; }
+
+    .actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 14px; }
+    .actions .spacer { flex: 1; }
+
+    .empty { text-align: center; padding: 48px 20px; color: var(--muted); background: var(--panel); border: 1px dashed var(--border-2); border-radius: 12px; }
+    .empty b { color: var(--text); display: block; font-size: 1rem; margin-bottom: 4px; }
+
+    /* dialog */
+    dialog { border: 1px solid var(--border-2); border-radius: 14px; padding: 0; background: var(--panel); color: var(--text); width: min(760px, calc(100vw - 24px)); max-height: calc(100vh - 40px); box-shadow: var(--shadow); }
+    dialog::backdrop { background: #04070cb3; backdrop-filter: blur(2px); }
+    dialog[open] { display: flex; flex-direction: column; animation: pop .16s ease-out; }
+    @keyframes pop { from { transform: translateY(6px); opacity: 0; } }
+    .dlg-head { padding: 16px 20px 12px; border-bottom: 1px solid var(--border); }
+    .dlg-head h3 { margin: 0; font-size: 1.05rem; font-weight: 650; }
+    .dlg-head p { margin: 3px 0 0; color: var(--muted); font-size: .84rem; }
+    .dlg-body { padding: 16px 20px; overflow: auto; display: grid; gap: 14px; min-height: 0; }
+    .dlg-foot { padding: 12px 20px; border-top: 1px solid var(--border); display: flex; gap: 8px; justify-content: flex-end; align-items: center; flex-wrap: wrap; }
+    .dlg-foot .status { margin-right: auto; font-size: .84rem; color: var(--muted); display: flex; align-items: center; gap: 8px; }
+    .dlg-foot .status.ok { color: var(--ok); } .dlg-foot .status.bad { color: var(--bad); } .dlg-foot .status.run { color: var(--run); }
+    .section-t { font-size: .8rem; color: var(--muted); font-weight: 600; margin: 0 0 6px; }
+    ol.cmds { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; counter-reset: c; }
+    ol.cmds li { counter-increment: c; display: grid; grid-template-columns: 22px 1fr; gap: 2px 8px; font-size: .84rem; }
+    ol.cmds li::before { content: counter(c); color: var(--faint); font-variant-numeric: tabular-nums; text-align: right; }
+    ol.cmds .run { grid-column: 2; font-family: ui-monospace, monospace; font-size: .76rem; background: var(--console); color: #cfd8e6; padding: 6px 9px; border-radius: 7px; overflow-wrap: anywhere; white-space: pre-wrap; }
+    ol.cmds .why { grid-column: 2; color: var(--muted); font-size: .76rem; }
+
+    /* progress */
+    ul.steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+    ul.steps li { display: grid; grid-template-columns: 20px 1fr auto; gap: 8px; align-items: center; font-size: .85rem; padding: 3px 0; }
+    ul.steps li .ic { width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--border-2); display: grid; place-items: center; font-size: .62rem; color: var(--panel); font-weight: 800; }
+    ul.steps li.done .ic { background: var(--ok); border-color: var(--ok); }
+    ul.steps li.failed .ic { background: var(--bad); border-color: var(--bad); }
+    ul.steps li.running .ic { border-color: var(--run); border-right-color: transparent; animation: spin .8s linear infinite; }
+    ul.steps li.skipped { color: var(--faint); text-decoration: line-through; }
+    ul.steps li .t { color: var(--faint); font-size: .74rem; font-variant-numeric: tabular-nums; }
+    .bar { height: 4px; border-radius: 4px; background: var(--raise); overflow: hidden; }
+    .bar i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .3s; }
+    .bar.ok i { background: var(--ok); } .bar.bad i { background: var(--bad); }
+    .console { background: var(--console); color: #c3cddb; font-family: ui-monospace, monospace; font-size: .74rem; line-height: 1.5; border-radius: 9px; padding: 10px 12px; height: 260px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .console .cmd { color: #8fb0ff; } .console .err { color: #ff9a9c; } .console .ok { color: #6fe0a8; } .console .warn { color: #ffd27a; } .console .info { color: #e8edf5; font-weight: 600; }
+    .result { border: 1px solid color-mix(in srgb, var(--ok) 40%, var(--border)); background: var(--ok-soft); border-radius: 10px; padding: 12px 14px; }
+    .result.bad { border-color: color-mix(in srgb, var(--bad) 40%, var(--border)); background: var(--bad-soft); }
+    .result h4 { margin: 0 0 6px; font-size: .9rem; }
+    .field { display: grid; gap: 5px; font-size: .84rem; }
+    .field select, .field textarea { font: inherit; font-size: .88rem; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+    .field textarea { min-height: 80px; resize: vertical; }
+    .check { display: flex; gap: 8px; align-items: flex-start; font-size: .84rem; }
+
+    #toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%) translateY(20px); opacity: 0; pointer-events: none; background: var(--raise); color: var(--text); border: 1px solid var(--border-2); border-radius: 10px; padding: 10px 16px; font-size: .86rem; box-shadow: var(--shadow); transition: .2s; max-width: calc(100vw - 32px); z-index: 50; }
+    #toast.on { opacity: 1; transform: translateX(-50%); pointer-events: auto; }
+    #toast.err { border-color: var(--bad); color: var(--bad); } #toast.ok { border-color: var(--ok); }
+    .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
   </style>
 </head>
 <body>
 <header>
-  <div class="brand"><span class="dot"></span>Integrations</div>
-  <span class="muted">GitHub &amp; open-source repos → skills · portal plugins</span>
+  <h1>Integrations</h1>
   <span class="spacer"></span>
-  <a class="link" href="/">← Dashboard</a>
-  <button id="theme" title="Toggle theme">🌗</button>
+  <button id="auditAll" class="btn ghost sm" title="Run the static audit over every installed skill dir and the bundled personas">Audit installed skills</button>
+  <a class="btn ghost sm" href="/">Dashboard</a>
+  <button id="theme" class="btn ghost sm" aria-label="Toggle light / dark theme">◐</button>
 </header>
 <main>
-  <section class="panel">
-    <h2>Add a repository</h2>
-    <div class="row">
-      <input id="repo" type="text" placeholder="owner/repo · https://github.com/owner/repo · …/tree/main/skills/foo" autocomplete="off">
-      <label class="muted"><input id="autoinstall" type="checkbox" checked> install if the audit passes</label>
-      <button id="add" class="btn primary">Fetch &amp; audit</button>
+  <section class="add" aria-labelledby="addTitle">
+    <h2 id="addTitle">Bring in a repository</h2>
+    <p class="lede">Cowork clones it without running any of its code, audits it, then asks an agent how to install it properly on this machine. You review the plan before anything is installed.</p>
+    <form id="addForm">
+      <label for="repo" class="sr">Repository</label>
+      <input id="repo" type="text" placeholder="owner/repo, a GitHub URL, or …/tree/main/skills/foo" autocomplete="off" spellcheck="false" required>
+      <button id="add" class="btn primary" type="submit">Fetch &amp; audit</button>
+    </form>
+    <div class="opts">
+      <label><input id="autoinstall" type="checkbox" checked> Install skills, persona packs and web apps right away if the audit passes</label>
+      <label><input id="advise" type="checkbox" checked> Ask an agent for install advice</label>
     </div>
-    <p class="muted">Shallow clone, <b>no repo code is executed</b>. Cowork detects what the repo is —
-      agent skill(s) (<code>SKILL.md</code>), static web app (<code>index.html</code>), MCP server, CLI or library —
-      and runs the static security audit. Skills are installed to the shared skills home and linked into every
-      agent client; web apps become a sandboxed Portal card. CLIs / MCP servers / libraries can be wrapped as a
-      skill by an engineering agent. CRITICAL audit findings quarantine the repo.</p>
-    <div id="msg"></div>
+    <div class="fetching" id="fetching" role="status"><span class="spin"></span><span id="fetchingText"></span></div>
   </section>
 
-  <section class="panel">
-    <div class="row" style="justify-content:space-between">
-      <h2 style="margin:0">Integrated repositories</h2>
-      <div class="row">
-        <button id="auditAll" class="btn sm" title="Audit every installed skill dir and the bundled agency personas">🛡 Audit installed skills</button>
-        <button id="refresh" class="btn sm">↻ Refresh</button>
-      </div>
+  <div class="toolbar">
+    <h2>Repositories</h2>
+    <div class="tabs" role="group" aria-label="Filter">
+      <button data-f="all" aria-pressed="true">All<span class="n" id="n-all"></span></button>
+      <button data-f="installed" aria-pressed="false">Installed<span class="n" id="n-installed"></span></button>
+      <button data-f="ready" aria-pressed="false">Ready to install<span class="n" id="n-ready"></span></button>
+      <button data-f="review" aria-pressed="false">Needs review<span class="n" id="n-review"></span></button>
     </div>
-    <p class="muted" id="paths"></p>
-    <div id="auditOut"></div>
-    <div id="list"><p class="muted">Loading…</p></div>
-  </section>
+    <span class="spacer"></span>
+    <input id="search" type="search" placeholder="Filter by name" aria-label="Filter by name">
+    <button id="refresh" class="btn ghost sm" aria-label="Refresh">Refresh</button>
+  </div>
+  <p class="paths" id="paths"></p>
+  <div id="auditOut"></div>
+  <div id="list" aria-live="polite"><p class="empty">Loading…</p></div>
 </main>
+
+<dialog id="dlg" aria-labelledby="dlgTitle">
+  <div class="dlg-head"><h3 id="dlgTitle"></h3><p id="dlgSub"></p></div>
+  <div class="dlg-body" id="dlgBody"></div>
+  <div class="dlg-foot" id="dlgFoot"></div>
+</dialog>
+<div id="toast" role="status" aria-live="polite"></div>
+
 <script>
   const $ = (s, r = document) => r.querySelector(s);
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -110,7 +250,9 @@
     const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
     applyTheme(next); localStorage.setItem('cowork-theme', next);
   };
-  let info = { integrations: [], agents: [] };
+
+  let info = { integrations: [], agents: [], adviseChain: [], jobs: {} };
+  let filter = 'all';
   const busy = new Set();
 
   async function api(path, body) {
@@ -118,97 +260,348 @@
     if (!r.ok) { let m = `HTTP ${r.status}`; try { m = (await r.json()).error || m; } catch {} throw new Error(m); }
     return r.json();
   }
-  const say = (text, cls = '') => { const m = $('#msg'); m.textContent = text; m.className = cls; };
-
-  const verdictPill = (v) => `<span class="pill ${v === 'pass' ? 'ok' : v === 'warn' ? 'warn' : 'bad'}">audit: ${esc(v)}</span>`;
-  const statusPill = (s) => `<span class="pill ${s === 'installed' ? 'ok' : s === 'quarantined' || s === 'error' ? 'bad' : 'run'}">${esc(s)}</span>`;
+  let toastTimer;
+  function toast(text, cls = '') {
+    const t = $('#toast'); t.textContent = text; t.className = `on ${cls}`;
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => t.className = cls, cls === 'err' ? 9000 : 4500);
+  }
+  const ago = (iso) => { if (!iso) return ''; const s = (Date.now() - Date.parse(iso)) / 1000; return s < 60 ? 'just now' : s < 3600 ? `${Math.round(s / 60)} min ago` : s < 86400 ? `${Math.round(s / 3600)} h ago` : `${Math.round(s / 86400)} d ago`; };
+  const short = (a) => String(a || '').replace(/^local-/, '');
   const findingsHtml = (fs) => fs.map(f => `<div class="finding"><b class="${esc(f.severity)}">[${esc(f.severity)}]</b> ${esc(f.rule)} — ${esc(f.file)}:${f.line}<br>${esc(f.excerpt)}</div>`).join('');
+  const isInstalled = (e) => e.status === 'installed';
+  const builtinKinds = (d) => (d.skills || []).length || d.personas || d.web;
+  const canInstall = (e) => !isInstalled(e) && (builtinKinds(e.detected || {}) || (e.advice?.status === 'ready' && e.advice.plan?.installable && e.advice.plan.steps.length && !(e.advice.lint?.blocked || []).length));
+
+  // ── where it landed ─────────────────────────────────────────────────────
+  function whereRows(e) {
+    const rows = [];
+    const ins = e.installed || {};
+    for (const s of ins.skills || []) rows.push(['skill', s.target, true, s.links?.length ? `linked into ${s.links.length} client dir${s.links.length > 1 ? 's' : ''}` : '']);
+    if (ins.personas) rows.push(['personas', ins.personas.root, true, `${ins.personas.count} personas, routable`]);
+    if (ins.web) rows.push(['portal plugin', ins.web.url, true, '', true]);
+    for (const l of ins.plan?.locations || []) rows.push([ins.plan.method || 'installed', l.path, l.exists]);
+    return rows;
+  }
+  function whereHtml(rows, limit = 6) {
+    if (!rows.length) return '';
+    const shown = rows.slice(0, limit);
+    return `<div class="where">${shown.map(([k, p, ok, extra, link]) => `<div><span class="k">${esc(k)}</span>${link ? `<a href="${esc(p)}" target="_blank" rel="noopener"><code>${esc(p)}</code></a>` : `<code>${esc(p)}</code>`}${ok === false ? ' <span class="miss">not found</span>' : ''}${extra ? ` <span class="k" style="min-width:0">${esc(extra)}</span>` : ''}</div>`).join('')}${rows.length > limit ? `<div><span class="k"></span><span class="k">+ ${rows.length - limit} more</span></div>` : ''}</div>`;
+  }
+
+  // ── rail ────────────────────────────────────────────────────────────────
+  function rail(e) {
+    const a = e.audit || { counts: {} }, adv = e.advice, job = info.jobs?.[e.id];
+    const c = a.counts || {};
+    const audit = a.verdict === 'pass' ? ['done', 'Passed', `${a.scannedFiles || 0} files, no high-risk findings`]
+      : a.verdict === 'warn' ? ['warn', 'Passed with warnings', `${c.high || 0} high, ${c.medium || 0} medium`]
+      : ['bad', 'Quarantined', `${c.critical || 0} critical finding${c.critical === 1 ? '' : 's'}${a.overridden ? ' (overridden)' : ''}`];
+    let advise;
+    if (!adv) advise = ['', 'Not requested', builtinKinds(e.detected || {}) ? 'built-in install available' : 'ask an agent how to install it'];
+    else if (adv.status === 'pending') advise = ['run', 'Agent is reading the repo', `${short(adv.agent)} · attempt ${adv.attempt + 1}/${adv.chain.length}`];
+    else if (adv.status === 'failed') advise = ['bad', 'No plan', adv.error ? adv.error.slice(0, 90) : 'every advisor failed'];
+    else if ((adv.lint?.blocked || []).length) advise = ['bad', 'Plan needs root', 'cowork won\'t run it — see below'];
+    else if (adv.plan && !adv.plan.installable) advise = ['warn', 'Not installable', adv.plan.scope === 'system' ? 'needs a system install' : 'see the advice'];
+    else advise = ['done', 'Plan ready', `${adv.plan?.method || 'user profile'} · ${adv.plan?.steps.length || 0} step${adv.plan?.steps.length === 1 ? '' : 's'}`];
+    const nWhere = whereRows(e).length;
+    const inst = job ? ['run', 'Working…', 'a job is running'] : isInstalled(e) ? ['done', 'Installed', `${nWhere} location${nWhere === 1 ? '' : 's'}`] : ['', 'Not installed', canInstall(e) ? 'ready when you are' : ''];
+    const st = (n, [cls, lbl, val], title) => `<li class="${cls}"><span class="mark" aria-hidden="true">${cls === 'done' ? '✓' : cls === 'bad' ? '!' : n}</span><span class="lbl">${esc(title)}: ${esc(lbl)}</span><span class="val">${esc(val)}</span></li>`;
+    return `<ol class="rail" aria-label="Progress">
+      ${st(1, ['done', 'Fetched', `${e.commit || ''} · ${ago(e.fetchedAt)}`], 'Fetch')}
+      ${st(2, audit, 'Audit')}
+      ${st(3, advise, 'Advice')}
+      ${st(4, inst, 'Install')}
+    </ol>`;
+  }
+
+  function adviceBlock(e) {
+    const adv = e.advice;
+    const parts = [];
+    if (isInstalled(e)) {
+      const rows = whereRows(e);
+      if (rows.length) parts.push(`<div><p class="section-t">Installed to</p>${whereHtml(rows)}</div>`);
+      if (e.installed?.plan?.usage) parts.push(`<div class="note info">${esc(e.installed.plan.usage)}</div>`);
+    }
+    if (adv?.status === 'ready' && adv.plan && !isInstalled(e)) {
+      const p = adv.plan;
+      parts.push(`<div class="summary">${esc(p.summary)}</div>`);
+      parts.push(`<div class="meta"><span>Advice from ${esc(short(adv.agent))}</span>${p.method ? `<span>Method: ${esc(p.method)}</span>` : ''}<span>Scope: ${esc(p.scope)}</span>${(p.requires || []).length ? `<span>Needs: ${esc(p.requires.join(', '))}</span>` : ''}</div>`);
+      for (const b of adv.lint?.blocked || []) parts.push(`<div class="note bad">${esc(b)}</div>`);
+    }
+    if (adv?.status === 'failed') parts.push(`<div class="note bad">${esc(adv.error || 'The advisor did not return a plan.')} Try again, or install it by hand.</div>`);
+    if (e.detected?.personas && !e.installed?.personas) parts.push(`<div class="note info">Persona pack: ${e.detected.personas.count} personas in ${e.detected.personas.divisions.length} divisions. Install to make them routable.</div>`);
+    for (const n of (e.notes || []).filter(n => !(adv && /^No SKILL\.md yet/.test(n)))) parts.push(`<div class="note info">${esc(n)}</div>`);
+    return parts.length ? `<div class="advice">${parts.join('')}</div>` : '';
+  }
+
+  function actions(e) {
+    const id = e.id, isBusy = busy.has(id) || !!info.jobs?.[id];
+    const d = e.detected || {}, adv = e.advice;
+    const dis = isBusy ? 'disabled' : '';
+    const b = [];
+    if (info.jobs?.[id]) b.push(`<button class="btn sm primary" data-act="watch">View progress</button>`);
+    else if (isInstalled(e)) b.push(`<button class="btn sm" data-act="uninstall" ${dis}>Uninstall</button>`);
+    else if (canInstall(e)) b.push(`<button class="btn sm primary" data-act="install" ${dis}>${e.audit?.verdict === 'quarantine' ? 'Review & install anyway' : 'Install'}</button>`);
+    if (!adv || adv.status !== 'pending') b.push(`<button class="btn sm" data-act="advise" ${dis}>${adv ? 'Ask again' : 'Get install advice'}</button>`);
+    const canWrap = !(d.skills || []).length && !d.personas && (d.kinds || []).some(k => k !== 'web');
+    if (canWrap && !isInstalled(e)) b.push(`<button class="btn sm ghost" data-act="wrap" ${dis}>Wrap as a skill</button>`);
+    b.push(`<button class="btn sm ghost" data-act="update" ${dis} title="Pull the latest commit and re-audit">Update</button>`);
+    b.push(`<button class="btn sm ghost" data-act="rescan" ${dis} title="Re-detect and re-audit what is on disk">Rescan</button>`);
+    b.push(`<span class="spacer"></span><button class="btn sm danger" data-act="remove" ${dis}>Remove</button>`);
+    return `<div class="actions">${b.join('')}</div>`;
+  }
+
+  function matches(e) {
+    const q = $('#search').value.trim().toLowerCase();
+    if (q && !`${e.source} ${e.subpath || ''} ${e.detected?.description || ''}`.toLowerCase().includes(q)) return false;
+    return filter === 'all' || filter === bucket(e);
+  }
+  const bucket = (e) => isInstalled(e) ? 'installed' : e.status === 'quarantined' || e.status === 'error' || e.advice?.status === 'failed' || (e.advice?.lint?.blocked || []).length ? 'review' : canInstall(e) ? 'ready' : 'other';
 
   function render() {
-    $('#paths').innerHTML = `Clones: <code>${esc(info.root)}</code> · skills home: <code>${esc(info.skillsHome)}</code> · linked into: ${(info.clientSkillDirs || []).map(d => `<code>${esc(d)}</code>`).join(', ') || 'none'} · hosts: ${esc((info.allowHosts || []).join(', '))}`;
+    const roots = [`clones <code>${esc(info.root)}</code>`, `skills <code>${esc(info.skillsHome)}</code>`];
+    if ((info.adviseChain || []).length) roots.push(`advisors ${info.adviseChain.map(a => `<code>${esc(short(a))}</code>`).join(' then ')}`);
+    $('#paths').innerHTML = roots.join(' &nbsp;·&nbsp; ');
     const list = info.integrations || [];
-    if (!list.length) { $('#list').innerHTML = '<p class="muted">Nothing integrated yet — paste a repository above.</p>'; return; }
-    $('#list').innerHTML = list.map(e => {
-      const d = e.detected || {}, a = e.audit || { counts: {} };
-      const isBusy = busy.has(e.id);
-      const skills = (e.installed?.skills || []).map(s => `<code>${esc(s.name)}</code>`).join(', ');
-      const web = e.installed?.web ? `<a href="${esc(e.installed.web.url)}" target="_blank" rel="noopener">${esc(e.installed.web.url)}</a>` : '';
-      const personas = e.installed?.personas ? `${e.installed.personas.count} personas (the router picks one per task)` : '';
-      const canWrap = !(d.skills || []).length && !d.personas && (d.kinds || []).some(k => k !== 'web');
-      return `<div class="card" data-id="${esc(e.id)}">
-        <div class="title"><a href="${esc(e.url.replace(/\.git$/, ''))}" target="_blank" rel="noopener">${esc(e.source)}</a>${e.subpath ? `<span class="muted">/${esc(e.subpath)}</span>` : ''}
-          ${statusPill(e.status)} ${verdictPill(a.verdict)}${a.overridden ? '<span class="pill bad">override</span>' : ''}
-          ${(d.kinds || []).map(k => `<span class="pill">${esc(k)}</span>`).join('')}
-          <span class="muted">${esc(e.commit || '')}</span></div>
-        ${d.description ? `<div class="muted">${esc(d.description)}</div>` : ''}
-        <div class="muted">${d.language ? esc(d.language) + ' · ' : ''}${d.license ? 'license: ' + esc(d.license) + ' · ' : ''}${a.scannedFiles || 0} files audited: ${a.counts.critical || 0} critical / ${a.counts.high || 0} high / ${a.counts.medium || 0} medium${d.mcp ? ' · MCP: ' + esc(d.mcp) : ''}${d.cli ? ' · ' + esc(d.cli) : ''}</div>
-        ${skills || web || personas ? `<div class="muted">Installed: ${skills ? 'skills ' + skills : ''} ${web ? ' · plugin ' + web : ''}${personas ? ' · ' + esc(personas) : ''}</div>` : ''}
-        ${d.personas && !personas ? `<div class="muted">Persona pack found: ${d.personas.count} personas in ${d.personas.divisions.length} divisions — Install to make them routable.</div>` : ''}
-        ${(d.skills || []).length && !skills ? `<div class="muted">Skills found: ${(d.skills).map(s => `<code>${esc(s.name)}</code>${s.wrapper ? ' (wrapper)' : ''}`).join(', ')}</div>` : ''}
-        ${(e.notes || []).map(n => `<div class="muted">ℹ ${esc(n)}</div>`).join('')}
-        ${(a.findings || []).length ? `<details><summary>Audit findings (${a.findings.length})</summary>${findingsHtml(a.findings)}</details>` : ''}
-        <div class="row">
-          ${e.status !== 'installed' ? `<button class="btn sm primary" data-act="install" ${isBusy ? 'disabled' : ''}>Install</button>` : ''}
-          <button class="btn sm" data-act="update" ${isBusy ? 'disabled' : ''}>Update</button>
-          <button class="btn sm" data-act="rescan" ${isBusy ? 'disabled' : ''}>Rescan</button>
-          ${canWrap ? `<button class="btn sm" data-act="wrap" ${isBusy ? 'disabled' : ''}>🧩 Wrap with an agent</button>` : ''}
-          ${e.status === 'installed' ? `<button class="btn sm danger" data-act="uninstall" ${isBusy ? 'disabled' : ''}>Uninstall</button>` : ''}
-          <button class="btn sm danger" data-act="purge" ${isBusy ? 'disabled' : ''}>Remove</button>
+    const counts = { all: list.length, installed: 0, ready: 0, review: 0 };
+    for (const e of list) { const k = bucket(e); if (k in counts) counts[k]++; }
+    for (const k of Object.keys(counts)) $(`#n-${k}`).textContent = counts[k] || '';
+    if (!list.length) { $('#list').innerHTML = '<div class="empty"><b>No repositories yet</b>Paste one above, for example <code>anthropics/skills</code>.</div>'; return; }
+    const shown = list.filter(matches);
+    if (!shown.length) { $('#list').innerHTML = '<div class="empty"><b>Nothing matches</b>Clear the filter to see every repository.</div>'; return; }
+    $('#list').innerHTML = shown.map(e => {
+      const d = e.detected || {}, a = e.audit || {};
+      return `<article class="repo ${e.status === 'quarantined' ? 'is-quarantined' : ''}" data-id="${esc(e.id)}">
+        <div class="repo-head">
+          <a class="name" href="${esc(e.url.replace(/\.git$/, ''))}" target="_blank" rel="noopener">${esc(e.source)}</a>${e.subpath ? `<span class="sub">/${esc(e.subpath)}</span>` : ''}
+          ${(d.kinds || []).map(k => `<span class="tag">${esc(k)}${k === 'skill' ? ` ×${d.skills.length}` : ''}</span>`).join('')}
+          ${d.license ? `<span class="tag">${esc(d.license.slice(0, 24))}</span>` : ''}
         </div>
-      </div>`;
+        ${d.description ? `<p class="desc">${esc(d.description)}</p>` : ''}
+        ${rail(e)}
+        ${adviceBlock(e)}
+        ${(a.findings || []).length ? `<details class="findings"><summary>Audit findings (${a.findings.length})</summary>${findingsHtml(a.findings)}</details>` : ''}
+        ${actions(e)}
+      </article>`;
     }).join('');
   }
 
+  let pollTimer;
   async function load() {
     try { info = await api('/integrations'); render(); }
-    catch (e) { $('#list').innerHTML = `<p class="muted">${esc(e.message)}</p>`; }
+    catch (e) { $('#list').innerHTML = `<div class="empty"><b>Couldn't load integrations</b>${esc(e.message)}</div>`; }
+    clearTimeout(pollTimer);
+    const live = (info.integrations || []).some(e => e.advice?.status === 'pending') || Object.keys(info.jobs || {}).length;
+    if (live) pollTimer = setTimeout(load, 6000);
+  }
+
+  // ── dialog helpers ──────────────────────────────────────────────────────
+  const dlg = $('#dlg');
+  let dlgLocked = false;
+  dlg.addEventListener('cancel', (ev) => { if (dlgLocked) ev.preventDefault(); });
+  dlg.addEventListener('close', () => { stopJobPoll(); load(); });
+  function openDlg(title, sub, body, foot) {
+    $('#dlgTitle').textContent = title; $('#dlgSub').textContent = sub || '';
+    $('#dlgBody').innerHTML = body; $('#dlgFoot').innerHTML = foot;
+    if (!dlg.open) dlg.showModal();
+  }
+  function setFoot(html) { $('#dlgFoot').innerHTML = html; }
+
+  function confirmDlg({ title, sub, body, ok, danger }) {
+    return new Promise(resolve => {
+      openDlg(title, sub, body, `<button class="btn ghost" data-r="0">Cancel</button><button class="btn ${danger ? 'danger solid' : 'primary'}" data-r="1">${esc(ok)}</button>`);
+      const foot = $('#dlgFoot');
+      const done = (v) => { foot.onclick = null; dlg.removeEventListener('close', onClose); resolve(v); };
+      const onClose = () => done(false);
+      dlg.addEventListener('close', onClose, { once: true });
+      foot.onclick = (ev) => { const b = ev.target.closest('[data-r]'); if (!b) return; done(b.dataset.r === '1' ? $('#dlgBody') : false); };
+      $('#dlgFoot [data-r="1"]').focus();
+    });
+  }
+
+  // ── job progress ────────────────────────────────────────────────────────
+  let jobPoll = null;
+  const stopJobPoll = () => { if (jobPoll) { clearTimeout(jobPoll); jobPoll = null; } };
+  const lineCls = { cmd: 'cmd', err: 'err', ok: 'ok', warn: 'warn', info: 'info', out: '' };
+
+  function showJob(jobId, e, title) {
+    stopJobPoll();
+    dlgLocked = true;
+    openDlg(title, e.source, `
+      <div class="bar" id="jbar"><i></i></div>
+      <div><p class="section-t">Steps</p><ul class="steps" id="jsteps"></ul></div>
+      <div><p class="section-t">Output</p><div class="console" id="jlog" tabindex="0" aria-label="Install output" aria-live="off"></div></div>
+      <div id="jresult"></div>`,
+      `<span class="status run" id="jstatus"><span class="spin"></span>Running…</span><button class="btn ghost" id="jhide">Run in background</button>`);
+    $('#jhide').onclick = () => { dlgLocked = false; dlg.close(); };
+    let since = 0;
+    const tick = async () => {
+      let j;
+      try { j = await (await fetch(`/api/integrations/jobs/${encodeURIComponent(jobId)}?since=${since}`)).json(); }
+      catch { jobPoll = setTimeout(tick, 2000); return; }
+      if (j.error && !j.id) { $('#jstatus').className = 'status bad'; $('#jstatus').textContent = j.error; dlgLocked = false; return; }
+      const log = $('#jlog');
+      if (!log) return;
+      const stick = log.scrollTop + log.clientHeight >= log.scrollHeight - 30;
+      log.insertAdjacentHTML('beforeend', j.log.map(l => `<span class="${lineCls[l.s] || ''}">${esc(l.text)}</span>\n`).join(''));
+      since = j.logTotal;
+      if (stick) log.scrollTop = log.scrollHeight;
+      $('#jsteps').innerHTML = j.steps.map(s => `<li class="${s.state}"><span class="ic">${s.state === 'done' ? '✓' : s.state === 'failed' ? '✕' : ''}</span><span>${esc(s.title)}${s.note ? ` <span class="t">— ${esc(s.note)}</span>` : ''}</span><span class="t">${s.ms != null ? (s.ms / 1000).toFixed(1) + 's' : ''}</span></li>`).join('');
+      const doneN = j.steps.filter(s => s.state === 'done' || s.state === 'skipped' || s.state === 'failed').length;
+      $('#jbar i').style.width = `${Math.round(100 * doneN / Math.max(1, j.steps.length))}%`;
+      if (j.status === 'running') { jobPoll = setTimeout(tick, 700); return; }
+      dlgLocked = false;
+      $('#jbar').className = `bar ${j.status === 'done' ? 'ok' : 'bad'}`;
+      $('#jbar i').style.width = '100%';
+      const fresh = (await api('/integrations').catch(() => null));
+      if (fresh) { info = fresh; render(); }
+      const cur = (info.integrations || []).find(x => x.id === e.id);
+      finishJob(j, e, cur);
+    };
+    tick();
+  }
+
+  function finishJob(j, e, cur) {
+    const ok = j.status === 'done';
+    const st = $('#jstatus');
+    if (j.kind === 'install') {
+      const rows = cur ? whereRows(cur) : (j.result?.locations || []).map(l => [l.label, l.path, l.exists]);
+      $('#jresult').innerHTML = `<div class="result ${ok ? '' : 'bad'}"><h4>${ok ? `Installed ${esc(e.source)}` : 'Install did not finish'}</h4>
+        ${ok ? '' : `<p style="margin:0 0 8px;font-size:.84rem">${esc(j.error || '')}</p>`}
+        ${rows.length ? `<p class="section-t" style="margin-top:6px">Installed to</p>${whereHtml(rows, 20)}` : ''}
+        ${j.result?.usage ? `<p class="section-t" style="margin-top:10px">How agents use it</p><div style="font-size:.84rem;white-space:pre-wrap">${esc(j.result.usage)}</div>` : ''}</div>`;
+      st.className = `status ${ok ? 'ok' : 'bad'}`; st.textContent = ok ? 'Installed' : 'Failed';
+      const canUn = cur && (isInstalled(cur) || cur.installed?.plan);
+      setFoot(`<span class="status ${ok ? 'ok' : 'bad'}">${ok ? '✓ Installed' : '✕ Failed'}</span>${canUn ? `<button class="btn danger" id="jun">Uninstall</button>` : ''}<button class="btn primary" id="jclose">Done</button>`);
+      if (canUn) $('#jun').onclick = () => act(e.id, 'uninstall');
+    } else {
+      const rem = j.result?.removed || [];
+      $('#jresult').innerHTML = `<div class="result ${ok ? '' : 'bad'}"><h4>${ok ? (j.kind === 'remove' ? `Removed ${esc(e.source)}` : `Uninstalled ${esc(e.source)}`) : 'Uninstall did not finish'}</h4>
+        ${ok ? '' : `<p style="margin:0 0 8px;font-size:.84rem">${esc(j.error || '')}</p>`}
+        ${rem.length ? `<div class="where">${rem.slice(0, 20).map(p => `<div><span class="k">removed</span><code>${esc(p)}</code></div>`).join('')}</div>` : ''}</div>`;
+      setFoot(`<span class="status ${ok ? 'ok' : 'bad'}">${ok ? '✓ Done' : '✕ Failed'}</span><button class="btn primary" id="jclose">Close</button>`);
+    }
+    $('#jclose').onclick = () => dlg.close();
+    $('#jclose').focus();
+  }
+
+  // ── actions ─────────────────────────────────────────────────────────────
+  function planReviewHtml(e) {
+    const adv = e.advice, p = adv?.status === 'ready' ? adv.plan : null, d = e.detected || {};
+    const out = [];
+    if (e.audit?.verdict === 'quarantine') out.push(`<div class="note bad"><b>Quarantined.</b> ${e.audit.counts.critical} critical audit finding(s). Read every finding before installing anyway.</div>${(e.audit.findings || []).length ? `<details class="findings" open><summary>Findings</summary>${findingsHtml(e.audit.findings.filter(f => f.severity !== 'medium'))}</details>` : ''}`);
+    const builtin = [];
+    if ((d.skills || []).length) builtin.push(`${d.skills.length} skill${d.skills.length > 1 ? 's' : ''} copied to <code>${esc(info.skillsHome)}</code> and linked into each agent's skills folder`);
+    if (d.personas) builtin.push(`${d.personas.count} personas registered with the Roster`);
+    if (d.web) builtin.push(`web app served as a sandboxed Portal card`);
+    if (builtin.length) out.push(`<div><p class="section-t">Cowork installs</p><ul style="margin:0;padding-left:18px;font-size:.86rem">${builtin.map(b => `<li>${b}</li>`).join('')}</ul></div>`);
+    if (p) {
+      out.push(`<div><p class="section-t">Agent's plan (${esc(short(adv.agent))})</p><div style="font-size:.88rem">${esc(p.summary)}</div></div>`);
+      for (const w of [...(adv.lint?.warnings || []), ...(p.warnings || [])]) out.push(`<div class="note">${esc(w)}</div>`);
+      if (p.steps.length) out.push(`<div><p class="section-t">Commands that will run, in order, as ${esc('you')} (no sudo)</p><ol class="cmds">${p.steps.map(s => `<li><span>${esc(s.title)}${s.cwd === 'home' ? ' <span class="k" style="color:var(--faint)">in ~</span>' : ''}</span><span class="run">${esc(s.run)}</span>${s.why ? `<span class="why">${esc(s.why)}</span>` : ''}</li>`).join('')}</ol></div>`);
+      if (p.locations.length) out.push(`<div><p class="section-t">Will be installed to</p><div class="where">${p.locations.map(l => `<div><code>${esc(l)}</code></div>`).join('')}</div></div>`);
+      if (p.steps.length && builtin.length) out.push(`<label class="check"><input type="checkbox" id="usePlan" checked> Run the agent's commands too (untick to do only cowork's built-in install)</label>`);
+      if (p.steps.length) out.push(`<label class="check"><input type="checkbox" id="ack"> I've read these commands and want to run them on this machine</label>`);
+    } else if (adv?.status === 'pending') out.push(`<div class="note info">The install advisor is still working. You can install the built-in parts now and run the plan later.</div>`);
+    return out.join('');
   }
 
   async function act(id, action) {
     const e = info.integrations.find(x => x.id === id);
-    let body = {};
-    if (action === 'install' && e?.audit?.verdict === 'quarantine') {
-      if (!confirm(`${e.source} is QUARANTINED (${e.audit.counts.critical} critical finding(s)).\n\nInstall anyway? Only do this after reading every finding.`)) return;
-      body.force = true;
+    if (!e) return;
+    if (action === 'watch') return showJob(info.jobs[id], e, 'Installing');
+    if (action === 'install') {
+      const p = e.advice?.status === 'ready' ? e.advice.plan : null;
+      const body = await confirmDlg({ title: `Install ${e.source}`, sub: 'Review what happens before it runs', body: planReviewHtml(e), ok: e.audit?.verdict === 'quarantine' ? 'Install anyway' : 'Install' });
+      if (!body) return;
+      const usePlan = !$('#usePlan', body) || $('#usePlan', body).checked;
+      if (p?.steps.length && usePlan && !$('#ack', body).checked) { toast('Tick the box to confirm you have read the commands.', 'err'); return act(id, action); }
+      try {
+        const r = await api(`/integrations/${encodeURIComponent(id)}/install-job`, { force: e.audit?.verdict === 'quarantine', usePlan });
+        info.jobs = { ...(info.jobs || {}), [id]: r.job.id }; render();
+        showJob(r.job.id, e, 'Installing');
+      } catch (err) { toast(err.message, 'err'); dlg.close(); }
+      return;
     }
-    if (action === 'purge') { if (!confirm(`Remove ${e?.source}: uninstall, delete the clone and its registry entry?`)) return; action = 'uninstall'; body.purge = true; }
-    if (action === 'uninstall' && !body.purge && !confirm(`Uninstall ${e?.source}? (links, copied skills and portal card are removed; the clone stays)`)) return;
+    if (action === 'uninstall' || action === 'remove') {
+      const rows = whereRows(e);
+      const undo = e.installed?.plan?.uninstall || [];
+      const remove = action === 'remove';
+      const body = [
+        isInstalled(e) ? `<div><p class="section-t">${remove ? 'First uninstalls' : 'Removes'}</p>${whereHtml(rows, 20) || '<span class="k">nothing on disk</span>'}</div>` : '',
+        undo.length ? `<div><p class="section-t">Undo commands</p><ol class="cmds">${undo.map(s => `<li><span>${esc(s.title)}</span><span class="run">${esc(s.run)}</span></li>`).join('')}</ol></div>` : '',
+        remove ? `<div><p class="section-t">Then deletes</p><div class="where"><div><span class="k">clone</span><code>${esc(info.root)}/${esc(e.id)}</code></div><div><span class="k">registry entry</span><code>${esc(e.id)}</code></div></div></div>` : '<div class="note info">The clone stays so you can reinstall without fetching again.</div>',
+      ].join('');
+      if (!await confirmDlg({ title: `${remove ? 'Remove' : 'Uninstall'} ${e.source}?`, sub: remove ? 'Uninstalls it if needed, then deletes the clone' : 'Undoes the install', body, ok: remove ? 'Remove' : 'Uninstall', danger: true })) return;
+      try {
+        const r = await api(`/integrations/${encodeURIComponent(id)}/${action}-job`, {});
+        info.jobs = { ...(info.jobs || {}), [id]: r.job.id }; render();
+        showJob(r.job.id, e, remove ? 'Removing' : 'Uninstalling');
+      } catch (err) { toast(err.message, 'err'); dlg.close(); }
+      return;
+    }
+    if (action === 'advise') {
+      const chain = (info.adviseChain || []).map(short).join(', then ') || 'none configured';
+      const body = await confirmDlg({ title: `Get install advice for ${e.source}`, sub: `Asks ${chain} (thinking high). Nothing is installed.`, ok: 'Ask the agent',
+        body: `<label class="field">Anything the agent should know (optional)<textarea id="advNotes" placeholder="e.g. install only the CLI, not the web UI"></textarea></label>` });
+      if (!body) return;
+      dlg.close();
+      return run(id, 'advise', { notes: $('#advNotes', body)?.value || '' }, 'Asked the install advisor. The plan shows up here when it is ready.');
+    }
     if (action === 'wrap') {
-      const agent = prompt(`Local agent to run the wrap task (Rule 6 — must be local):\n${info.agents.join(', ')}`, info.wrapAgent || '');
-      if (agent === null) return;
-      const notes = prompt('Notes for the agent (optional):', '') || '';
-      body = { agent, notes };
+      const body = await confirmDlg({ title: `Wrap ${e.source} as a skill`, sub: 'Creates a task for an engineering agent to write a SKILL.md for it', ok: 'Create task',
+        body: `<label class="field">Agent (local only)<select id="wrapAgent">${info.agents.map(a => `<option ${a === info.wrapAgent ? 'selected' : ''}>${esc(a)}</option>`).join('')}</select></label>
+               <label class="field">Notes for the agent (optional)<textarea id="wrapNotes"></textarea></label>` });
+      if (!body) return;
+      const payload = { agent: $('#wrapAgent', body).value, notes: $('#wrapNotes', body).value };
+      dlg.close();
+      return run(id, 'wrap', payload, null);
     }
-    busy.add(id); render(); say(`${action}: ${e?.source}…`);
+    return run(id, action, {}, null);
+  }
+
+  async function run(id, action, body, okMsg) {
+    const e = info.integrations.find(x => x.id === id);
+    busy.add(id); render();
     try {
       const r = await api(`/integrations/${encodeURIComponent(id)}/${action}`, body);
-      say(action === 'wrap' ? `Created task ${r.task?.id} — when it finishes, press Rescan then Install.` : `${action} ✓ ${e?.source}`, 'ok');
-    } catch (err) { say(err.message, 'err'); }
+      toast(okMsg || (action === 'wrap' ? `Created task ${r.task?.id?.slice(0, 8)}. When it finishes, press Rescan, then Install.` : `${action === 'update' ? 'Updated' : action === 'rescan' ? 'Rescanned' : 'Done'}: ${e?.source}`), 'ok');
+    } catch (err) { toast(err.message, 'err'); }
     busy.delete(id); await load();
   }
 
   $('#list').addEventListener('click', (ev) => {
     const b = ev.target.closest('button[data-act]'); if (!b) return;
-    act(b.closest('.card').dataset.id, b.dataset.act);
+    act(b.closest('.repo').dataset.id, b.dataset.act);
   });
-  $('#add').onclick = async () => {
+  $('#addForm').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
     const repo = $('#repo').value.trim(); if (!repo) return;
-    $('#add').disabled = true; say(`Fetching ${repo}… (shallow clone + audit)`);
+    $('#add').disabled = true; $('#fetching').classList.add('on'); $('#fetchingText').textContent = `Cloning ${repo} and running the audit…`;
     try {
-      const e = await api('/integrations', { repo, install: $('#autoinstall').checked });
-      say(`${e.source}: ${e.status} · audit ${e.audit.verdict} · ${e.detected.kinds.join(', ')}`, e.status === 'quarantined' ? 'err' : 'ok');
+      const e = await api('/integrations', { repo, install: $('#autoinstall').checked, advise: $('#advise').checked });
+      const adv = e.advice?.status === 'pending' ? ` Asked ${short(e.advice.agent)} how to install it.` : '';
+      toast(`${e.source}: audit ${e.audit.verdict === 'quarantine' ? 'quarantined it' : e.audit.verdict === 'warn' ? 'passed with warnings' : 'passed'}.${e.status === 'installed' ? ' Built-in parts installed.' : ''}${adv}`, e.status === 'quarantined' ? 'err' : 'ok');
       $('#repo').value = '';
-    } catch (err) { say(err.message, 'err'); }
-    $('#add').disabled = false; await load();
-  };
-  $('#repo').addEventListener('keydown', (ev) => { if (ev.key === 'Enter') $('#add').click(); });
+      filter = 'all'; document.querySelectorAll('.tabs button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.f === 'all')));
+    } catch (err) { toast(err.message, 'err'); }
+    $('#add').disabled = false; $('#fetching').classList.remove('on');
+    await load();
+  });
+  document.querySelector('.tabs').addEventListener('click', (ev) => {
+    const b = ev.target.closest('button[data-f]'); if (!b) return;
+    filter = b.dataset.f;
+    document.querySelectorAll('.tabs button').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+    render();
+  });
+  $('#search').addEventListener('input', render);
   $('#refresh').onclick = load;
   $('#auditAll').onclick = async () => {
-    $('#auditAll').disabled = true; $('#auditOut').innerHTML = '<p class="muted">Auditing…</p>';
+    $('#auditAll').disabled = true; $('#auditOut').innerHTML = '<p class="paths"><span class="spin" style="display:inline-block;vertical-align:middle"></span> Auditing installed skills…</p>';
     try {
       const r = await api('/integrations/audit', {});
-      $('#auditOut').innerHTML = `<details open><summary>${verdictPill(r.verdict)} ${r.scannedFiles} files in ${r.targets.length} dirs — ${r.counts.critical} critical / ${r.counts.high} high / ${r.counts.medium} medium${r.allowed ? ` (${r.allowed} allow-listed)` : ''}</summary>${findingsHtml(r.findings)}</details>`;
-    } catch (err) { $('#auditOut').innerHTML = `<p class="muted">${esc(err.message)}</p>`; }
+      const cls = r.verdict === 'pass' ? 'info' : r.verdict === 'warn' ? '' : 'bad';
+      $('#auditOut').innerHTML = `<details class="note ${cls}" style="margin-bottom:14px" open><summary style="cursor:pointer">Audit of installed skills: ${esc(r.verdict)} — ${r.scannedFiles} files in ${r.targets.length} folders, ${r.counts.critical} critical, ${r.counts.high} high${r.allowed ? `, ${r.allowed} allow-listed` : ''}</summary>${findingsHtml(r.findings)}</details>`;
+    } catch (err) { $('#auditOut').innerHTML = `<p class="note bad">${esc(err.message)}</p>`; }
     $('#auditAll').disabled = false;
   };
   const q = new URLSearchParams(location.search).get('repo');
