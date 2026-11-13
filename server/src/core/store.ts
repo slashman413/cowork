@@ -8,6 +8,7 @@ import { globSync } from 'glob';
 import type { Config, ActiveWorker, Task, DashboardData, PersonaCard, InteractionField, AgentUsage } from '../types.js';
 import type { EventBus } from './events.js';
 import { Roster } from './roster.js';
+import { sharedIntegrations } from './integrations.js';
 import { normalizeRecurrence, recurrenceFromLegacyHours, nextRunAt, type TaskRecurrence } from './recurrence.js';
 import { isRateLimitFailure } from './result-verifier.js';
 import { canonicalAgentId } from '../config.js';
@@ -42,7 +43,7 @@ export type CompletionGuard = (task: Task, result?: string) => Promise<Completio
 
 /** Statuses in which a recurring scheduler's run-child is still in flight
  *  (queued, running, waiting on a person, or deferred on background work). */
-const OUTSTANDING_RUN_STATUSES = new Set(['pending', 'claimed', 'in-progress', 'wait-input', 'scheduled']);
+const OUTSTANDING_RUN_STATUSES = new Set(['pending', 'claimed', 'in-progress', 'wait-input', 'scheduled', 'paused']);
 /** Default for inbox.purgeScheduledRunsAfterDays (0 disables the auto-purge). */
 export const DEFAULT_PURGE_SCHEDULED_RUNS_DAYS = 3;
 /** Default for orchestration.scheduler.maxPendingBacklog (0 disables the hold). */
@@ -111,7 +112,11 @@ export class Store {
   constructor(config: Config, eventBus: EventBus) {
     this.config = config;
     this.eventBus = eventBus;
-    this.roster = new Roster(config.paths.agencyAgents);
+    // Personas come from installed persona-pack integrations (agency-agents is a
+    // default integration). An explicit paths.agencyAgents still wins — tests and
+    // hosts that keep a local persona checkout pin the roster to that one dir.
+    const explicit = config.paths.agencyAgents;
+    this.roster = new Roster(explicit ? explicit : () => sharedIntegrations(config.integrations).personaRoots());
   }
 
   public getConfig(): Config {
@@ -1661,8 +1666,98 @@ export class Store {
     return { ...this.purgeTasks({ olderThanDays: raw, dryRun: opts.dryRun, scheduledRunsOnly: true }), disabled: false };
   }
 
+  // ── Pause / resume (human-controlled hold) ───────────────────────────────
+  /** Ids paused in THIS process. A run that was in flight when its task was paused
+   *  may still save the task (progress, handover) before its agent dies; any such
+   *  write is forced back to `paused` so the pause can't be silently undone. */
+  private pausedGuard = new Set<string>();
+
+  /** Statuses a person can pause: anything not finished and not already paused. */
+  public static readonly PAUSABLE = new Set(['pending', 'claimed', 'in-progress', 'scheduled', 'wait-input']);
+
+  /**
+   * Pause a task: move it to the `paused` queue, out of every scheduling path (the
+   * dispatcher only plans `pending`, only releases `scheduled`, remote clients only
+   * claim `pending`). The previous status is kept in context.pausedFrom; brief,
+   * context, attempts, artifacts and interaction are untouched so resume loses
+   * nothing. A RUNNING task's agent is stopped (taskPaused → Dispatcher.cancelTask);
+   * its partial artifacts (progress.md) stay for the resumed run to pick up.
+   * Returns null when the task is absent or not pausable.
+   */
+  public pauseTask(taskId: string, opts: { by?: string; reason?: string } = {}): { task: Task; from: string } | null {
+    const task = this.getTask(taskId);
+    if (!task || !Store.PAUSABLE.has(task.status)) return null;
+    const from = task.status;
+    task.status = 'paused';
+    task.context = {
+      ...(task.context || {}),
+      pausedFrom: from,
+      pausedAt: new Date().toISOString(),
+      ...(opts.by ? { pausedBy: opts.by } : {}),
+      ...(opts.reason ? { pausedReason: String(opts.reason).slice(0, 500) } : {}),
+      pendingReason: 'Paused by a person — it will not run until resumed.',
+      pendingReasonAt: new Date().toISOString(),
+    };
+    this.pausedGuard.add(task.id);
+    this.saveTask(task);
+    this.eventBus.emitTaskPaused?.(task, from);
+    this.eventBus.emitTaskCreated(task);   // nudge live dashboards to refresh
+    console.log(`Store: paused task ${task.id} (was ${from})${opts.by ? ` by ${opts.by}` : ''} — ${task.title}`);
+    return { task, from };
+  }
+
+  /**
+   * Resume a paused task back into execution:
+   *   scheduled  → `scheduled` again (a past launch time releases on the next tick;
+   *                a recurring scheduler simply re-arms),
+   *   wait-input → `wait-input` while its interaction is still unanswered,
+   *   anything else (pending / claimed / in-progress) → `pending`, on the SAME
+   *                chain rung (context.attempts kept), claim cleared, so the next
+   *                tick dispatches it; an interrupted run is flagged so the agent
+   *                resumes from its progress ledger instead of redoing work.
+   */
+  public resumeTask(taskId: string, opts: { by?: string } = {}): Task | null {
+    const task = this.getTask(taskId);
+    if (!task || task.status !== 'paused') return null;
+    const ctx: Record<string, any> = { ...(task.context || {}) };
+    const from = String(ctx.pausedFrom || 'pending');
+    const awaiting = task.interaction && Array.isArray(task.interaction.fields)
+      && task.interaction.fields.length > 0 && task.interaction.status !== 'submitted';
+    let next: Task['status'];
+    if (from === 'scheduled' && (task.scheduledAt || task.recurrence || task.loopIntervalHours)) next = 'scheduled';
+    else if (awaiting) next = 'wait-input';
+    else next = 'pending';
+    if (from === 'in-progress' || from === 'claimed') ctx.resumedAfterInterrupt = true;
+    delete task.claimedBy;   // whoever held it before the pause no longer does
+    delete task.claimedAt;
+    ctx.dispatched = false;
+    ctx.resumedAt = new Date().toISOString();
+    if (opts.by) ctx.resumedBy = opts.by;
+    for (const k of ['pausedFrom', 'pausedAt', 'pausedBy', 'pausedReason', 'pendingReason', 'pendingReasonAt', 'remoteWaitSince']) delete ctx[k];
+    task.context = ctx;
+    task.status = next;
+    this.pausedGuard.delete(task.id);
+    this.saveTask(task);
+    this.eventBus.emitTaskResumed?.(task);
+    this.eventBus.emitTaskCreated(task);
+    console.log(`Store: resumed task ${task.id} → ${next} (was ${from} before the pause) — ${task.title}`);
+    return task;
+  }
+
   /** Persist arbitrary task mutations (handover, retries). */
   public saveTask(task: Task): void {
+    if (this.pausedGuard.has(task.id) && task.status !== 'paused') {
+      // A stale in-flight write (the run that was stopped by the pause) — keep it paused.
+      // Keep the pause bookkeeping from the paused copy on disk (the stale write
+      // carries the pre-pause context, which would lose pausedFrom).
+      const onDisk = this.getTask(task.id);
+      const keep: Record<string, any> = {};
+      for (const k of ['pausedFrom', 'pausedAt', 'pausedBy', 'pausedReason', 'pendingReason', 'pendingReasonAt']) {
+        if (onDisk?.context?.[k] !== undefined) keep[k] = onDisk.context[k];
+      }
+      task.status = 'paused';
+      task.context = { ...(task.context || {}), ...keep, dispatched: false };
+    }
     const file = this.resolveTaskFile(task.id) || `${task.id}.json`;
     this.writeTaskFile(file, task);
   }
@@ -2051,13 +2146,14 @@ export class Store {
     const activeWorkers = this.activeWorkers.size;
     const tasks = this.listTasks();
     // Single pass over the task list instead of six full .filter() scans.
-    let pending = 0, scheduled = 0, waitingInput = 0, inProgress = 0, failed = 0, completed = 0;
+    let pending = 0, scheduled = 0, waitingInput = 0, inProgress = 0, paused = 0, failed = 0, completed = 0;
     for (const t of tasks) {
       switch (t.status) {
         case 'pending': pending++; break;
         case 'scheduled': scheduled++; break;
         case 'wait-input': waitingInput++; break;
         case 'in-progress': case 'claimed': inProgress++; break;
+        case 'paused': paused++; break;
       }
       // "completed" is every finished task (done or rejected); the UI derives the
       // green "done" pill as completed - failed, so failed must be a subset here.
@@ -2077,6 +2173,7 @@ export class Store {
         scheduled,
         waitingInput,
         inProgress,
+        paused,
         completed,
         failed
       },

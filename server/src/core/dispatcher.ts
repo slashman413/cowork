@@ -1,9 +1,10 @@
+import { matchPersona } from './persona-match.js';
 import { spawn, type ChildProcess, execFile } from 'child_process';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, readdirSync, readFileSync, writeFileSync, statSync, createWriteStream, type WriteStream } from 'node:fs';
 import { tmpdir } from 'node:os';
-import type { Config, RoleConfig, Task, AchieverDecision, RunUsage } from '../types.js';
+import type { Config, RoleConfig, Task, AchieverDecision, RunUsage, PersonaCard } from '../types.js';
 import type { AchieverTurn } from './goal-view.js';
 import type { EventBus } from './events.js';
 import type { Store, CompletionDecision } from './store.js';
@@ -149,6 +150,12 @@ export class Dispatcher {
         const taskId = evt?.payload?.taskId;
         if (taskId) this.cancelTask(taskId, 'task deleted');
       });
+      // Pausing a running task stops its agent the same way; the store keeps the
+      // task on `paused` (its pause guard overrides the dying run's last writes).
+      eventBus.on('taskPaused', (evt: any) => {
+        const taskId = evt?.payload?.task?.id;
+        if (taskId) this.cancelTask(taskId, 'task paused');
+      });
     }
   }
 
@@ -250,8 +257,7 @@ export class Dispatcher {
 
   /** Resolve the agent fallback chain for an agent. Precedence:
    *   special role      → its own agents[name].agents
-   *   persona       → its own personaChains[slug] override, else its
-   *                        division's override, else the global default chain.
+   *   persona           → its work-role tier (if any), then the global default chain.
    *   Disabled agents are silently stripped from the resolved chain so they are
    *   never dispatched. */
   private chainFor(persona: string, division?: string, ctx?: Record<string, any>): string[] {
@@ -267,19 +273,13 @@ export class Dispatcher {
         raw = mergeTierChain(this.tierList('judgment', ctx), raw);
       }
     } else {
-      // A persona's own override wins over its division and the global default.
-      const own = orch.personaChains && orch.personaChains[persona];
-      if (own && own.length) {
-        raw = own;
-        if (ctx?.escalated && tier === 'judgment') {
-          raw = mergeTierChain(this.tierList('judgment', ctx), raw);
-        }
-      } else {
-        const div = division || '';
-        raw = (orch.divisionChains && orch.divisionChains[div]) || orch.defaultChain || [];
-        // P1-4: a tier-tagged task tries its tier's agents first, then the normal chain.
-        if (tier) raw = mergeTierChain(this.tierList(tier, ctx), raw);
-      }
+      // Personas no longer carry their own agent routing (the per-division /
+      // per-persona chain overrides were removed with the Personas page): a
+      // persona shapes the PROMPT, the work role's tier + default chain pick the agent.
+      void division;
+      raw = orch.defaultChain || [];
+      // P1-4: a tier-tagged task tries its tier's agents first, then the normal chain.
+      if (tier) raw = mergeTierChain(this.tierList(tier, ctx), raw);
     }
     // Strip disabled agents so the dispatcher never schedules them.
     return raw.filter(id => !agents[id]?.disabled);
@@ -898,7 +898,13 @@ export class Dispatcher {
    */
   private route(task: Task): void {
     const cls = this.config.orchestration.classifier;
-    if (cls && cls.enabled === false) { this.assignPersona(task, 'generalist', undefined); return; }
+    if (cls && cls.enabled === false) {
+      // Classifier off: still pick a persona from the installed packs by keywords.
+      const hit = matchPersona(`${task.title}\n${task.description}`, this.allPersonas());
+      if (hit) this.assignPersona(task, hit.slug, hit.division, { personaMatch: 'keyword' });
+      else this.assignPersona(task, 'generalist', undefined);
+      return;
+    }
     if (this.classifying.has(task.id)) return;
     this.classifying.add(task.id);
     const timeout = cls?.timeoutMs || 300000;
@@ -929,6 +935,13 @@ export class Dispatcher {
         // persona (every task went to academic/academic-statistician while the
         // router's CLI printed nothing). Fall back to the generalist instead.
         if (!pickedDivision) {
+          // LLM router silent/unparseable: match the brief against every installed
+          // persona deterministically before giving up on a specialist.
+          const hit = matchPersona(`${task.title}\n${task.description}`, this.allPersonas());
+          if (hit) {
+            console.warn(`Dispatcher: router gave no division for ${task.id} — keyword match → ${hit.division}/${hit.slug} (score ${hit.score})`);
+            this.assignPersona(task, hit.slug, hit.division, { ...extra, personaMatch: 'keyword' }); return;
+          }
           console.warn(`Dispatcher: router gave no division for ${task.id} (reply ${JSON.stringify(divOut.slice(0, 80))}) — generalist`);
           this.assignPersona(task, cls?.fallbackRole || 'generalist', undefined, extra); return;
         }
@@ -943,7 +956,9 @@ export class Dispatcher {
           personasIn.map(a => `- ${a.slug}: ${a.name} — ${(a.description || '').slice(0, 120)}`).join('\n') +
           `\n\nReply with ONLY the slug.`;
         const agOut = await this.askRouter(agPrompt, timeout);
-        const chosenSlug = this.pickLast(personasIn.map(a => a.slug), agOut) || personasIn[0].slug;
+        const chosenSlug = this.pickLast(personasIn.map(a => a.slug), agOut)
+          || matchPersona(`${task.title}\n${task.description}`, personasIn)?.slug
+          || personasIn[0].slug;
         this.assignPersona(task, chosenSlug, division, extra);
       } catch {
         this.assignPersona(task, 'generalist', undefined);
@@ -951,6 +966,11 @@ export class Dispatcher {
         this.classifying.delete(task.id);
       }
     })();
+  }
+
+  /** Every installed persona (empty when the roster is unavailable). */
+  private allPersonas(): PersonaCard[] {
+    try { return (this.store as any).getRoster?.() || []; } catch { return []; }
   }
 
   /** Pick the candidate whose LAST mention in the text is latest — LLMs put the
@@ -972,7 +992,8 @@ export class Dispatcher {
     if (fresh && fresh.status === 'pending') {
       // Re-check against the FRESH context: a tier/thinking set while routing ran wins.
       const wr = extra.workRole ? workRoleContext(extra.workRole, resolveWorkRoles(this.config.orchestration.workRoles), fresh.context, this.config.orchestration.workRoles?.budget) : {};
-      fresh.context = { ...(fresh.context || {}), persona, ...(division ? { division } : {}), ...wr, routedBy: this.routerModel().model };
+      const how = extra.personaMatch || (this.isSpecial(persona) ? 'fallback' : 'router');
+      fresh.context = { ...(fresh.context || {}), persona, ...(division ? { division } : {}), ...wr, routedBy: this.routerModel().model, personaMatch: how };
       this.store.saveTask(fresh);
       console.log(`Dispatcher: routed task ${task.id} -> ${division ? division + '/' : ''}${persona}` +
         (wr.workRole ? ` [${wr.workRole}${wr.tier ? ' tier=' + wr.tier : ''}${wr.thinking ? ' thinking=' + wr.thinking : ''}]` : ''));
@@ -1770,6 +1791,11 @@ export class Dispatcher {
     // of the same task, if `artifacts/<id>/progress.md` exists, include it (last
     // 4 KB) so the agent resumes from completed steps instead of starting over.
     const priorProgress = this.readProgressLedger(task.id);
+    if (task.context?.resumedAfterInterrupt) {
+      lines.push(`# Resumed after a pause`,
+        `A person paused this task while an earlier run was in progress and has now resumed it. Files that run left in your artifacts dir are still there — check them (and \`progress.md\` if present) and continue rather than starting over.`,
+        ``);
+    }
     if (priorProgress) {
       lines.push(
         `# Prior progress — resume, do not redo`,
@@ -2923,7 +2949,8 @@ export class Dispatcher {
     // agent (or re-save its file).
     const wasCancelled = this.cancelled.delete(task.id);
     if (wasCancelled || !this.store.getTask(task.id)) {
-      console.log(`Dispatcher: task ${task.id} was deleted while running on ${plan.agentId} — run discarded`);
+      const paused = this.store.getTask(task.id)?.status === 'paused';
+      console.log(`Dispatcher: task ${task.id} was ${paused ? 'paused' : 'deleted'} while running on ${plan.agentId} — run discarded`);
       return;
     }
 

@@ -36,20 +36,20 @@ export function activeLayoutPath(): string {
 }
 
 /** Singleton app pages: id === type, at most one each, rendered by app.js. */
-export const APP_PAGES = ['tasks', 'recipes', 'calendar', 'goals', 'routing', 'agents', 'personas', 'workers', 'config'] as const;
+export const APP_PAGES = ['tasks', 'recipes', 'calendar', 'goals', 'routing', 'agents', 'workers', 'config'] as const;
 /**
  * Pre-2026-10-16 app-page ids, renamed so each URL matches its nav label
  * (#inbox showed "Tasks", …). Old ids in a user's layout.json are rewritten
  * to the new ones; app.js redirects old bookmarks the same way.
  */
 export const LEGACY_PAGE_IDS: Record<string, string> = {
-  inbox: 'tasks', team: 'routing', roster: 'personas', connections: 'workers',
+  inbox: 'tasks', team: 'routing', connections: 'workers',
 };
 /**
  * Retired app pages (Chat + voice assistant, removed 2026-10-30): a user's
  * layout.json that still names one is silently skipped, not reported as an error.
  */
-export const REMOVED_PAGE_IDS = new Set<string>(['chat']);
+export const REMOVED_PAGE_IDS = new Set<string>(['chat', 'personas', 'roster']);   // personas → Integrations (2026-11-13)
 const renamed = (id: string) => (Object.hasOwn(LEGACY_PAGE_IDS, id) ? LEGACY_PAGE_IDS[id] : id);
 /** Composable page types: any number, any id. */
 export const COMPOSABLE_PAGES = ['dashboard', 'portal'] as const;
@@ -63,7 +63,6 @@ const APP_PAGE_DEFAULTS: Record<string, { label: string; icon: string }> = {
   goals: { label: 'Goals', icon: 'target' },
   routing: { label: 'Routing', icon: 'bot' },
   agents: { label: 'Agents', icon: 'cpu' },
-  personas: { label: 'Personas', icon: 'users-round' },
   workers: { label: 'Workers', icon: 'plug' },
   config: { label: 'Configuration', icon: 'settings' },
 };

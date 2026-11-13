@@ -19,6 +19,10 @@ import type { IntegrationsConfig } from '../types.js';
  *                  symlinked into every client skills dir that exists — the same
  *                  convention the `skills` CLI already uses on this host, so every
  *                  agent (claude / codex / agy / hermes) picks it up.
+ *         persona → a persona pack (e.g. msitarzewski/agency-agents: division dirs of
+ *                  agent .md files with name/description frontmatter). Nothing is
+ *                  copied — the clone dir is registered as a persona source that the
+ *                  Roster reads, and the dispatcher's router picks from it per task.
  *         web    → served sandboxed at /plugins/<id>/ and registered as a Portal card.
  *         mcp / cli / library → nothing runs automatically (installing deps executes
  *                  repo code); instead `buildWrapTask` drafts a cowork task asking an
@@ -30,7 +34,7 @@ import type { IntegrationsConfig } from '../types.js';
  * links/dirs/portal card this module created and nothing else.
  */
 
-export type IntegrationKind = 'skill' | 'web' | 'mcp' | 'cli' | 'library';
+export type IntegrationKind = 'skill' | 'persona' | 'web' | 'mcp' | 'cli' | 'library';
 
 export interface RepoRef {
   /** Clone URL (https://… or file://… in tests). */
@@ -46,9 +50,13 @@ export interface RepoRef {
 
 export interface DetectedSkill { name: string; dir: string; description?: string; wrapper?: boolean }
 
+export interface DetectedPersonas { count: number; divisions: string[] }
+
 export interface Detection {
   kinds: IntegrationKind[];
   skills: DetectedSkill[];
+  /** Persona pack (agent .md files grouped by division dir). */
+  personas?: DetectedPersonas;
   web?: { root: string; entry: string };
   mcp?: string;
   cli?: string;
@@ -76,16 +84,61 @@ export interface Integration {
   installed: {
     skills: Array<{ name: string; target: string; links: string[] }>;
     web?: { portalKey: string; url: string };
+    /** Registered as a persona source for the Roster (root dir + persona count). */
+    personas?: { root: string; count: number };
   };
   notes?: string[];
 }
 
-interface RegistryFile { version: 1; integrations: Record<string, Integration> }
+interface RegistryFile {
+  version: 1;
+  integrations: Record<string, Integration>;
+  /** Default integrations already provisioned once (id → ISO time). A default the
+   *  operator later uninstalls is NOT re-installed on the next boot. */
+  defaultsSeeded?: Record<string, string>;
+}
+
+/**
+ * Integrations every cowork server provisions on first run (after it is up), so
+ * a fresh host gets the same persona pack + skill library the fleet relies on.
+ * Override with `integrations.defaults` in config (an array; [] disables).
+ */
+export const DEFAULT_INTEGRATIONS: string[] = [
+  'msitarzewski/agency-agents',
+  'garrytan/gbrain',
+  'addyosmani/agent-skills',
+  'anthropics/skills',
+  'vercel-labs/agent-browser',
+  'backnotprop/pstack',
+  'pbakaus/impeccable',
+  'Nutlope/hallmark',
+  'multica-ai/andrej-karpathy-skills',
+];
+
+export interface DefaultStatus {
+  input: string;
+  id: string;
+  present: boolean;
+  status?: Integration['status'];
+  kinds?: IntegrationKind[];
+  skillsDetected?: number;
+  skillsInstalled?: number;
+  personas?: number;
+  verdict?: AuditVerdict;
+  ok: boolean;
+  problem?: string;
+}
 
 export const DEFAULT_ALLOWED_HOSTS = ['github.com', 'gitlab.com', 'codeberg.org', 'bitbucket.org'];
 const NAME_RE = /^[A-Za-z0-9._-]{1,100}$/;
 const SKILL_NAME_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const SKIP_DIRS = new Set(['.git', 'node_modules', '.venv', 'venv', '__pycache__', 'dist', 'build', 'target', '.next', 'vendor']);
+/** Not walked when looking for SKILL.md / personas: test fixtures are not real skills. */
+const SKIP_SCAN_DIRS = new Set([...SKIP_DIRS, 'test', 'tests', '__tests__', 'fixtures', '__fixtures__', 'testdata']);
+/** Non-persona dirs in a persona pack (repo docs, sample output, tooling). */
+const PERSONA_SKIP_DIRS = new Set(['docs', 'examples', 'scripts', 'integrations', '.github', 'tools', 'assets', 'images', 'skills']);
+/** Max SKILL.md files detected per repo (gbrain alone ships ~75 distinct skills). */
+const MAX_SKILLS = 500;
 
 const home = () => os.homedir();
 const expand = (p: string) => p.startsWith('~') ? path.join(home(), p.slice(1)) : p;
@@ -108,7 +161,6 @@ export function defaultWrapAgent(configured: string | undefined, localAgents: st
 export function defaultAuditTargets(cfg: IntegrationsConfig = {}): string[] {
   const repo = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../..');
   const candidates = [
-    path.join(repo, 'agency-agents'),
     path.join(repo, 'deploy', 'skills'),
     expand(cfg.skillsHome || '~/.agents/skills'),
     ...(cfg.clientSkillDirs?.map(expand) || defaultClientSkillDirs()),
@@ -258,18 +310,54 @@ function readmeBlurb(text: string): string | undefined {
   return undefined;
 }
 
-function findSkillFiles(root: string, maxDepth = 5, cap = 50): string[] {
+function findSkillFiles(root: string, maxDepth = 5, cap = MAX_SKILLS): string[] {
   const out: string[] = [];
   const walk = (d: string, depth: number) => {
     if (out.length >= cap || depth > maxDepth) return;
     let entries: fs.Dirent[];
     try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
     if (entries.some(e => e.isFile() && e.name === 'SKILL.md')) { out.push(path.join(d, 'SKILL.md')); return; }
-    for (const e of entries) if (e.isDirectory() && !SKIP_DIRS.has(e.name)) walk(path.join(d, e.name), depth + 1);
+    // Canonical locations first (`skills/`, then visible dirs, then dot-dirs), so a
+    // name shipped both in skills/ and in a per-tool copy (.cursor/skills/…) is
+    // detected from the canonical copy — detection de-duplicates by name.
+    const dirs = entries.filter(e => e.isDirectory() && !SKIP_SCAN_DIRS.has(e.name))
+      .sort((a, b) => rank(a.name) - rank(b.name) || a.name.localeCompare(b.name));
+    for (const e of dirs) walk(path.join(d, e.name), depth + 1);
   };
+  const rank = (n: string) => n === 'skills' ? 0 : n.startsWith('.') ? 3 : /variant|copies|mirror/i.test(n) ? 2 : 1;
   walk(root, 0);
   return out;
 }
+
+/** Persona files of a persona pack: `<division>/**.md` with name + description frontmatter. */
+export function findPersonaFiles(root: string, maxDepth = 3): Array<{ file: string; division: string }> {
+  const out: Array<{ file: string; division: string }> = [];
+  let top: fs.Dirent[];
+  try { top = fs.readdirSync(root, { withFileTypes: true }); } catch { return out; }
+  for (const div of top) {
+    if (!div.isDirectory() || div.name.startsWith('.') || SKIP_SCAN_DIRS.has(div.name) || PERSONA_SKIP_DIRS.has(div.name)) continue;
+    const walk = (d: string, depth: number) => {
+      if (depth > maxDepth) return;
+      let entries: fs.Dirent[];
+      try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+      if (entries.some(e => e.isFile() && e.name === 'SKILL.md')) return;   // a skill dir, not personas
+      for (const e of entries) {
+        const p = path.join(d, e.name);
+        if (e.isDirectory() && !SKIP_SCAN_DIRS.has(e.name) && !PERSONA_SKIP_DIRS.has(e.name)) walk(p, depth + 1);
+        else if (e.isFile() && e.name.endsWith('.md') && !/^(README|CHANGELOG|CONTRIBUTING|LICENSE|SECURITY|AGENTS|CLAUDE)/i.test(e.name)) {
+          const head = (readText(p, 512 * 1024) || '').slice(0, 2000);
+          const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(head)?.[1] || '';
+          if (/^name\s*:/m.test(fm) && /^description\s*:/m.test(fm)) out.push({ file: p, division: div.name });
+        }
+      }
+    };
+    walk(path.join(root, div.name), 1);
+  }
+  return out;
+}
+
+/** A repo is a persona pack when it has at least this many persona files (and few skills). */
+const MIN_PERSONAS = 5;
 
 function skillFromFile(file: string, fallbackName: string, wrapper = false): DetectedSkill | null {
   const text = readText(file);
@@ -303,6 +391,15 @@ export function detectRepo(root: string, wrapperDir?: string): Detection {
     }
   }
   if (det.skills.length) det.kinds.push('skill');
+
+  // Persona pack (agency-agents layout): many agent .md files in division dirs.
+  const personaFiles = findPersonaFiles(root);
+  // Only a repo WITHOUT skills: a skill repo's command/reference docs often carry
+  // name/description frontmatter too (pbakaus/impeccable) and are not personas.
+  if (personaFiles.length >= MIN_PERSONAS && det.skills.length === 0) {
+    det.personas = { count: personaFiles.length, divisions: [...new Set(personaFiles.map(p => p.division))].sort() };
+    det.kinds.push('persona');
+  }
 
   // Static web app: a committed index.html in a conventional place.
   for (const sub of ['', 'dist', 'build', 'docs', 'public', 'site', 'www', 'demo', 'out']) {
@@ -434,7 +531,7 @@ export class Integrations {
       this.put(entry);
       // An update of an installed integration refreshes the installed copies too,
       // but only if it still passes the audit (a poisoned update stays quarantined).
-      const wasInstalled = !!(prev && (prev.installed.skills.length || prev.installed.web));
+      const wasInstalled = !!(prev && (prev.installed.skills.length || prev.installed.web || prev.installed.personas));
       if (opts.install || wasInstalled) {
         if (entry.status === 'quarantined' && !opts.force) return entry;
         // Keep a curated subset curated: refresh only the skills that were installed.
@@ -476,7 +573,7 @@ export class Integrations {
     const counts = { critical: 0, high: 0, medium: 0 } as Record<Severity, number>;
     for (const f of findings) counts[f.severity]++;
     const verdict: AuditVerdict = counts.critical ? 'quarantine' : counts.high ? 'warn' : 'pass';
-    const isInstalled = base.installed.skills.length > 0 || !!base.installed.web;
+    const isInstalled = base.installed.skills.length > 0 || !!base.installed.web || !!base.installed.personas;
     return {
       ...base,
       fetchedAt: new Date().toISOString(),
@@ -520,7 +617,7 @@ export class Integrations {
     }
     const want = new Set(opts.kinds?.length ? opts.kinds : e.detected.kinds);
     const notes: string[] = [];
-    const installed: Integration['installed'] = { skills: [...e.installed.skills], web: e.installed.web };
+    const installed: Integration['installed'] = { skills: [...e.installed.skills], web: e.installed.web, personas: e.installed.personas };
 
     if (want.has('skill')) {
       for (const s of e.detected.skills) {
@@ -533,12 +630,17 @@ export class Integrations {
     if (want.has('web') && e.detected.web) {
       installed.web = this.registerPortal(e);
     }
-    if ((want.has('mcp') || want.has('cli') || want.has('library')) && !e.detected.skills.length) {
+    if (!e.detected.personas) delete installed.personas;   // re-detected as not a persona pack
+    if (want.has('persona') && e.detected.personas) {
+      // Registered, not copied: the Roster reads personas straight from the clone.
+      installed.personas = { root: this.scanRoot(e), count: e.detected.personas.count };
+    }
+    if ((want.has('mcp') || want.has('cli') || want.has('library')) && !e.detected.skills.length && !e.detected.personas) {
       notes.push('No SKILL.md yet — use "Wrap with an agent" to have an engineering agent write one, then Rescan.');
     }
     const next: Integration = {
       ...e, installed, notes,
-      status: installed.skills.length || installed.web ? 'installed' : e.status === 'quarantined' ? 'quarantined' : 'fetched',
+      status: installed.skills.length || installed.web || installed.personas ? 'installed' : e.status === 'quarantined' ? 'quarantined' : 'fetched',
       audit: { ...e.audit, ...(e.audit.verdict === 'quarantine' ? { overridden: true } : {}) },
     };
     return this.put(next);
@@ -631,6 +733,75 @@ export class Integrations {
     doc.integrations[id] = next;
     this.save(doc);
     return next;
+  }
+
+  /** Dirs of every installed persona pack — the Roster's persona sources. */
+  personaRoots(): string[] {
+    return this.list()
+      .filter(e => e.installed.personas && fs.existsSync(e.installed.personas.root))
+      .map(e => e.installed.personas!.root);
+  }
+
+  // ── default integrations (first-run provisioning) ────────────────────────
+  defaultInputs(): string[] {
+    return Array.isArray(this.cfg.defaults) ? this.cfg.defaults : DEFAULT_INTEGRATIONS;
+  }
+
+  /** Status of every default integration, from the registry + disk (no network). */
+  verifyDefaults(): DefaultStatus[] {
+    return this.defaultInputs().map(input => {
+      let id: string;
+      try { id = this.parse(input).id; } catch (err: any) { return { input, id: '', present: false, ok: false, problem: err.message }; }
+      const e = this.get(id);
+      if (!e) return { input, id, present: false, ok: false, problem: 'not provisioned yet' };
+      const res: DefaultStatus = {
+        input, id, present: true, status: e.status, kinds: e.detected.kinds,
+        skillsDetected: e.detected.skills.length, skillsInstalled: e.installed.skills.length,
+        personas: e.installed.personas?.count || 0, verdict: e.audit.verdict, ok: false,
+      };
+      const missingTargets = e.installed.skills.filter(s => !fs.existsSync(path.join(s.target, 'SKILL.md'))).map(s => s.name);
+      if (e.status !== 'installed') res.problem = `status ${e.status}`;
+      else if (e.detected.personas && !e.installed.personas) res.problem = 'persona pack not registered';
+      else if (missingTargets.length) res.problem = `installed skill(s) missing on disk: ${missingTargets.slice(0, 5).join(', ')}`;
+      else if (!e.installed.skills.length && !e.installed.personas && !e.installed.web) res.problem = 'nothing installed';
+      res.ok = !res.problem;
+      return res;
+    });
+  }
+
+  /**
+   * Provision the default integrations once: fetch + install each default that was
+   * never seeded on this host. Quarantined repos stay quarantined (never forced).
+   * A default already present (e.g. installed by hand) is just marked seeded, and
+   * installed if it was only fetched. Sequential — clones are large.
+   */
+  async ensureDefaults(opts: { log?: (msg: string) => void } = {}): Promise<DefaultStatus[]> {
+    const log = opts.log || (() => {});
+    for (const input of this.defaultInputs()) {
+      let id: string;
+      try { id = this.parse(input).id; } catch (err: any) { log(`default ${input}: ${err.message}`); continue; }
+      if (this.load().defaultsSeeded?.[id]) continue;
+      try {
+        let out: Integration;
+        if (!this.get(id)) {
+          out = await this.add(input, { install: true });
+        } else {
+          // Present already (installed by hand, or by an older cowork whose detector
+          // missed persona packs / capped skills): re-detect from disk, then install
+          // EVERYTHING it ships — a default is meant to be fully available to agents.
+          const e = this.rescan(id);
+          out = e.status === 'quarantined' ? e : this.install(id);
+        }
+        log(`default ${input}: ${out.status}${out.status === 'quarantined' ? ' (critical audit findings — review on the Integrations page; not forced)'
+          : ` (${out.installed.skills.length}/${out.detected.skills.length} skill(s)${out.installed.personas ? `, ${out.installed.personas.count} personas` : ''})`}`);
+        const doc = this.load();
+        doc.defaultsSeeded = { ...(doc.defaultsSeeded || {}), [id]: new Date().toISOString() };
+        this.save(doc);
+      } catch (err: any) {
+        log(`default ${input}: FAILED — ${err.message}`);   // retried on the next boot (not marked seeded)
+      }
+    }
+    return this.verifyDefaults();
   }
 
   /** Absolute web root to serve for /plugins/<id>/ (only once installed as web). */

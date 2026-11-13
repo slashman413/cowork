@@ -235,6 +235,46 @@ export function createApiRouter(store: Store, eventBus: EventBus): Router {
     }
   });
 
+  // ── Pause / resume ────────────────────────────────────────────────────────
+  // A person can pause any pending / scheduled / in-progress / wait-input task
+  // into the `paused` queue (a running agent is stopped) and resume it later with
+  // its brief, context, attempts and artifacts intact. Two shapes:
+  //   POST /api/inbox/:id/pause | /resume          (dashboard buttons)
+  //   POST /api/tasks/pause | /resume {taskId}     (scripts / other agents)
+  const bodyTaskId = (req: any): string => {
+    const b = req.body || {};
+    if (typeof b.taskId === 'string') return b.taskId;
+    if (typeof b.task_id === 'string') return b.task_id;
+    if (typeof b.id === 'string') return b.id;
+    // `curl -d '{"taskId":"x"}'` without a JSON content-type arrives urlencoded,
+    // with the whole JSON as the only key.
+    const keys = Object.keys(b);
+    if (keys.length === 1 && keys[0].startsWith('{')) { try { const j = JSON.parse(keys[0]); return String(j.taskId || j.task_id || j.id || ''); } catch { /* not JSON */ } }
+    return typeof req.query?.taskId === 'string' ? req.query.taskId : '';
+  };
+  const pauseHandler = (id: string, req: any, res: any) => {
+    if (!id) return res.status(400).json({ error: 'taskId is required' });
+    const t = store.getTask(id);
+    if (!t) return res.status(404).json({ error: `Task ${id} not found` });
+    const out = store.pauseTask(id, { by: typeof req.body?.by === 'string' ? req.body.by : 'dashboard', reason: req.body?.reason });
+    if (!out) return res.status(409).json({ error: `Task ${id} is ${t.status} — only pending, scheduled, wait-input or in-progress tasks can be paused` });
+    res.json({ ok: true, from: out.from, task: out.task });
+  };
+  const resumeHandler = (id: string, req: any, res: any) => {
+    if (!id) return res.status(400).json({ error: 'taskId is required' });
+    const t = store.getTask(id);
+    if (!t) return res.status(404).json({ error: `Task ${id} not found` });
+    const task = store.resumeTask(id, { by: typeof req.body?.by === 'string' ? req.body.by : 'dashboard' });
+    if (!task) return res.status(409).json({ error: `Task ${id} is ${t.status}, not paused` });
+    res.json({ ok: true, task });
+  };
+  router.post('/inbox/:id/pause', (req, res) => pauseHandler(req.params.id, req, res));
+  router.post('/inbox/:id/resume', (req, res) => resumeHandler(req.params.id, req, res));
+  const formBody = express.urlencoded({ extended: false, limit: '16kb' });
+  router.post('/tasks/pause', formBody, (req, res) => pauseHandler(bodyTaskId(req), req, res));
+  router.post('/tasks/resume', formBody, (req, res) => resumeHandler(bodyTaskId(req), req, res));
+  router.get('/tasks/paused', (_req, res) => res.json(store.listTasks({ status: 'paused' })));
+
   // Run a SCHEDULED task NOW — release it immediately instead of at its
   // scheduledAt time. The dashboard shows this as a "Run now" button on
   // scheduled cards. Returns the released task (now pending, or wait-input if it
