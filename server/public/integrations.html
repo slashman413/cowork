@@ -200,7 +200,7 @@
     .field textarea { min-height: 80px; resize: vertical; }
     .check { display: flex; gap: 8px; align-items: flex-start; font-size: .84rem; }
     .result .where code, .result p, .result div { overflow-wrap: anywhere; }
-    @media (max-width: 520px) {
+    @media (max-width: 640px) {
       dialog#dlg { width: calc(100vw - 16px); max-width: calc(100vw - 16px); max-height: calc(100dvh - 16px); border-radius: 12px; }
       #dlg .dlg-head { padding: 12px 14px 10px; } #dlg .dlg-head h3 { font-size: .98rem; overflow-wrap: anywhere; } #dlg .dlg-head p { overflow-wrap: anywhere; }
       #dlg .dlg-body { padding: 12px 14px; gap: 12px; }
@@ -436,8 +436,20 @@
   // ── dialog helpers ──────────────────────────────────────────────────────
   const dlg = $('#dlg');
   let dlgLocked = false;
-  dlg.addEventListener('cancel', (ev) => { if (dlgLocked) ev.preventDefault(); });
-  dlg.addEventListener('close', () => { stopJobPoll(); load(); });
+  // Escape / backdrop tap always dismiss. Jobs run server-side, so closing a running job's dialog
+  // just sends it to the background (same as "Run in background") instead of trapping the user.
+  const dismissDlg = () => {
+    if (!dlg.open) return;
+    if (dlgLocked) toast('Still running in the background — the card shows its progress.', 'ok');
+    dlgLocked = false; dlg.close();
+  };
+  dlg.addEventListener('cancel', (ev) => { ev.preventDefault(); dismissDlg(); });
+  dlg.addEventListener('click', (ev) => {
+    if (ev.target !== dlg) return;
+    const r = dlg.getBoundingClientRect();
+    if (ev.clientX < r.left || ev.clientX > r.right || ev.clientY < r.top || ev.clientY > r.bottom) dismissDlg();
+  });
+  dlg.addEventListener('close', () => { dlgLocked = false; stopJobPoll(); load(); });
   function openDlg(title, sub, body, foot) {
     $('#dlgTitle').textContent = title; $('#dlgSub').textContent = sub || '';
     $('#dlgBody').innerHTML = body; $('#dlgFoot').innerHTML = foot;
@@ -447,12 +459,17 @@
 
   function confirmDlg({ title, sub, body, ok, danger }) {
     return new Promise(resolve => {
+      stopJobPoll(); dlgLocked = false;
       openDlg(title, sub, body, `<button class="btn ghost" data-r="0">Cancel</button><button class="btn ${danger ? 'danger solid' : 'primary'}" data-r="1">${esc(ok)}</button>`);
       const foot = $('#dlgFoot');
       const done = (v) => { foot.onclick = null; dlg.removeEventListener('close', onClose); resolve(v); };
       const onClose = () => done(false);
       dlg.addEventListener('close', onClose, { once: true });
-      foot.onclick = (ev) => { const b = ev.target.closest('[data-r]'); if (!b) return; done(b.dataset.r === '1' ? $('#dlgBody') : false); };
+      foot.onclick = (ev) => {
+        const b = ev.target.closest('[data-r]'); if (!b) return;
+        if (b.dataset.r === '1') { done($('#dlgBody')); return; }
+        done(false); dlg.close(); // Cancel must actually dismiss the modal, not just resolve
+      };
       $('#dlgFoot [data-r="1"]').focus();
     });
   }
@@ -477,9 +494,9 @@
       let j;
       try { j = await (await fetch(`/api/integrations/jobs/${encodeURIComponent(jobId)}?since=${since}`)).json(); }
       catch { jobPoll = setTimeout(tick, 2000); return; }
-      if (j.error && !j.id) { $('#jstatus').className = 'status bad'; $('#jstatus').textContent = j.error; dlgLocked = false; return; }
+      if (j.error && !j.id) { dlgLocked = false; setFoot(`<span class="status bad">${esc(j.error)}</span><button class="btn primary" id="jclose">Close</button>`); $('#jclose').onclick = () => dlg.close(); return; }
       const log = $('#jlog');
-      if (!log) return;
+      if (!log) { dlgLocked = false; return; }
       const stick = log.scrollTop + log.clientHeight >= log.scrollHeight - 30;
       log.insertAdjacentHTML('beforeend', j.log.map(l => `<span class="${lineCls[l.s] || ''}">${esc(l.text)}</span>\n`).join(''));
       since = j.logTotal;
