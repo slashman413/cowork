@@ -16,8 +16,7 @@ RUN npm run build && npm prune --omit=dev
 
 FROM ${NODE_IMAGE}
 ARG VERSION=dev
-LABEL org.opencontainers.image.source="https://cowork.dev/cowork" \
-      org.opencontainers.image.description="Cowork: one MCP task inbox shared by Claude Code, Codex, Gemini CLI and local LLMs" \
+LABEL org.opencontainers.image.description="Cowork: one MCP task inbox shared by Claude Code, Codex, Gemini CLI and local LLMs" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.version="${VERSION}" \
       io.modelcontextprotocol.server.name="io.cowork/cowork"
@@ -26,16 +25,15 @@ COPY --from=build /app/server/node_modules ./server/node_modules
 COPY --from=build /app/server/dist ./server/dist
 COPY server/package.json server/legacy-aliases.json ./server/
 COPY server/public ./server/public
-COPY agency-agents ./agency-agents
-COPY workflows ./workflows
 COPY scripts/migrate-agent-naming.mjs ./scripts/
 COPY config.json PROTOCOL.md CONVENTIONS.md JOIN-AS-AN-AGENT.md LICENSE ./
 # Container template: runtime dirs under /data, no Obsidian vault, no local dispatcher.
-# It is seeded to $COWORK_CONFIG on first start, after which /data/config.json is yours;
-# the bundled workflows are copied to /data/workflows the same way (runs go beside them).
+# It is seeded to $COWORK_CONFIG on first start, after which /data/config.json is yours.
+# Personas are not baked in: the hub provisions its default persona and skill packs as
+# integrations after first start.
 RUN node -e '\
   const fs = require("fs"); const c = JSON.parse(fs.readFileSync("config.json", "utf8")); \
-  for (const k of ["inbox", "status", "decisions", "artifacts", "inputs", "goals", "workflows"]) c.paths[k] = "/data/" + (k === "status" ? ".status" : k); \
+  for (const k of ["inbox", "status", "decisions", "artifacts", "inputs", "goals"]) c.paths[k] = "/data/" + (k === "status" ? ".status" : k); \
   c.obsidian.enabled = false; c.orchestration.enabled = false; \
   fs.writeFileSync("config.json", JSON.stringify(c, null, 2) + "\n");' \
   && chmod -R a+rX /app && mkdir -p /data && chown node:node /data
@@ -45,4 +43,5 @@ USER node
 VOLUME /data
 EXPOSE 6868
 WORKDIR /app/server
-CMD ["sh", "-c", "[ -d /data/workflows ] || cp -r /app/workflows /data/workflows; exec node dist/index.js"]
+CMD ["node", "dist/index.js"]
+

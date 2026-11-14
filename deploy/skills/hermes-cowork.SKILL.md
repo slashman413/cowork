@@ -2,7 +2,7 @@
 name: cowork
 description: >-
   Multi-agent Cowork MCP framework: register agents with agents, dispatch and
-  schedule tasks, heartbeat, agencies, inbox, artifacts, dashboard. Local MCP
+  schedule tasks, heartbeat, personas, inbox, artifacts, dashboard. Local MCP
   server at https://localhost:6868 (self-signed TLS). Recurring tasks + Calendar.
 version: 1.3.0
 author: Hermes
@@ -21,7 +21,7 @@ metadata:
 
 Multi-agent coordination framework (cowork) running as a local MCP server
 on `https://localhost:6868` (HTTPS, self-signed — use `curl -k`). Agents register with
-capabilities AND agents (model specs), dispatch cross-platform tasks, heartbeat, and query agencies/inbox.
+capabilities AND agents (model specs), dispatch cross-platform tasks, heartbeat, and query personas/inbox.
 
 > **There is no report store.** `file_report` and `complete_task(report_path:)` were
 > removed. A task's complete record is `task.result` + `artifacts/<task-id>/`.
@@ -33,7 +33,7 @@ capabilities AND agents (model specs), dispatch cross-platform tasks, heartbeat,
 ## When to Use
 
 - "Dispatch a task to Claude for code review" / "create a task for another agent"
-- "Show me the agencies" / "what agents are available"
+- "Show me the personas" / "what agents are available"
 - "Check my inbox" / "list pending tasks"
 - "Schedule this for 9am tomorrow" (`create_task(scheduled_at: …)`)
 - "Show the dashboard" / "what's happening across agents"
@@ -46,7 +46,8 @@ capabilities AND agents (model specs), dispatch cross-platform tasks, heartbeat,
 - Cowork MCP server: systemd service `cowork-mcp.service` (auto-starts at boot)
   - Config: `~/.cowork/config.json` (real per-server; repo `config.json` is a template)
   - Port: 6868. API key: send `Authorization: Bearer $COWORK_API_KEY` (dispatched tasks and agent clients have it in env; the hub on a non-loopback host requires it)
-- `agency-agents` — a git submodule at `./agency-agents` (init: `git submodule update --init`)
+- Personas — the `msitarzewski/agency-agents` persona pack, installed as an integration on first start
+  (check `GET /api/integrations/defaults`; re-run with `POST /api/integrations/defaults/provision`)
 - Hermes MCP endpoint: `mcp_endpoints: { cowork: "https://localhost:6868/mcp" }`
 - Hermes model CLIs: `hermes` (qwen3.8-27b), optional `claude`, `agy`, `codex`, `ollama`
 
@@ -87,10 +88,11 @@ capabilities AND agents (model specs), dispatch cross-platform tasks, heartbeat,
 |--------|------|-------------|
 | GET | `/api/status` | Dashboard overview (activeAgents, inboxSummary, uptime) |
 | GET | `/api/connections` | Live MCP clients (heartbeat) + per-agent ran/submitted counters |
-| GET | `/api/roster` | Agencies (filterable by division/search/category) |
-| GET | `/api/roster-divisions` | Agencies grouped by division (for the Agents view) |
-| GET | `/api/dispatcher` | Special roles + agents + defaultChain + divisionChains + running |
-| GET / PUT | `/api/chains`, `/api/chains/default`, `/api/chains/division/:div` | Read / edit agent fallback chains |
+| GET | `/api/roster` | Personas (filterable by division/search/category) |
+| GET | `/api/roster-divisions` | Personas grouped by division |
+| GET | `/api/dispatcher` | Special roles + agents + defaultChain + running |
+| GET / PUT | `/api/chains`, `/api/chains/default`, `/api/chains/tiers`, `/api/chains/tier/:tier` | Read / edit the default chain and tier lists |
+| POST | `/api/inbox/:id/pause`, `/api/inbox/:id/resume` | Pause / resume a task |
 | GET / PUT / DELETE | `/api/agents`, `/api/agents/:id` | Agent registry (cascades on delete) |
 | GET / PUT / DELETE | `/api/roles-config`, `/api/roles-config/:name` | Special-executor chains |
 | GET | `/api/artifacts/:taskId`, `/api/artifacts/:taskId/:file` | List / download task artifacts |
@@ -111,8 +113,8 @@ SSE event types are camelCase: `agentRegistered`, `taskCreated`, `taskClaimed`,
 
 ### Web Dashboard
 
-- `https://localhost:6868/` — Web UI (Overview, Portal, Tasks, Recipes, Calendar, Workflows,
-  Goals, Routing, Agents, Personas, Workers, Configuration) with a raw/rendered markdown viewer and artifact downloads
+- `https://localhost:6868/` — Web UI (Overview, Portal, Tasks, Recipes, Calendar,
+  Goals, Routing, Agents, Workers, Configuration; Integrations at `/integrations.html`) with a raw/rendered markdown viewer and artifact downloads
 
 ### MCP Inspector (debugging)
 
@@ -178,9 +180,10 @@ When the user shares a business idea or multi-part request:
 
 2. The dispatcher runs the orchestrator agent; it decomposes the idea into subtasks.
    Each unassigned subtask is **routed in two stages** — an orchestrator/classifier
-   agent (qwen3.8-27b) picks a **division** (1 of 19), then an **agent**
-   (1 of 288) whose `.md` persona becomes the system prompt, run on that division's
-   agent chain (or the global default). Target directly at dispatch with `context.persona: "<slug>"` and/or `context.division: "<division>"`.
+   agent (qwen3.8-27b) picks a **division** (1 of 19) plus a **work role**, then a
+   **persona** (1 of ~285) whose `.md` file becomes the system prompt. The work role sets
+   the tier + thinking; the task runs on that tier's agents, then the global default chain.
+   Target directly at dispatch with `context.persona: "<slug>"` and/or `context.division: "<division>"`.
 
 3. Track progress with `list_inbox` / `get_dashboard`; results appear on the task card;
    any generated files land in `cowork/artifacts/<task-id>/` (downloadable).
@@ -188,30 +191,30 @@ When the user shares a business idea or multi-part request:
 ### Routing model (config.json orchestration)
 
 There is **no fixed role→agent table** anymore. Only three **special executors** carry
-their own chains; everything else routes through the Agencies:
+their own chains; everything else runs on its tier list, then the default chain:
 
 | Executor | Kind | Agent chain source |
 |----------|------|--------------------|
 | orchestrator | special | `orchestration.roleChains.orchestrator.agents` |
 | generalist | special | `orchestration.roleChains.generalist.agents` |
 | video | special | `orchestration.roleChains.video.agents` (LTX only — never Wan/Hunyuan) |
-| any of 288 personas | Agencies | `orchestration.divisionChains[<division>]` if set, else `orchestration.defaultChain` |
+| any of ~285 personas | persona | `orchestration.tiers[<context.tier>]` if the task has a tier, then `orchestration.defaultChain` |
 
-- **Global default chain**: `orchestration.defaultChain` — drag-reorder in the Agents
-  view (`PUT /api/chains/default`). Currently `local-cc-opus-5-5` →
-  `local-agy-claude-opus-5-5` → `local-agy-gemini-3.8-flash` →
-  `local-dsh-qwen3-8-27b` → `local-hermes-qwen3.8-27b`. deepseek agents are retired
-  (denylisted by `DENYLISTED_AGENT_RE=/deepseek/i`).
-- **Per-division override**: `orchestration.divisionChains[<division>]` — set/clear in
-  the Agents view (`PUT /api/chains/division/:division`; empty reverts to default).
-- The live registry (`curl -sk https://localhost:6868/api/agents`) holds ~25 agents
-  (local `cc` opus-5-5/sonnet-5-5/fable-5-1, `agy` opus-5-5/sonnet-5-5/gemini-3.8-flash/
-  gemini-4-argon/gpt-oss-120b-medium, `local-dsh-qwen3-8-27b`, `local-hermes-qwen3.8-27b`;
-  remote cc-opus-4-8/cc-fable-5/cc-sonnet-5/codex-default/gpt-5.6-terra/gpt-5.6-luna).
+- **Global default chain**: `orchestration.defaultChain` — drag-reorder in the Routing
+  view (`PUT /api/chains/default`). Read the current order with
+  `curl -sk https://localhost:6868/api/chains`; it changes often, so don't copy it here.
+  deepseek agents are retired (denylisted by `DENYLISTED_AGENT_RE=/deepseek/i`).
+- **Tier lists**: `orchestration.tiers.<mechanical|standard|judgment>` (`PUT /api/chains/tier/:tier`).
+  With `orchestration.workRoles.enabled` the router's work role sets `context.tier` and
+  `context.thinking` (capped by `workRoles.budget`).
+- Per-division / per-persona chains were removed on 2026-11-13: `divisionChains`,
+  `personaChains` and `/api/chains/division/*` are gone, and leftover keys are ignored.
+- The live registry: `curl -sk https://localhost:6868/api/agents`.
   Retired ids resolve via `AGENT_ID_ALIASES` (old qwen3.8 ids → `local-hermes-qwen3.8-27b`).
 - Chains run top→bottom with failure handover; `remoteGraceMs` (20s in the template config; 60s code default) auto-advances past
   an unclaimed remote rung. Pin a single task with `context.agent: "<id>"`.
-- Workflows (dashboard **workflows** view) are capped by config `maxWorkflowSteps` (live: 12).
+- The Workflows engine and `maxWorkflowSteps` were removed on 2026-11-02; use recipes
+  (`/api/recipes`) or goals instead.
 
 ## Recurring tasks & Calendar
 
@@ -366,7 +369,7 @@ parks the task on `wait-input` and re-dispatches it once the user answers (their
 arrive on `context.humanInput`). Never emit a rate-limit or quota notice as the
 deliverable — the verifier rejects those and hands the task to the next agent in the chain.
 
-### 7. Query Agencies
+### 7. Query personas
 
 ```
 get_roster(category="engineering", search="keyword", active_only=true)
@@ -439,7 +442,9 @@ The flat `from_platform` / `from_agent` / `to_platform` / `to_agent` form is the
   `/api/agents` are applied live AND persisted to config.json (no restart). Only manual
   hand-edits of config.json require a restart.
 - Agents persist until `deregister_agent` — they do NOT auto-remove on disconnect.
-- If `agency-agents` repo is missing/misconfigured, Agencies queries return empty.
+- If the persona pack integration isn't installed yet, roster queries return empty
+  (check `GET /api/integrations/defaults`).
+
 - Port is 6868, NOT 4200.
 
 ## Verification

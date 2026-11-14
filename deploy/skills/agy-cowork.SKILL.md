@@ -1,6 +1,6 @@
 ---
 name: cowork
-description: Full-lifecycle Cowork multi-agent framework skill — register agents, dispatch and schedule tasks, collect artifacts, run workflows, and administer the local Cowork MCP server at https://localhost:6868.
+description: Full-lifecycle Cowork multi-agent framework skill — register agents, dispatch and schedule tasks, collect artifacts, run recipes and goals, and administer the local Cowork MCP server at https://localhost:6868.
 ---
 
 # Cowork — Multi-Agent Coordination Skill
@@ -26,7 +26,7 @@ glass.
 ## When to Use
 
 - "Dispatch a task to Claude / Hermes for code review" / "create a task for another agent"
-- "Show me the agencies" / "what agents are available"
+- "Show me the personas" / "what agents are available"
 - "Check my inbox" / "list pending tasks"
 - "Schedule this for 9am tomorrow" (`create_task(scheduled_at: …)`)
 - "Show the dashboard" / "what's happening across agents"
@@ -45,7 +45,8 @@ glass.
   - Config: `~/.config/cowork-local-agent/agy.env`
   - Script: `~/workspace/cowork/deploy/remote-agent-client.mjs`
 - **Cowork repo**: `~/workspace/cowork/`
-- `agency-agents` — a git submodule at `./agency-agents` (init: `git submodule update --init`)
+- Personas — the `msitarzewski/agency-agents` persona pack, installed as an integration on first start
+  (check `GET /api/integrations/defaults`; re-run with `POST /api/integrations/defaults/provision`)
 
 ## Key Paths
 
@@ -105,11 +106,11 @@ run now. `interaction` (`{prompt?, fields:[{id,label,type?,options?,required?}]}
 a form on the Inbox card and holds the task on `wait-input` until a person answers; their
 replies arrive on `context.humanInput`.
 
-### Agencies & Intelligence
+### Personas & Intelligence
 
 | Tool | Purpose | Key Arguments |
 |------|---------|---------------|
-| `get_roster` | Search the Agencies (~288 personas) | `platform`, `category` (= division), `search`, `active_only` |
+| `get_roster` | Search the personas (~285, from the installed persona packs) | `platform`, `category` (= division), `search`, `active_only` |
 | `get_dashboard` | Full dashboard snapshot | _(none)_ |
 
 ---
@@ -151,7 +152,7 @@ ids for the same models.
 > already declared.
 
 > ⚠️ Do **not** call `deregister_agent` for these local agents on exit — it cascades
-> them out of the default/division chains that the box's config depends on. Just
+> them out of the default chain, tier lists and special roles that the box's config depends on. Just
 > disconnect; agents persist (they're only removed by an explicit deregister).
 
 ### Agent Environment Manifests (`env`)
@@ -168,29 +169,33 @@ When declaring agents in `register_agent`, each agent object supports an optiona
 The always-on coordinator (shown in **Connections** as `cowork/orchestrator`) polls the
 inbox and executes any task that resolves to an executor. Routing is **two-stage**:
 an orchestrator/classifier agent (default Qwen3.8-27B via Hermes) first picks a **division**
-(1 of 19), then picks an **agent** (1 of 288) inside it. The chosen agent's full
-`.md` persona (from the `agency-agents` repo) becomes the system prompt, run on the
-division's agent chain. You can also target directly: `context.persona: "<persona-slug>"`
-or a special-executor name skips classification.
+(1 of 19) and, with `orchestration.workRoles.enabled`, a **work role** (`mechanical`,
+`feature`, `bug-fix`, `perf-issue`, `research`, `prose`, `hardest`), then picks a
+**persona** (1 of ~285) inside the division. The persona's `.md` file (from the installed
+persona pack) becomes the system prompt; the work role sets `context.tier` and
+`context.thinking`. The task runs on its tier list, then the global default chain. You can
+also target directly: `context.persona: "<persona-slug>"` or a special-executor name skips
+classification. A task pinned to a small-model agent (≤ 70B) still gets a router-picked
+persona unless the agent sets `personaRouting: "never"`.
 
-### Executors: Special Agents + the Agencies
+### Executors: Special Agents + personas
 
 - **Special executors** live in `config.json → orchestration.roleChains` (only
   `orchestrator`, `generalist`, `video`) — each is `{description, agents: [...]}` with
   its own chain. Edit in the dashboard **Agents** view → *Special executors*
   (or `PUT /api/roles-config/:name`).
-- **Agencies personas** are the 288 personas in `agency-agents`, grouped into 19 divisions
-  (`GET /api/roster-divisions`). They don't carry their own chain — they run on the
-  **division chain** if one is set, else the **global default chain**.
+- **Personas** are the ~285 personas of the installed persona packs, grouped into 19 divisions
+  (`GET /api/roster-divisions`). They shape the prompt only and carry no chain of their own.
 
-### Agent Fallback Chains (Global Default + Per-Division Override)
+### Agent Fallback Chains (Global Default + Tier Lists)
 
 - **Global default**: `config.json → orchestration.defaultChain` — the fallback chain
-  every agent uses unless its division overrides it. Reorder by **drag & drop**
-  in the dashboard **Agents** view (`PUT /api/chains/default`).
-- **Per-division override**: `orchestration.divisionChains[<division>]` — set/clear in
-  the **Agents** view per division (`PUT /api/chains/division/:division`; empty body
-  reverts to the default).
+  every non-special task uses. Reorder by **drag & drop** in the dashboard **Routing**
+  view (`PUT /api/chains/default`).
+- **Tier lists**: `orchestration.tiers.<mechanical|standard|judgment>`
+  (`PUT /api/chains/tier/:tier`). A task with `context.tier` tries its tier first.
+- Per-division / per-persona chains were removed on 2026-11-13 (`divisionChains`,
+  `personaChains`, `/api/chains/division/*`); leftover keys are ignored.
 - A chain runs top → bottom: task runs on `chain[0]`; on failure the dispatcher **hands
   over to `chain[1]`, then `[2]`…**, until success or the
   chain is exhausted. `remoteGraceMs` (20s in the template config; 60s code default) auto-advances past a **remote** rung
@@ -208,7 +213,7 @@ to claim.
 
 - **Agents auto-register**: a connecting client declares them via `register_agent`'s
   `agents` field; `deregister_agent` (or the Agents UI) removes them and cascades the
-  removal out of the default chain, every division chain, and every special role.
+  removal out of the default chain, every tier list, and every special role.
 - **Remote agent client**: poll `list_inbox(status:"pending")`, take tasks whose
   `context.agent` is one of yours, `claim_task` → run → `complete_task`. Ready-made
   helper: `deploy/remote-agent-client.mjs`; onboarding doc: `JOIN-AS-AN-AGENT.md`.
@@ -335,7 +340,7 @@ parks the task on `wait-input` and re-dispatches it once the user answers. Never
 rate-limit or quota notice as the deliverable — the verifier rejects those and hands the
 task to the next agent in the chain.
 
-### 7. Query Agencies
+### 7. Query personas
 
 ```
 get_roster(category="engineering", search="keyword")
@@ -365,52 +370,20 @@ When dispatching from Antigravity:
 
 ---
 
-## Workflows
+## Recipes (Workflows were removed)
 
-Workflows are reusable JSON templates in `cowork/workflows/`. Two modes:
-
-### DAG Mode (default)
-
-Static, deterministic. Steps form a DAG wired by `dependsOn`. The entire graph is
-expanded into inbox tasks up front.
-
-```json
-{
-  "id": "content-pipeline",
-  "params": ["topic"],
-  "steps": [
-    { "key": "research", "title": "Research: {{topic}}", "division": "marketing" },
-    { "key": "draft", "title": "Draft {{topic}}", "division": "marketing", "dependsOn": ["research"] },
-    { "key": "review", "title": "Review {{topic}}", "agent": "code-reviewer", "dependsOn": ["draft"] }
-  ]
-}
-```
-
-### Orchestrated Mode
-
-Adaptive, LLM-driven. Steps are a candidate library. After each step completes, the
-orchestrator agent decides the next step or says `DONE`.
-
-```json
-{
-  "id": "adaptive-research",
-  "mode": "orchestrated",
-  "goal": "Produce a decision-ready brief answering: {{question}}",
-  "params": ["question"],
-  "steps": [
-    { "key": "scope", "title": "Scope the question" },
-    { "key": "deep-dive", "title": "Deep dive on the crux" },
-    { "key": "brief", "title": "Write the decision brief" }
-  ]
-}
-```
-
-### Running a Workflow
+The Workflows engine (`cowork/workflows/*.json`, `/api/workflows*`, the Workflows tab) was
+removed on 2026-11-02; don't call it. For repeatable work save a **recipe**: a task with
+`{{fields}}`, its own agent, thinking level and timebox.
 
 ```
-POST https://localhost:6868/api/workflows/<id>/run
-Body: { "params": { "topic": "value" }, "dryRun": false }
+POST https://localhost:6868/api/recipes/<id>/run
+Body: { "values": { "topic": "value" }, "agent": "local-cc-sonnet-5-5", "thinking": "high" }
 ```
+
+`agent` and `thinking` are optional per-run overrides. Recipes don't pin a persona; the
+router picks one per run. For multi-step objectives use a Goal (below) or one task with
+`context.persona: "orchestrator"`.
 
 ---
 
@@ -477,12 +450,12 @@ way; copy that shape rather than writing a bare metric.
 | `GET` | `/api/status` | Dashboard overview (activeAgents, inboxSummary, uptime) |
 | `GET` | `/api/workers` | Active workers |
 | `GET` | `/api/connections` | Live MCP clients with per-agent stats |
-| `GET` | `/api/roster` | Agencies (filterable by division/search) |
-| `GET` | `/api/roster-divisions` | Agencies grouped by division |
-| `GET` | `/api/dispatcher` | Special roles + agents + defaultChain + divisionChains + running |
-| `GET` | `/api/chains` | Default + per-division (+ per-agent) chains |
+| `GET` | `/api/roster` | Personas (filterable by division/search) |
+| `GET` | `/api/roster-divisions` | Personas grouped by division |
+| `GET` | `/api/dispatcher` | Special roles + agents + defaultChain + running |
+| `GET` | `/api/chains`, `/api/chains/tiers` | Default chain and tier lists |
 | `PUT` | `/api/chains/default` | Global default chain |
-| `PUT` | `/api/chains/division/:div` | Per-division chain |
+| `PUT` | `/api/chains/tier/:tier` | One tier list |
 | `GET/PUT/DELETE` | `/api/agents`, `/api/agents/:id` | Agent registry (cascades on delete) |
 | `GET/PUT/DELETE` | `/api/roles-config`, `/api/roles-config/:name` | Special-executor chains |
 | `GET` | `/api/artifacts/:taskId`, `/api/artifacts/:taskId/:file` | List / download task artifacts |
@@ -494,9 +467,9 @@ way; copy that shape rather than writing a bare metric.
 | `POST` | `/api/inbox/:id/interaction` | Submit a person's answers → releases a `wait-input` task |
 | `GET`/`POST` | `/api/inputs/:taskId`, `/api/inbox/:id/inputs` | List / attach task input files |
 | `GET` | `/api/config` | Current configuration |
-| `GET` | `/api/workflows` | Workflow templates |
-| `POST` | `/api/workflows/:id/run` | Start a workflow run |
-| `GET` | `/api/workflow-runs/:runId` | Run status and decision log |
+| `POST` | `/api/inbox/:id/pause`, `/api/inbox/:id/resume` | Pause a task (stops a running agent) / resume it |
+| `GET`/`POST` | `/api/recipes`, `/api/recipes/:id/run` | Saved recipes; run one with `{values, agent?, thinking?}` |
+| `GET`/`POST` | `/api/integrations`, `/api/integrations/defaults`, `/api/integrations/defaults/provision` | Integrations (skills, MCP, persona packs) |
 | `GET`/`POST` | `/api/goals` | List goal summaries (`?view=full` for whole records) / create one |
 | `GET`/`PATCH`/`DELETE` | `/api/goals/:id` | Read, edit, or remove a goal |
 | `POST` | `/api/goals/:id/activate`, `/pause`, `/block` | Drive a goal's lifecycle (`activate` also resumes a blocked goal; `block` takes a `reason` + `unblockCriteria`) |
@@ -506,7 +479,7 @@ way; copy that shape rather than writing a bare metric.
 ### Web Dashboard
 
 - `https://localhost:6868/` — Web UI (Overview, Portal, Tasks, Recipes, Calendar,
-  Workflows, Goals, Routing, Agents, Personas, Workers, Configuration) with raw/rendered markdown viewer and artifact downloads
+  Goals, Routing, Agents, Workers, Configuration; Integrations at `/integrations.html`) with raw/rendered markdown viewer and artifact downloads
 - **Inbox UX**: Real-time SSE updates preserve card expansion and scroll position; status pills display live counts; and a **+ New task** toolbar button lets you create and dispatch tasks with title, brief, priority, and target agent directly from the Tasks page.
 
 ---
@@ -604,5 +577,7 @@ or `GET /api/artifacts/:taskId/:file`.
   `/api/agents` are applied live AND persisted to config.json (no restart). Only manual
   hand-edits of config.json require a restart.
 - Agents persist until `deregister_agent` — they do NOT auto-remove on disconnect.
-- If `agency-agents` repo is missing/misconfigured, Agencies queries return empty.
+- If the persona pack integration isn't installed yet, roster queries return empty
+  (check `GET /api/integrations/defaults`).
+
 - Port is 6868, NOT 4200.

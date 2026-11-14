@@ -1,6 +1,6 @@
 ---
 name: cowork
-description: Coordinate with other AI agents (Hermes, Antigravity/Gemini, Codex, other Claude sessions) via the Cowork MCP server — register presence and agents, dispatch/schedule cross-platform tasks, work the shared inbox, run workflows, browse the Agencies, and collect artifacts. Use when the user wants to dispatch work to another agent/platform, check the shared task inbox, see which agents/agents are active, run a cowork workflow, or when you are executing a cowork task yourself.
+description: Coordinate with other AI agents (Hermes, Antigravity/Gemini, Codex, other Claude sessions) via the Cowork MCP server — register presence and agents, dispatch/schedule cross-platform tasks, work the shared inbox, run recipes and goals, browse the personas, and collect artifacts. Use when the user wants to dispatch work to another agent/platform, check the shared task inbox, see which workers/agents are active, run a cowork recipe or goal, or when you are executing a cowork task yourself.
 ---
 
 # Cowork — Multi-Agent Coordination
@@ -62,7 +62,7 @@ Resources: `cowork://status`, `cowork://roster`.
    ```
    Save the returned `id`. Omit `agents` entirely if you're only dispatching/observing.
    > ⚠️ **Never call `deregister_agent`** for shared local agents on exit — it cascades
-   > them out of the default chain, every division chain, and every special role, and
+   > them out of the default chain, every tier list, and every special role, and
    > the box's routing config depends on them. Just disconnect; agents persist.
 2. **Heartbeat** when starting/finishing work: `heartbeat(agent_id, status, current_task)`.
    Agents are pruned after ~10 min of silence (agents are not).
@@ -82,8 +82,14 @@ Resources: `cowork://status`, `cowork://roster`.
 | `humanInput` | Answers from a human-in-the-loop round (server-written, read-only to you) |
 
 With none of these set, an **LLM router** runs two stages: pick 1 of 19 **divisions**,
-then 1 of ~285 **personas** in it; that persona's full `.md` file becomes the
-system prompt. Tag a task `manual` to skip routing and dispatch entirely.
+then 1 of ~285 **personas** in it; that persona's `.md` file becomes the system
+prompt. With `orchestration.workRoles.enabled` the router also names a **work role**
+(`mechanical`, `feature`, `bug-fix`, `perf-issue`, `research`, `prose`, `hardest`) that
+sets `context.tier` + `context.thinking` unless you set them. A persona shapes the prompt
+only; the agent comes from the tier list, then `defaultChain`. A task pinned to a small
+model (≤ 70B, e.g. qwen3.8-27b) still gets a router-picked persona unless that agent sets
+`personaRouting: "never"`. Personas come from persona-pack integrations
+(default `msitarzewski/agency-agents`). Tag a task `manual` to skip routing and dispatch entirely.
 
 Special executors (`orchestration.roleChains`): `orchestrator`, `generalist`, `video` only.
 The **CEO flow** is one `context: {"persona": "orchestrator"}` task carrying the raw idea
@@ -97,6 +103,9 @@ scheduled ─┐
 wait-input ┴→ pending → claimed → in-progress → done
                                               → rejected / failed(chain exhausted)
 ```
+
+- **`paused`** — a person paused it (`POST /api/inbox/:id/pause`); a running agent is
+  stopped. `/resume` restores it to `scheduled` / `wait-input` / `pending` with context intact.
 
 - **`scheduled`** — `create_task(scheduled_at: "<ISO 8601>")` parks the task out of the
   pending pool until its launch time. Omit it (or pass a past time) to run now. A goal
@@ -154,10 +163,13 @@ don't trust any hardcoded list, including this one.
 **Chains** run top → bottom: `chain[0]` runs; on a failed/rejected result the dispatcher
 **hands over** to `chain[1]`, `[2]`… until success or exhaustion (then `failed: true`).
 - Global default: `orchestration.defaultChain` (`PUT /api/chains/default`, drag-reorder
-  in the **Agents** view).
-- Per-division override: `orchestration.divisionChains[<division>]`
-  (`PUT /api/chains/division/:division`; empty body reverts to default).
+  in the **Routing** view).
+- Tier lists: `orchestration.tiers.<mechanical|standard|judgment>` (`PUT /api/chains/tier/:tier`);
+  a task with `context.tier` tries its tier first, then the default chain.
 - Special executors carry their own chain (`PUT /api/roles-config/:name`).
+- Per-division / per-persona chains were removed on 2026-11-13 (`divisionChains`,
+  `personaChains` and `/api/chains/division/*` are gone).
+
 - `remoteGraceMs` (20s in the template config; 60s code default) auto-advances past a **remote** rung no client claimed, so a
   cold remote agent never stalls a chain. `staleClaimMs` (10 min in the template config; code default 0 = off) reclaims tasks orphaned
   by a dead agent.
@@ -180,28 +192,16 @@ and human-gated by design: there is no autonomous improver agent.
   `POST /api/uploads?name=<file>` → `{token}`, then attach via
   `POST /api/inbox/:id/inputs {inputs:[{token,name}]}`.
 
-## Workflows
+## Recipes
 
-Templates in `workflows/<id>.json`, two modes. **`dag`** (default): steps wired by
-`dependsOn`, expanded into inbox tasks up front — deterministic and inspectable.
-**`orchestrated`**: steps are a *candidate library*; after each step the orchestrator
-agent picks the next one (or `DONE`) from the `goal` + results so far, logging every
-decision to `workflow-runs/<runId>.json`. Shipped: `idea-to-launch` (flagship),
-`build-and-ship`, `product-spec`, `feedback-to-roadmap`, `gtm-campaign`, `finance-close`,
-`expand-perspectives`, `content-pipeline`, `product-brief`, `adaptive-research`,
-`plan-execution`, `daily-fantasy-vlog`, `eval-prompt-change`, `gentle-soul-storybook`,
-`gumroad-implementation`, `workflow-builder`.
+The Workflows engine (`workflows/*.json`, `/api/workflows*`) was removed on 2026-11-02;
+don't call it. For repeatable work use a **recipe**: a saved task with `{{fields}}`,
+its own agent, thinking level and timebox. `GET/POST /api/recipes`,
+`POST /api/recipes/:id/run {values, agent?, thinking?, scheduledAt?, recurrence?}`,
+`POST /api/recipes/draft-from-task/:taskId`. Recipes don't pin a persona; the router picks one
+per run. For multi-step objectives use a goal (below) or an orchestrator task.
 
-```bash
-curl -sk -X POST https://localhost:6868/api/workflows/<id>/run \
-  -H 'content-type: application/json' -d '{"params":{"idea":"..."},"dryRun":true}'
-```
-
-Steps pin a `division` or `persona` (never an `agent`) so chains stay editable from the
-dashboard. Templates are validated on load (unique keys, deps exist, DAG acyclic);
-invalid ones are skipped and surfaced at `GET /api/workflows-invalid`.
-
-## Goals (long-lived objectives, beneath Workflows)
+## Goals (long-lived objectives)
 
 **The `/goal` + `/loop` idiom.** A goal *is* Claude-CLI's `/goal` (declare the objective +
 its binary "done") paired with a `/loop` that runs 24/7 **until it's met**: the dispatcher
@@ -253,19 +253,21 @@ dependency, or a decision only a human can make.
 
 ## REST mirror (https://localhost:6868/api/...)
 
-`GET status | agents | connections | agents | dispatcher | chains | roster |
-roster-divisions | system | services | config | events(SSE) | workflows |
-workflow-runs[/:runId] | artifacts/:taskId[/:file] | inputs/:taskId[/:file]` ·
+`GET status | workers | connections | agents | dispatcher | chains | chains/tiers | roster |
+roster-divisions | system | services | config | calendar | events(SSE) | tasks/paused |
+artifacts/:taskId[/:file] | outputs/:taskId[/:file] | inputs/:taskId[/:file]` ·
 `GET/POST inbox` · `GET inbox/:id` · `PATCH inbox/:id {action: claim|complete}` ·
-`POST inbox/:id/{rerun,continue,inputs,interaction}` · `POST inbox/purge` ·
-`DELETE inbox/:id` · `POST uploads?name=` · `PUT chains/default`,
-`chains/division/:div` · `GET/PUT/DELETE agents/:id`, `agents-config/:name` ·
-`POST workflows/:id/run` · `GET/POST goals`, `GET/PATCH/DELETE goals/:id`,
+`POST inbox/:id/{rerun,continue,inputs,interaction,pause,resume,reassign,run-now}` ·
+`POST inbox/purge` · `DELETE inbox/:id` · `POST uploads?name=` · `PUT chains/default`,
+`chains/tier/:tier` · `GET/PUT/DELETE agents/:id`, `PATCH agents/:id/{enable,disable,thinking}` ·
+`GET roles-config`, `PUT/DELETE roles-config/:name` · `GET/POST recipes`, `POST recipes/:id/run` ·
+`GET/POST integrations`, `GET integrations/defaults`, `POST integrations/defaults/provision` ·
+`GET/POST goals`, `GET/PATCH/DELETE goals/:id`,
 `POST goals/:id/{activate,pause,block}`, `GET goals/:id/tasks`.
 
-SSE event names are camelCase: `agentRegistered`, `taskCreated`, `taskClaimed`,
-`taskCompleted`, `heartbeat` (older docs list snake_case names and a `report_filed`
-event — both are wrong). Consume with `curl -kN`.
+SSE event names are camelCase: `workerRegistered`, `taskCreated`, `taskClaimed`,
+`taskCompleted`, `taskDeleted`, `taskPaused`, `taskResumed`, `goalUpdated`, `heartbeat`,
+`agentExecuted`. Consume with `curl -kN`.
 
 ## Ops
 
@@ -278,7 +280,8 @@ cd ~/workspace/cowork/server && npm test   # engine tests
 
 Pitfalls: `/mcp` is MCP, `/api` is REST — don't mix. Every request needs
 `-H "Authorization: Bearer $COWORK_API_KEY"` (dispatched tasks and agent clients get it in
-env; never paste the key into task text or output). Port is 6868. A missing `agency-agents`
-submodule makes the Agencies empty (`git submodule update --init`). Canonical copies of
+env; never paste the key into task text or output). Port is 6868. An empty roster means the
+persona pack isn't installed yet: check `GET /api/integrations/defaults` and re-run
+`POST /api/integrations/defaults/provision`. Canonical copies of
 this skill live in `deploy/skills/` — edit there and re-run `deploy/install-skill.sh`,
 or keep both in sync by hand.

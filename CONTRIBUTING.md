@@ -30,7 +30,7 @@ its Δ in the commit message**:
 - the verifier prompts in `server/src/core/result-verifier.ts`
   (`buildVerifierPrompt`, the spec-verifier prompt)
 - a top-10 persona: the 10 personas with the most done tasks in the inbox
-  (`agency-agents/**/<slug>.md`)
+  (`<slug>.md` in the installed persona pack, under `~/.cowork/integrations/`)
 
 Without a measurement, rule tweaks are guesses. The eval replays 5 historical
 done tasks of the affected family under the new and the old text in sandboxes.
@@ -42,19 +42,18 @@ positive Δ means the change helps:
 
 ```bash
 git show HEAD:CONVENTIONS.md > /tmp/conventions-old.md
-# dashboard: Workflows → "Eval a prompt change", or:
-curl -s --cacert ~/.cowork/tls/cert.pem -H "Authorization: Bearer $COWORK_API_KEY" \
-  -X POST https://localhost:6868/api/workflows/eval-prompt-change/run -H 'Content-Type: application/json' \
-  -d '{"params":{"family":"engineering","variantA":"CONVENTIONS.md","variantB":"/tmp/conventions-old.md"}}'
-# or without the hub's scheduler (same code path):
 cd server && node dist/eval-cli.js run --family engineering --a ../CONVENTIONS.md --b /tmp/conventions-old.md --out /tmp/eval-out
 ```
+
+The `eval-prompt-change` workflow and its dashboard button went with the Workflows engine
+(removed 2026-11-02). The CLI is the remaining way to run the eval.
 
 `family` is a division (`engineering`, `marketing`, …) or a persona slug. Pick
 the family the change affects most. For a persona, that is the persona's own
 slug. For `CONVENTIONS.md`, use the busiest division. The run writes
 `eval-report.md` (per-task scores, Δ(A−B), the outward-action check) into the
-judge step's artifacts.
+`--out` directory.
+
 
 **Cite it** in the commit message body:
 

@@ -23,5 +23,6 @@ deploy/install-skill.sh --skill-only        # copy the skill only, don't touch M
 
 To update a live copy after editing here (or vice-versa), re-run the installer (or copy
 the file to/from the install path above). These describe the two-stage router
-(division → 1-of-285 persona) and the global-default + per-division agent fallback
-chains.
+(division + work role → 1-of-285 persona) and the agent fallback chains (special
+executors, tier lists, global default). Per-division chains are gone since 2026-11-13.
+

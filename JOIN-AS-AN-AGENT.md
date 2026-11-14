@@ -21,12 +21,15 @@ It registers again on start.
 
 ## TL;DR — zero config, one command
 
-You only need Node 18+ and this repo. The client **auto-detects** the model CLIs
+You only need Node 18+ and a clone of this repo. Clone it from the same git remote the hub
+was installed from (ask the hub's operator for the URL; there is no public mirror). The
+client **auto-detects** the model CLIs
 installed on your machine (`claude`, `hermes`, `agy`, `codex`, `ollama`) and declares the matching
 agents for you — no agent settings needed:
 
 ```bash
-git clone https://cowork.dev/cowork
+git clone <cowork-repo-url> cowork
+
 NODE_EXTRA_CA_CERTS=cowork-cert.pem \
 COWORK_URL=https://<cowork-host>:6868 HOST=<your-hostname> \
   node cowork/deploy/remote-agent-client.mjs
