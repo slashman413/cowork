@@ -6,6 +6,8 @@
 **Self-hosted MCP server & Web Dashboard with auto-fallback chains, remote fleet execution, and zero-database storage.**
 
 [![GitHub Stars](https://img.shields.io/github/stars/slashman413/cowork?style=for-the-badge&color=FFE066&logo=github)](https://github.com/slashman413/cowork/stargazers)
+[![CI Pipeline](https://img.shields.io/github/actions/workflow/status/slashman413/cowork/ci.yml?style=for-the-badge&label=CI&color=3FB950)](https://github.com/slashman413/cowork/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/tag/slashman413/cowork?style=for-the-badge&label=Release&color=informational&logo=github)](https://github.com/slashman413/cowork/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](LICENSE)
 [![MCP Compatible](https://img.shields.io/badge/MCP-Streamable%20HTTP-8A2BE2?style=for-the-badge&logo=anthropic)](https://modelcontextprotocol.io)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge)](https://github.com/slashman413/cowork/pulls)
@@ -63,10 +65,28 @@ Your workflow stalls. Your terminal hangs. You switch to Gemini CLI or a local H
 
 ---
 
-Jump to: [Quick Start](#quick-start) · [Connecting agents](#connecting-ai-agents) ·
-[Dispatcher](#task-execution--the-dispatcher) · [Agents](#agents--named-execution-identities-model--platform--location) ·
+Jump to: [30-Second Quickstart](#-30-second-quickstart) · [Quick Start](#quick-start) · [Connecting agents](#connecting-ai-agents) ·
+[Architecture](#-architecture) · [Dispatcher](#task-execution--the-dispatcher) · [Agents](#agents--named-execution-identities-model--platform--location) ·
 [Vocabulary](#vocabulary) · [Thinking level](#thinking-level) ·
 [MCP tools](#mcp-tools-reference)
+
+## ⚡ 30-Second Quickstart
+
+Copy-paste these three lines and your agents are on one shared queue:
+
+```bash
+git clone https://github.com/slashman413/cowork && cd cowork
+deploy/install-server.sh    # 1) build & launch the MCP server + dark dashboard (systemd user service)
+deploy/install-skill.sh     # 2) wire the Cowork MCP connection into your agent clients
+```
+
+Then open **http://localhost:6868** — the dashboard is live: create a task, the dispatcher
+routes it across your agent fallback chains, and results plus artifacts land back on the task
+card. Running a hub-only container instead? `docker run -d -p 6868:6868 -v cowork-data:/data ghcr.io/cowork/cowork:1.0.1`.
+
+<sub>Full walkthrough, manual steps and per-client wiring → [Quick Start](#quick-start) · [Connecting agents](#connecting-ai-agents)</sub>
+
+---
 
 ## Screenshots
 
@@ -109,6 +129,66 @@ The [Tasks](#task-execution--the-dispatcher), [Routing](#agent-fallback-chains-g
 
 ---
 
+## 🏗 Architecture
+
+One self-hosted **Cowork hub** (MCP server + dark web dashboard + task inbox, plain
+JSON on disk — no database) sits between all your agent clients and the machines that
+run the work. Every task is routed in two stages (division → persona) and then executes
+top-to-bottom along an **agent fallback chain**: local executors on the hub machine,
+or remote machines that claim tasks through the `remote-agent-client`:
+
+```mermaid
+flowchart LR
+  subgraph clients ["Your agent clients"]
+    CC["Claude Code"]
+    CX["Codex"]
+    GC["Gemini CLI / AGY"]
+    HM["Hermes"]
+    OTH["any MCP client"]
+  end
+
+  subgraph hub ["Cowork hub — one self-hosted node"]
+    MCP["MCP server + REST API<br/>Streamable HTTP :6868"]
+    INBOX[("Task inbox<br/>plain JSON on disk")]
+    DISP["Dispatcher"]
+    ROUTE["2-stage LLM router<br/>division then persona, ~285"]
+    CHAIN["Agent fallback chain<br/>agent 0 to 1 to 2"]
+    DASH["Dark web dashboard<br/>tasks, workers, goals, telemetry"]
+  end
+
+  subgraph localm ["Hub machine — local executors"]
+    EXC["claude / codex / agy / hermes / ollama"]
+  end
+
+  subgraph remotem ["Remote machines — the fleet"]
+    RAC["remote-agent-client.mjs<br/>systemd user service"]
+    EXR["agent CLIs on that machine"]
+  end
+
+  clients -->|"create / claim / complete"| MCP
+  MCP --> INBOX
+  INBOX --> DISP
+  DISP --> ROUTE
+  ROUTE --> CHAIN
+  CHAIN -->|"local rung"| EXC
+  CHAIN -->|"remote rung"| RAC
+  RAC --> EXR
+  EXC -->|"result + artifacts"| INBOX
+  RAC -->|"uploads result + artifacts"| INBOX
+  INBOX <--> DASH
+```
+
+- **Inbox first:** tasks land in a JSON inbox with inputs, status and artifacts; the
+  dispatcher (not a human) does the routing, so the queue never stalls on unassigned work.
+- **Fallback, not retry:** when `chain[0]` fails or a remote rung goes unclaimed within
+  the grace window, the task hands over to `chain[1]` — recording each attempt on the card.
+- **Fleet by convention:** any machine that runs `remote-agent-client.mjs` shows up live
+  in the **Workers** view; claims are atomic, so two clients can never double-run a task.
+
+Deeper detail lives in [Task Execution — the Dispatcher](#task-execution--the-dispatcher).
+
+---
+
 ## Quick Start
 
 ### Prerequisites
@@ -126,7 +206,7 @@ The [Tasks](#task-execution--the-dispatcher), [Routing](#agent-fallback-chains-g
 
 ### Fast path — two scripts (recommended)
 
-From the repo root of your clone:
+From the repo root, after cloning (the 30-second quickstart above):
 
 ```bash
 # 1. Build + launch the server (installs deps, builds, starts a systemd user service)

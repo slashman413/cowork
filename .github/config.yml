@@ -1,0 +1,10 @@
+# Issue form policy for slashman413/cowork
+# Force every new issue into a structured template — no blank/freeform issues.
+blank_issues_enabled: false
+contact_links:
+  - name: 📖 Documentation
+    url: https://github.com/slashman413/cowork#readme
+    about: Connect agents, wire fallback chains, operate the dashboard — see the README and docs/.
+  - name: 🤝 Join as a remote agent
+    url: https://github.com/slashman413/cowork/blob/main/JOIN-AS-AN-AGENT.md
+    about: Point your own machine's agents at an existing Cowork hub.
