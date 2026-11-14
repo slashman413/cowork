@@ -102,6 +102,17 @@
     .repo-head .commit { color: var(--faint); font-size: .74rem; margin-left: auto; }
     .tag { font-size: .7rem; padding: 1px 7px; border-radius: 5px; background: var(--raise); color: var(--muted); }
     .repo .desc { color: var(--muted); font-size: .86rem; margin: 4px 0 0; max-width: 78ch; }
+    /* collapsible cards: collapsed by default (title + description), tap the card to show details */
+    .repo { cursor: pointer; transition: border-color .15s; -webkit-tap-highlight-color: transparent; }
+    .repo:hover { border-color: var(--border-2); }
+    .repo .repo-body { cursor: auto; }
+    .repo.is-collapsed .repo-body, .repo-body[hidden] { display: none; }
+    .repo .toggle { margin-left: auto; align-self: center; flex: none; width: 28px; height: 28px; padding: 0; justify-content: center; border-radius: 7px; background: none; border-color: transparent; color: var(--muted); }
+    .repo .toggle:hover { border-color: var(--border); color: var(--text); }
+    .repo .toggle .chev { display: block; width: 8px; height: 8px; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: translateY(-2px) rotate(45deg); transition: transform .15s; }
+    .repo .toggle[aria-expanded="true"] .chev { transform: translateY(2px) rotate(-135deg); }
+    .tag.live { background: var(--run-soft); color: var(--run); display: inline-flex; align-items: center; gap: 5px; }
+    .tag.live .spin { width: 9px; height: 9px; border-width: 1.5px; }
 
     /* the rail: four real stages */
     .rail { list-style: none; margin: 14px 0 12px; padding: 0; display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; position: relative; }
@@ -147,32 +158,34 @@
     .empty b { color: var(--text); display: block; font-size: 1rem; margin-bottom: 4px; }
 
     /* dialog */
-    dialog { border: 1px solid var(--border-2); border-radius: 14px; padding: 0; background: var(--panel); color: var(--text); width: min(760px, calc(100vw - 24px)); max-height: calc(100vh - 40px); box-shadow: var(--shadow); }
+    dialog { border: 1px solid var(--border-2); border-radius: 14px; padding: 0; background: var(--panel); color: var(--text); width: min(760px, calc(100vw - 24px)); max-width: calc(100vw - 24px); max-height: calc(100vh - 40px); max-height: calc(100dvh - 40px); box-shadow: var(--shadow); overflow: hidden; }
     dialog::backdrop { background: #04070cb3; backdrop-filter: blur(2px); }
     dialog[open] { display: flex; flex-direction: column; animation: pop .16s ease-out; }
     @keyframes pop { from { transform: translateY(6px); opacity: 0; } }
     .dlg-head { padding: 16px 20px 12px; border-bottom: 1px solid var(--border); }
     .dlg-head h3 { margin: 0; font-size: 1.05rem; font-weight: 650; }
     .dlg-head p { margin: 3px 0 0; color: var(--muted); font-size: .84rem; }
-    .dlg-body { padding: 16px 20px; overflow: auto; display: grid; gap: 14px; min-height: 0; }
+    .dlg-body { padding: 16px 20px; overflow-x: hidden; overflow-y: auto; display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; min-height: 0; }
+    .dlg-body > * { min-width: 0; }
     .dlg-foot { padding: 12px 20px; border-top: 1px solid var(--border); display: flex; gap: 8px; justify-content: flex-end; align-items: center; flex-wrap: wrap; }
     .dlg-foot .status { margin-right: auto; font-size: .84rem; color: var(--muted); display: flex; align-items: center; gap: 8px; }
     .dlg-foot .status.ok { color: var(--ok); } .dlg-foot .status.bad { color: var(--bad); } .dlg-foot .status.run { color: var(--run); }
     .section-t { font-size: .8rem; color: var(--muted); font-weight: 600; margin: 0 0 6px; }
     ol.cmds { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; counter-reset: c; }
-    ol.cmds li { counter-increment: c; display: grid; grid-template-columns: 22px 1fr; gap: 2px 8px; font-size: .84rem; }
+    ol.cmds li { counter-increment: c; display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 2px 8px; font-size: .84rem; }
     ol.cmds li::before { content: counter(c); color: var(--faint); font-variant-numeric: tabular-nums; text-align: right; }
     ol.cmds .run { grid-column: 2; font-family: ui-monospace, monospace; font-size: .76rem; background: var(--console); color: #cfd8e6; padding: 6px 9px; border-radius: 7px; overflow-wrap: anywhere; white-space: pre-wrap; }
     ol.cmds .why { grid-column: 2; color: var(--muted); font-size: .76rem; }
 
     /* progress */
     ul.steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
-    ul.steps li { display: grid; grid-template-columns: 20px 1fr auto; gap: 8px; align-items: center; font-size: .85rem; padding: 3px 0; }
+    ul.steps li { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; gap: 8px; align-items: center; font-size: .85rem; padding: 3px 0; }
     ul.steps li .ic { width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--border-2); display: grid; place-items: center; font-size: .62rem; color: var(--panel); font-weight: 800; }
     ul.steps li.done .ic { background: var(--ok); border-color: var(--ok); }
     ul.steps li.failed .ic { background: var(--bad); border-color: var(--bad); }
     ul.steps li.running .ic { border-color: var(--run); border-right-color: transparent; animation: spin .8s linear infinite; }
     ul.steps li.skipped { color: var(--faint); text-decoration: line-through; }
+    ul.steps li > span:nth-child(2) { overflow-wrap: anywhere; }
     ul.steps li .t { color: var(--faint); font-size: .74rem; font-variant-numeric: tabular-nums; }
     .bar { height: 4px; border-radius: 4px; background: var(--raise); overflow: hidden; }
     .bar i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .3s; }
@@ -186,6 +199,21 @@
     .field select, .field textarea { font: inherit; font-size: .88rem; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
     .field textarea { min-height: 80px; resize: vertical; }
     .check { display: flex; gap: 8px; align-items: flex-start; font-size: .84rem; }
+    .result .where code, .result p, .result div { overflow-wrap: anywhere; }
+    @media (max-width: 520px) {
+      dialog#dlg { width: calc(100vw - 16px); max-width: calc(100vw - 16px); max-height: calc(100dvh - 16px); border-radius: 12px; }
+      #dlg .dlg-head { padding: 12px 14px 10px; } #dlg .dlg-head h3 { font-size: .98rem; overflow-wrap: anywhere; } #dlg .dlg-head p { overflow-wrap: anywhere; }
+      #dlg .dlg-body { padding: 12px 14px; gap: 12px; }
+      #dlg .console { height: 34vh; min-height: 150px; padding: 8px 10px; font-size: .7rem; border-radius: 8px; }
+      #dlg .dlg-foot { padding: 10px 14px calc(10px + env(safe-area-inset-bottom)); gap: 6px; }
+      #dlg .dlg-foot .status { flex-basis: 100%; margin-right: 0; }
+      #dlg .dlg-foot .btn { flex: 1 1 0; justify-content: center; }
+      #dlg ul.steps li { grid-template-columns: 18px minmax(0, 1fr) auto; gap: 6px; font-size: .8rem; }
+      #dlg ol.cmds li { grid-template-columns: 16px minmax(0, 1fr); gap: 2px 6px; }
+      #dlg .where div { flex-wrap: wrap; gap: 0 8px; }
+      #dlg .where .k { min-width: 0; }
+      #dlg .result { padding: 10px 12px; }
+    }
 
     #toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%) translateY(20px); opacity: 0; pointer-events: none; background: var(--raise); color: var(--text); border: 1px solid var(--border-2); border-radius: 10px; padding: 10px 16px; font-size: .86rem; box-shadow: var(--shadow); transition: .2s; max-width: calc(100vw - 32px); z-index: 50; }
     #toast.on { opacity: 1; transform: translateX(-50%); pointer-events: auto; }
@@ -254,6 +282,10 @@
   let info = { integrations: [], agents: [], adviseChain: [], jobs: {} };
   let filter = 'all';
   const busy = new Set();
+  // Cards are collapsed by default; the ids the operator expanded survive re-renders/polls for this tab.
+  const expanded = new Set((() => { try { return JSON.parse(sessionStorage.getItem('int-expanded') || '[]'); } catch { return []; } })());
+  const saveExpanded = () => { try { sessionStorage.setItem('int-expanded', JSON.stringify([...expanded])); } catch {} };
+  const domId = (id) => 'rb-' + String(id).replace(/[^a-zA-Z0-9_-]/g, '_');
 
   async function api(path, body) {
     const r = await fetch(`/api${path}`, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -344,6 +376,7 @@
     if (!adv || adv.status !== 'pending') b.push(`<button class="btn sm" data-act="advise" ${dis}>${adv ? 'Ask again' : 'Get install advice'}</button>`);
     const canWrap = !(d.skills || []).length && !d.personas && (d.kinds || []).some(k => k !== 'web');
     if (canWrap && !isInstalled(e)) b.push(`<button class="btn sm ghost" data-act="wrap" ${dis}>Wrap as a skill</button>`);
+    // Update / Rescan (and Advice / Wrap) open the progress dialog like install/remove do: act() → runInDlg() → openDlg().
     b.push(`<button class="btn sm ghost" data-act="update" ${dis} title="Pull the latest commit and re-audit">Update</button>`);
     b.push(`<button class="btn sm ghost" data-act="rescan" ${dis} title="Re-detect and re-audit what is on disk">Rescan</button>`);
     b.push(`<span class="spacer"></span><button class="btn sm danger" data-act="remove" ${dis}>Remove</button>`);
@@ -370,17 +403,23 @@
     if (!shown.length) { $('#list').innerHTML = '<div class="empty"><b>Nothing matches</b>Clear the filter to see every repository.</div>'; return; }
     $('#list').innerHTML = shown.map(e => {
       const d = e.detected || {}, a = e.audit || {};
-      return `<article class="repo ${e.status === 'quarantined' ? 'is-quarantined' : ''}" data-id="${esc(e.id)}">
+      const open = expanded.has(e.id), bid = domId(e.id);
+      const live = info.jobs?.[e.id] || busy.has(e.id) ? `<span class="tag live"><span class="spin"></span>Working</span>` : '';
+      return `<article class="repo ${e.status === 'quarantined' ? 'is-quarantined' : ''} ${open ? '' : 'is-collapsed'}" data-id="${esc(e.id)}">
         <div class="repo-head">
           <a class="name" href="${esc(e.url.replace(/\.git$/, ''))}" target="_blank" rel="noopener">${esc(e.source)}</a>${e.subpath ? `<span class="sub">/${esc(e.subpath)}</span>` : ''}
           ${(d.kinds || []).map(k => `<span class="tag">${esc(k)}${k === 'skill' ? ` ×${d.skills.length}` : ''}</span>`).join('')}
           ${d.license ? `<span class="tag">${esc(d.license.slice(0, 24))}</span>` : ''}
+          ${live}
+          <button class="btn toggle" data-toggle aria-expanded="${open}" aria-controls="${bid}" aria-label="${open ? 'Hide' : 'Show'} details for ${esc(e.source)}"><span class="chev" aria-hidden="true"></span></button>
         </div>
         ${d.description ? `<p class="desc">${esc(d.description)}</p>` : ''}
-        ${rail(e)}
-        ${adviceBlock(e)}
-        ${(a.findings || []).length ? `<details class="findings"><summary>Audit findings (${a.findings.length})</summary>${findingsHtml(a.findings)}</details>` : ''}
-        ${actions(e)}
+        <div class="repo-body" id="${bid}" ${open ? '' : 'hidden'}>
+          ${rail(e)}
+          ${adviceBlock(e)}
+          ${(a.findings || []).length ? `<details class="findings"><summary>Audit findings (${a.findings.length})</summary>${findingsHtml(a.findings)}</details>` : ''}
+          ${actions(e)}
+        </div>
       </article>`;
     }).join('');
   }
@@ -544,8 +583,7 @@
       const body = await confirmDlg({ title: `Get install advice for ${e.source}`, sub: `Asks ${chain} (thinking high). Nothing is installed.`, ok: 'Ask the agent',
         body: `<label class="field">Anything the agent should know (optional)<textarea id="advNotes" placeholder="e.g. install only the CLI, not the web UI"></textarea></label>` });
       if (!body) return;
-      dlg.close();
-      return run(id, 'advise', { notes: $('#advNotes', body)?.value || '' }, 'Asked the install advisor. The plan shows up here when it is ready.');
+      return runInDlg(id, 'advise', { notes: $('#advNotes', body)?.value || '' });
     }
     if (action === 'wrap') {
       const body = await confirmDlg({ title: `Wrap ${e.source} as a skill`, sub: 'Creates a task for an engineering agent to write a SKILL.md for it', ok: 'Create task',
@@ -553,25 +591,136 @@
                <label class="field">Notes for the agent (optional)<textarea id="wrapNotes"></textarea></label>` });
       if (!body) return;
       const payload = { agent: $('#wrapAgent', body).value, notes: $('#wrapNotes', body).value };
-      dlg.close();
-      return run(id, 'wrap', payload, null);
+      return runInDlg(id, 'wrap', payload);
     }
-    return run(id, action, {}, null);
+    return runInDlg(id, action, {});
   }
 
-  async function run(id, action, body, okMsg) {
+  // ── direct actions in the progress dialog ───────────────────────────────
+  // update / rescan / advise / wrap are single synchronous API calls (no server job), so the
+  // dialog tracks the real phases: the call itself (with a live elapsed timer), then the registry
+  // refresh — same bar / steps / output console / result layout as install & remove jobs.
+  const DIRECT = {
+    update: { title: 'Updating', step: 'Pull the latest commit and re-audit', done: 'Updated', fail: 'Update did not finish' },
+    rescan: { title: 'Rescanning', step: 'Re-detect and re-audit what is on disk', done: 'Rescanned', fail: 'Rescan did not finish' },
+    advise: { title: 'Asking for install advice', step: 'Dispatch the install advisor task', done: 'Advisor asked', fail: 'Could not ask the advisor' },
+    wrap: { title: 'Wrapping as a skill', step: 'Create the wrap task', done: 'Task created', fail: 'Could not create the task' },
+  };
+  let dlgRun = 0;
+
+  async function runInDlg(id, action, body) {
     const e = info.integrations.find(x => x.id === id);
+    if (!e) return;
+    const spec = DIRECT[action] || { title: action, step: action, done: 'Done', fail: 'Failed' };
+    const token = String(++dlgRun);
+    stopJobPoll();
+    dlgLocked = false;
+    let bg = false;
+    openDlg(spec.title, e.source, `
+      <div class="bar" id="jbar"><i></i></div>
+      <div><p class="section-t">Steps</p><ul class="steps" id="jsteps"></ul></div>
+      <div><p class="section-t">Output</p><div class="console" id="jlog" tabindex="0" aria-label="Output" aria-live="off"></div></div>
+      <div id="jresult"></div>`,
+      `<span class="status run" id="jstatus"><span class="spin"></span>Running…</span><button class="btn ghost" id="jhide">Run in background</button>`);
+    $('#dlgBody').dataset.run = token;
+    const alive = () => !bg && dlg.open && $('#dlgBody').dataset.run === token;
+    $('#jhide').onclick = () => { bg = true; dlg.close(); };
+    const steps = [{ title: spec.step, state: 'running', t0: Date.now() }, { title: 'Refresh the registry', state: 'pending' }];
+    const paint = () => {
+      if (!alive()) return;
+      $('#jsteps').innerHTML = steps.map(s => `<li class="${s.state}"><span class="ic">${s.state === 'done' ? '✓' : s.state === 'failed' ? '✕' : ''}</span><span>${esc(s.title)}${s.note ? ` <span class="t">— ${esc(s.note)}</span>` : ''}</span><span class="t">${s.t0 ? (((s.t1 || Date.now()) - s.t0) / 1000).toFixed(1) + 's' : ''}</span></li>`).join('');
+      const n = steps.filter(s => s.state === 'done' || s.state === 'failed').length;
+      $('#jbar i').style.width = `${Math.max(8, Math.round(100 * n / steps.length))}%`;
+    };
+    const log = (cls, text) => {
+      if (!alive()) return;
+      const el = $('#jlog');
+      el.insertAdjacentHTML('beforeend', `<span class="${cls}">${esc(text)}</span>\n`);
+      el.scrollTop = el.scrollHeight;
+    };
+    const timer = setInterval(paint, 200);
+    paint();
+    log('info', `${spec.title} ${e.source}`);
+    log('cmd', `$ POST /api/integrations/${id}/${action}`);
+    if (action === 'update') log('', `current commit ${e.commit || '?'} · fetched ${ago(e.fetchedAt) || '?'}`);
+
     busy.add(id); render();
-    try {
-      const r = await api(`/integrations/${encodeURIComponent(id)}/${action}`, body);
-      toast(okMsg || (action === 'wrap' ? `Created task ${r.task?.id?.slice(0, 8)}. When it finishes, press Rescan, then Install.` : `${action === 'update' ? 'Updated' : action === 'rescan' ? 'Rescanned' : 'Done'}: ${e?.source}`), 'ok');
-    } catch (err) { toast(err.message, 'err'); }
-    busy.delete(id); await load();
+    let r, err;
+    try { r = await api(`/integrations/${encodeURIComponent(id)}/${action}`, body); }
+    catch (x) { err = x; }
+    steps[0].t1 = Date.now(); steps[0].state = err ? 'failed' : 'done';
+    const lines = err ? [['err', err.message]] : describe(action, e, r);
+    for (const [c, t] of lines) log(c, t);
+    if (!err) { steps[1].state = 'running'; steps[1].t0 = Date.now(); }
+    else steps[1].state = 'skipped';
+    paint();
+    busy.delete(id);
+    if (!err) {
+      const fresh = await api('/integrations').catch(x => { log('warn', `refresh failed: ${x.message}`); return null; });
+      if (fresh) info = fresh;
+      steps[1].t1 = Date.now(); steps[1].state = 'done';
+    }
+    render();
+    clearInterval(timer); paint();
+
+    const ok = !err;
+    const summary = ok ? (action === 'wrap' ? `Created task ${r.task?.id?.slice(0, 8)}. When it finishes, press Rescan, then Install.`
+      : action === 'advise' ? 'Asked the install advisor. The plan shows up on the card when it is ready.'
+      : `Audit ${r?.audit?.verdict || '?'}${action === 'update' && r?.commit ? ` at ${r.commit}` : ''} · status ${r?.status || '?'}.${isInstalled(r || {}) ? ' Installed copies were refreshed.' : ''}`) : err.message;
+    if (!alive()) { toast(summary, ok ? 'ok' : 'err'); load(); return; }
+    $('#jbar').className = `bar ${ok ? 'ok' : 'bad'}`; $('#jbar i').style.width = '100%';
+    $('#jresult').innerHTML = `<div class="result ${ok ? '' : 'bad'}"><h4>${esc(ok ? `${spec.done} ${e.source}` : spec.fail)}</h4>
+      <p style="margin:0;font-size:.84rem">${esc(summary)}</p>
+      ${ok && r?.task?.id ? `<p style="margin:6px 0 0;font-size:.84rem"><a href="/#tasks/${encodeURIComponent(r.task.id)}" target="_blank" rel="noopener">Open the task on the dashboard</a></p>` : ''}</div>`;
+    setFoot(`<span class="status ${ok ? 'ok' : 'bad'}">${ok ? `✓ ${esc(spec.done)}` : '✕ Failed'}</span><button class="btn primary" id="jclose">${ok ? 'Done' : 'Close'}</button>`);
+    $('#jclose').onclick = () => dlg.close();
+    $('#jclose').focus();
   }
 
+  // Human-readable output lines for a finished direct action.
+  function describe(action, before, r) {
+    const out = [];
+    if (action === 'wrap') {
+      out.push(['ok', `task ${r.task?.id || '?'} created`]);
+      if (r.task?.context?.agent) out.push(['', `agent ${r.task.context.agent}`]);
+      return out;
+    }
+    const a = r?.audit || {}, c = a.counts || {}, d = r?.detected || {};
+    if (action === 'advise') {
+      const adv = r?.advice || {};
+      out.push(['ok', `advisor ${short(adv.agent) || '?'} · status ${adv.status || '?'}`]);
+      if ((adv.chain || []).length) out.push(['', `chain ${adv.chain.map(short).join(' → ')}`]);
+      return out;
+    }
+    if (action === 'update') {
+      out.push(before.commit && r?.commit && before.commit !== r.commit ? ['ok', `commit ${before.commit} → ${r.commit}`] : ['', `commit ${r?.commit || '?'} (already up to date)`]);
+    }
+    out.push([a.verdict === 'quarantine' ? 'err' : a.verdict === 'warn' ? 'warn' : 'ok',
+      `audit ${a.verdict || '?'} · ${a.scannedFiles || 0} files · ${c.critical || 0} critical, ${c.high || 0} high, ${c.medium || 0} medium`]);
+    if ((d.kinds || []).length) out.push(['', `detected ${d.kinds.join(', ')}${(d.skills || []).length ? ` · ${d.skills.length} skill${d.skills.length > 1 ? 's' : ''}` : ''}`]);
+    out.push(['', `status ${r?.status || '?'}`]);
+    for (const n of r?.notes || []) out.push(['warn', n]);
+    return out;
+  }
+
+  function setExpanded(card, open) {
+    const id = card.dataset.id;
+    if (open) expanded.add(id); else expanded.delete(id);
+    saveExpanded();
+    card.classList.toggle('is-collapsed', !open);
+    const body = card.querySelector('.repo-body'); if (body) body.hidden = !open;
+    const t = card.querySelector('[data-toggle]');
+    if (t) { t.setAttribute('aria-expanded', String(open)); t.setAttribute('aria-label', t.getAttribute('aria-label').replace(/^(Show|Hide)/, open ? 'Hide' : 'Show')); }
+  }
   $('#list').addEventListener('click', (ev) => {
-    const b = ev.target.closest('button[data-act]'); if (!b) return;
-    act(b.closest('.repo').dataset.id, b.dataset.act);
+    const b = ev.target.closest('button[data-act]');
+    if (b) { act(b.closest('.repo').dataset.id, b.dataset.act); return; }
+    const card = ev.target.closest('.repo'); if (!card) return;
+    if (ev.target.closest('[data-toggle]')) { setExpanded(card, card.classList.contains('is-collapsed')); return; }
+    // Links, buttons, form controls, <details>/<summary> and code/console blocks keep their own behaviour.
+    if (ev.target.closest('a, button, input, select, textarea, label, summary, details, code, .console, .run')) return;
+    if (String(window.getSelection?.() || '').length) return;   // selecting text is not a tap
+    setExpanded(card, card.classList.contains('is-collapsed'));
   });
   $('#addForm').addEventListener('submit', async (ev) => {
     ev.preventDefault();
