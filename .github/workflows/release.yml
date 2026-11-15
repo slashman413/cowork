@@ -1,6 +1,6 @@
 name: Release image + MCP Registry
 
-# Push a v* tag (matching server.json's version) to build ghcr.io/cowork/cowork for
+# Push a v* tag (matching server.json's version) to build ghcr.io/slashman413/cowork for
 # amd64 + arm64 and publish that version to the official MCP Registry.
 on:
   push:
@@ -24,12 +24,12 @@ jobs:
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ env.ACTOR || 'cowork' }}
+          username: ${{ env.ACTOR || 'slashman413' }}
           password: ${{ secrets.REGISTRY_TOKEN || secrets.TOKEN }}
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/cowork/cowork
+          images: ghcr.io/slashman413/cowork
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -65,7 +65,7 @@ jobs:
         run: |
           v=$(git describe --tags --exact-match 2>/dev/null || printenv | awk -F= '/_REF_NAME$/ {print $2; exit}')
           v="${v#v}"
-          jq -e --arg v "$v" '.version == $v and .packages[0].identifier == "ghcr.io/cowork/cowork:" + $v' server.json
+          jq -e --arg v "$v" '.version == $v and .packages[0].identifier == "ghcr.io/slashman413/cowork:" + $v' server.json
       - name: Install mcp-publisher
         env:
           MCP_PUBLISHER_VERSION: v1.8.1

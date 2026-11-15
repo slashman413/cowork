@@ -82,7 +82,7 @@ deploy/install-skill.sh     # 2) wire the Cowork MCP connection into your agent 
 
 Then open **http://localhost:6868** — the dashboard is live: create a task, the dispatcher
 routes it across your agent fallback chains, and results plus artifacts land back on the task
-card. Running a hub-only container instead? `docker run -d -p 6868:6868 -v cowork-data:/data ghcr.io/cowork/cowork:1.0.1`.
+card. Running a hub-only container instead? `docker run -d -p 6868:6868 -v cowork-data:/data ghcr.io/slashman413/cowork:1.0.1`.
 
 <sub>Full walkthrough, manual steps and per-client wiring → [Quick Start](#quick-start) · [Connecting agents](#connecting-ai-agents)</sub>
 
@@ -227,7 +227,7 @@ to do it by hand.
 ### Container (hub only)
 
 ```bash
-docker run -d -p 6868:6868 -v cowork-data:/data ghcr.io/cowork/cowork:1.0.1
+docker run -d -p 6868:6868 -v cowork-data:/data ghcr.io/slashman413/cowork:1.0.1
 docker logs <container>   # first start prints the generated API key once
 ```
 

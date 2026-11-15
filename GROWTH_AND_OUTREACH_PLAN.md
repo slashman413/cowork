@@ -277,7 +277,7 @@ We've also built in adapters for 285+ specialist personas from the `agency-agent
 The core server, web UI, dispatcher, and remote agent client are open source under the MIT license.
 
 GitHub: https://github.com/slashman413/cowork
-Quick container run: `docker run -d -p 6868:6868 -v cowork-data:/data ghcr.io/cowork/cowork:1.0.1`
+Quick container run: `docker run -d -p 6868:6868 -v cowork-data:/data ghcr.io/slashman413/cowork:1.0.1`
 
 We would love feedback from the HN community on our fallback architecture, the plain-file storage design, and what agent platforms you'd like to see connected next.
 
@@ -329,7 +329,7 @@ Why it fits the r/selfhosted ethos:
 - **Zero Database Required:** Tasks, execution logs, calendars, and artifacts live in plain text/JSON directories. No Postgres or Mongo instances eating up RAM.
 - **Single Pane of Glass:** One responsive web UI showing server vitals (CPU/GPU/RAM/temp), queued tasks, scheduled routines, and file artifacts.
 - **Docker Ready:** Spin up with one command:
-  `docker run -d -p 6868:6868 -v cowork-data:/data ghcr.io/cowork/cowork:1.0.1`
+  `docker run -d -p 6868:6868 -v cowork-data:/data ghcr.io/slashman413/cowork:1.0.1`
 - **Local Network Fleet:** Let your other homelab machines join the pool with a lightweight Node script.
 - **100% Free & Open Source:** Licensed under MIT.
 
@@ -503,7 +503,7 @@ We've written a step-by-step guide and would love to share it with the Cline com
 - **Tweet 8 (Docker One-Liner):**
   > Get it running in under 60 seconds with Docker:
   >
-  > `docker run -d -p 6868:6868 -v cowork-data:/data ghcr.io/cowork/cowork:1.0.1`
+  > `docker run -d -p 6868:6868 -v cowork-data:/data ghcr.io/slashman413/cowork:1.0.1`
   >
   > Or clone the repo: `git clone https://github.com/slashman413/cowork`
 
@@ -539,7 +539,7 @@ We built **Cowork** — an open-source, self-hosted MCP server & Web UI that act
 - ⚡ **Remote Fleet:** Connect any local GPU box or laptop in 1 command.
 - 📜 **100% MIT Open Source:** https://github.com/slashman413/cowork
 
-Docker: `docker run -d -p 6868:6868 -v cowork-data:/data ghcr.io/cowork/cowork:1.0.1`
+Docker: `docker run -d -p 6868:6868 -v cowork-data:/data ghcr.io/slashman413/cowork:1.0.1`
 
 Would love to hear what you think or what integrations you'd like to see!
 ```
