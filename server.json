@@ -8,18 +8,26 @@
     "source": "github"
   },
   "websiteUrl": "https://github.com/slashman413/cowork",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "packages": [
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/slashman413/cowork:1.0.1",
+      "identifier": "ghcr.io/slashman413/cowork:1.0.2",
       "transport": {
         "type": "streamable-http",
         "url": "http://localhost:6868/mcp"
       },
       "runtimeArguments": [
-        { "type": "named", "name": "-p", "value": "6868:6868" },
-        { "type": "named", "name": "-v", "value": "cowork-data:/data" }
+        {
+          "type": "named",
+          "name": "-p",
+          "value": "6868:6868"
+        },
+        {
+          "type": "named",
+          "name": "-v",
+          "value": "cowork-data:/data"
+        }
       ],
       "environmentVariables": [
         {
