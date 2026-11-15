@@ -1,13 +1,18 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.cowork/cowork",
+  "name": "io.github.slashman413/cowork",
   "title": "Cowork",
   "description": "Self-hosted MCP task inbox shared by Claude Code, Codex, Gemini CLI and local LLMs.",
+  "repository": {
+    "url": "https://github.com/slashman413/cowork",
+    "source": "github"
+  },
+  "websiteUrl": "https://github.com/slashman413/cowork",
   "version": "1.0.1",
   "packages": [
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/cowork/cowork:1.0.1",
+      "identifier": "ghcr.io/slashman413/cowork:1.0.1",
       "transport": {
         "type": "streamable-http",
         "url": "http://localhost:6868/mcp"
@@ -25,5 +30,10 @@
         }
       ]
     }
-  ]
+  ],
+  "_meta": {
+    "io.github.slashman413.cowork": {
+      "namespace": "io.github.slashman413.cowork"
+    }
+  }
 }
