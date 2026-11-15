@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="zh-TW" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LINE Creators Market 登入認證 · Cowork</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <style>
+    :root[data-theme="dark"] {
+      --bg: #0b0f17;
+      --panel: #121826;
+      --panel-2: #0e1320;
+      --border: #232c3d;
+      --border-focus: #06c755;
+      --text: #e6edf7;
+      --muted: #8b98ad;
+      --accent: #06c755;
+      --accent-soft: rgba(6, 199, 85, 0.15);
+      --accent-glow: rgba(6, 199, 85, 0.35);
+      --ok: #22c55e;
+      --warn: #eab308;
+      --bad: #ef4444;
+      --bad-soft: rgba(239, 68, 68, 0.15);
+      --shadow: 0 10px 32px rgba(0,0,0,.45);
+    }
+    :root[data-theme="light"] {
+      --bg: #f6f8fc;
+      --panel: #ffffff;
+      --panel-2: #eef2f8;
+      --border: #dbe2ee;
+      --border-focus: #06c755;
+      --text: #1a2130;
+      --muted: #5b6779;
+      --accent: #05b34c;
+      --accent-soft: rgba(5, 179, 76, 0.12);
+      --accent-glow: rgba(5, 179, 76, 0.25);
+      --ok: #16a34a;
+      --warn: #b8860b;
+      --bad: #dc2626;
+      --bad-soft: rgba(220, 38, 38, 0.12);
+      --shadow: 0 8px 30px rgba(20,30,60,.12);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { min-height: 100%; }
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      display: flex;
+      flex-direction: column;
+      transition: background .2s, color .2s;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 12px 24px;
+      border-bottom: 1px solid var(--border);
+      background: var(--panel);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    header .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 700;
+      font-size: 1.05rem;
+      letter-spacing: -0.01em;
+    }
+    header .brand .dot {
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 12px var(--accent);
+    }
+    header .spacer { flex: 1; }
+    .btn {
+      color: var(--muted);
+      text-decoration: none;
+      font-size: .85rem;
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 7px 14px;
+      cursor: pointer;
+      font-family: inherit;
+      font-weight: 500;
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      transition: all .15s ease;
+    }
+    .btn:hover:not(:disabled) {
+      color: var(--text);
+      border-color: var(--border-focus);
+      transform: translateY(-1px);
+    }
+    .btn:disabled {
+      opacity: .5;
+      cursor: not-allowed;
+      transform: none !important;
+    }
+    .btn.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+      font-weight: 600;
+    }
+    .btn.primary:hover:not(:disabled) {
+      background: #05b64e;
+      border-color: #05b64e;
+      box-shadow: 0 4px 16px var(--accent-glow);
+    }
+
+    .container {
+      max-width: 1000px;
+      width: 100%;
+      margin: 24px auto;
+      padding: 0 20px 48px;
+      display: grid;
+      grid-template-columns: 1fr 340px;
+      gap: 24px;
+      flex: 1;
+    }
+    @media (max-width: 860px) {
+      .container {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 24px;
+      box-shadow: var(--shadow);
+    }
+
+    /* Status Banner */
+    .status-banner {
+      border-radius: 12px;
+      padding: 16px 20px;
+      margin-bottom: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      transition: all .25s ease;
+    }
+    .status-banner.waiting {
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+    }
+    .status-banner.pin {
+      background: var(--bad-soft);
+      border: 2px solid var(--bad);
+      animation: pulse-border 2s infinite;
+    }
+    .status-banner.logged-in {
+      background: var(--accent-soft);
+      border: 2px solid var(--accent);
+    }
+    @keyframes pulse-border {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
+      50% { box-shadow: 0 0 0 8px rgba(239, 68, 68, 0); }
+    }
+
+    .status-title {
+      font-size: 1.15rem;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .status-desc {
+      font-size: .88rem;
+      color: var(--muted);
+    }
+
+    /* Massive PIN Box */
+    .pin-display {
+      display: none;
+      margin: 16px 0;
+      padding: 20px;
+      background: var(--panel-2);
+      border: 2px dashed var(--bad);
+      border-radius: 12px;
+      text-align: center;
+    }
+    .pin-digits {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 4rem;
+      font-weight: 800;
+      color: var(--bad);
+      letter-spacing: 14px;
+      line-height: 1;
+      margin: 8px 0;
+      text-shadow: 0 2px 12px rgba(239, 68, 68, 0.3);
+    }
+    .pin-countdown {
+      font-size: 1rem;
+      font-weight: 600;
+      color: var(--bad);
+    }
+
+    /* QR Container */
+    .qr-wrapper {
+      text-align: center;
+      margin: 20px 0;
+      padding: 20px;
+      background: var(--panel-2);
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      position: relative;
+    }
+    .qr-img {
+      max-width: 320px;
+      width: 100%;
+      height: auto;
+      border-radius: 10px;
+      box-shadow: 0 4px 18px rgba(0,0,0,.25);
+      background: #fff;
+      display: inline-block;
+      min-height: 320px;
+    }
+    .qr-meta {
+      margin-top: 12px;
+      font-size: .85rem;
+      color: var(--muted);
+      display: flex;
+      justify-content: center;
+      gap: 16px;
+    }
+    .qr-age.stale {
+      color: var(--bad);
+      font-weight: 600;
+    }
+
+    /* Actions */
+    .action-row {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-top: 18px;
+    }
+
+    /* Instructions & Sidebar */
+    .guide-step {
+      display: flex;
+      gap: 14px;
+      margin-bottom: 18px;
+    }
+    .step-num {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: var(--accent-soft);
+      color: var(--accent);
+      border: 1px solid var(--accent);
+      font-weight: 700;
+      font-size: .85rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .step-content h4 {
+      font-size: .92rem;
+      font-weight: 600;
+      margin-bottom: 2px;
+    }
+    .step-content p {
+      font-size: .82rem;
+      color: var(--muted);
+      line-height: 1.4;
+    }
+
+    /* Terminal Console */
+    .terminal-box {
+      margin-top: 24px;
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 14px;
+    }
+    .terminal-head {
+      font-size: .78rem;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .05em;
+      margin-bottom: 8px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .terminal-pre {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: .78rem;
+      color: var(--muted);
+      white-space: pre-wrap;
+      word-break: break-all;
+      max-height: 140px;
+      overflow-y: auto;
+      line-height: 1.45;
+    }
+
+    .pill {
+      font-size: .75rem;
+      padding: 3px 9px;
+      border-radius: 999px;
+      font-weight: 600;
+    }
+    .pill.green { background: var(--accent-soft); color: var(--accent); }
+    .pill.yellow { background: rgba(234, 179, 8, 0.15); color: var(--warn); }
+    .pill.red { background: var(--bad-soft); color: var(--bad); }
+    .pill.gray { background: var(--panel-2); color: var(--muted); border: 1px solid var(--border); }
+  </style>
+</head>
+<body>
+
+  <header>
+    <a class="btn" href="/#portal">← Cowork</a>
+    <div class="brand">
+      <div class="dot"></div>
+      <span>LINE Creators Market 登入認證</span>
+    </div>
+    <div class="spacer"></div>
+    <span id="badge-status" class="pill gray">載入中…</span>
+    <button class="btn" id="theme-toggle" onclick="toggleTheme()" title="切換明暗主題">🌓</button>
+  </header>
+
+  <div class="container">
+    <!-- Left Main Column -->
+    <div class="main-col">
+      <div class="card">
+
+        <!-- Status Banner -->
+        <div id="status-banner" class="status-banner waiting">
+          <div class="status-title" id="status-title">
+            <span>📱 步驟 1：請使用手機 LINE 掃描下方 QR Code</span>
+          </div>
+          <div class="status-desc" id="status-desc">
+            若這頁是開在手機上：可先螢幕截圖，至 LINE 掃描器選擇右下角相簿載入截圖。
+          </div>
+        </div>
+
+        <!-- High Visibility PIN Box -->
+        <div id="pin-display" class="pin-display">
+          <div style="font-size:1.1rem; font-weight:700; color:var(--bad)">👉 請立即在手機 LINE 輸入此 4 位數認證碼</div>
+          <div id="pin-digits" class="pin-digits">----</div>
+          <div id="pin-countdown" class="pin-countdown">認證有效時間剩餘中…</div>
+        </div>
+
+        <!-- QR Code Area -->
+        <div class="qr-wrapper">
+          <img id="qr-img" class="qr-img" alt="LINE Login QR Code" src="/line-login/qr.png">
+          <div class="qr-meta">
+            <span id="qr-age-label" class="qr-age">條碼載入中…</span>
+            <span id="auto-refresh-label">（每 150 秒自動更新）</span>
+          </div>
+        </div>
+
+        <!-- Action Buttons -->
+        <div class="action-row">
+          <button id="btn-refresh" class="btn primary" onclick="requestQrRefresh()">
+            🔄 立即更新 QR 碼
+          </button>
+          <button id="btn-restart" class="btn" onclick="requestServiceRestart()">
+            ▶ 重啟登入程序
+          </button>
+          <span id="action-msg" style="align-self:center; font-size:.85rem; color:var(--accent);"></span>
+        </div>
+
+        <!-- Terminal Output -->
+        <div class="terminal-box">
+          <div class="terminal-head">
+            <span>即時服務狀態記錄 (Live Logs)</span>
+            <span id="last-update-time" style="font-weight:400">--:--:--</span>
+          </div>
+          <pre id="terminal-log" class="terminal-pre">正在連線至登入服務…</pre>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Right Sidebar: Guide & Info -->
+    <div class="side-col">
+      <div class="card" style="height: 100%;">
+        <h3 style="font-size:1rem; font-weight:700; margin-bottom:16px;">快速操作指引</h3>
+
+        <div class="guide-step">
+          <div class="step-num">1</div>
+          <div class="step-content">
+            <h4>確認條碼有效</h4>
+            <p>準備掃描前，可點擊「🔄 立即更新 QR 碼」換一張剛出爐的條碼。</p>
+          </div>
+        </div>
+
+        <div class="guide-step">
+          <div class="step-num">2</div>
+          <div class="step-content">
+            <h4>手機 LINE 掃描</h4>
+            <p>開啟手機 LINE App → 主頁搜尋列右側「掃描」圖示掃描畫面中的條碼。</p>
+          </div>
+        </div>
+
+        <div class="guide-step">
+          <div class="step-num">3</div>
+          <div class="step-content">
+            <h4>輸入 4 位數 PIN</h4>
+            <p>掃描後網頁會跳出紅色超大字 4 位數認證碼，請於 2 分鐘內在手機 LINE 輸入此代碼。</p>
+          </div>
+        </div>
+
+        <div class="guide-step">
+          <div class="step-num">4</div>
+          <div class="step-content">
+            <h4>自動儲存 Session</h4>
+            <p>手機確認後，本頁面將即時變為「✅ 已登入」。Session 會持久化保存於 <code>~/.priv/line_creators_cookies.json</code>，所有背景貼圖審查與統計任務將自動恢復執行！</p>
+          </div>
+        </div>
+
+        <hr style="border:0; border-top:1px solid var(--border); margin:20px 0;">
+
+        <div style="font-size:.82rem; color:var(--muted); line-height:1.5;">
+          <strong>💡 永久固定網址</strong><br>
+          本頁面路徑為固定非臨時路徑 <code>/line-login.html</code>，您可隨時從 Cowork Portal 的 <strong>LINE Login</strong> 卡片開啟，無須擔心任務結束或路徑失效。
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let isRequesting = false;
+
+    function toggleTheme() {
+      const html = document.documentElement;
+      const cur = html.getAttribute('data-theme') || 'dark';
+      const nxt = cur === 'dark' ? 'light' : 'dark';
+      html.setAttribute('data-theme', nxt);
+      localStorage.setItem('cowork-theme', nxt);
+    }
+    const savedTheme = localStorage.getItem('cowork-theme');
+    if (savedTheme) document.documentElement.setAttribute('data-theme', savedTheme);
+
+    async function requestQrRefresh() {
+      const btn = document.getElementById('btn-refresh');
+      const msg = document.getElementById('action-msg');
+      btn.disabled = true;
+      msg.textContent = '已送出更新要求，約 5 秒後換新…';
+      try {
+        await fetch('/api/artifacts/line-login/refresh_req.txt', {
+          method: 'POST',
+          body: 'refresh ' + Date.now(),
+          headers: { 'Content-Type': 'application/octet-stream' }
+        });
+        setTimeout(() => {
+          btn.disabled = false;
+          msg.textContent = '';
+          poll();
+        }, 5000);
+      } catch (err) {
+        msg.textContent = '更新要求失敗：' + err;
+        btn.disabled = false;
+      }
+    }
+
+    async function requestServiceRestart() {
+      const btn = document.getElementById('btn-restart');
+      const msg = document.getElementById('action-msg');
+      btn.disabled = true;
+      msg.textContent = '正在重新觸發登入程序…';
+      try {
+        await fetch('/api/artifacts/line-login/start_req.txt', {
+          method: 'POST',
+          body: 'restart ' + Date.now(),
+          headers: { 'Content-Type': 'application/octet-stream' }
+        });
+        setTimeout(() => {
+          btn.disabled = false;
+          msg.textContent = '';
+          poll();
+        }, 4000);
+      } catch (err) {
+        msg.textContent = '重啟失敗：' + err;
+        btn.disabled = false;
+      }
+    }
+
+    async function poll() {
+      if (isRequesting) return;
+      isRequesting = true;
+      const now = Date.now();
+
+      // Refresh QR image
+      const qrImg = document.getElementById('qr-img');
+      qrImg.src = '/line-login/qr.png?t=' + now;
+
+      try {
+        const res = await fetch('/line-login/status.json?t=' + now);
+        if (res.ok) {
+          const data = await res.json();
+          updateUI(data);
+        } else {
+          // fallback to reading text status if json not ready
+          const resTxt = await fetch('/line-login/status.txt?t=' + now);
+          if (resTxt.ok) {
+            const txt = await resTxt.text();
+            parseTextStatus(txt);
+          }
+        }
+      } catch (e) {
+        // network or server not reachable
+      } finally {
+        isRequesting = false;
+      }
+    }
+
+    function updateUI(data) {
+      const banner = document.getElementById('status-banner');
+      const title = document.getElementById('status-title');
+      const desc = document.getElementById('status-desc');
+      const badge = document.getElementById('badge-status');
+      const pinBox = document.getElementById('pin-display');
+      const pinDigits = document.getElementById('pin-digits');
+      const pinCountdown = document.getElementById('pin-countdown');
+      const ageLabel = document.getElementById('qr-age-label');
+      const logBox = document.getElementById('terminal-log');
+      const lastUp = document.getElementById('last-update-time');
+
+      lastUp.textContent = data.updated_at || new Date().toLocaleTimeString();
+
+      if (data.log) {
+        logBox.textContent = data.log;
+      }
+
+      if (data.qr_age !== undefined) {
+        const age = data.qr_age;
+        ageLabel.textContent = `這張 QR 碼已顯示 ${age} 秒`;
+        if (age > 120) {
+          ageLabel.className = 'qr-age stale';
+          ageLabel.textContent += '（即將過期，建議點擊 🔄 更新）';
+        } else {
+          ageLabel.className = 'qr-age';
+        }
+      }
+
+      if (data.status === 'LOGGED_IN') {
+        banner.className = 'status-banner logged-in';
+        title.innerHTML = '<span>✅ 已成功登入 LINE Creators Market！</span>';
+        desc.textContent = 'Session 已自動持久化儲存，背景貼圖審查與數據統計正在進行中。';
+        badge.className = 'pill green';
+        badge.textContent = '已登入 (Active)';
+        pinBox.style.display = 'none';
+        document.getElementById('btn-refresh').style.display = 'none';
+      } else if (data.status === 'PIN_REQUIRED' && data.pin) {
+        banner.className = 'status-banner pin';
+        title.innerHTML = '<span>🚨 手機已完成掃描！請立即在 LINE 輸入認證碼</span>';
+        desc.textContent = '請注意：認證碼倒數逾時後 LINE 會自動作廢，請盡速輸入。';
+        badge.className = 'pill red';
+        badge.textContent = '等待 PIN 輸入';
+        pinBox.style.display = 'block';
+        pinDigits.textContent = data.pin;
+        pinCountdown.textContent = data.countdown ? `剩餘時間：${data.countdown}` : '倒數計時中（約 2 分鐘內有效）';
+      } else {
+        banner.className = 'status-banner waiting';
+        title.innerHTML = '<span>📱 步驟 1：請使用手機 LINE 掃描下方 QR Code</span>';
+        desc.textContent = '掃描後畫面會在 3 秒內自動轉為 4 位數 PIN 認證碼顯示。';
+        badge.className = 'pill yellow';
+        badge.textContent = '等待掃描';
+        pinBox.style.display = 'none';
+      }
+    }
+
+    function parseTextStatus(txt) {
+      const pinMatch = txt.match(/^\s*(\d{4,6})\s*$/m);
+      const timeMatch = txt.match(/剩餘時間\s*([\d:]+)/);
+      const ageMatch = txt.match(/qr_age=(\d+)/);
+      const isLogged = txt.startsWith('LOGGED_IN');
+
+      const data = {
+        status: isLogged ? 'LOGGED_IN' : (pinMatch ? 'PIN_REQUIRED' : 'WAITING_SCAN'),
+        pin: pinMatch ? pinMatch[1] : null,
+        countdown: timeMatch ? timeMatch[1] : null,
+        qr_age: ageMatch ? parseInt(ageMatch[1], 10) : 0,
+        updated_at: new Date().toLocaleTimeString(),
+        log: txt
+      };
+      updateUI(data);
+    }
+
+    poll();
+    setInterval(poll, 2500);
+  </script>
+</body>
+</html>

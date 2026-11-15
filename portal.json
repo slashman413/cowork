@@ -116,6 +116,18 @@
       "probe": "http://localhost:47989/serverinfo",
       "unit": "sunshine.service",
       "controllable": true
+    },
+    "linelogin": {
+      "url": "/line-login.html",
+      "label": "LINE Login 創作者登入",
+      "description": "LINE Creators Market 互動登入：即時掃描 QR Code 與輸入 4 位數認證碼，管理貼圖創作者 Session。",
+      "icon": "message-circle",
+      "category": "Services",
+      "enabled": true,
+      "order": 45,
+      "accent": "#06C755",
+      "probe": false,
+      "unit": "line-login.service"
     }
   }
 }
