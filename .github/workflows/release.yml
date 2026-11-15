@@ -25,7 +25,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ env.ACTOR || 'slashman413' }}
-          password: ${{ secrets.REGISTRY_TOKEN || secrets.TOKEN }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - id: meta
         uses: docker/metadata-action@v5
         with:
