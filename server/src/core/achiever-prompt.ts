@@ -86,6 +86,11 @@ export function buildAchieverPrompt(ctx: AchieverPromptContext): string {
   }
 
   if (ctx.nextMove) lines.push('', `NEXT MOVE (from the Judger's latest minutes): ${ctx.nextMove}`);
+  const answers = (rec.operatorAnswers || []).slice(-3);
+  if (answers.length) {
+    lines.push('', 'OPERATOR ANSWERS (binding decisions from the person running this goal; act on them, do not ask again):');
+    for (const a of answers) lines.push(`- ${a.at.slice(0, 10)}${a.question ? ` Q: ${clip(a.question, 200)}` : ''} A: ${clip(a.answer, 600)}`);
+  }
   if (rec.lastBlock) lines.push('', `RESUMED FROM A BLOCK: ${clip(rec.lastBlock.reason, 300)}${rec.lastBlock.unblockCriteria ? ` Resume condition: ${clip(rec.lastBlock.unblockCriteria, 200)}` : ''} To check it, emit a mechanical task. If it still holds, block again.`);
   if (rec.lastRejected) lines.push('', `LAST MOVE REJECTED: ${clip(rec.lastRejected.reason, 300)}`);
 

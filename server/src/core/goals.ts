@@ -452,6 +452,27 @@ export class Goals {
 
   resume(goalId: string): GoalRecord { return this.activate(goalId); }
 
+  /** A person answers the goal's open question (usually a block's "CEO question").
+   *  The answer is stored as a standing decision the Achiever sees on every turn,
+   *  logged in the history, and a blocked goal resumes at once (a manual resume, so
+   *  the breaker resets). An answer to a paused or active goal is recorded as a
+   *  steering note and does not change its status. */
+  answer(goalId: string, text: string): GoalRecord {
+    const answer = String(text || '').trim().slice(0, 4000);
+    if (!answer) throw new Error('answer is required');
+    const rec = this.load(goalId);
+    if (!rec) throw new Error('goal not found');
+    if (rec.status === 'achieved') throw new Error('cannot answer an achieved goal');
+    const at = new Date().toISOString();
+    const question = rec.status === 'blocked' ? (rec.blockReason || rec.unblockCriteria) : undefined;
+    rec.operatorAnswers = [...(rec.operatorAnswers || []), { ...(question ? { question: question.slice(0, 1000) } : {}), answer, at }].slice(-5);
+    this.addHistory(rec, { kind: 'answer', reason: answer, at });
+    this.trail(goalId, { phase: this.currentPhase(rec)?.key || 'goal', decision: 'operator answered', why: question || 'steering note',
+      evidence: 'goal history', result: answer.slice(0, 300) });
+    this.save(rec);
+    return rec.status === 'blocked' ? this.activate(goalId) : this.load(goalId)!;
+  }
+
   /**
    * Recoverable hold — the replacement for the old terminal `abandon` (ADR-007).
    * A blocked goal is NOT thrown away: it records the obstacle (`reason`) and the

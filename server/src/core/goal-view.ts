@@ -12,7 +12,7 @@ import type { GoalBlockCode, GoalDecision, GoalRecord, RunUsage, Task } from '..
 import { isRateLimitFailure } from './result-verifier.js';
 
 export type GoalState = 'needs-you' | 'running' | 'thinking' | 'auditing' | 'sleeping' | 'retrying' | 'stuck' | 'paused' | 'draft' | 'achieved';
-export type GoalAction = 'raise-budget' | 'retry' | 'plan-phase' | 'open-task' | 'activate';
+export type GoalAction = 'raise-budget' | 'retry' | 'plan-phase' | 'open-task' | 'activate' | 'answer';
 
 export interface DisplayState {
   state: GoalState;
@@ -97,7 +97,7 @@ export function deriveDisplayState(rec: GoalRecord, tasks: Task[], opts: Display
     }
     // The server runs this check itself, so nobody has to act unless they want to.
     if (rec.unblockCheck) return { state: 'retrying', line: clip(`Waiting: ${rec.unblockCriteria || rec.blockReason || 'a check to pass'}`, 90), nextAt: retry, action: 'retry' };
-    return { state: 'needs-you', line: clip(rec.unblockCriteria && code === 'achiever_declared' ? rec.unblockCriteria : rec.blockReason || 'Held', 90), nextAt: retry, action: 'retry' };
+    return { state: 'needs-you', line: clip(rec.unblockCriteria && code === 'achiever_declared' ? rec.unblockCriteria : rec.blockReason || 'Held', 90), nextAt: retry, action: 'answer' };
   }
 
   // active

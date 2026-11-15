@@ -975,7 +975,7 @@ export interface GoalPhase {
 /** One row of a goal's audit trail — every autonomous move is recorded so the
  *  loop is fully traceable (the audit trail IS the feature, not an add-on). */
 export interface GoalDecision {
-  kind: 'evaluate' | 'plan' | 'emit' | 'judge' | 'finish' | 'block' | 'resume';
+  kind: 'evaluate' | 'plan' | 'emit' | 'judge' | 'finish' | 'block' | 'resume' | 'answer';
   phaseKey?: string;
   /** For 'emit'/'judge': the task the decision created. */
   taskId?: string;
@@ -1052,6 +1052,9 @@ export interface GoalRecord {
   /** The obstacle a resumed goal was held on, shown in the next prompt until a move
    *  makes progress: a tool-free Achiever has no other way to know what to re-check. */
   lastBlock?: { reason: string; unblockCriteria?: string; at: string };
+  /** A person's answers to the goal's block questions, newest last (at most 5).
+   *  Kept across moves: they are standing decisions, shown in every Achiever prompt. */
+  operatorAnswers?: { question?: string; answer: string; at: string }[];
   /** Why the last Achiever move was rejected, shown in the next prompt. */
   lastRejected?: { reason: string; at: string };
   /** Every Achiever agent is rate limited: no turn before this time. No failure is

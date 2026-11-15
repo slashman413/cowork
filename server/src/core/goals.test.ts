@@ -397,3 +397,29 @@ test('phaseNeedingJudger flags a completing phase whose Judger event was dropped
   store.deleteTask(judger.id);
   assert.equal(goals.phaseNeedingJudger(g.goalId), 'research');
 });
+
+// ── operator answers ─────────────────────────────────────────────────────────
+
+test('answer records the decision, resumes a blocked goal and resets the breaker', () => {
+  const { goals } = makeGoals();
+  const g = goals.create(seed); goals.activate(g.goalId);
+  goals.block(g.goalId, 'CEO question: (a) supply a token? (b) post manually?', 'CEO answers', { code: 'achiever_declared' });
+  const r = goals.answer(g.goalId, '(b) I will post manually');
+  assert.equal(r.status, 'active');
+  assert.equal(r.blockCount, undefined);
+  assert.equal(r.operatorAnswers!.length, 1);
+  assert.match(r.operatorAnswers![0].question!, /CEO question/);
+  assert.equal(r.operatorAnswers![0].answer, '(b) I will post manually');
+  assert.ok(r.history.some(h => h.kind === 'answer'));
+});
+
+test('answer on an active goal is a steering note; empty and achieved are refused', () => {
+  const { goals } = makeGoals();
+  const g = goals.create(seed); goals.activate(g.goalId);
+  assert.throws(() => goals.answer(g.goalId, '  '), /required/);
+  const r = goals.answer(g.goalId, 'Focus on Mastodon');
+  assert.equal(r.status, 'active');
+  assert.equal(r.operatorAnswers![0].question, undefined);
+  goals.applyAchieverDecision(g.goalId, { kind: 'evaluate', met: true, reason: 'done' });
+  assert.throws(() => goals.answer(g.goalId, 'late'), /achieved/);
+});

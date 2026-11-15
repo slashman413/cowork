@@ -137,6 +137,20 @@
 .gv-h { font-size: 0.875rem; font-weight: 600; margin: 16px 0 8px; }
 .gv-block { padding: 8px 12px; border: 1px solid var(--gv-line); border-radius: 8px; margin-bottom: 12px; }
 .gv-pre { white-space: pre-wrap; }
+/* Block question: what the goal needs from you, with its choices as buttons. */
+.gv-question { border-color: var(--gv-needs); border-left-width: 4px; padding: 12px 16px; }
+.gv-q-h { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; font-size: 0.9375rem; color: var(--gv-needs); }
+.gv-q-opts { list-style: none; margin: 8px 0 12px; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.gv-q-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.gv-q-foot .btn { display: inline-flex; align-items: center; gap: 6px; }
+.gv-q-text { max-height: 30vh; overflow-y: auto; padding: 8px 12px; border-radius: 8px; background: var(--gv-tint); font-size: 0.8125rem; line-height: 1.5; }
+.gv-opts { display: flex; flex-direction: column; gap: 6px; }
+.gv-opt { display: flex; align-items: flex-start; gap: 8px; width: 100%; min-height: 40px; padding: 8px 12px; text-align: left; font: inherit; color: inherit; background: transparent; border: 1px solid var(--gv-line); border-radius: 8px; cursor: pointer; line-height: 1.4; }
+.gv-opt:hover { background: var(--gv-tint); }
+.gv-opt:focus-visible { outline: 2px solid var(--accent-color); outline-offset: 2px; }
+.gv-opt[aria-pressed="true"] { border-color: var(--accent-color); background: var(--gv-tint); }
+.gv-opt-key { flex: none; display: inline-grid; place-items: center; min-width: 22px; height: 22px; padding: 0 4px; border-radius: 6px; font-size: 0.75rem; font-weight: 700; text-transform: uppercase; background: var(--gv-line); }
+.gv-primary { display: inline-flex; align-items: center; gap: 6px; }
 .gv-more > summary { cursor: pointer; min-height: 24px; color: var(--gv-muted); }
 .gv-tasks, .gv-decisions { list-style: none; margin: 8px 0; padding: 0; }
 .gv-tasks li, .gv-decisions li { padding: 6px 0; border-top: 1px solid var(--gv-line); font-size: 0.8125rem; overflow-wrap: anywhere; }
@@ -185,7 +199,7 @@
 [data-theme="dark"] .gv .btn-primary, [data-theme="dark"] .gv-dialog .btn-primary { background: #2563EB; border-color: #2563EB; color: #fff; }
 
 /* Dialog */
-.gv-dialog { width: min(480px, 92vw); border: 1px solid var(--gv-line); border-radius: 12px; padding: 16px; background: var(--card-bg, var(--bg-primary)); color: var(--text-primary); }
+.gv-dialog { width: min(560px, 92vw); max-height: 90vh; overflow-y: auto; border: 1px solid var(--gv-line); border-radius: 12px; padding: 16px; background: var(--card-bg, var(--bg-primary)); color: var(--text-primary); }
 .gv-dialog::backdrop { background: var(--modal-backdrop); }
 .gv-dialog h3 { margin: 0 0 12px; font-size: 1rem; overflow-wrap: anywhere; }
 .gv-dialog-body { display: flex; flex-direction: column; gap: 12px; }

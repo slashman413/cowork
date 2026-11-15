@@ -69,7 +69,7 @@ test('display state table', () => {
     ['first failure', { status: 'blocked', blockCode: 'achiever_no_progress', blockCount: 1 }, [], 'retrying', 'retry'],
     ['repeat failure', { status: 'blocked', blockCode: 'achiever_no_progress', blockCount: 4 }, [], 'stuck', 'retry'],
     ['no phase left', { status: 'blocked', blockCode: 'achiever_no_progress', blockCount: 1, phases: [{ key: 'a', title: 'A', status: 'audited', taskIds: [] }] }, [], 'stuck', 'plan-phase'],
-    ['human obstacle', { status: 'blocked', blockCode: 'achiever_declared', unblockCriteria: 'Log in to LINE' }, [], 'needs-you', 'retry'],
+    ['human obstacle', { status: 'blocked', blockCode: 'achiever_declared', unblockCriteria: 'Log in to LINE' }, [], 'needs-you', 'answer'],
     ['hold', { achieverRetryAt: '2026-11-06T09:00:00Z' }, [], 'retrying', 'retry'],
   ];
   for (const [name, over, tasks, state, action] of cases) {
@@ -372,4 +372,10 @@ test('a resumed goal tells the Achiever what it was held on, until a move progre
   assert.match(buildAchieverPrompt(ctx as any), /RESUMED FROM A BLOCK: LINE login expired Resume condition: Login works/);
   goals.applyAchieverDecision(g.goalId, { kind: 'plan', phase: { key: 'next', title: 'N' }, reason: 'r' } as any);
   assert.equal(goals.get(g.goalId)!.lastBlock, undefined);
+});
+
+test('achiever prompt carries the operator answers as binding decisions', () => {
+  const p = buildAchieverPrompt(promptCtx({ record: rec({ operatorAnswers: [{ question: 'Supply a token?', answer: 'No. Reduce to 1/7.', at: '2026-11-15T00:00:00Z' }] }) }));
+  assert.match(p, /OPERATOR ANSWERS/);
+  assert.match(p, /Reduce to 1\/7/);
 });

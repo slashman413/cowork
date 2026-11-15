@@ -19,6 +19,7 @@ import { sanitizeCheck, type Goals } from '../core/goals.js';
  *   POST   /goals/:id/activate        draft/paused/blocked → active (resume)
  *   POST   /goals/:id/pause           active → paused
  *   POST   /goals/:id/block           recoverable hold, with reason + unblockCriteria
+ *   POST   /goals/:id/answer          answer the block question { answer } → resumes a blocked goal
  *   DELETE /goals/:id                 remove goal (?withTasks=1 drops its tasks)
  *   GET    /goals/:id/tasks           the tasks this goal generated (lineage)
  */
@@ -96,6 +97,11 @@ export function createGoalRouter(goals: Goals): Router {
       const unblockCriteria = req.body && req.body.unblockCriteria ? String(req.body.unblockCriteria) : undefined;
       res.json({ ok: true, goal: goals.block(req.params.id, reason, unblockCriteria, { code: 'operator', check: sanitizeCheck(req.body?.unblockCheck) }) });
     } catch (e: any) { res.status(400).json({ error: e.message }); }
+  });
+
+  router.post('/goals/:id/answer', (req, res) => {
+    try { res.json({ ok: true, goal: goals.answer(req.params.id, String(req.body?.answer ?? '')) }); }
+    catch (e: any) { res.status(e.message === 'goal not found' ? 404 : 400).json({ error: e.message }); }
   });
 
   router.delete('/goals/:id', (req, res) => {

@@ -99,6 +99,22 @@
   /** Is this text a Yes/No question? A warning only: the server does not enforce it. */
   const looksYesNo = (s) => /\?\s*$/.test(s) && /^\s*(is|are|does|do|did|has|have|can|will|was|were|should)\b/i.test(s);
 
+  /** Split a block question into its "(a) … (b) …" choices, when it offers them. */
+  function questionOptions(text) {
+    const parts = String(text || '').split(/(?:^|\s)\(([a-f])\)\s+/);
+    if (parts.length < 5) return [];   // fewer than two choices: free text only
+    const out = [];
+    for (let i = 1; i < parts.length; i += 2) {
+      let t = parts[i + 1] || '';
+      if (i + 2 >= parts.length) t = t.split(/\s(?=(?:Note|Once you answer|After the answer)\b)/i)[0];
+      t = t.replace(/\s*\b(or|and)\s*$/i, '').replace(/[;,]\s*$/, '').trim();
+      if (t) out.push({ key: parts[i], text: t });
+    }
+    return out;
+  }
+  /** The question part of a block reason: what comes before the first choice. */
+  const questionLead = (text) => String(text || '').split(/(?:^|\s)\([a-f]\)\s+/)[0].trim();
+
   function deriveKey(raw, idx, seen) {
     const base = raw.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || `phase-${idx + 1}`;
     let key = base; let n = 2;
@@ -388,6 +404,7 @@
     _gvPrimary(g) {
       const a = g.display.action;
       if (a === 'raise-budget') return `<button type="button" class="btn btn-primary gv-primary" data-act="raise">Raise budget</button>`;
+      if (a === 'answer') return `<button type="button" class="btn btn-primary gv-primary" data-act="answer">${icon('message-square-reply')}<span>Answer</span></button>`;
       if (a === 'retry') return `<button type="button" class="btn btn-primary gv-primary" data-act="retry">Retry now</button>`;
       if (a === 'plan-phase') return `<button type="button" class="btn btn-primary gv-primary" data-act="plan">Plan a phase</button>`;
       if (a === 'activate') return `<button type="button" class="btn btn-primary gv-primary" data-act="activate">${g.status === 'paused' ? 'Resume' : 'Activate'}</button>`;
@@ -399,6 +416,8 @@
       const d = g.display;
       const menu = [];
       if (g.status === 'active') menu.push(`<button type="button" data-act="pause">Pause</button>`);
+      if (d.action === 'answer') menu.push(`<button type="button" data-act="retry">Retry without answering</button>`);
+      if (g.status === 'active' || g.status === 'paused') menu.push(`<button type="button" data-act="note">Add a note for the Achiever…</button>`);
       if (g.status !== 'achieved' && g.status !== 'blocked') menu.push(`<button type="button" data-act="block">Block…</button>`);
       menu.push(`<button type="button" data-act="delete" class="is-danger">Delete…</button>`);
       const tabs = TABS.map(([k, label]) => `<a role="tab" id="gv-tab-${k}" href="#goals/${enc(g.goalId)}/${k}" aria-selected="${k === tab}" tabindex="${k === tab ? 0 : -1}" aria-controls="gv-pane">${label}</a>`).join('');
@@ -433,11 +452,24 @@
 
     _gvOverview(g) {
       const out = [];
-      if (g.status === 'blocked') {
+      if (g.status === 'blocked' && g.display.action === 'answer') {
+        const opts = questionOptions(g.blockReason);
+        const lead = opts.length ? questionLead(g.blockReason) : (g.blockReason || 'Held');
+        out.push(`<section class="gv-block gv-question" aria-labelledby="gv-q-h">
+          <h3 class="gv-q-h" id="gv-q-h">${icon('circle-alert')}<span>The goal is waiting for your answer</span></h3>
+          <p class="gv-pre">${esc(lead)}</p>
+          ${opts.length ? `<ol class="gv-q-opts">${opts.map(o => `<li><button type="button" class="gv-opt" data-act="answer" data-opt="${esc(o.key)}"><span class="gv-opt-key">${esc(o.key)}</span><span>${esc(o.text)}</span></button></li>`).join('')}</ol>` : ''}
+          ${g.unblockCriteria ? `<p><span class="gv-k">Resumes when</span> ${esc(g.unblockCriteria)}</p>` : ''}
+          <div class="gv-q-foot"><button type="button" class="btn btn-primary" data-act="answer">${icon('message-square-reply')}<span>${opts.length ? 'Answer in my own words' : 'Answer'}</span></button>
+            ${g.nextRetryAt ? `<span class="gv-muted">Without an answer it re-asks ${timeTag(g.nextRetryAt)}${g.blockCount ? ` (asked ${g.blockCount} time${g.blockCount === 1 ? '' : 's'})` : ''}</span>` : ''}</div>
+        </section>`);
+      } else if (g.status === 'blocked') {
         out.push(`<div class="gv-block"><p><span class="gv-k">Held because</span> ${esc(g.blockReason || BLOCK_TEXT[g.blockCode] || 'Held')}</p>
           ${g.unblockCriteria ? `<p><span class="gv-k">Resumes when</span> ${esc(g.unblockCriteria)}</p>` : ''}
           ${g.nextRetryAt ? `<p><span class="gv-k">Auto-retry</span> ${timeTag(g.nextRetryAt)}${g.blockCount ? ` · attempt ${g.blockCount}` : ''}</p>` : ''}</div>`);
       }
+      const answers = (g.operatorAnswers || []).slice().reverse();
+      if (answers.length) out.push(`<details class="gv-more"${g.status === 'blocked' ? '' : ' open'}><summary>Your answers (${answers.length})</summary><ul class="gv-decisions">${answers.map(a => `<li><span class="gv-muted gv-dec-at">${esc(timeAgo(a.at))}</span><div class="gv-pre">${esc(a.answer)}</div></li>`).join('')}</ul></details>`);
       if (g.status === 'achieved' && g.closedReason) out.push(`<p><span class="gv-k">Closed</span> ${esc(g.closedReason)}</p>`);
       if (g.lastRejected) out.push(`<p><span class="gv-k">Last rejected move</span> ${esc(g.lastRejected.reason)}</p>`);
       if (g.description) out.push(`<details class="gv-more"><summary>Goal details</summary><p class="gv-pre">${esc(g.description)}</p></details>`);
@@ -483,7 +515,7 @@
     _gvDecisionRows(rows) {
       return rows.slice().reverse().map(h => {
         const text = h.kind === 'block' ? (h.reason || BLOCK_TEXT[h.code] || 'Held') : (h.reason || '');
-        const label = { evaluate: h.met ? 'Criterion met' : 'Evaluated: not met', plan: 'Planned', emit: 'Created task', judge: 'Judger started', finish: 'Finished', block: 'Blocked', resume: 'Resumed' }[h.kind] || h.kind;
+        const label = { evaluate: h.met ? 'Criterion met' : 'Evaluated: not met', plan: 'Planned', emit: 'Created task', judge: 'Judger started', finish: 'Finished', block: 'Blocked', resume: 'Resumed', answer: 'You answered' }[h.kind] || h.kind;
         const count = h.count > 1 ? ` <span class="gv-count">${h.count} times since ${esc(new Date(h.firstAt || h.at).toLocaleString())}</span>` : '';
         const task = h.taskId ? ` <a href="#tasks/${enc(h.taskId)}">task</a>` : '';
         return `<li><span class="gv-dec-kind">${esc(label)}</span>${h.phaseKey ? ` <span class="gv-muted">${esc(h.phaseKey)}</span>` : ''}${count}${task}
@@ -545,6 +577,8 @@
         if (act === 'activate') return guarded(btn, async () => { await post('activate'); await after('Goal is active.'); });
         if (act === 'pause') return guarded(btn, async () => { await post('pause'); await after('Goal paused.'); });
         if (act === 'raise') { window.location.hash = `#goals/${enc(id)}/settings`; return null; }
+        if (act === 'answer') return this._gvAnswerDialog(g, after, btn.dataset.opt);
+        if (act === 'note') return this._gvAnswerDialog(g, after, undefined, true);
         if (act === 'plan') return this._gvPlanDialog(g, after);
         if (act === 'block') return this._gvBlockDialog(g, after);
         if (act === 'delete') return this._gvDeleteDialog(g);
@@ -650,6 +684,46 @@
             ...(type ? { unblockCheck: { type, value } } : {})
           });
           await after('Goal blocked.');
+          return true;
+        }
+      });
+    },
+
+    /** Answer a blocked goal's question (or leave a note on a running one). The
+     *  answer is kept as a standing decision for the Achiever, and a blocked goal
+     *  resumes at once. */
+    _gvAnswerDialog(g, after, pick, note = false) {
+      const opts = note ? [] : questionOptions(g.blockReason);
+      const chosen = opts.find(o => o.key === pick);
+      const quick = !note && !opts.length
+        ? [['yes', 'Yes, approved. Go ahead.'], ['no', 'No, not approved. Do not do it; find another way or reduce the scope.']]
+        : [];
+      const chips = [...opts.map(o => [o.key, `(${o.key}) ${o.text}`]), ...quick];
+      this._gvDialog({
+        title: note ? 'Note for the Achiever' : 'Answer the goal',
+        submit: note ? 'Save note' : 'Send answer and resume',
+        body: `${note ? '' : `<div class="gv-q-text gv-pre">${esc(g.blockReason || g.unblockCriteria || 'The goal is held.')}</div>`}
+          ${chips.length ? `<div class="gv-opts" role="group" aria-label="Quick answers">${chips.map(([k, t]) =>
+            `<button type="button" class="gv-opt" data-fill="${esc(t)}" aria-pressed="${chosen && k === chosen.key}"><span class="gv-opt-key">${esc(k)}</span><span>${esc(t.replace(/^\([a-f]\)\s*/, ''))}</span></button>`).join('')}</div>` : ''}
+          ${field('ga-answer', note ? 'Your note' : 'Your answer', `<textarea id="ga-answer" rows="5" placeholder="${note ? 'e.g. Focus on Mastodon first.' : 'Pick a choice above and add details, or write your own answer.'}"></textarea>`,
+            note ? 'The Achiever reads it on every turn from now on.' : 'The Achiever reads this on its next turn and keeps it as a standing decision. The goal resumes right away.')}`,
+        init: (dlg) => {
+          const ta = dlg.querySelector('#ga-answer');
+          if (chosen) ta.value = `(${chosen.key}) ${chosen.text}`;
+          dlg.querySelectorAll('[data-fill]').forEach(b => b.addEventListener('click', () => {
+            dlg.querySelectorAll('[data-fill]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+            ta.value = b.dataset.fill;
+            ta.focus();
+            ta.setSelectionRange(ta.value.length, ta.value.length);
+          }));
+          setTimeout(() => ta.focus(), 0);
+        },
+        onSubmit: async (dlg) => {
+          const answer = dlg.querySelector('#ga-answer').value.trim();
+          setFieldError(dlg, 'ga-answer', answer ? '' : (note ? 'Write the note.' : 'Pick a choice or write an answer.'));
+          if (!answer) { dlg.querySelector('#ga-answer').focus(); return false; }
+          await this.api.post(`/goals/${enc(g.goalId)}/answer`, { answer });
+          await after(note ? 'Note saved.' : 'Answer sent. The goal is running again.');
           return true;
         }
       });
