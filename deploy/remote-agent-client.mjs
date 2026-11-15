@@ -576,15 +576,25 @@ function buildPrompt(task, artDir, inputInfo) {
   for (const k of ['personaPrompt', 'agentAuto', 'remoteWaitSince', 'dispatched', 'attempts', 'personaName', 'ranPersona', 'ranDivision', 'ranAgent', 'isRoster', 'inputFiles']) delete shown[k];
   if (Object.keys(shown).length) lines.push('# Context', '```json', JSON.stringify(shown, null, 2), '```', '');
   if (inputInfo && inputInfo.files.length) {
+    const maxListed = 50;
+    const listed = inputInfo.files.slice(0, maxListed).map(f => `- ${join(inputInfo.dir, f)}`);
+    if (inputInfo.files.length > maxListed) {
+      listed.push(`- ... and ${inputInfo.files.length - maxListed} more files in directory: ${inputInfo.dir} (see inputs directory for complete list)`);
+    }
     lines.push('# Attached input files',
-      'The requester attached these files for you to read (downloaded to your machine):',
-      ...inputInfo.files.map(f => `- ${join(inputInfo.dir, f)}`), '');
+      `The requester attached these files for you to read (downloaded to your machine, ${inputInfo.files.length} files total in ${inputInfo.dir}):`,
+      ...listed, '');
   }
   lines.push(
     `If you generate any files (reports, media, data), save them to the directory: ${artDir} (also in $COWORK_ARTIFACTS_DIR) — they are uploaded to the dashboard as downloadable artifacts when the task completes.`,
     `Put the FINAL deliverable files the user asked for in its outputs/ subfolder: ${join(artDir, 'outputs')} (also $COWORK_OUTPUTS_DIR) — the dashboard lists them as OUTPUTS, apart from working files (notes, logs, scripts) that stay in the artifacts folder.`,
     'Your final stdout becomes the task result shown on the dashboard.');
-  return lines.join('\n');
+  const prompt = lines.join('\n');
+  const MAX_PROMPT_CHARS = 100_000;
+  if (prompt.length > MAX_PROMPT_CHARS) {
+    return prompt.slice(0, MAX_PROMPT_CHARS - 1000) + '\n\n[... Remaining prompt truncated to stay within system command-line argument limits ...]\n';
+  }
+  return prompt;
 }
 function ensureDshPatch() {
   try {

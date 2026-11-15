@@ -885,12 +885,16 @@ export class Dispatcher {
     const { exec, model } = this.routerModel();
     const argv = this.buildArgv({ exec: exec as RoleConfig['exec'], model }, prompt);
     return new Promise((resolve) => {
-      const child = spawn(argv[0], argv.slice(1), { env: { ...process.env }, stdio: ['ignore', 'pipe', 'pipe'] });
-      let out = '';
-      const timer = setTimeout(() => { child.kill('SIGTERM'); resolve(out); }, timeoutMs);
-      child.stdout.on('data', d => { out += d.toString(); });
-      child.on('error', () => resolve(''));
-      child.on('close', () => { clearTimeout(timer); resolve(stripAnsi(out)); });
+      try {
+        const child = spawn(argv[0], argv.slice(1), { env: { ...process.env }, stdio: ['ignore', 'pipe', 'pipe'] });
+        let out = '';
+        const timer = setTimeout(() => { child.kill('SIGTERM'); resolve(out); }, timeoutMs);
+        child.stdout.on('data', d => { out += d.toString(); });
+        child.on('error', () => resolve(''));
+        child.on('close', () => { clearTimeout(timer); resolve(stripAnsi(out)); });
+      } catch {
+        resolve('');
+      }
     });
   }
 
@@ -1275,46 +1279,52 @@ export class Dispatcher {
     // leave settings or hooks there for this one to pick up.
     const scratch = lean ? mkdtempSync(join(tmpdir(), 'cowork-achiever-')) : null;
     return new Promise((resolve) => {
-      const child = spawn(argv[0], argv.slice(1), {
-        env: lean ? { ...process.env, CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' } : { ...process.env },
-        ...(scratch ? { cwd: scratch } : {}),
-        // Its own process group, so a timeout can kill the whole tree.
-        detached: true,
-        stdio: ['ignore', 'pipe', 'pipe']
-      });
-      let out = '';
-      let err = '';
-      let timedOut = false;
-      let done = false;
-      const finish = (r: { text: string; usage?: RunUsage | null }) => {
-        if (done) return;
-        done = true;
-        clearTimeout(timer);
-        clearTimeout(giveUp);
-        if (scratch) rmSync(scratch, { recursive: true, force: true });
-        if (usageFile) rmSync(usageFile, { force: true });
-        resolve({ ...r, timedOut, stderr: err });
-      };
-      let giveUp: ReturnType<typeof setTimeout>;
-      const timer = setTimeout(() => {
-        timedOut = true;
-        if (child.pid) void killProcessTree(child.pid, { graceMs });
-        // A survivor holding the pipe open must not leave this turn in flight forever.
-        giveUp = setTimeout(() => finish({ text: stripAnsi(out) }), graceMs + 1000);
-      }, timeoutMs);
-      child.stdout.on('data', d => { out += d.toString(); });
-      child.stderr.on('data', d => { if (err.length < 2000) err += d.toString().slice(0, 2000 - err.length); });
-      child.on('error', () => finish({ text: '' }));
-      child.on('close', () => {
-        const clean = stripAnsi(out);
-        if (usageFile) { void this.hermesAchieverReply(usageFile, clean).then(finish); return; }
-        if (!toolless) return finish({ text: clean });
-        // --output-format json: one object with the answer and its usage.
-        try {
-          const ev = JSON.parse(clean);
-          finish({ text: typeof ev.result === 'string' ? ev.result : '', usage: claudeUsage(ev) });
-        } catch { finish({ text: clean }); }
-      });
+      try {
+        const child = spawn(argv[0], argv.slice(1), {
+          env: lean ? { ...process.env, CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' } : { ...process.env },
+          ...(scratch ? { cwd: scratch } : {}),
+          // Its own process group, so a timeout can kill the whole tree.
+          detached: true,
+          stdio: ['ignore', 'pipe', 'pipe']
+        });
+        let out = '';
+        let err = '';
+        let timedOut = false;
+        let done = false;
+        const finish = (r: { text: string; usage?: RunUsage | null }) => {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          clearTimeout(giveUp);
+          if (scratch) rmSync(scratch, { recursive: true, force: true });
+          if (usageFile) rmSync(usageFile, { force: true });
+          resolve({ ...r, timedOut, stderr: err });
+        };
+        let giveUp: ReturnType<typeof setTimeout>;
+        const timer = setTimeout(() => {
+          timedOut = true;
+          if (child.pid) void killProcessTree(child.pid, { graceMs });
+          // A survivor holding the pipe open must not leave this turn in flight forever.
+          giveUp = setTimeout(() => finish({ text: stripAnsi(out) }), graceMs + 1000);
+        }, timeoutMs);
+        child.stdout.on('data', d => { out += d.toString(); });
+        child.stderr.on('data', d => { if (err.length < 2000) err += d.toString().slice(0, 2000 - err.length); });
+        child.on('error', () => finish({ text: '' }));
+        child.on('close', () => {
+          const clean = stripAnsi(out);
+          if (usageFile) { void this.hermesAchieverReply(usageFile, clean).then(finish); return; }
+          if (!toolless) return finish({ text: clean });
+          // --output-format json: one object with the answer and its usage.
+          try {
+            const ev = JSON.parse(clean);
+            finish({ text: typeof ev.result === 'string' ? ev.result : '', usage: claudeUsage(ev) });
+          } catch { finish({ text: clean }); }
+        });
+      } catch (e: any) {
+        if (scratch) try { rmSync(scratch, { recursive: true, force: true }); } catch { /* best-effort */ }
+        if (usageFile) try { rmSync(usageFile, { force: true }); } catch { /* best-effort */ }
+        resolve({ text: '', timedOut: false, stderr: String(e?.message || e) });
+      }
     });
   }
 
@@ -1603,12 +1613,16 @@ export class Dispatcher {
     const { exec, model } = this.execForChain(chain);
     const argv = this.buildArgv({ exec: exec as RoleConfig['exec'], model }, prompt);
     return new Promise((resolve) => {
-      const child = spawn(argv[0], argv.slice(1), { env: { ...process.env }, stdio: ['ignore', 'pipe', 'pipe'] });
-      let out = '';
-      const timer = setTimeout(() => { child.kill('SIGTERM'); resolve(out); }, timeoutMs);
-      child.stdout.on('data', d => { out += d.toString(); });
-      child.on('error', () => resolve(''));
-      child.on('close', () => { clearTimeout(timer); resolve(stripAnsi(out)); });
+      try {
+        const child = spawn(argv[0], argv.slice(1), { env: { ...process.env }, stdio: ['ignore', 'pipe', 'pipe'] });
+        let out = '';
+        const timer = setTimeout(() => { child.kill('SIGTERM'); resolve(out); }, timeoutMs);
+        child.stdout.on('data', d => { out += d.toString(); });
+        child.on('error', () => resolve(''));
+        child.on('close', () => { clearTimeout(timer); resolve(stripAnsi(out)); });
+      } catch {
+        resolve('');
+      }
     });
   }
 
@@ -1813,9 +1827,14 @@ export class Dispatcher {
     const inputFiles = Array.isArray(task.context?.inputFiles) ? task.context!.inputFiles as string[] : [];
     const inputsDir = inputFiles.length ? this.store.inputsPath(task.id) : null;
     if (inputsDir && inputFiles.length) {
+      const maxListed = 50;
+      const listed = inputFiles.slice(0, maxListed).map(f => `- ${join(inputsDir, f)}`);
+      if (inputFiles.length > maxListed) {
+        listed.push(`- ... and ${inputFiles.length - maxListed} more files in directory: ${inputsDir} (see inputs directory for complete list)`);
+      }
       lines.push(`# Attached input files`,
-        `The requester attached these files for you to read (absolute paths):`,
-        ...inputFiles.map(f => `- ${join(inputsDir, f)}`), ``);
+        `The requester attached these files for you to read (absolute paths, ${inputFiles.length} files total in ${inputsDir}):`,
+        ...listed, ``);
     }
     const deps = task.context?.dependsOn;
     if (Array.isArray(deps) && deps.length > 0) {
@@ -1850,7 +1869,7 @@ export class Dispatcher {
         ``,
         `This is ONE TURN of a live conversation. Your stdout is spoken/shown to the user verbatim as your reply. Asking the user a question is a normal, complete reply — do NOT emit NEEDS_INPUT or WAITING_ON_BACKGROUND markers. Scratch files (if any) go in: ${artifactsDir}`
       );
-      return lines.join('\n');
+      return this.capPrompt(lines.join('\n'));
     }
     lines.push(
       ``,
@@ -1860,7 +1879,16 @@ export class Dispatcher {
       `If you CANNOT finish without more information or a decision from the user, do NOT guess or invent an answer. End your output with a line beginning "NEEDS_INPUT:" followed by your question(s), one per line. The task will then pause and wait for the user to answer instead of being marked done.`,
       `If you launched LONG-RUNNING BACKGROUND WORK (a background shell/command, a spawned sub-agent, a CI/deploy/render job) that has NOT finished yet, do NOT report a partial result as if the task were done. End your output with a line beginning "WAITING_ON_BACKGROUND:" describing what you are waiting on. The task will be re-run shortly to check whether that work finished, instead of being marked done and closed while it is still in flight.`
     );
-    return lines.join('\n');
+    return this.capPrompt(lines.join('\n'));
+  }
+
+  /** Guard against Linux MAX_ARG_STRLEN (128 KB per argument in execve):
+   *  Ensure prompt stays under 100,000 chars (~100 KB) so child_process.spawn
+   *  never fails with E2BIG. */
+  private capPrompt(prompt: string): string {
+    const MAX_PROMPT_CHARS = 100_000;
+    if (prompt.length <= MAX_PROMPT_CHARS) return prompt;
+    return prompt.slice(0, MAX_PROMPT_CHARS - 1000) + '\n\n[... Remaining prompt truncated to stay within system command-line argument limits ...]\n';
   }
 
   /** `taskText` = the task's own title + description for a task run (picks its
@@ -2864,73 +2892,78 @@ export class Dispatcher {
     else if (task.worktree) logProgress(`worktree: ${task.worktree.path} (branch ${task.worktree.branch})\n\n`);
 
     const output = await new Promise<{ ok: boolean; text: string; stderr?: string }>((resolve) => {
-      const child = spawn(argv[0], argv.slice(1), {
-        // Run the agent INSIDE its artifacts dir. Without a cwd the child
-        // inherits the server's — the repo itself — so anything an agent wrote
-        // with a relative path (scratch scripts, generated images) landed in
-        // server/ and dirtied the working tree. Rooted here, those files become
-        // the task's artifacts instead. exec:script keeps the server cwd because
-        // its configured command is a repo-relative path (./deploy/…).
-        ...(plan.exec === 'script' ? {} : { cwd: agentCwd }),
-        // Own process group (pgid = child pid) so cancel/timeout can kill the
-        // agent's whole tree (tool shells, scripts) — not just the top process.
-        // Not unref'd: the server still waits on it and reaps it.
-        detached: true,
-        env: {
-          ...process.env,
-          // exec:script pipelines read the task from these instead of a prompt.
-          COWORK_TASK_ID: task.id,
-          COWORK_TASK_TITLE: task.title,
-          COWORK_TASK_DESCRIPTION: task.description,
-          COWORK_TASK_CONTEXT: JSON.stringify(task.context || {}),
-          COWORK_API: `http://localhost:${this.config.server.port}/api`,
-          COWORK_ARTIFACTS_DIR: artDir,
-          COWORK_OUTPUTS_DIR: outDir,
-          ...(memoryOff ? { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' } : {}),
-          // When the server runs https with a self-signed cert, node-based child
-          // agents (claude CLI, exec:script pipelines) must trust it to reach
-          // COWORK_API or remote endpoints — add the cert as an extra CA rather than
-          // disabling verification. Harmless when tls is off.
-          ...(this.config.server.tls ? { NODE_EXTRA_CA_CERTS: this.config.server.tls.certFile } : {}),
-          // Children that call COWORK_API (orchestrator curls, scripts) send this
-          // as "Authorization: Bearer $COWORK_API_KEY".
-          ...(this.config.server.apiKey ? { COWORK_API_KEY: this.config.server.apiKey } : {})
-        },
-        stdio: ['ignore', 'pipe', 'pipe']
-      });
-      let out = '';
-      let err = '';
-      // Streaming execs: `out` is the answer recovered from the JSON events (the
-      // `result` event, else the assistant text so far) — the same text plain `-p`
-      // would have printed — so verification below is unchanged.
-      const answer = () => (renderer ? renderer.finalText() : out);
-      this.children.set(task.id, child);
-      // The task may have been deleted between claim and spawn.
-      if (this.cancelled.has(task.id)) void killProcessTree(child.pid, { graceMs: orch.killGraceMs ?? 5000 });
-      const timer = setTimeout(() => {
-        void killProcessTree(child.pid, { graceMs: orch.killGraceMs ?? 5000 });
-        resolve({ ok: false, text: `TIMEOUT after ${orch.taskTimeoutMs}ms\n${answer()}\n${err}`, stderr: err });
-      }, orch.taskTimeoutMs);
-      child.stdout.on('data', (d) => {
-        const s = d.toString();
-        if (renderer) logProgress(stripAnsi(renderer.feed(s)));
-        else { out += s; logProgress(stripAnsi(s)); }
-      });
-      child.stderr.on('data', (d) => { const s = d.toString(); err += s; logProgress(stripAnsi(s)); });
-      child.on('error', (e) => {
-        clearTimeout(timer);
-        resolve({ ok: false, text: `SPAWN ERROR: ${e.message}` });
-      });
-      child.on('close', (code) => {
-        clearTimeout(timer);
-        if (renderer) { logProgress(stripAnsi(renderer.flush())); out = renderer.finalText(); }
-        this.recordRunUsage(task.id, plan.agentId, renderer?.usage() ?? this.readHermesUsage(hermesUsageFile), memoryAB ? (memoryOff ? 'memory-off' : 'memory-on') : undefined);
-        // Strip ANSI/terminal control sequences some CLIs emit even to a pipe
-        // (e.g. Ollama's streaming cursor redraws) so results are clean text.
-        const clean = stripAnsi(out).trim();
-        if (code === 0 && clean) resolve({ ok: true, text: clean, stderr: err });
-        else resolve({ ok: code === 0, text: (clean || stripAnsi(err).trim() || `exit code ${code}`), stderr: err });
-      });
+      try {
+        const child = spawn(argv[0], argv.slice(1), {
+          // Run the agent INSIDE its artifacts dir. Without a cwd the child
+          // inherits the server's — the repo itself — so anything an agent wrote
+          // with a relative path (scratch scripts, generated images) landed in
+          // server/ and dirtied the working tree. Rooted here, those files become
+          // the task's artifacts instead. exec:script keeps the server cwd because
+          // its configured command is a repo-relative path (./deploy/…).
+          ...(plan.exec === 'script' ? {} : { cwd: agentCwd }),
+          // Own process group (pgid = child pid) so cancel/timeout can kill the
+          // agent's whole tree (tool shells, scripts) — not just the top process.
+          // Not unref'd: the server still waits on it and reaps it.
+          detached: true,
+          env: {
+            ...process.env,
+            // exec:script pipelines read the task from these instead of a prompt.
+            COWORK_TASK_ID: task.id,
+            COWORK_TASK_TITLE: task.title,
+            COWORK_TASK_DESCRIPTION: task.description,
+            COWORK_TASK_CONTEXT: JSON.stringify(task.context ? (JSON.stringify(task.context).length > 60000 ? { ...task.context, inputFiles: `${(task.context.inputFiles as any[])?.length || 0} files` } : task.context) : {}),
+            COWORK_API: `http://localhost:${this.config.server.port}/api`,
+            COWORK_ARTIFACTS_DIR: artDir,
+            COWORK_OUTPUTS_DIR: outDir,
+            ...(memoryOff ? { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' } : {}),
+            // When the server runs https with a self-signed cert, node-based child
+            // agents (claude CLI, exec:script pipelines) must trust it to reach
+            // COWORK_API or remote endpoints — add the cert as an extra CA rather than
+            // disabling verification. Harmless when tls is off.
+            ...(this.config.server.tls ? { NODE_EXTRA_CA_CERTS: this.config.server.tls.certFile } : {}),
+            // Children that call COWORK_API (orchestrator curls, scripts) send this
+            // as "Authorization: Bearer $COWORK_API_KEY".
+            ...(this.config.server.apiKey ? { COWORK_API_KEY: this.config.server.apiKey } : {})
+          },
+          stdio: ['ignore', 'pipe', 'pipe']
+        });
+        let out = '';
+        let err = '';
+        // Streaming execs: `out` is the answer recovered from the JSON events (the
+        // `result` event, else the assistant text so far) — the same text plain `-p`
+        // would have printed — so verification below is unchanged.
+        const answer = () => (renderer ? renderer.finalText() : out);
+        this.children.set(task.id, child);
+        // The task may have been deleted between claim and spawn.
+        if (this.cancelled.has(task.id)) void killProcessTree(child.pid, { graceMs: orch.killGraceMs ?? 5000 });
+        const timer = setTimeout(() => {
+          void killProcessTree(child.pid, { graceMs: orch.killGraceMs ?? 5000 });
+          resolve({ ok: false, text: `TIMEOUT after ${orch.taskTimeoutMs}ms\n${answer()}\n${err}`, stderr: err });
+        }, orch.taskTimeoutMs);
+        child.stdout.on('data', (d) => {
+          const s = d.toString();
+          if (renderer) logProgress(stripAnsi(renderer.feed(s)));
+          else { out += s; logProgress(stripAnsi(s)); }
+        });
+        child.stderr.on('data', (d) => { const s = d.toString(); err += s; logProgress(stripAnsi(s)); });
+        child.on('error', (e) => {
+          clearTimeout(timer);
+          resolve({ ok: false, text: `SPAWN ERROR: ${e.message}` });
+        });
+        child.on('close', (code) => {
+          clearTimeout(timer);
+          if (renderer) { logProgress(stripAnsi(renderer.flush())); out = renderer.finalText(); }
+          this.recordRunUsage(task.id, plan.agentId, renderer?.usage() ?? this.readHermesUsage(hermesUsageFile), memoryAB ? (memoryOff ? 'memory-off' : 'memory-on') : undefined);
+          // Strip ANSI/terminal control sequences some CLIs emit even to a pipe
+          // (e.g. Ollama's streaming cursor redraws) so results are clean text.
+          const clean = stripAnsi(out).trim();
+          if (code === 0 && clean) resolve({ ok: true, text: clean, stderr: err });
+          else resolve({ ok: code === 0, text: (clean || stripAnsi(err).trim() || `exit code ${code}`), stderr: err });
+        });
+      } catch (e: any) {
+        logProgress(`[${new Date().toISOString()}] ✖ failed to spawn agent: ${e?.message || e}\n`);
+        resolve({ ok: false, text: `SPAWN ERROR: ${e?.message || e}`, stderr: String(e?.stack || e) });
+      }
     });
 
     logProgress(`\n[${new Date().toISOString()}] ■ finished — ${output.ok ? 'ok' : 'failed/empty'} (verifying result…)\n`);
