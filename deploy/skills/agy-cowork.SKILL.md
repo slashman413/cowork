@@ -66,9 +66,11 @@ glass.
 
 ## Registered Local Agents (via `agy.env`)
 
-One agent per `agy models` slug (agy 1.3.6, 2026-10-16). Gemini 4 Argon has its own weekly
-quota, separate from the Gemini Models group (see the dashboard's agy meter). Re-check with `agy models` when
-Antigravity rotates models; retired ids resolve via `AGENT_ID_ALIASES` in `server/src/config.ts`.
+One agent per model family in `agy models` (catalog as of agy 1.5.9, 2026-11-16). Gemini 4 Argon has its own weekly
+quota, separate from the Gemini Models group (see the dashboard's agy meter). The 2026-11 catalog also lists
+`gemini-4-hydrogen` (low/medium/high/xhigh) and `gemini-pro-orchestrator-g1-pro`; no agent is registered for
+them yet — add one via the AGENTS list in `agy.env` if you want to route to them. Re-check with `agy models`
+when Antigravity rotates models; retired ids resolve via `AGENT_ID_ALIASES` in `server/src/config.ts`.
 
 | Agent ID | Model | Location |
 |----------|-------|----------|

@@ -153,7 +153,7 @@ When *you* are the agent running a dispatched task:
 
 **Agent = model × exec × location.** `exec` ∈ `claude | hermes | agy | codex | ollama | script | dsh`.
 On this box today: `local-hermes-qwen3.8-27b` (Hermes), `local-dsh-*` (DeepSeek Harness),
-`local-agy-*` (Antigravity: gemini-3.x, claude-opus-4-6-thinking, gpt-oss-120b),
+`local-agy-*` (Antigravity: gemini-4-argon, gemini-3.8-flash, claude-opus-5-5, claude-sonnet-5-5, gpt-oss-120b),
 `local-cc-*` (Claude Code), `local-codex-*` (Codex on this host, claimed by the codex client), `local-comfy-ltx` (LTX video — never
 Wan/Hunyuan), `remote-ai-code-gen-cc-*` (another machine). The `local-`/`remote-` prefix
 names the machine an agent runs on; `location` (local = dispatcher spawns, remote = a client

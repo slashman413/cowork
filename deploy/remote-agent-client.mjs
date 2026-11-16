@@ -385,7 +385,7 @@ function agyUserAgent() {
     ver = (r.stdout || '').match(/\d+\.\d+\.\d+/)?.[0] || null;
   } catch { /* agy not installed */ }
   const arch = process.arch === 'x64' ? 'amd64' : process.arch;
-  agyUA = `antigravity/cli/${ver || '1.3.6'} (aidev_client; os_type=${process.platform}; arch=${arch})`;
+  agyUA = `antigravity/cli/${ver || '1.5.9'} (aidev_client; os_type=${process.platform}; arch=${arch})`;
   return agyUA;
 }
 

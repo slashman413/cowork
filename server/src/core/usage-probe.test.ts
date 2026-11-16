@@ -458,14 +458,14 @@ test('installedAgyUserAgent: a failed version lookup is retried, a successful on
     _resetAgyUserAgent();
     let calls = 0;
     const fail = async () => { calls++; throw new Error('ETIMEDOUT'); };
-    assert.match(await installedAgyUserAgent(fail), /antigravity\/cli\/1\.3\.6 /);
+    assert.match(await installedAgyUserAgent(fail), /antigravity\/cli\/1\.5\.9 /);
     const ok = async () => { calls++; return { stdout: 'agy 1.9.2\n' }; };
     assert.match(await installedAgyUserAgent(ok), /antigravity\/cli\/1\.9\.2 /, 'fallback must not be pinned');
     assert.match(await installedAgyUserAgent(fail), /antigravity\/cli\/1\.9\.2 /, 'success is memoised');
     assert.equal(calls, 2);
     // Unparseable output is a failure too.
     _resetAgyUserAgent();
-    assert.match(await installedAgyUserAgent(async () => ({ stdout: 'garbage' })), /1\.3\.6/);
+    assert.match(await installedAgyUserAgent(async () => ({ stdout: 'garbage' })), /1\.5\.9/);
     assert.match(await installedAgyUserAgent(ok), /1\.9\.2/);
   } finally {
     if (saved === undefined) delete process.env.AGY_USER_AGENT; else process.env.AGY_USER_AGENT = saved;

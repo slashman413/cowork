@@ -56,7 +56,7 @@ const CLAUDE_USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
 const AGY_QUOTA_HOSTS = ['daily-cloudcode-pa.googleapis.com', 'cloudcode-pa.googleapis.com'];
 // Used when `agy --version` can't be read (agy not on PATH here). The backend
 // gates Argon on a minimum CLI version, so keep this at a version that works.
-const AGY_FALLBACK_VERSION = '1.3.6';
+const AGY_FALLBACK_VERSION = '1.5.9';
 
 /** The User-Agent agy itself sends for a given agy version (fallback when
  *  unknown). AGY_USER_AGENT overrides it. Exported for tests. */
