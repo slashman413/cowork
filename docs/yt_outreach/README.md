@@ -21,7 +21,7 @@ Runner: `scripts/yt_outreach.py` (stdlib only, OAuth token at `~/.priv/ai_gaowan
   `感谢分享`, `非常`, `总之`, `综上所述`, `As an AI`, `AI助手`, `我是AI`, …
 - No emoji (regex-stripped safety net), no images, no links in the comment body.
 - Length ~30–90 characters, one sentence family, warm and specific.
-- Tests: `tests/test_yt_outreach.py` (15 tests, `python3 -m pytest tests/test_yt_outreach.py`).
+- Tests: `tests/test_yt_outreach.py` (16 tests, `python3 -m pytest tests/test_yt_outreach.py`).
 
 ## cowork pro promotion guideline (conditional soft-pitch)
 - **Rule:** mention `cowork pro` **only** when the video's topic directly
