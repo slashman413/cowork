@@ -12,7 +12,10 @@ const pexecFile = promisify(execFile);
  * CORS. The server, however, runs ON the host — so it probes each service's
  * real (localhost) URL here and reports up/down to the UI. Any HTTP response
  * (even 401/403/404) means the port is open and something is listening, so the
- * service counts as online; only a connection error or timeout is offline.
+ * service counts as online; a connection error or timeout is offline. So is a
+ * gateway error (502/503/504): that is a reverse proxy answering for a backend
+ * that is down (e.g. Eigent's web proxy while its Brain is dead), and the app
+ * behind the card is not usable.
  *
  * Per ServiceConfig semantics, a service with `enabled: false` is listed but
  * never probed — it's reported as disabled rather than offline. `probe` may
@@ -88,6 +91,9 @@ export async function unitState(unit: string): Promise<{ active: string; autosta
   return { active, autostart };
 }
 
+/** Proxy-says-the-backend-is-down statuses: the port answers, the app doesn't. */
+const GATEWAY_DOWN = new Set([502, 503, 504]);
+
 async function probeOne(key: string, svc: ServiceConfig, timeoutMs: number): Promise<ServiceStatus> {
   const enabled = svc?.enabled !== false;
   if (!svc?.url) return { key, enabled, online: false, code: null, ms: null, reason: 'no url' };
@@ -105,7 +111,11 @@ async function probeOne(key: string, svc: ServiceConfig, timeoutMs: number): Pro
     // extra hop; we never read the body — the status line is all we need.
     const res = await fetch(url, { method: 'GET', signal: ctrl.signal, redirect: 'manual' });
     try { await res.body?.cancel(); } catch { /* ignore */ }
-    return { key, enabled, online: true, code: res.status || null, ms: Date.now() - started };
+    const ms = Date.now() - started;
+    if (GATEWAY_DOWN.has(res.status)) {
+      return { key, enabled, online: false, code: res.status, ms, reason: `upstream ${res.status}` };
+    }
+    return { key, enabled, online: true, code: res.status || null, ms };
   } catch (e: any) {
     const reason = e?.name === 'AbortError' ? 'timeout' : (e?.cause?.code || e?.code || 'unreachable');
     return { key, enabled, online: false, code: null, ms: Date.now() - started, reason: String(reason) };
