@@ -26,10 +26,18 @@ Runner: `scripts/yt_outreach.py` (stdlib only, OAuth token at `~/.priv/ai_gaowan
 ## cowork pro promotion guideline (conditional soft-pitch)
 - **Rule:** mention `cowork pro` **only** when the video's topic directly
   addresses a multi-agent / agent-workflow / automation / coding-agent pain
-  point. Trigger keywords (in title or description): `agent`, `multi-agent`,
-  `多智能体`, `orchestrat`, `workflow`, `工作流`, `automation`, `自动化`,
-  `coding`, `編程`, `claude`, `cursor`, `copilot`, `llm`, `gpt`, `prompt`,
-  `提示词`, `tool`, `工具`, `task`, `任務`.
+  point. Triggers (per `PITCH_TRIGGERS` in `scripts/yt_outreach.py`, matched in
+  title or description, case-insensitive): `multi-agent`, `多智能体`,
+  `多agent`, `多 agent`, `orchestrat`, `agent workflow`, `agent 工作流`,
+  `agent 协作`, `agent协作`, `workflow`, `工作流`, `automation`, `自动化`,
+  `coding agent`, `coding 工作流`, `编程工作流`, `multi agent`,
+  `multi agent 工作流`, `multiagent`.
+  Broad single tokens (`agent`, `llm`, `gpt`, `tool`, `coding` alone, `claude`,
+  `cursor`, `copilot`, `prompt`, …) are deliberately NOT triggers — an
+  AI-explainer or news video is not a workflow pain point, and a pitch there
+  reads as spam to a blind reviewer. A video whose topic words include such a
+  token can still be pitched when its title/description also matches a trigger
+  phrase (e.g. a "cursor" video that discusses an agent workflow).
 - **Budget:** at most **1 pitch per run** (`PITCH_PER_RUN = 1`).
 - **Form:** single natural mention appended to an otherwise normal comment,
   e.g. "顺带说下，我在维护一个叫 cowork 的多 agent 协作工具（cowork pro），
