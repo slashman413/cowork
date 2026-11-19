@@ -55,7 +55,9 @@ export class IntegrationJobs {
   constructor(
     private readonly int: Integrations,
     private readonly store: TaskStoreLike,
-    private readonly opts: { chain: () => string[]; thinking?: () => string | undefined; localAgents: () => string[] },
+    private readonly opts: { chain: () => string[]; thinking?: () => string | undefined; localAgents: () => string[];
+      /** Identity of `store` (its inbox dir). Advice dispatched by another owner is left to that server. */
+      owner?: () => string },
   ) {}
 
   // ── advisor ──────────────────────────────────────────────────────────────
@@ -68,7 +70,7 @@ export class IntegrationJobs {
   advise(id: string, opts: { notes?: string } = {}): Integration {
     const e = this.int.get(id);
     if (!e) throw new Error(`unknown integration ${id}`);
-    if (e.advice?.status === 'pending' && e.advice.taskId) this.dropTask(e.advice.taskId, 're-requested');
+    if (e.advice?.status === 'pending' && e.advice.taskId && this.ownsAdvice(e.advice)) this.dropTask(e.advice.taskId, 're-requested');
     const chain = this.adviseChain();
     const now = new Date().toISOString();
     if (!chain.length) {
@@ -100,6 +102,7 @@ export class IntegrationJobs {
     });
     advice.agent = agent;
     advice.taskId = task.id;
+    advice.owner = this.opts.owner?.();
     advice.status = 'pending';
     advice.updatedAt = new Date().toISOString();
   }
@@ -113,8 +116,17 @@ export class IntegrationJobs {
     for (const e of this.int.list()) {
       const a = e.advice;
       if (!a || a.status !== 'pending' || !a.taskId) continue;
+      // Another server (sharing this registry, not our inbox) dispatched it: its
+      // task is invisible here, so judging it would wrongly report "task disappeared".
+      if (!this.ownsAdvice(a)) continue;
       try { this.step(e, a); } catch (err: any) { console.error(`Integrations advice ${e.id}:`, err?.message || err); }
     }
+  }
+
+  /** True when this instance's store holds the advice task (legacy entries without an owner count as ours). */
+  private ownsAdvice(a: AdviceState): boolean {
+    const me = this.opts.owner?.();
+    return !a.owner || !me || a.owner === me;
   }
 
   private step(e: Integration, a: AdviceState): void {
@@ -366,7 +378,7 @@ export class IntegrationJobs {
   startRemove(id: string): Job {
     const e = this.int.get(id);
     if (!e) throw new Error(`unknown integration ${id}`);
-    if (e.advice?.status === 'pending' && e.advice.taskId) this.dropTask(e.advice.taskId, 'integration removed');
+    if (e.advice?.status === 'pending' && e.advice.taskId && this.ownsAdvice(e.advice)) this.dropTask(e.advice.taskId, 'integration removed');
     return this.startUninstall(id, { remove: true });
   }
 }
