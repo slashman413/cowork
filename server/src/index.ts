@@ -686,6 +686,7 @@ async function main() {
     chain: () => (config.integrations?.adviseChain?.length ? config.integrations.adviseChain : DEFAULT_ADVISE_CHAIN).map(a => canonicalAgentId(config, a)),
     thinking: () => config.integrations?.adviseThinking,
     localAgents: () => localAgents().filter(a => !config.orchestration.agents?.[a]?.disabled),
+    owner: () => path.resolve(config.paths.inbox),
   });
   if (intEnabled()) setInterval(() => intJobs.tick(), 20_000).unref();
   app.get('/api/integrations', (_req, res) => {

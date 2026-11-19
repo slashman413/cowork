@@ -74,6 +74,13 @@ export interface AdviceState {
   attempt: number;
   agent?: string;
   taskId?: string;
+  /**
+   * Which task store holds `taskId` (the dispatching server's inbox dir). Several
+   * servers can share one integrations registry (~/.cowork/integrations.json) but
+   * not their inboxes; only the owner may judge the task, or a foreign instance
+   * sees it as "task disappeared" and fails the advice.
+   */
+  owner?: string;
   thinking?: string;
   requestedAt: string;
   updatedAt: string;
