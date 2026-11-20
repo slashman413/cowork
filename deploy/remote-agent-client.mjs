@@ -616,10 +616,16 @@ function ensureDshPatch() {
 // Thinking level precedence: task context.thinking → agent default → medium.
 const THINKING_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const askedThinking = (agent, ctx) => [ctx?.thinking, agent.thinking].find(l => THINKING_LEVELS.includes(l));
-// agy's catalog slugs end in low|medium|high; a few models ship a single level.
+// agy's catalog slugs end in low|medium|high (see `agy models`); exceptions mirror
+// server/src/core/thinking.ts agyModelSlug: gpt-oss-* ships only -medium, the
+// gemini-pro-orchestrator-* models have no level suffix, and gemini-4-neon/hydrogen
+// also offer -xhigh.
 const agySlug = (model, level) => {
   if (!model) return '';
-  return /^gpt-oss-/.test(model) ? `${model}-medium` : `${model}-${level === 'xhigh' || level === 'max' ? 'high' : level}`;
+  if (/^gemini-pro-orchestrator-/.test(model)) return model;
+  if (/^gpt-oss-/.test(model)) return `${model}-medium`;
+  if (level === 'xhigh' || level === 'max') return `${model}-${/^gemini-4-(neon|hydrogen)$/.test(model) ? 'xhigh' : 'high'}`;
+  return `${model}-${level}`;
 };
 
 function runModel(agent, prompt, artDir, ctx) {

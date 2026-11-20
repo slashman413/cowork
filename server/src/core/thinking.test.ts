@@ -24,6 +24,11 @@ test('agyModelSlug builds the catalog slug: default medium, clamp to high, singl
   assert.equal(agyModelSlug('gemini-3.8-flash-high', 'low'), 'gemini-3.8-flash-low', 'an explicit level wins');
   assert.equal(agyModelSlug('gpt-oss-120b', 'high'), 'gpt-oss-120b-medium');
   assert.equal(agyModelSlug(''), '');
+  assert.equal(agyModelSlug('gemini-pro-orchestrator-g1-pro', 'high'), 'gemini-pro-orchestrator-g1-pro', 'orchestrators have no level slug');
+  assert.equal(agyModelSlug('gemini-pro-orchestrator-neon'), 'gemini-pro-orchestrator-neon');
+  assert.equal(agyModelSlug('gemini-4-neon', 'xhigh'), 'gemini-4-neon-xhigh', 'neon offers xhigh');
+  assert.equal(agyModelSlug('gemini-4-hydrogen', 'max'), 'gemini-4-hydrogen-xhigh');
+  assert.equal(agyModelSlug('gemini-4-argon', 'xhigh'), 'gemini-4-argon-high', 'argon tops out at high');
 });
 
 test('thinkingArgs maps a level to each CLI, defaulting to medium where it can', () => {

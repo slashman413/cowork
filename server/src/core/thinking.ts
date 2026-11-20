@@ -25,16 +25,24 @@ export function splitThinkingSuffix(id: string): { base: string; level?: Thinkin
   return m ? { base: id.slice(0, m.index), level: m[1] as ThinkingLevel } : { base: id };
 }
 
-/** agy has no separate effort for its catalog: the level is the last part of the slug,
- *  and a slug only comes in low/medium/high. A few models ship a single level. */
+/** agy has no separate effort for its catalog: the level is the last part of the slug
+ *  (see `agy models`). Most models come in low/medium/high; a few differ:
+ *  - gpt-oss-* ships a single `-medium` slug;
+ *  - the orchestrators (`gemini-pro-orchestrator-*`) have NO level suffix at all —
+ *    appending one makes agy reject the model;
+ *  - gemini-4-neon / gemini-4-hydrogen also offer `-xhigh` (used for xhigh and max). */
 const AGY_SINGLE_LEVEL: Array<[RegExp, ThinkingLevel]> = [[/^gpt-oss-/, 'medium']];
+const AGY_NO_LEVEL = /^gemini-pro-orchestrator-/;
+const AGY_XHIGH = /^gemini-4-(neon|hydrogen)$/;
 export function agyModelSlug(model: string, thinking?: ThinkingLevel): string {
   if (!model) return model;
   const { base, level } = splitThinkingSuffix(model);
+  if (AGY_NO_LEVEL.test(base)) return base;
   const single = AGY_SINGLE_LEVEL.find(([re]) => re.test(base));
   if (single) return `${base}-${single[1]}`;
   const want = thinking || level || DEFAULT_THINKING;
-  return `${base}-${want === 'xhigh' || want === 'max' ? 'high' : want}`;
+  if (want === 'xhigh' || want === 'max') return `${base}-${AGY_XHIGH.test(base) ? 'xhigh' : 'high'}`;
+  return `${base}-${want}`;
 }
 
 /** Extra CLI flags for a level. agy is handled through its model slug (agyModelSlug);
