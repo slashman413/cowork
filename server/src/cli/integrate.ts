@@ -15,6 +15,19 @@
  */
 import { sharedIntegrations, defaultAuditTargets } from '../core/integrations.js';
 import { auditPath, mergeReports, formatSummary } from '../core/skill-auditor.js';
+import { activeConfigPath } from '../config.js';
+import type { IntegrationsConfig } from '../types.js';
+import fs from 'fs';
+
+/** The live config's integrations settings, with `paths.integrations` as the clone
+ *  root (read directly: loadConfig logs to stdout, which would corrupt --json). */
+function liveIntegrationsConfig(): IntegrationsConfig {
+  try {
+    const raw = JSON.parse(fs.readFileSync(activeConfigPath(), 'utf-8'));
+    const root = raw.paths?.integrations || raw.integrations?.root;
+    return { ...(raw.integrations || {}), ...(root ? { root } : {}) };
+  } catch { return {}; }
+}
 
 async function main() {
   const args = process.argv.slice(2);
@@ -25,7 +38,7 @@ async function main() {
   const positional = args.filter(a => !a.startsWith('--'));
 
   const cmd = positional[0] || 'list';
-  const int = sharedIntegrations();
+  const int = sharedIntegrations(liveIntegrationsConfig());
 
   if (cmd === 'list') {
     const list = int.list();

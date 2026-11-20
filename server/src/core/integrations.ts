@@ -31,7 +31,7 @@ import type { InstallPlan, PlanLint, PlanStep } from './install-plan.js';
  *                  which a rescan then installs like any other skill.
  *
  * State is one JSON registry (~/.cowork/integrations.json) plus the clones under
- * ~/.cowork/integrations/. Everything is reversible: uninstall removes exactly the
+ * the integrations root (config `paths.integrations`, default /data/cowork/integrations). Everything is reversible: uninstall removes exactly the
  * links/dirs/portal card this module created and nothing else.
  */
 
@@ -150,6 +150,9 @@ interface RegistryFile {
  * a fresh host gets the same persona pack + skill library the fleet relies on.
  * Override with `integrations.defaults` in config (an array; [] disables).
  */
+/** Where repos are cloned when neither `paths.integrations` nor `integrations.root` is set. */
+export const DEFAULT_INTEGRATIONS_ROOT = '/data/cowork/integrations';
+
 export const DEFAULT_INTEGRATIONS: string[] = [
   'msitarzewski/agency-agents',
   'garrytan/gbrain',
@@ -211,7 +214,7 @@ export function defaultAuditTargets(cfg: IntegrationsConfig = {}): string[] {
     path.join(repo, 'deploy', 'skills'),
     expand(cfg.skillsHome || '~/.agents/skills'),
     ...(cfg.clientSkillDirs?.map(expand) || defaultClientSkillDirs()),
-    expand(cfg.root || '~/.cowork/integrations'),
+    expand(cfg.root || DEFAULT_INTEGRATIONS_ROOT),
   ];
   const seen = new Set<string>();
   return candidates.filter(p => {
@@ -512,7 +515,7 @@ export class Integrations {
   private inflight = new Set<string>();
 
   constructor(readonly cfg: IntegrationsConfig = {}, opts: { portalFile?: string; allowFileUrls?: boolean } = {}) {
-    this.root = expand(cfg.root || '~/.cowork/integrations');
+    this.root = expand(cfg.root || DEFAULT_INTEGRATIONS_ROOT);
     this.registryFile = expand(cfg.registry || '~/.cowork/integrations.json');
     this.skillsHome = expand(cfg.skillsHome || '~/.agents/skills');
     this.clientSkillDirs = (cfg.clientSkillDirs || defaultClientSkillDirs()).map(expand);

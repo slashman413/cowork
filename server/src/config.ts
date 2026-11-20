@@ -5,6 +5,7 @@ import path from 'path';
 import os from 'os';
 import { fileURLToPath } from 'url';
 import type { Config } from './types.js';
+import { DEFAULT_INTEGRATIONS_ROOT } from './core/integrations.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -53,7 +54,8 @@ const defaultConfig: Config = {
     inputs: './inputs',
     status: './.status',
     decisions: './decisions',
-    goals: './goals'
+    goals: './goals',
+    integrations: DEFAULT_INTEGRATIONS_ROOT
   },
   platforms: {},
   services: {},
@@ -293,6 +295,7 @@ export function loadConfig(): Config {
     const v = config.paths[key];
     if (v) (config.paths as Record<string, string | undefined>)[key] = resolvePath(v);
   }
+  applyIntegrationsPath(config, loadedConfig);
 
   // Resolve TLS cert/key like the other paths so `~` and repo-relative forms work.
   if (config.server.tls?.certFile && config.server.tls?.keyFile) {
@@ -305,6 +308,21 @@ export function loadConfig(): Config {
   }
 
   return config;
+}
+
+/**
+ * `paths.integrations` (Configuration → Paths) is where the Integrations page
+ * clones repos; Integrations reads it as `integrations.root`. An explicit
+ * `paths.integrations` in the file wins; a legacy `integrations.root` with no
+ * `paths.integrations` is honoured and reflected into paths so the UI shows it.
+ */
+export function applyIntegrationsPath(config: Config, loaded: Partial<Config>): void {
+  const legacyRoot = loaded.integrations?.root;
+  const dir = !loaded.paths?.integrations && legacyRoot
+    ? resolvePath(legacyRoot)
+    : config.paths.integrations || DEFAULT_INTEGRATIONS_ROOT;
+  config.paths.integrations = dir;
+  config.integrations = { ...(config.integrations || {}), root: dir };
 }
 
 /**
