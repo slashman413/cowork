@@ -49,3 +49,38 @@ test('loadConfig: live values win over PS defaults', async () => {
     assert.equal(c.orchestration.prAutomation?.mergeMethod, 'squash');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('loadConfig: paths.integrations defaults to /data/cowork/integrations and feeds integrations.root', async () => {
+  const dir = withConfig({ integrations: { adviseChain: ['a'] } });
+  try {
+    const { loadConfig } = await import('./config.js');
+    const { DEFAULT_INTEGRATIONS_ROOT, Integrations } = await import('./core/integrations.js');
+    assert.equal(DEFAULT_INTEGRATIONS_ROOT, '/data/cowork/integrations');
+    const c = loadConfig();
+    assert.equal(c.paths.integrations, '/data/cowork/integrations');
+    assert.equal(c.integrations?.root, '/data/cowork/integrations');
+    assert.deepEqual(c.integrations?.adviseChain, ['a'], 'other integrations keys preserved');
+    assert.equal(new Integrations(c.integrations).root, '/data/cowork/integrations');
+    assert.equal(new Integrations({}).root, '/data/cowork/integrations', 'bare default');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('loadConfig: configured paths.integrations is used (and wins over integrations.root)', async () => {
+  const dir = withConfig({ paths: { integrations: '/srv/int' }, integrations: { root: '/old/root' } });
+  try {
+    const { loadConfig } = await import('./config.js');
+    const c = loadConfig();
+    assert.equal(c.paths.integrations, '/srv/int');
+    assert.equal(c.integrations?.root, '/srv/int');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('loadConfig: legacy integrations.root without paths.integrations is honoured and shown in paths', async () => {
+  const dir = withConfig({ integrations: { root: '/legacy/int' } });
+  try {
+    const { loadConfig } = await import('./config.js');
+    const c = loadConfig();
+    assert.equal(c.paths.integrations, '/legacy/int');
+    assert.equal(c.integrations?.root, '/legacy/int');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

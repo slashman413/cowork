@@ -13,7 +13,8 @@
     "status": "./.status",
     "decisions": "./decisions",
     "artifacts": "./artifacts",
-    "inputs": "./inputs"
+    "inputs": "./inputs",
+    "integrations": "/data/cowork/integrations"
   },
   "platforms": {
     "claude": {

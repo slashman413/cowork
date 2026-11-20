@@ -569,6 +569,9 @@ export interface Config {
     /** Dir of Goal aggregates (goals/*.json) — long-lived, phase-tracked
      *  objectives. See core/goals.ts. */
     goals: string;
+    /** Dir the Integrations page fetches (clones) repos into. Mirrored into
+     *  integrations.root at load. Default /data/cowork/integrations. */
+    integrations?: string;
   };
   platforms: Record<string, PlatformConfig>;
   services: Record<string, ServiceConfig>;
@@ -605,7 +608,8 @@ export interface Config {
 export interface IntegrationsConfig {
   /** Master switch for the API/page/MCP tool. Default on. */
   enabled?: boolean;
-  /** Where repos are cloned (default ~/.cowork/integrations). */
+  /** Where repos are cloned. Normally set via `paths.integrations` (Configuration → Paths);
+   *  loadConfig mirrors that here. Default /data/cowork/integrations. */
   root?: string;
   /** Registry file (default ~/.cowork/integrations.json). */
   registry?: string;

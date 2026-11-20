@@ -452,7 +452,7 @@ per agent with `orchestration.agents.<id>.personaRouting: "always" | "never"`.
   with its own chain. `video` runs the ComfyUI **LTX** pipeline
   (`deploy/video-pipeline.sh`; LTX only — never Wan/Hunyuan/SVD).
 - **Personas** — the ~285 personas from the installed persona-pack integrations
-  (default: `msitarzewski/agency-agents`, cloned under `~/.cowork/integrations/`),
+  (default: `msitarzewski/agency-agents`, cloned under `paths.integrations`, default `/data/cowork/integrations/`),
   grouped into 19 divisions. They have no chain of their own: per-division and
   per-persona chains were removed on 2026-11-13, and `divisionChains` /
   `personaChains` in an old config are ignored.
