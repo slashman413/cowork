@@ -50,7 +50,8 @@ Runner: `scripts/yt_outreach.py` (stdlib only, OAuth token at `~/.priv/ai_gaowan
 - crontab (installed 2026-11-01, user wayne):
   `0 2,8,14,20 * * * flock -n /tmp/yt_outreach.lock /usr/bin/python3 .../scripts/yt_outreach.py --hours 48 --consider 6 --post 3`
   → daily (in fact 4×/day) live runs; logs to `logs/yt_outreach_cron.log`.
-- Payload per run: `logs/yt_outreach_YYYY-MM-DD.json` — JSON array of records
+- Payload per run: `logs/yt_outreach_YYYY-MM-DD_HHMM.json` (UTC timestamp keeps
+  runs on the same UTC date from overwriting each other) — JSON array of records
   with `video_id, video_url, channel, channel_id, comment, mentions_product,
   status (draft | posted | replied | skipped:… | error:…)`.
 

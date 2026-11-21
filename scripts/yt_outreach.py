@@ -19,7 +19,8 @@ Each run:
      and post it first (priority interactions).
   6. Posts the top N drafts via commentThreads.insert (skipped in
      --dry-run) and persists a structured outreach payload (JSON array)
-     to logs/yt_outreach_YYYY-MM-DD.json.
+     to logs/yt_outreach_YYYY-MM-DD_HHMM.json (UTC; HHMM keeps same-date
+     runs from clobbering each other's payload).
 
 YouTube Data API v3 cannot like videos or subscribe to channels (ratings
 removed in 2020; channels.subscribe never existed in v3) — those stay
@@ -525,7 +526,7 @@ def main(argv=None):
     ap.add_argument("--consider", type=int, default=6,
                     help="how many candidates to draft for (default 6)")
     ap.add_argument("--output", default=None,
-                    help="output JSON path (default logs/yt_outreach_YYYY-MM-DD.json)")
+                    help="output JSON path (default logs/yt_outreach_YYYY-MM-DD_HHMM.json)")
     ap.add_argument("--fixtures", default=None,
                     help="path to a JSON fixture file with candidate videos "
                          "(skip live search; used for tests/offline runs)")
@@ -672,7 +673,10 @@ def main(argv=None):
         out_path = args.output
     else:
         os.makedirs(LOGS_DIR, exist_ok=True)
-        out_path = os.path.join(LOGS_DIR, f"yt_outreach_{now:%Y-%m-%d}.json")
+        # Include HHMM (UTC) so two runs on the same UTC date (02:00 and 20:00
+        # local) each get their own payload file instead of clobbering each
+        # other's record of what was posted.
+        out_path = os.path.join(LOGS_DIR, f"yt_outreach_{now:%Y-%m-%d_%H%M}.json")
     out_dir = os.path.dirname(os.path.abspath(out_path))
     os.makedirs(out_dir, exist_ok=True)
     with open(out_path, "w") as f:

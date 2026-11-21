@@ -318,4 +318,41 @@ def test_make_reply_strips_zero_width_prefix_before_mentions():
     assert "alright" in reply
 
 
+def test_default_output_path_unique_per_run(monkeypatch, tmp_path):
+    """Two runs on the same UTC date must not clobber each other's payload.
+
+    Regression: cron runs at 02:00 and 20:00 local land on the same UTC
+    date on some days, and `yt_outreach_YYYY-MM-DD.json` made the later
+    run overwrite the earlier payload (losing its posted-record audit).
+    The default filename now carries HHMM (UTC).
+    """
+    import datetime as real_dt
+    import types
+
+    fake_dt = types.ModuleType("fake_dt")
+    for attr in dir(real_dt):
+        if attr != "datetime":
+            setattr(fake_dt, attr, getattr(real_dt, attr))
+
+    class _FixedDT(real_dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return real_dt.datetime(2026, 11, 21, 12, 0, 0,
+                                    tzinfo=tz or real_dt.timezone.utc)
+
+    fake_dt.datetime = _FixedDT
+    monkeypatch.setattr(yt_outreach, "dt", fake_dt)
+
+    rc = yt_outreach.main(["--dry-run", "--fixtures", yt_outreach.FIXTURES_FILE])
+    assert rc == 0
+    out = tmp_path / "logs" / "yt_outreach_2026-11-21_1200.json"
+    assert out.exists(), f"default payload missing; dir has: {list((tmp_path / 'logs').glob('*'))}"
+    records = json.loads(out.read_text(encoding="utf-8"))
+    assert isinstance(records, list) and len(records) >= 1
+    for rec in records:
+        for key in ("video_id", "video_url", "channel", "comment",
+                    "mentions_product", "status"):
+            assert key in rec
+
+
 
