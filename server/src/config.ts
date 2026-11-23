@@ -463,7 +463,12 @@ export const AGENT_ID_ALIASES: Readonly<Record<string, string>> = {
   'local-agy-gemini-3.7-flash-medium': 'local-agy-gemini-3.8-flash',
   'local-agy-gemini-3.7-flash-low': 'local-agy-gemini-3.8-flash',
   'local-agy-claude-sonnet-4-6': 'local-agy-claude-sonnet-5-5',
-  'local-agy-claude-opus-4-6-thinking': 'local-agy-claude-opus-5-5'
+  'local-agy-claude-opus-4-6-thinking': 'local-agy-claude-opus-5-5',
+  // Shorthand agy neon / hydrogen aliases → canonical local-agy-gemini-4-* agent ids.
+  'agy-neon': 'local-agy-gemini-4-neon',
+  'local-agy-neon': 'local-agy-gemini-4-neon',
+  'agy-hydrogen': 'local-agy-gemini-4-hydrogen',
+  'local-agy-hydrogen': 'local-agy-gemini-4-hydrogen'
 };
 
 /** Resolve a (possibly retired) agent id to its canonical id. Follows chained

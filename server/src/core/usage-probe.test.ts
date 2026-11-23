@@ -479,12 +479,26 @@ test('agyWindowMatchesModel: partitions Antigravity quota groups by model family
   const argonWin = { label: '7d', usedPct: 100, group: 'Gemini 4 Argon', title: 'Gemini 4 Argon Weekly Limit', groupNote: 'Argon quota is separate' };
   const ungroupedWin = { label: '5h', usedPct: 20 };
 
-  // Standard Gemini models (gemini-3.8-flash, etc.)
+  // Standard Gemini models (gemini-3.8-flash, gemini-4-neon, gemini-4-hydrogen, agy-neon, agy-hydrogen, etc.)
   assert.equal(agyWindowMatchesModel('local-agy-gemini-3.8-flash', geminiWin), true);
   assert.equal(agyWindowMatchesModel('gemini-3.8-flash-high', geminiWin), true);
   assert.equal(agyWindowMatchesModel('local-agy-gemini-3.8-flash', claudeWin), false, 'gemini must not match claude/gpt group');
   assert.equal(agyWindowMatchesModel('local-agy-gemini-3.8-flash', argonWin), false, 'gemini must not match argon group');
   assert.equal(agyWindowMatchesModel('local-agy-gemini-3.8-flash', ungroupedWin), true, 'ungrouped matches all');
+
+  // Neon and Hydrogen models (both full gemini-4-* slugs and shorthand agy-neon / agy-hydrogen ids)
+  for (const neonId of ['agy-neon', 'local-agy-neon', 'local-agy-gemini-4-neon', 'gemini-4-neon', 'gemini-4-neon-xhigh', 'gemini-pro-orchestrator-neon']) {
+    assert.equal(agyWindowMatchesModel(neonId, geminiWin), true, `${neonId} matches Gemini Models`);
+    assert.equal(agyWindowMatchesModel(neonId, claudeWin), false, `${neonId} must not match Claude/GPT`);
+    assert.equal(agyWindowMatchesModel(neonId, argonWin), false, `${neonId} must not match Argon`);
+    assert.equal(agyWindowMatchesModel(neonId, ungroupedWin), true, `${neonId} matches ungrouped`);
+  }
+  for (const hydrogenId of ['agy-hydrogen', 'local-agy-hydrogen', 'local-agy-gemini-4-hydrogen', 'gemini-4-hydrogen', 'gemini-4-hydrogen-xhigh']) {
+    assert.equal(agyWindowMatchesModel(hydrogenId, geminiWin), true, `${hydrogenId} matches Gemini Models`);
+    assert.equal(agyWindowMatchesModel(hydrogenId, claudeWin), false, `${hydrogenId} must not match Claude/GPT`);
+    assert.equal(agyWindowMatchesModel(hydrogenId, argonWin), false, `${hydrogenId} must not match Argon`);
+    assert.equal(agyWindowMatchesModel(hydrogenId, ungroupedWin), true, `${hydrogenId} matches ungrouped`);
+  }
 
   // Argon models
   assert.equal(agyWindowMatchesModel('local-agy-gemini-4-argon', argonWin), true);

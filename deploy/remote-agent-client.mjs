@@ -493,8 +493,13 @@ function agyWindowMatchesModel(modelOrAgentId, w) {
   if (isArgonModel) return isArgonWindow;
   if (isArgonWindow) return false;
 
-  if (target.includes('gemini')) return group.includes('gemini');
-  if (target.includes('claude')) return group.includes('claude');
+  const isNeonWindow = group.includes('neon') || title.includes('neon');
+  if (isNeonWindow) return target.includes('neon');
+  const isHydrogenWindow = group.includes('hydrogen') || title.includes('hydrogen');
+  if (isHydrogenWindow) return target.includes('hydrogen');
+
+  if (target.includes('gemini') || target.includes('neon') || target.includes('hydrogen') || target.includes('flash')) return group.includes('gemini');
+  if (target.includes('claude') || target.includes('opus') || target.includes('sonnet') || target.includes('haiku')) return group.includes('claude');
   if (target.includes('gpt')) return group.includes('gpt');
 
   if (w.groupModels && w.groupModels.length > 0) {
@@ -519,13 +524,13 @@ async function refreshUsage() {
     const now = new Date().toISOString();
     for (const id of ids) {
       const b = AGENT[id];
-      const model = b?.model || id;
+      const model = b?.model ? `${b.model} ${id}` : id;
       const agentWindows = exec === 'agy'
         ? windows.filter(w => agyWindowMatchesModel(model, w))
         : windows;
       next[id] = {
         exec,
-        windows: agentWindows.length ? agentWindows : windows,
+        windows: agentWindows.length || windows.every(w => !!w?.group) ? agentWindows : windows,
         at: now
       };
     }

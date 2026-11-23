@@ -282,8 +282,13 @@ export class Dispatcher {
       // P1-4: a tier-tagged task tries its tier's agents first, then the normal chain.
       if (tier) raw = mergeTierChain(this.tierList(tier, ctx), raw);
     }
-    // Strip disabled agents so the dispatcher never schedules them.
-    return raw.filter(id => !agents[id]?.disabled);
+    // Canonicalise every rung (AGENT_ID_ALIASES) and strip disabled agents so the dispatcher never schedules them.
+    const out: string[] = [];
+    for (const rawId of raw) {
+      const id = canonicalAgentId(this.config, rawId);
+      if (!agents[id]?.disabled && !out.includes(id)) out.push(id);
+    }
+    return out;
   }
 
   /** Agents of a tier. `review` = a different family than context.reviewOf
@@ -2714,6 +2719,7 @@ export class Dispatcher {
       }
       verdict = await this.qualityGateVerdict(task, text, agentId, (Number(task.context?.attempts) || 0) + 1);
       if (verdict.ok) {
+        this.store.clearAgentRateLimited(agentId);
         return {
           action: 'complete',
           context: {

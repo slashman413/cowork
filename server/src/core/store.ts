@@ -289,11 +289,43 @@ export class Store {
               continue;
             }
             if (id !== rawId && this.agentUsage.has(id)) continue;   // canonical entry wins
-            this.agentUsage.set(id, u as AgentUsage);
+            const usage = u as AgentUsage;
+            let windows = usage.windows;
+            if (usage.exec === 'agy' && Array.isArray(windows)) {
+              const matched = this.matchingUsageWindows(id, usage);
+              if (matched.length || windows.every(w => !!w?.group)) windows = matched;
+            }
+            this.agentUsage.set(id, { ...usage, windows });
           }
         }
       }
     } catch { /* no snapshot on disk yet — first boot */ }
+  }
+
+  /** Usage percent (0–100) for one quota window, derived from usedPct or remainingPct. */
+  private windowUsedPct(w: AgentUsage['windows'][number]): number {
+    return typeof w.usedPct === 'number' ? w.usedPct
+      : (typeof w.remainingPct === 'number' ? 100 - w.remainingPct : 0);
+  }
+
+  /** Return the usage windows applicable to `agentId` (filtered by model group for `agy`). */
+  private matchingUsageWindows(agentId: string, u: AgentUsage | undefined = this.agentUsage.get(agentId)): AgentUsage['windows'] {
+    if (!u || !Array.isArray(u.windows)) return [];
+    if (u.exec !== 'agy') return u.windows;
+    const cfgModel = this.config.orchestration?.agents?.[agentId]?.model;
+    const target = cfgModel ? `${cfgModel} ${agentId}` : agentId;
+    return u.windows.filter(w => agyWindowMatchesModel(target, w));
+  }
+
+  /** True when at least one active window is at or above `threshold`% used and has not yet reset. */
+  private hasNearExhaustedWindow(windows: AgentUsage['windows'], threshold = 80): boolean {
+    const now = Date.now();
+    return windows.some(w => {
+      if (w.disabledNote) return false;
+      if (this.windowUsedPct(w) < threshold) return false;
+      const at = w.resetsAt ? Date.parse(w.resetsAt) : NaN;
+      return !Number.isFinite(at) || at > now;
+    });
   }
 
   // Coalesce writes: usage arrives on every heartbeat (seconds apart), so flush
@@ -316,11 +348,18 @@ export class Store {
     }
     let windows = usage.windows;
     if (usage.exec === 'agy' && Array.isArray(windows)) {
-      const model = this.config.orchestration?.agents?.[agentId]?.model || agentId;
-      const matched = windows.filter(w => agyWindowMatchesModel(model, w));
-      if (matched.length) windows = matched;
+      const matched = this.matchingUsageWindows(agentId, usage);
+      if (matched.length || windows.every(w => !!w?.group)) windows = matched;
     }
-    this.agentUsage.set(agentId, { ...usage, windows });
+    const stored: AgentUsage = { ...usage, windows };
+    this.agentUsage.set(agentId, stored);
+    // When a fresh usage snapshot confirms all applicable windows for this agent have
+    // remaining quota (< 80% used), clear any stale observed rate-limit cooldown so
+    // an upgraded/refreshed quota window does not stay deadlocked in memory.
+    const applicable = this.matchingUsageWindows(agentId, stored);
+    if (applicable.length > 0 && !this.hasNearExhaustedWindow(applicable)) {
+      this.agentRateLimitedUntil.delete(agentId);
+    }
     this.scheduleAgentUsageSave();
   }
   public removeAgentUsage(agentId: string): void {
@@ -388,15 +427,13 @@ export class Store {
     const futures: number[] = [];
     const exhausted: number[] = [];
     for (const { agentId, u } of pool) {
-      const model = agentId ? (this.config.orchestration?.agents?.[agentId]?.model || agentId) : undefined;
-      for (const w of u.windows) {
-        if (model && u.exec === 'agy' && !agyWindowMatchesModel(model, w)) continue;
+      const windows = agentId ? this.matchingUsageWindows(agentId, u) : u.windows;
+      for (const w of windows) {
         if (!w.resetsAt) continue;
         const t = Date.parse(w.resetsAt);
         if (!Number.isFinite(t) || t <= now) continue;
         futures.push(t);
-        const used = typeof w.usedPct === 'number' ? w.usedPct
-          : (typeof w.remainingPct === 'number' ? 100 - w.remainingPct : 0);
+        const used = this.windowUsedPct(w);
         if (used >= 80) exhausted.push(t);
       }
     }
@@ -1089,18 +1126,22 @@ export class Store {
   public agentCooldownUntil(agentId: string): string | undefined {
     const now = Date.now();
     let until = 0;
+    const u = this.agentUsage.get(agentId);
+    const applicable = this.matchingUsageWindows(agentId, u);
+    // If the live usage meter reports applicable windows for this agent and ALL of
+    // them have remaining quota below the near-exhausted threshold (< 80% used),
+    // any earlier observed rate-limit hold is stale and must not block dispatch.
+    if (applicable.length > 0 && !this.hasNearExhaustedWindow(applicable)) {
+      this.agentRateLimitedUntil.delete(agentId);
+    }
     // An OBSERVED rate-limit failure counts too: meters poll on an interval and
     // often still read < 100% when the agent is already refusing work.
     const seen = this.agentRateLimitedUntil.get(agentId);
     if (seen !== undefined) {
       if (seen > now) until = seen; else this.agentRateLimitedUntil.delete(agentId);
     }
-    const u = this.agentUsage.get(agentId);
-    const model = this.config.orchestration?.agents?.[agentId]?.model || agentId;
-    for (const w of (u && Array.isArray(u.windows)) ? u.windows : []) {
-      if (u?.exec === 'agy' && !agyWindowMatchesModel(model, w)) continue;
-      const used = typeof w.usedPct === 'number' ? w.usedPct
-        : (typeof w.remainingPct === 'number' ? 100 - w.remainingPct : 0);
+    for (const w of applicable) {
+      const used = this.windowUsedPct(w);
       const at = w.resetsAt ? Date.parse(w.resetsAt) : NaN;
       if (used >= 100 && Number.isFinite(at) && at > now) until = Math.max(until, at);
     }
@@ -1118,14 +1159,11 @@ export class Store {
    * fixed hold. Cleared early by clearAgentRateLimited when the agent next succeeds.
    */
   public noteAgentRateLimited(agentId: string, fallbackMs = 15 * 60_000): string {
-    const u = this.agentUsage.get(agentId);
-    const model = this.config.orchestration?.agents?.[agentId]?.model || agentId;
+    const applicable = this.matchingUsageWindows(agentId);
     const now = Date.now();
     let reset = 0;
-    for (const w of (u && Array.isArray(u.windows)) ? u.windows : []) {
-      if (u?.exec === 'agy' && !agyWindowMatchesModel(model, w)) continue;
-      const used = typeof w.usedPct === 'number' ? w.usedPct
-        : (typeof w.remainingPct === 'number' ? 100 - w.remainingPct : 0);
+    for (const w of applicable) {
+      const used = this.windowUsedPct(w);
       const at = w.resetsAt ? Date.parse(w.resetsAt) : NaN;
       if (used >= 80 && Number.isFinite(at) && at > now) reset = reset ? Math.min(reset, at) : at;
     }
