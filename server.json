@@ -1,8 +1,8 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.slashman413/cowork",
-  "title": "Cowork",
-  "description": "Self-hosted MCP task inbox shared by Claude Code, Codex, Gemini CLI and local LLMs.",
+  "title": "Cowork MCP — Self-Hosted Multi-Agent Task Queue & MCP Control Plane",
+  "description": "Independent MIT multi-agent task queue & MCP control plane (not affiliated with Anthropic).",
   "repository": {
     "url": "https://github.com/slashman413/cowork",
     "source": "github"

@@ -172,3 +172,46 @@ test('integration jobs: blocked plans and failing steps', async () => {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test('advisor: another server instance sharing the registry does not fail advice as "task disappeared"', async () => {
+  // Two cowork servers (e.g. the real one + a sandbox with its own inbox) share
+  // ~/.cowork/integrations.json but not their task stores. The instance that did
+  // not dispatch the advice task must leave it alone — before the fix it saw
+  // "task disappeared", re-dispatched into ITS store, and the owner then saw that
+  // task disappear too → "every advisor failed (a → b): task disappeared".
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'int-adv-owner-'));
+  try {
+    const repo = makeRepo(tmp);
+    const mk = () => new Integrations({ root: path.join(tmp, 'clones'), registry: path.join(tmp, 'reg.json'), skillsHome: path.join(tmp, 'skills'), clientSkillDirs: [] },
+      { portalFile: path.join(tmp, 'portal.json'), allowFileUrls: true });
+    const intA = mk(), intB = mk();
+    const storeA = fakeStore(path.join(tmp, 'a')), storeB = fakeStore(path.join(tmp, 'b'));
+    const opts = { chain: () => ['sonnet', 'opus'], localAgents: () => ['sonnet', 'opus'] };
+    const A = new IntegrationJobs(intA, storeA, { ...opts, owner: () => path.join(tmp, 'a', 'inbox') });
+    const B = new IntegrationJobs(intB, storeB, { ...opts, owner: () => path.join(tmp, 'b', 'inbox') });
+    const e = await intA.add(`file://${repo}`);
+    const taskId = A.advise(e.id).advice!.taskId!;
+    assert.ok(storeA.getTask(taskId));
+
+    B.tick();   // B cannot see A's task: it must not touch the advice
+    let adv = intA.get(e.id)!.advice!;
+    assert.equal(adv.status, 'pending', adv.error);
+    assert.equal(adv.taskId, taskId);
+    assert.equal(adv.attempt, 0);
+    assert.equal(storeB.tasks.size, 0, 'B dispatched nothing');
+
+    storeA.finish(taskId, 'ok', { installable: true, scope: 'user', steps: [{ title: 'noop', run: 'true' }], uninstall: [], locations: [] });
+    A.tick();
+    adv = intA.get(e.id)!.advice!;
+    assert.equal(adv.status, 'ready', adv.error);
+    assert.ok(!JSON.stringify(adv).includes('task disappeared'));
+
+    // A task genuinely deleted from the owner's store still falls over (unchanged).
+    const t2 = A.advise(e.id).advice!.taskId!;
+    storeA.tasks.delete(t2);
+    A.tick();
+    adv = intA.get(e.id)!.advice!;
+    assert.equal(adv.history.at(-1)!.outcome, 'task disappeared');
+    assert.equal(adv.agent, 'opus');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+});

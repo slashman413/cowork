@@ -1,9 +1,11 @@
 <div align="center">
 
-# 🤝 Cowork
+# 🤝 Cowork MCP — Self-Hosted Multi-Agent Task Queue & MCP Control Plane
 
 ### One Task Inbox for Claude Code, Codex, Gemini CLI & Hermes Agents
 **Self-hosted MCP server & Web Dashboard with auto-fallback chains, remote fleet execution, and zero-database storage.**
+
+> **Disambiguation:** Independent MIT open-source project — not affiliated with Anthropic.
 
 [![GitHub Stars](https://img.shields.io/github/stars/slashman413/cowork?style=for-the-badge&color=FFE066&logo=github)](https://github.com/slashman413/cowork/stargazers)
 [![CI Pipeline](https://img.shields.io/github/actions/workflow/status/slashman413/cowork/ci.yml?style=for-the-badge&label=CI&color=3FB950)](https://github.com/slashman413/cowork/actions/workflows/ci.yml)
@@ -452,7 +454,7 @@ per agent with `orchestration.agents.<id>.personaRouting: "always" | "never"`.
   with its own chain. `video` runs the ComfyUI **LTX** pipeline
   (`deploy/video-pipeline.sh`; LTX only — never Wan/Hunyuan/SVD).
 - **Personas** — the ~285 personas from the installed persona-pack integrations
-  (default: `msitarzewski/agency-agents`, cloned under `~/.cowork/integrations/`),
+  (default: `msitarzewski/agency-agents`, cloned under `paths.integrations`, default `/data/cowork/integrations/`),
   grouped into 19 divisions. They have no chain of their own: per-division and
   per-persona chains were removed on 2026-11-13, and `divisionChains` /
   `personaChains` in an old config are ignored.
