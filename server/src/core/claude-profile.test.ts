@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ClaudeProfile, needsFullProfile, selectMcpServers } from './claude-profile.js';
+import { ClaudeProfile, denyForServers, needsFullProfile, selectMcpServers } from './claude-profile.js';
 
 const servers = {
   cowork: { type: 'http', url: 'https://localhost:6868/mcp', headers: { 'X-Api-Key': 'k' } },
@@ -66,4 +66,34 @@ test('args: lean flags with 0600 files carrying env/model/effort and the chosen 
 test('args: full profile ([]) when the task needs skills or ~/.claude.json is unreadable', () => {
   assert.deepEqual(new ClaudeProfile({ home: fakeHome() }).args('run /graphify here'), []);
   assert.deepEqual(new ClaudeProfile({ home: fakeHome(false) }).args('write a post'), []);
+});
+
+test('F1: deny entries apply only to selected MCP servers; non-MCP names always', () => {
+  const deny = ['mcp__firecrawl__firecrawl_search', 'mcp__rea', 'WebSearch', '', 'mcp__twstock__quote'];
+  assert.deepEqual(denyForServers(deny, ['cowork', 'firecrawl']), ['mcp__firecrawl__firecrawl_search', 'WebSearch']);
+  assert.deepEqual(denyForServers(deny, ['cowork', 'rea']), ['mcp__rea', 'WebSearch']);
+  assert.deepEqual(denyForServers(undefined, ['firecrawl']), []);
+});
+
+test('F1: a run with the denied server selected gets permissions.deny; other runs keep the same settings file', () => {
+  const home = fakeHome();
+  writeFileSync(join(home, '.claude.json'), JSON.stringify({ mcpServers: {
+    cowork: servers.cowork, firecrawl: { type: 'http', url: 'http://localhost:3000/mcp' },
+  } }));
+  const p = new ClaudeProfile({ home });
+  const cfg = {
+    always: ['cowork'],
+    onDemand: { firecrawl: String.raw`\bscrap(?:e|es|ed|ing)\b` },
+    deny: ['mcp__firecrawl__firecrawl_search', 'mcp__firecrawl__firecrawl_agent'],
+  };
+  const fc = p.args('scrape example.com', cfg);
+  assert.deepEqual(Object.keys(JSON.parse(readFileSync(fc[6], 'utf8')).mcpServers), ['cowork', 'firecrawl']);
+  const fcSettings = JSON.parse(readFileSync(fc[3], 'utf8'));
+  assert.deepEqual(fcSettings.permissions, { deny: ['mcp__firecrawl__firecrawl_search', 'mcp__firecrawl__firecrawl_agent'] });
+  assert.equal(fcSettings.model, 'm'); // carried settings are kept alongside the deny list
+  assert.equal(statSync(fc[3]).mode & 0o777, 0o600);
+  // A run that does not load firecrawl writes exactly the settings file it did before F1.
+  const plain = p.args('write a blog post', cfg);
+  assert.equal(plain[3], p.args('write a blog post')[3]);
+  assert.equal(JSON.parse(readFileSync(plain[3], 'utf8')).permissions, undefined);
 });
