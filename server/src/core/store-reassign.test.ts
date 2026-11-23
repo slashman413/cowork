@@ -213,3 +213,84 @@ test('agentCooldownUntil & classifyRateLimit: Antigravity quota groups only affe
   assert.equal(completed.context?.rateLimited, true);
   assert.equal(completed.context?.rateLimitResetsAt, geminiReset, 'rateLimitResetsAt matches Gemini window, NOT Claude');
 });
+
+test('agy-neon and agy-hydrogen: quota matching, cooldown recovery on refreshed quota, and dispatch eligibility', () => {
+  const { store, config } = makeStore();
+  (config.orchestration.agents as any)['agy-neon'] = { location: 'local', exec: 'agy', model: 'gemini-4-neon' };
+  (config.orchestration.agents as any)['agy-hydrogen'] = { location: 'local', exec: 'agy', model: 'gemini-4-hydrogen' };
+  (config.orchestration.agents as any)['local-agy-gemini-4-neon'] = { location: 'local', exec: 'agy', model: 'gemini-4-neon' };
+  (config.orchestration.agents as any)['local-agy-gemini-4-hydrogen'] = { location: 'local', exec: 'agy', model: 'gemini-4-hydrogen' };
+  (config.orchestration.roleChains as any).generalist.agents = ['agy-neon', 'agy-hydrogen', 'local-qwen'];
+
+  const geminiReset = new Date(Date.now() + 1800e3).toISOString();
+  const claudeReset = new Date(Date.now() + 86400e3).toISOString();
+  const argonReset = new Date(Date.now() + 43200e3).toISOString();
+
+  // 1. When Gemini Models has remaining quota (16% used / 84% remaining), agy-neon and agy-hydrogen
+  //    must not cool down even if Claude/GPT and Argon windows are 100% exhausted.
+  const availableGeminiUsage: AgentUsage = {
+    exec: 'agy',
+    at: new Date().toISOString(),
+    windows: [
+      { label: '7d', usedPct: 16, remainingPct: 84, resetsAt: geminiReset, group: 'Gemini Models', groupModels: ['Gemini 4 Neon', 'Gemini 4 Hydrogen', 'Gemini 3.8 Flash'], title: 'Weekly Limit Remaining' },
+      { label: '5h', usedPct: 2.4, remainingPct: 97.62, resetsAt: geminiReset, group: 'Gemini Models', groupModels: ['Gemini 4 Neon', 'Gemini 4 Hydrogen', 'Gemini 3.8 Flash'], title: 'Five Hour Limit Remaining' },
+      { label: '7d', usedPct: 100, remainingPct: 0, resetsAt: claudeReset, group: 'Claude and GPT models', groupModels: ['Claude Opus 5.5', 'Claude Sonnet 5.5', 'GPT-OSS 120B'], title: 'Weekly Limit Remaining' },
+      { label: '7d', usedPct: 100, remainingPct: 0, resetsAt: argonReset, group: 'Gemini 4 Argon', title: 'Gemini 4 Argon Weekly Limit', groupNote: 'Argon quota is separate' }
+    ]
+  };
+
+  for (const id of ['agy-neon', 'agy-hydrogen', 'local-agy-gemini-4-neon', 'local-agy-gemini-4-hydrogen']) {
+    store.setAgentUsage(id, availableGeminiUsage);
+    assert.equal(store.getAgentUsage()[id].windows.length, 2, `${id} keeps only Gemini Models windows`);
+    assert.equal(store.agentCooldownUntil(id), undefined, `${id} has no cooldown while Gemini quota is available`);
+  }
+
+  // 2. When their own Gemini Models window is exhausted (100% used), they report cooldown until geminiReset,
+  //    and even if noteAgentRateLimited latches that cooldown in memory, a subsequent quota refresh/upgrade
+  //    (setAgentUsage with available quota) clears the stale cooldown so tasks dispatch immediately.
+  const exhaustedGeminiUsage: AgentUsage = {
+    exec: 'agy',
+    at: new Date(Date.now() + 1000).toISOString(),
+    windows: [
+      { label: '7d', usedPct: 100, remainingPct: 0, resetsAt: geminiReset, group: 'Gemini Models', groupModels: ['Gemini 4 Neon', 'Gemini 4 Hydrogen', 'Gemini 3.8 Flash'], title: 'Weekly Limit Remaining' },
+      { label: '7d', usedPct: 100, remainingPct: 0, resetsAt: claudeReset, group: 'Claude and GPT models', title: 'Weekly Limit Remaining' }
+    ]
+  };
+
+  for (const id of ['agy-neon', 'agy-hydrogen', 'local-agy-gemini-4-neon', 'local-agy-gemini-4-hydrogen']) {
+    store.setAgentUsage(id, exhaustedGeminiUsage);
+    assert.equal(store.agentCooldownUntil(id), geminiReset, `${id} cools down when its own Gemini window is exhausted`);
+    assert.equal(store.noteAgentRateLimited(id), geminiReset);
+    assert.equal(store.agentCooldownUntil(id), geminiReset);
+  }
+
+  // Refresh quota (e.g. window reset or plan upgrade) → cooldown clears automatically
+  const refreshedGeminiUsage: AgentUsage = {
+    ...availableGeminiUsage,
+    at: new Date(Date.now() + 2000).toISOString()
+  };
+  for (const id of ['agy-neon', 'agy-hydrogen', 'local-agy-gemini-4-neon', 'local-agy-gemini-4-hydrogen']) {
+    store.setAgentUsage(id, refreshedGeminiUsage);
+    assert.equal(store.agentCooldownUntil(id), undefined, `${id} cooldown clears once meter reports available quota`);
+  }
+
+  // 3. Tasks pinned or routed to agy-neon and agy-hydrogen resolve to canonical local-agy-gemini-4-*
+  //    and dispatch instead of pending due to rate limit.
+  const d = new Dispatcher(config, store, new EventBus());
+  const ran: string[] = [];
+  (d as any).workerId = 'dispatcher';
+  (d as any).execute = async (task: any, plan: any) => { ran.push(`${task.id}@${plan.agentId}`); };
+
+  const pinnedNeon = mkTask(store, { persona: 'generalist', agent: 'agy-neon' });
+  const pinnedHydrogen = mkTask(store, { persona: 'generalist', agent: 'agy-hydrogen' });
+  const routedNeon = mkTask(store, { persona: 'generalist' }); // chain head is agy-neon → canonical local-agy-gemini-4-neon
+
+  (d as any).tick();
+  assert.deepEqual(ran.sort(), [
+    `${pinnedNeon.id}@local-agy-gemini-4-neon`,
+    `${pinnedHydrogen.id}@local-agy-gemini-4-hydrogen`,
+    `${routedNeon.id}@local-agy-gemini-4-neon`
+  ].sort());
+  assert.equal(store.getTask(pinnedNeon.id)!.context?.pendingReason, undefined);
+  assert.equal(store.getTask(pinnedHydrogen.id)!.context?.pendingReason, undefined);
+});

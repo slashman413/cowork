@@ -225,3 +225,50 @@ test('store: loadAgentUsage prunes retired local agents from disk snapshot', () 
   assert.equal('local-agy-gemini-3.8-flash' in usage, true);
   assert.equal('local-agy-gemini-3.7-flash' in usage, false, 'retired local agent must be pruned');
 });
+
+test('completeTask & setAgentUsage: agy-neon and agy-hydrogen clear stale rate-limit holds when Gemini quota refreshes and record Gemini reset when exhausted', async () => {
+  const { store } = makeStore({
+    agents: {
+      'local-agy-gemini-4-neon': { location: 'local', exec: 'agy', model: 'gemini-4-neon' },
+      'local-agy-gemini-4-hydrogen': { location: 'local', exec: 'agy', model: 'gemini-4-hydrogen' },
+    }
+  });
+  const geminiReset = new Date(Date.now() + 2 * 3600 * 1000).toISOString();
+  const claudeReset = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
+
+  // 1. Exhausted Gemini window latches cooldown on noteAgentRateLimited
+  const exhaustedSnapshot: AgentUsage = {
+    exec: 'agy',
+    at: '2026-11-21T01:01:05.000Z',
+    windows: [
+      { label: '7d', usedPct: 100, remainingPct: 0, resetsAt: geminiReset, group: 'Gemini Models', groupModels: ['Gemini 4 Neon', 'Gemini 4 Hydrogen', 'Gemini 3.8 Flash'] },
+      { label: '7d', usedPct: 100, remainingPct: 0, resetsAt: claudeReset, group: 'Claude and GPT models', groupModels: ['Claude Opus 5.5', 'Claude Sonnet 5.5', 'GPT-OSS 120B'] }
+    ]
+  };
+  for (const id of ['local-agy-gemini-4-neon', 'local-agy-gemini-4-hydrogen']) {
+    store.setAgentUsage(id, exhaustedSnapshot);
+    assert.equal(store.noteAgentRateLimited(id), geminiReset);
+    assert.equal(store.agentCooldownUntil(id), geminiReset);
+  }
+
+  // 2. Quota refreshes on Gemini Models while Claude/GPT stays 100% exhausted → stale hold clears
+  const refreshedSnapshot: AgentUsage = {
+    exec: 'agy',
+    at: '2026-11-23T07:40:00.000Z',
+    windows: [
+      { label: '7d', usedPct: 16, remainingPct: 84, resetsAt: geminiReset, group: 'Gemini Models', groupModels: ['Gemini 4 Neon', 'Gemini 4 Hydrogen', 'Gemini 3.8 Flash'] },
+      { label: '5h', usedPct: 2, remainingPct: 98, resetsAt: geminiReset, group: 'Gemini Models', groupModels: ['Gemini 4 Neon', 'Gemini 4 Hydrogen', 'Gemini 3.8 Flash'] },
+      { label: '7d', usedPct: 100, remainingPct: 0, resetsAt: claudeReset, group: 'Claude and GPT models', groupModels: ['Claude Opus 5.5', 'Claude Sonnet 5.5', 'GPT-OSS 120B'] }
+    ]
+  };
+  for (const id of ['local-agy-gemini-4-neon', 'local-agy-gemini-4-hydrogen']) {
+    store.setAgentUsage(id, refreshedSnapshot);
+    assert.equal(store.agentCooldownUntil(id), undefined, `${id} must not stay cooling down once Gemini quota is available`);
+  }
+
+  // 3. A task pinned via shorthand agy-neon or agy-hydrogen resolves to canonical local-agy-gemini-4-*
+  const tNeon = mkTask(store, 'neon task', { agent: 'agy-neon' });
+  const tHydrogen = mkTask(store, 'hydrogen task', { agent: 'agy-hydrogen' });
+  assert.equal(tNeon.context?.agent, 'local-agy-gemini-4-neon');
+  assert.equal(tHydrogen.context?.agent, 'local-agy-gemini-4-hydrogen');
+});

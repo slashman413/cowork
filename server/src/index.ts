@@ -811,12 +811,19 @@ async function main() {
         live: now - new Date(a.lastHeartbeat).getTime() < 600000
       }));
     // usage: per-agent rate-limit snapshots (local poller + remote heartbeats);
+    // cooldowns: per-agent effective cooldown reset ISO strings from Store.agentCooldownUntil;
     // localAgents: which of those live on THIS host, so the UI can render them
     // as a separate "cowork host" card instead of mis-filing them under a client.
+    const allAgents = Object.keys(config.orchestration.agents || {});
     const localAgents = Object.entries(config.orchestration.agents || {})
       .filter(([, b]) => b.location === 'local' && isMeteredExec(b.exec))
       .map(([id]) => id);
-    res.json({ clients, counters: store.getCounters(), usage: store.getAgentUsage(), localAgents });
+    const cooldowns: Record<string, string> = {};
+    for (const id of allAgents) {
+      const until = store.agentCooldownUntil(id);
+      if (until) cooldowns[id] = until;
+    }
+    res.json({ clients, counters: store.getCounters(), usage: store.getAgentUsage(), cooldowns, localAgents });
   });
 
   // ── Task artifacts (persistent per-task dir; downloadable) ─────────────────
@@ -1061,12 +1068,21 @@ async function main() {
     res.json({ ok: true, id, disabled: true });
   });
 
+  // Clear a stale observed rate-limit hold (Store.agentRateLimitedUntil) for an agent.
+  app.post('/api/agents/:id/clear-cooldown', (req, res) => {
+    const id = canonicalAgentId(config, req.params.id);
+    store.clearAgentRateLimited(id);
+    store.clearAgentRateLimited(req.params.id);
+    res.json({ ok: true, id, cooldownUntil: store.agentCooldownUntil(id) ?? null });
+  });
+
   // Re-enable a previously disabled agent.
   app.patch('/api/agents/:id/enable', (req, res) => {
     const id = req.params.id;
     const agent = (config.orchestration.agents || {})[id];
     if (!agent) return res.status(404).json({ error: 'agent not found' });
     delete agent.disabled;
+    store.clearAgentRateLimited(id);
     persistRegistries(config);
     res.json({ ok: true, id, disabled: false });
   });

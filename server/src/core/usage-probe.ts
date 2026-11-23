@@ -446,13 +446,19 @@ export function agyWindowMatchesModel(modelOrAgentId: string, w: AgentUsageWindo
   if (isArgonModel) return isArgonWindow;
   if (isArgonWindow) return false;
 
-  // 2. Standard Gemini models (Flash, Pro, 3.8, etc.)
-  if (target.includes('gemini')) {
+  // 1b. Dedicated Neon / Hydrogen window (if partitioned separately by group/title)
+  const isNeonWindow = group.includes('neon') || title.includes('neon');
+  if (isNeonWindow) return target.includes('neon');
+  const isHydrogenWindow = group.includes('hydrogen') || title.includes('hydrogen');
+  if (isHydrogenWindow) return target.includes('hydrogen');
+
+  // 2. Standard Gemini models (Gemini 4 Neon, Gemini 4 Hydrogen, Gemini 3.8 Flash, Pro, etc.)
+  if (target.includes('gemini') || target.includes('neon') || target.includes('hydrogen') || target.includes('flash')) {
     return group.includes('gemini');
   }
 
   // 3. Claude models
-  if (target.includes('claude')) {
+  if (target.includes('claude') || target.includes('opus') || target.includes('sonnet') || target.includes('haiku')) {
     return group.includes('claude');
   }
 
@@ -703,13 +709,13 @@ export class UsagePoller {
       const at = new Date().toISOString();
       for (const id of ids) {
         const agent = this.agents()[id];
-        const model = agent?.model || id;
+        const model = agent?.model ? `${agent.model} ${id}` : id;
         const agentWindows = targetExec === 'agy'
           ? windows.filter(w => agyWindowMatchesModel(model, w))
           : windows;
         this.store.setAgentUsage(id, {
           exec: targetExec,
-          windows: agentWindows.length ? agentWindows : windows,
+          windows: agentWindows.length || windows.every(w => !!w?.group) ? agentWindows : windows,
           at
         });
       }
