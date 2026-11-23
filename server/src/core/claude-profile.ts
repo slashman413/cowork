@@ -27,9 +27,16 @@ export interface ClaudeMcpConfig {
   always?: string[];
   /** Servers added only when the task text matches the regex (case-insensitive). */
   onDemand?: Record<string, string>;
+  /** Tool names hidden from lean runs via `permissions.deny` in the run's
+   *  settings file (honoured even with --dangerously-skip-permissions). An
+   *  `mcp__<server>__…` entry is only written when that server is selected, so
+   *  runs without it keep the same settings file. Used to drop MCP tools that
+   *  cannot work on this host, e.g. Firecrawl Local's 27 cloud-only tools
+   *  (~5.9k input tokens per turn). */
+  deny?: string[];
 }
 
-export const DEFAULT_MCP: Required<ClaudeMcpConfig> = {
+export const DEFAULT_MCP: Required<Omit<ClaudeMcpConfig, 'deny'>> = {
   always: ['cowork', 'firecrawl'],
   onDemand: {
     twstock: String.raw`twse|tpex|twstock|台股|股票|上市|上櫃|\betf\b|\bstocks?\b`,
@@ -57,6 +64,18 @@ export function selectMcpServers(
     try { if (new RegExp(re, 'i').test(taskText)) out[name] = all[name]; } catch { /* bad regex: skip */ }
   }
   return out;
+}
+
+/** The `deny` entries that apply to a run with `servers` selected: non-MCP
+ *  names always, `mcp__<server>` / `mcp__<server>__<tool>` only for a selected server. */
+export function denyForServers(deny: string[] | undefined, servers: string[]): string[] {
+  if (!Array.isArray(deny)) return [];
+  const sel = new Set(servers);
+  return deny.filter(d => {
+    if (typeof d !== 'string' || !d.trim()) return false;
+    const m = /^mcp__(.+?)(?:__|$)/.exec(d);
+    return !m || sel.has(m[1]);
+  });
 }
 
 /** True when the task explicitly needs the owner's skills or subagents, which
@@ -134,8 +153,11 @@ export class ClaudeProfile {
     // --setting-sources project,local would silently drop them: stay full.
     if (all === null) return [];
     try {
-      const settings = this.writeRunFile('settings', this.carriedSettings());
-      const mcp = this.writeRunFile('mcp', { mcpServers: selectMcpServers(all, taskText, mcpCfg) });
+      const servers = selectMcpServers(all, taskText, mcpCfg);
+      const deny = denyForServers(mcpCfg?.deny, Object.keys(servers));
+      const settings = this.writeRunFile('settings', deny.length
+        ? { ...this.carriedSettings(), permissions: { deny } } : this.carriedSettings());
+      const mcp = this.writeRunFile('mcp', { mcpServers: servers });
       return ['--setting-sources', 'project,local', '--settings', settings, '--strict-mcp-config', '--mcp-config', mcp];
     } catch { return []; }
   }

@@ -365,8 +365,9 @@ export interface OrchestrationConfig {
   /** MCP servers (names from ~/.claude.json) for lean claude task runs:
    *  `always` for every run, `onDemand` name → regex matched against the task's
    *  title + description. Defaults: cowork + firecrawl always; twstock,
-   *  notebooklm-mcp, rea on demand. */
-  claudeMcp?: { always?: string[]; onDemand?: Record<string, string> };
+   *  notebooklm-mcp, rea on demand. `deny` = tool names hidden from those runs
+   *  (`permissions.deny`), e.g. MCP tools that cannot work on this host. */
+  claudeMcp?: { always?: string[]; onDemand?: Record<string, string>; deny?: string[] };
   /** Grace period before a task on a REMOTE agent in a chain auto-advances to
    *  the next agent if no client has claimed it (ms; 0 disables). */
   remoteGraceMs?: number;
