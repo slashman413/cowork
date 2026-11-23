@@ -437,6 +437,9 @@ export interface OrchestrationConfig {
   methods?: MethodsConfig;
   /** PR shepherd (pstack opening-a-pr / babysit / shipping). See core/pr-automation.ts. */
   prAutomation?: PrAutomationConfig;
+  /** S1: point tasks with context.verify at the verification-before-completion
+   *  skill. Off by default. See core/verification-skill.ts. */
+  verificationSkill?: { enabled?: boolean; path?: string };
 }
 
 /** Config for {@link OrchestrationConfig.prAutomation}. */

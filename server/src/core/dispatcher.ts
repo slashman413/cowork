@@ -29,6 +29,7 @@ import { briefPersona } from './persona-brief.js';
 import { wantsPersonaRouting } from './persona-routing.js';
 import { agyModelSlug, DEFAULT_THINKING, normalizeThinking, splitThinkingSuffix, thinkingArgs, type ThinkingLevel } from './thinking.js';
 import { ClaudeProfile } from './claude-profile.js';
+import { renderVerificationSkillPrompt } from './verification-skill.js';
 import { killProcessTree } from './proc-tree.js';
 import { codeTaskRepo, ensureWorktree, writeWorktreeDiff, pruneStaleWorktrees } from './worktree.js';
 import { lintArtifacts, lintReason, resolveSloplint, OUTPUTS_SUBDIR } from './artifact-lint.js';
@@ -1768,6 +1769,8 @@ export class Dispatcher {
     if (methodLines.length) lines.push(...methodLines);
     // G10: context.skill — any vendored pstack skill, by name.
     lines.push(...renderSkillPrompt({ repoRoot, skill: task.context?.skill, isLocal }));
+    // S1: tasks with a verify list get a pointer to verification-before-completion.
+    lines.push(...renderVerificationSkillPrompt({ context: task.context, isLocal, cfg: this.config.orchestration?.verificationSkill }));
 
     if (Object.keys(shownCtx).length > 0) {
       lines.push(`# Context`, '```json', JSON.stringify(shownCtx, null, 2), '```', '');
