@@ -570,8 +570,13 @@ function agyWindowMatchesModel(modelOrAgentId, w) {
   if (isArgonModel) return isArgonWindow;
   if (isArgonWindow) return false;
 
-  if (target.includes('gemini')) return group.includes('gemini');
-  if (target.includes('claude')) return group.includes('claude');
+  const isNeonWindow = group.includes('neon') || title.includes('neon');
+  if (isNeonWindow) return target.includes('neon');
+  const isHydrogenWindow = group.includes('hydrogen') || title.includes('hydrogen');
+  if (isHydrogenWindow) return target.includes('hydrogen');
+
+  if (target.includes('gemini') || target.includes('neon') || target.includes('hydrogen') || target.includes('flash')) return group.includes('gemini');
+  if (target.includes('claude') || target.includes('opus') || target.includes('sonnet') || target.includes('haiku')) return group.includes('claude');
   if (target.includes('gpt')) return group.includes('gpt');
 
   if (w.groupModels && w.groupModels.length > 0) {
@@ -584,23 +589,17 @@ function agyWindowMatchesModel(modelOrAgentId, w) {
   return group.includes(target) || target.includes(group);
 }
 
-/** Reset time (Date) of an agent's rate limit window — prefers an exhausted (≥100%)
- *  window that is actively cooling down, or falls back to the rate limit reset time
- *  for metered agents so rate limits remain visible in pickers — or null. */
+/** Reset time (Date) of an agent cooling down on a rate limit — a usage window at
+ *  ≥100% that resets in the future (mirror of Store.agentCooldownUntil) — or null. */
 function agentCooldownUntil(u, agentId) {
   let until = 0;
-  let futureReset = 0;
   for (const w of (u && Array.isArray(u.windows)) ? u.windows : []) {
     if (agentId && u?.exec === 'agy' && !agyWindowMatchesModel(agentId, w)) continue;
     const used = typeof w.usedPct === 'number' ? w.usedPct : (typeof w.remainingPct === 'number' ? 100 - w.remainingPct : 0);
     const at = w.resetsAt ? Date.parse(w.resetsAt) : NaN;
-    if (Number.isFinite(at) && at > Date.now()) {
-      futureReset = Math.max(futureReset, at);
-      if (used >= 100) until = Math.max(until, at);
-    }
+    if (used >= 100 && Number.isFinite(at) && at > Date.now()) until = Math.max(until, at);
   }
-  const chosen = until || futureReset;
-  return chosen ? new Date(chosen) : null;
+  return until ? new Date(until) : null;
 }
 
 // Thinking level picker: a run parameter, separate from which agent runs.

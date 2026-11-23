@@ -39,7 +39,7 @@ export function assertTier(v: unknown, field = 'context.tier'): void {
 export function agentFamily(b: Pick<AgentConfig, 'exec' | 'model'> | undefined, id = ''): string {
   const s = `${b?.model || ''} ${id}`.toLowerCase();
   if (b?.exec === 'claude' || /(?:^|-)cc(?:-|$)|claude|opus|sonnet|haiku|fable/.test(s)) return 'claude';
-  if (/gemini|argon/.test(s)) return 'gemini';
+  if (/gemini|argon|neon|hydrogen/.test(s)) return 'gemini';
   if (/qwen/.test(s)) return 'qwen';
   if (/deepseek/.test(s)) return 'deepseek';
   if (/gpt|codex/.test(s) || b?.exec === 'codex') return 'openai';

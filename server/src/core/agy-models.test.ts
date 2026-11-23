@@ -33,6 +33,10 @@ test('diagnoseAgyModelFailure: a slug missing from a loaded catalog is reported 
 test('retired agy agent ids alias to live ones and the renamed agent forwards the live model', () => {
   assert.equal(canonicalAgentId(undefined, 'local-agy-gemini-3.1-pro-high'), 'local-agy-gemini-3.8-flash');
   assert.equal(canonicalAgentId(undefined, 'local-agy-claude-opus-4-6-thinking'), 'local-agy-claude-opus-5-5');
+  assert.equal(canonicalAgentId(undefined, 'agy-neon'), 'local-agy-gemini-4-neon');
+  assert.equal(canonicalAgentId(undefined, 'local-agy-neon'), 'local-agy-gemini-4-neon');
+  assert.equal(canonicalAgentId(undefined, 'agy-hydrogen'), 'local-agy-gemini-4-hydrogen');
+  assert.equal(canonicalAgentId(undefined, 'local-agy-hydrogen'), 'local-agy-gemini-4-hydrogen');
   const config: any = { orchestration: { agents: {
     'local-agy-gemini-3.6-flash-low': { description: 'x', location: 'local', exec: 'agy', model: 'gemini-3.6-flash-low' }
   }, roleChains: { a: { agents: ['local-agy-gemini-3.6-flash-low'] } } } };
