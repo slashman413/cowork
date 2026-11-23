@@ -4,7 +4,7 @@ set -euo pipefail
 # sync-pstack.sh — Vendor a pinned copy of pstack skills + LICENSE at a given commit.
 # Usage: ./scripts/sync-pstack.sh [commit-sha] (defaults to the pinned SHA below)
 
-SHA="${1:-6c75f4e67546c2ddbf9634734c1e3ebbea34861a}"
+SHA="${1:-c3464c11c60b1352d5e8f5f0428a3a6943837568}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TARGET_DIR="${REPO_ROOT}/vendor/pstack"
 TMP_DIR="$(mktemp -d /tmp/pstack-sync.XXXXXX)"
