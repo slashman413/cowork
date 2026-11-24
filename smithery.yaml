@@ -1,0 +1,36 @@
+# Smithery.ai MCP Server Configuration for Cowork MCP
+# Repository: https://github.com/slashman413/cowork
+# Official MCP Registry ID: io.github.slashman413/cowork
+# Transport: Streamable HTTP MCP at /mcp (default port 6868)
+
+runtime: "container"
+
+build:
+  dockerfile: "Dockerfile"
+  dockerBuildPath: "."
+
+startCommand:
+  type: "http"
+  configSchema:
+    type: object
+    required:
+      - coworkApiKey
+    properties:
+      coworkApiKey:
+        type: string
+        title: "Cowork API Key"
+        description: "Bearer token (COWORK_API_KEY) required on /mcp and /api when listening on non-loopback hosts. If omitted in container mode, Cowork generates one into /data/api-key on first start."
+      coworkPort:
+        type: integer
+        title: "Server Port"
+        default: 6868
+        description: "Listening HTTP port for Cowork MCP (/mcp) and the Web Dashboard (mapped to COWORK_PORT)."
+      coworkAllowedHosts:
+        type: string
+        title: "Allowed Host Headers"
+        default: ""
+        description: "Optional comma-separated extra Host header allowlist entries for reverse-proxy or hosted deployments (mapped to COWORK_ALLOWED_HOSTS)."
+  exampleConfig:
+    coworkApiKey: "replace-with-strong-random-token"
+    coworkPort: 6868
+    coworkAllowedHosts: ""
