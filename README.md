@@ -84,9 +84,9 @@ deploy/install-skill.sh     # 2) wire the Cowork MCP connection into your agent 
 
 Then open **http://localhost:6868** — the dashboard is live: create a task, the dispatcher
 routes it across your agent fallback chains, and results plus artifacts land back on the task
-card. Running a hub-only container instead? `docker run -d -p 6868:6868 -v cowork-data:/data ghcr.io/slashman413/cowork:1.0.1`.
+card. Running a hub-only container instead? `docker run -d -p 6868:6868 -v cowork-data:/data ghcr.io/slashman413/cowork:1.0.2`.
 
-<sub>Full walkthrough, manual steps and per-client wiring → [Quick Start](#quick-start) · [Connecting agents](#connecting-ai-agents)</sub>
+<sub>Full walkthrough, manual steps and per-client wiring → [Quick Start](#quick-start) · [Connecting agents](#connecting-ai-agents) · [MCP Client Setup Guide](docs/mcp-setup.md)</sub>
 
 ---
 
@@ -229,7 +229,7 @@ to do it by hand.
 ### Container (hub only)
 
 ```bash
-docker run -d -p 6868:6868 -v cowork-data:/data ghcr.io/slashman413/cowork:1.0.1
+docker run -d -p 6868:6868 -v cowork-data:/data ghcr.io/slashman413/cowork:1.0.2
 docker logs <container>   # first start prints the generated API key once
 ```
 
@@ -333,7 +333,7 @@ Open **http://localhost:6868** in your browser.
 
 ## Connecting AI Agents
 
-For programmatic access, wire the MCP connection into your agent clients:
+For programmatic access, wire the MCP connection into your agent clients. See **[docs/mcp-setup.md](docs/mcp-setup.md)** for the full zero-friction guide covering **Node.js / `npx` (`mcp-remote`)**, **Docker (`Authorization: Bearer`)**, and **Smithery** container deployments.
 
 **Scripted (recommended):** `deploy/install-skill.sh` installs the `cowork` coordination
 skill and wires the MCP connection for every agent client detected on the box — one command
@@ -347,27 +347,100 @@ deploy/install-skill.sh --client all --url http://cowork-host:6868   # remote se
 
 It drops the per-client skill (canonical copies in `deploy/skills/`) into the client's live
 skill dir and, for Claude Code, merges the `mcpServers.cowork` entry into `~/.claude.json`
-without disturbing your other servers. The manual per-client config is below for reference.
+without disturbing your other servers. Copy-pasteable per-client configs are below.
+
+> **Using Docker (`0.0.0.0`) or a remote hub?** Add `"headers": { "Authorization": "Bearer YOUR_COWORK_API_KEY" }` (or `--header "Authorization: Bearer $COWORK_API_KEY"` for `claude mcp add`). Local loopback (`127.0.0.1`) Node.js hubs need no API key.
 
 ### Claude Code
 
-Add to your MCP configuration (`~/.claude.json` or project-level):
+One-command CLI setup:
+
+```bash
+# Local Node.js hub
+claude mcp add --transport http cowork http://localhost:6868/mcp
+
+# Docker / remote hub (with API key)
+claude mcp add --transport http cowork http://localhost:6868/mcp \
+  --header "Authorization: Bearer $COWORK_API_KEY"
+```
+
+Or add to `~/.claude.json` (user) / `.mcp.json` (project):
+
+```json
+{
+  "mcpServers": {
+    "cowork": {
+      "type": "http",
+      "url": "http://localhost:6868/mcp"
+    }
+  }
+}
+```
+
+Then in Claude Code, verify with `claude mcp list` and call:
+```
+Use the cowork MCP tools: register_agent, create_task, get_roster, etc.
+```
+
+### Cursor
+
+Add to `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (project root):
 
 ```json
 {
   "mcpServers": {
     "cowork": {
       "url": "http://localhost:6868/mcp",
-      "transport": "streamable-http"
+      "headers": {
+        "Authorization": "Bearer ${env:COWORK_API_KEY}"
+      }
     }
   }
 }
 ```
 
-Then in Claude Code, the agent can call:
+*(Omit `headers` for a local loopback Node.js hub, or use the `npx -y mcp-remote` bridge snippet in [docs/mcp-setup.md#2-cursor](docs/mcp-setup.md#2-cursor).)*
+
+### Cline
+
+Add to `cline_mcp_settings.json` (*Cline panel → MCP Servers → Configure MCP Servers*):
+
+```json
+{
+  "mcpServers": {
+    "cowork": {
+      "url": "http://localhost:6868/mcp",
+      "type": "streamableHttp",
+      "headers": {
+        "Authorization": "Bearer YOUR_COWORK_API_KEY"
+      },
+      "disabled": false,
+      "autoApprove": []
+    }
+  }
+}
 ```
-Use the cowork MCP tools: register_agent, create_task, get_roster, etc.
+
+*(Omit `headers` for a local loopback Node.js hub; see [docs/mcp-setup.md#3-cline-vs-code-extension](docs/mcp-setup.md#3-cline-vs-code-extension) for OS paths and `npx` bridge options.)*
+
+### Windsurf
+
+Add to `~/.codeium/windsurf/mcp_config.json` (*Windsurf Settings → Cascade → MCP Servers → View raw config*):
+
+```json
+{
+  "mcpServers": {
+    "cowork": {
+      "serverUrl": "http://localhost:6868/mcp",
+      "headers": {
+        "Authorization": "Bearer ${env:COWORK_API_KEY}"
+      }
+    }
+  }
+}
 ```
+
+*(Use `"url"` instead of `"serverUrl"` on older Windsurf builds, omit `headers` for a local loopback Node.js hub, or use the `npx` bridge in [docs/mcp-setup.md#4-windsurf-cascade](docs/mcp-setup.md#4-windsurf-cascade).)*
 
 ### Antigravity (AGY)
 

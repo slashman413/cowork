@@ -8,6 +8,7 @@ on specific subsystems.
 
 | Doc | What it covers |
 |-----|----------------|
+| **[mcp-setup.md](mcp-setup.md)** | **Zero-friction MCP client setup recipes** — one-command and copy-pasteable configs for Claude Code, Cursor, Cline, and Windsurf (Node.js/`npx` and Docker hubs), plus Smithery container notes and troubleshooting. |
 | **[dashboard.md](dashboard.md)** | **Page-by-page manual of the web dashboard** — every nav tab (Overview, Portal, Tasks, Recipes, Calendar, Goals, Routing, Agents, Workers, Configuration), plus Integrations, what it shows, and the REST endpoints behind it. |
 | [self-improvement-env-sharing.md](self-improvement-env-sharing.md) | The human-gated lesson loop and agent environment sharing — overview. |
 | [calendar-ux.md](calendar-ux.md) | The Calendar page: scheduled and recurring tasks on a time axis, UX spec and data contract. |
