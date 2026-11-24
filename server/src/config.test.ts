@@ -84,3 +84,22 @@ test('loadConfig: legacy integrations.root without paths.integrations is honoure
     assert.equal(c.integrations?.root, '/legacy/int');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('loadConfig: PORT env var overrides default port, and COWORK_PORT takes precedence over PORT', async () => {
+  const dir = withConfig({ server: { port: 6868 } });
+  const prevCoworkPort = process.env.COWORK_PORT;
+  const prevPort = process.env.PORT;
+  try {
+    const { loadConfig } = await import('./config.js');
+    delete process.env.COWORK_PORT;
+    process.env.PORT = '8081';
+    assert.equal(loadConfig().server.port, 8081, 'falls back to standard PORT for container runtimes');
+
+    process.env.COWORK_PORT = '7000';
+    assert.equal(loadConfig().server.port, 7000, 'COWORK_PORT overrides PORT');
+  } finally {
+    if (prevCoworkPort === undefined) delete process.env.COWORK_PORT; else process.env.COWORK_PORT = prevCoworkPort;
+    if (prevPort === undefined) delete process.env.PORT; else process.env.PORT = prevPort;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

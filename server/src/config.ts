@@ -282,8 +282,11 @@ export function loadConfig(): Config {
   if (process.env.COWORK_API_KEY) {
     config.server.apiKey = process.env.COWORK_API_KEY;
   }
-  if (process.env.COWORK_PORT) {
-    const p = parseInt(process.env.COWORK_PORT, 10);
+  // COWORK_PORT takes precedence; fall back to standard PORT for container
+  // runtimes such as Smithery (runtime: "container", startCommand.type: "http").
+  const portEnv = process.env.COWORK_PORT || process.env.PORT;
+  if (portEnv) {
+    const p = parseInt(portEnv, 10);
     if (Number.isFinite(p) && p > 0) config.server.port = p;
   }
   // COWORK_HOST lets a container bind 0.0.0.0 without editing the seeded config.
