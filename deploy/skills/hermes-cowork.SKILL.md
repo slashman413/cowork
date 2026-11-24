@@ -114,7 +114,7 @@ SSE event types are camelCase: `agentRegistered`, `taskCreated`, `taskClaimed`,
 ### Web Dashboard
 
 - `https://localhost:6868/` — Web UI (Overview, Portal, Tasks, Recipes, Calendar,
-  Goals, Routing, Agents, Workers, Configuration; Integrations at `/integrations.html`) with a raw/rendered markdown viewer and artifact downloads
+  Goals, Routing, Agents, Workers, Configuration; Integrations at `/integrations.html`) with a raw/rendered markdown viewer, an in-app HTML viewer (clickable .html artifacts open in a size-fit popup dialog), and artifact downloads
 
 ### MCP Inspector (debugging)
 

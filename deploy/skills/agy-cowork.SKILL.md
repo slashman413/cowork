@@ -481,7 +481,7 @@ way; copy that shape rather than writing a bare metric.
 ### Web Dashboard
 
 - `https://localhost:6868/` — Web UI (Overview, Portal, Tasks, Recipes, Calendar,
-  Goals, Routing, Agents, Workers, Configuration; Integrations at `/integrations.html`) with raw/rendered markdown viewer and artifact downloads
+  Goals, Routing, Agents, Workers, Configuration; Integrations at `/integrations.html`) with raw/rendered markdown viewer, in-app HTML viewer (clickable .html artifacts open in a size-fit popup dialog), and artifact downloads
 - **Inbox UX**: Real-time SSE updates preserve card expansion and scroll position; status pills display live counts; and a **+ New task** toolbar button lets you create and dispatch tasks with title, brief, priority, and target agent directly from the Tasks page.
 
 ---

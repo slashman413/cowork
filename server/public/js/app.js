@@ -509,14 +509,22 @@ function mediaKindFor(f) { return MEDIA_KIND.find(k => k.re.test(f)) || null; }
 // would mangle its formatting.
 const TEXT_RE = /\.(txt|log)$/i;
 
+// HTML artifacts (.html / .htm / .xhtml) that open in the in-app HTML viewer
+// (openHtmlModal) instead of downloading: the markup renders in a sandboxed
+// <iframe> inside the same size-fit popup the markdown viewer uses, so a
+// produced page is viewable right on the dashboard.
+const HTML_RE = /\.(html?|xhtml)$/i;
+
 // One file chip for a task's OUTPUTS, ARTIFACTS or INPUTS list (`kind` picks the API
 // route). Markdown files (.md / .markdown) open in the in-app markdown viewer,
-// plain-text files (.txt / .log) open in the same viewer as raw text, and
-// images / video / audio open in the in-app media viewer (buttons wired to
-// App.openMarkdownModal / App.openMediaModal via the delegated .md-artifact /
-// .text-artifact / .media-artifact handlers) so they can be read without leaving
-// the dashboard; every other file type stays a plain download link. Shared by the
-// Inbox file lists stay visually identical.
+// plain-text files (.txt / .log) open in the same viewer as raw text, HTML files
+// (.html / .htm / .xhtml) open in the in-app HTML viewer, and images / video /
+// audio open in the in-app media viewer (buttons wired to
+// App.openMarkdownModal / App.openHtmlModal / App.openMediaModal via the
+// delegated .md-artifact / .text-artifact / .html-artifact / .media-artifact
+// handlers) so they can be read without leaving the dashboard; every other file
+// type stays a plain download link. Shared by the Inbox file lists stay visually
+// identical.
 function artifactChip(taskId, f, fontSize = '0.9rem', kind = 'artifacts') {
   const base = `font-size:${fontSize};margin:0;display:inline-flex;align-items:center;gap:4px`;
   if (/\.(md|markdown)$/i.test(f)) {
@@ -524,6 +532,9 @@ function artifactChip(taskId, f, fontSize = '0.9rem', kind = 'artifacts') {
   }
   if (TEXT_RE.test(f)) {
     return `<button class="btn text-artifact" data-md-task="${esc(taskId)}" data-md-file="${esc(f)}" data-md-kind="${esc(kind)}" title="Open “${esc(f)}” in the text viewer" style="${base}"><i data-lucide="file-text" style="width:12px;height:12px"></i>${esc(f)}</button>`;
+  }
+  if (HTML_RE.test(f)) {
+    return `<button class="btn html-artifact" data-html-task="${esc(taskId)}" data-html-file="${esc(f)}" data-html-kind="${esc(kind)}" title="Open “${esc(f)}” in the HTML viewer" style="${base}"><i data-lucide="code" style="width:12px;height:12px"></i>${esc(f)}</button>`;
   }
   const media = mediaKindFor(f);
   if (media) {
@@ -759,6 +770,16 @@ class App {
       e.stopPropagation();
       this.openMarkdownModal(btn.dataset.mdTask, btn.dataset.mdFile, btn.dataset.mdKind || 'artifacts', { plain: true });
     });
+    // Delegated: HTML artifacts (.html / .htm / .xhtml) open in the in-app HTML
+    // viewer (a sandboxed <iframe> inside the shared popup) instead of
+    // downloading. Same document-level rationale as the handlers above.
+    document.addEventListener('click', (e) => {
+      const btn = e.target.closest('.html-artifact');
+      if (!btn) return;
+      e.preventDefault();
+      e.stopPropagation();
+      this.openHtmlModal(btn.dataset.htmlTask, btn.dataset.htmlFile, btn.dataset.htmlKind || 'artifacts');
+    });
     // Delegated: image / video / audio artifacts (and inputs) open in the in-app
     // media viewer instead of downloading. Same document-level rationale as the
     // markdown handler above — the Inbox cards re-render
@@ -856,7 +877,7 @@ class App {
         workers: ['Workers', 'plug'], config: ['Configuration', 'settings'] };
       const pages = {
         overview: { id: 'overview', type: 'dashboard', label: 'Overview', icon: 'layout-dashboard',
-          rows: [{ widgets: [{ type: 'sysbar' }] }, { widgets: [{ type: 'stats' }] }, { widgets: [{ type: 'quality', days: 7 }] }, { widgets: [{ type: 'rulings', days: 7, limit: 15 }] },
+          rows: [{ widgets: [{ type: 'sysbar' }] }, { widgets: [{ type: 'drives' }] }, { widgets: [{ type: 'stats' }] }, { widgets: [{ type: 'quality', days: 7 }] }, { widgets: [{ type: 'rulings', days: 7, limit: 15 }] },
                  { minWidth: 380, widgets: [{ type: 'dispatcher' }, { type: 'activity' }] }, { widgets: [{ type: 'platforms' }] }] },
         portal: { id: 'portal', type: 'portal', label: 'Portal', icon: 'layout-grid' },
       };
@@ -1213,6 +1234,99 @@ class App {
       const wrap = content.querySelector('.mdm-media-wrap');
       if (wrap) wrap.innerHTML = `<p style="color:#EF4444">Could not preview <strong>${esc(file)}</strong>. <a href="${url}" download>Download instead</a>.</p>`;
     });
+  }
+
+  /**
+   * Open a task's HTML file (from ARTIFACTS / OUTPUTS or INPUTS) in the shared
+   * size-fit popup, rendered in a sandboxed <iframe> — the in-app HTML viewer,
+   * the HTML counterpart of openMarkdownModal. The markup is fetched from the
+   * same path-guarded file route and handed to the iframe as srcdoc, so the
+   * page renders even though the route normally stamps
+   * Content-Disposition: attachment (which would trigger a download). An
+   * injected <base> points relative assets (CSS / images / JS) back at the
+   * file's own directory on that route, via the route's ?inline=1 form which
+   * serves without attachment. The iframe is sandboxed WITHOUT
+   * allow-same-origin: the agent-produced page runs its own scripts but gets
+   * an opaque origin, so it can never reach the dashboard's DOM, cookies or
+   * /api, and it cannot navigate the top-level window (no
+   * allow-top-navigation). A "Source" button shows the fetched markup,
+   * mirroring the markdown viewer's Raw toggle. `kind` picks the ARTIFACTS /
+   * OUTPUTS vs INPUTS route. Non-HTML files never reach here — they stay
+   * download links (see artifactChip).
+   */
+  async openHtmlModal(taskId, file, kind = 'artifacts') {
+    const container = document.getElementById('modal-container');
+    const content = document.getElementById('modal-content');
+    if (!container || !content) return;
+    const encodedPath = file.split('/').map(encodeURIComponent).join('/');
+    const downloadName = file.split('/').pop() || file;
+    const url = `/api/${kind}/${encodeURIComponent(taskId)}/${encodedPath}`;
+    const barBtn = 'font-size:0.75rem;padding:3px 8px;display:inline-flex;align-items:center;gap:4px';
+    content.classList.add('modal-md');
+    content.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin:0 0 12px">
+        <h3 style="margin:0;font-size:1.02rem;display:flex;align-items:center;gap:6px;min-width:0">
+          <i data-lucide="code" style="width:16px;height:16px;flex:0 0 auto"></i>
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(file)}</span>
+        </h3>
+        <div style="display:flex;gap:6px;flex:0 0 auto">
+          <button class="btn htm-toggle" title="Toggle rendered / source" style="${barBtn}" disabled>Source</button>
+          <a class="btn" href="${url}" download="${esc(downloadName)}" title="Download this file" style="${barBtn}"><i data-lucide="download" style="width:13px;height:13px"></i></a>
+          <button class="btn htm-close" title="Close" style="${barBtn}"><i data-lucide="x" style="width:14px;height:14px"></i></button>
+        </div>
+      </div>
+      <iframe class="htm-frame" title="HTML preview: ${esc(file)}" sandbox="allow-scripts allow-modals allow-forms allow-popups" style="display:block;width:100%;height:70vh;border:1px solid var(--border-color);border-radius:8px;background:#fff"></iframe>
+      <pre class="htm-raw" hidden style="white-space:pre-wrap;font-size:0.85rem;background:var(--bg-tertiary);padding:10px;border-radius:8px;margin:4px 0"></pre>`;
+    container.classList.remove('hidden');
+    createIcons();
+
+    const close = () => {
+      container.classList.add('hidden');
+      content.classList.remove('modal-md');
+      content.innerHTML = '';
+      document.removeEventListener('keydown', onKey);
+    };
+    const onKey = (ev) => { if (ev.key === 'Escape') close(); };
+    document.addEventListener('keydown', onKey);
+    content.querySelector('.htm-close').onclick = close;
+    container.querySelector('.modal-backdrop').onclick = close;
+
+    const frame = content.querySelector('.htm-frame');
+    const rawEl = content.querySelector('.htm-raw');
+    const toggle = content.querySelector('.htm-toggle');
+    if (!frame || !rawEl || !toggle) return;   // modal was closed while building
+
+    let raw = '';
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      raw = await res.text();
+    } catch (err) {
+      // Same failure surface as the markdown viewer: message + download link.
+      frame.remove();
+      rawEl.hidden = false;
+      rawEl.innerHTML = `<p style="color:#EF4444">Could not load <strong>${esc(file)}</strong>: ${esc(err.message)}. <a href="${url}" download>Download instead</a>.</p>`;
+      return;
+    }
+    if (!content.querySelector('.htm-frame')) return;   // modal was closed while loading
+
+    // Point relative assets at the file's own directory on the same route.
+    // ?inline=1 is the route's form that omits Content-Disposition: attachment
+    // (res.sendFile, no attachment header), so CSS / images / JS next to the
+    // page load and render in place. Injected as the FIRST <base> so it wins
+    // over any <base> the page itself declares.
+    const baseHref = url.replace(/\/[^/]*$/, '/?inline=1');
+    const baseTag = `<base href="${baseHref}">`;
+    let htmlDoc = raw.includes('<head>') ? raw.replace('<head>', `<head>\n${baseTag}`) : `${baseTag}\n${raw}`;
+    frame.srcdoc = htmlDoc;
+    rawEl.textContent = raw;
+    toggle.disabled = false;
+    toggle.onclick = () => {
+      const showRaw = frame.style.display !== 'none';
+      frame.style.display = showRaw ? 'none' : '';
+      rawEl.hidden = !showRaw;
+      toggle.textContent = showRaw ? 'Rendered' : 'Source';
+    };
   }
 
   /**
@@ -1770,15 +1884,16 @@ class App {
     const has = (t) => widgets.some(w => w.type === t);
     const qw = widgets.find(w => w.type === 'quality');
     const rw = widgets.find(w => w.type === 'rulings');
-    const [status, dispatcher, portal, , quality, rulings] = await Promise.all([
+    const [status, dispatcher, portal, , quality, rulings, drives] = await Promise.all([
       (has('stats') || has('platforms')) ? this.api.get('/status') : null,
       has('dispatcher') ? this.api.get('/dispatcher').catch(() => null) : null,
       has('services') ? this.api.get('/portal').catch(() => null) : null,
       has('activity') ? this.refreshWorkers() : null,
       qw ? this.api.get(`/metrics/quality?days=${qw.days || 7}`).catch(() => null) : null,
       rw ? this.api.get(`/rulings?days=${rw.days || 7}`).catch(() => null) : null,
+      has('drives') ? this.api.get('/system/drives').catch((e) => ({ drives: [], error: e.message })) : null,
     ]);
-    const ctx = { status, dispatcher, portal, quality, rulings };
+    const ctx = { status, dispatcher, portal, quality, rulings, drives };
 
     const rows = (page.rows || []).map((row) => {
       const cells = row.widgets.map((w) => {
@@ -1810,7 +1925,7 @@ class App {
 
   // One widget's HTML. Options were validated server-side (layout-config.ts);
   // every string that reaches the DOM still goes through esc()/md().
-  renderWidget(w, { status, dispatcher, portal, quality, rulings }) {
+  renderWidget(w, { status, dispatcher, portal, quality, rulings, drives }) {
     const head = (icon, title, extra = '') => `
       <div style="display:flex; align-items:center; gap:8px; margin-bottom:var(--space-md)">
         <i data-lucide="${icon}" style="width:18px;height:18px;color:var(--text-muted)"></i>
@@ -1867,6 +1982,59 @@ class App {
       }
 
       // P2-3 decision trail (GET /api/rulings): RULING lines + auto-answers.
+      case 'drives': {
+        // Physical disks (lsblk) + usage of every mounted filesystem (df) from GET /api/system/drives.
+        const inv = drives || { drives: [] };
+        const isSystem = (d) => (d.mountpoints || []).some(m => m === '/' || m === '/boot' || m === '/boot/efi');
+        const list = (inv.drives || []).filter(d => !(w.hideSystem && isSystem(d)));
+        const size = (b) => (b >= 1e12 ? `${(b / 1e12).toFixed(2)} TB` : `${Math.round(b / 1e9)} GB`);
+        const STATE = { uninitialized: ['var(--warning, #d97706)', 'uninitialized'], unmounted: ['var(--text-muted)', 'unmounted'], mounted: ['var(--success, #16a34a)', 'mounted'] };
+        const rows = list.map(d => {
+          const [color, label] = STATE[d.state] || ['var(--text-muted)', d.state];
+          const parts = (d.partitions || []).map(p => `${esc(p.name)}${p.fstype ? ` ${esc(p.fstype)}` : ''}${p.mountpoints?.length ? ` → ${esc(p.mountpoints.join(', '))}` : ''}${p.usage ? ` <span style="color:var(--text-muted)">(${esc(String(p.usage.usedPercent))}% used)</span>` : ''}`).join('<br>');
+          const free = d.unallocatedBytes > 1e9 ? `<br><span style="color:var(--text-muted)">${size(d.unallocatedBytes)} unallocated</span>` : '';
+          return `<tr>
+            <td class="mono">${esc(d.device)}</td>
+            <td class="mono" title="${esc(String(d.sizeBytes))} bytes · ${esc(String(d.sizeGiB))} GiB">${size(d.sizeBytes)}</td>
+            <td>${esc(d.model || '—')}${d.media ? ` <span style="color:var(--text-muted)">${d.media.toUpperCase()}</span>` : ''}</td>
+            <td class="mono">${esc(d.serial || '—')}</td>
+            <td data-drive-state="${esc(d.state)}"><span style="color:${color}; font-weight:600">${esc(label)}</span></td>
+            <td style="font-size:0.8rem">${parts || '<span style="color:var(--text-muted)">no partitions</span>'}${free}</td>
+          </tr>`;
+        }).join('');
+        const disks = list.length ? `
+          <div class="sysd-table-wrap" style="overflow-x:auto"><table class="sysd-table" style="width:100%">
+            <thead><tr><th>Device</th><th>Size</th><th>Model</th><th>Serial</th><th>State</th><th>Partitions</th></tr></thead>
+            <tbody>${rows}</tbody></table></div>`
+          : `<p style="color:var(--text-muted); font-size:0.85rem">No physical drives reported${inv.error ? ` (${esc(inv.error)})` : ''}.</p>`;
+        // Usage of every mounted real filesystem (df -B1, pseudo fs excluded) — never filtered or truncated.
+        const fss = inv.filesystems || [];
+        const bytes = (b) => {
+          const u = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']; let i = 0, v = b;
+          while (v >= 1000 && i < u.length - 1) { v /= 1000; i++; }
+          return `${v >= 100 || i === 0 ? Math.round(v) : v.toFixed(1)} ${u[i]}`;
+        };
+        const pctColor = (p) => p >= 90 ? 'var(--danger, #dc2626)' : p >= 75 ? 'var(--warning, #d97706)' : 'var(--success, #16a34a)';
+        const fsRows = fss.map(f => `<tr data-fs-mount="${esc(f.mount)}">
+            <td class="mono">${esc(f.mount)}</td>
+            <td class="mono">${esc(f.source)}</td>
+            <td>${esc(f.fstype)}</td>
+            <td class="mono" title="${esc(String(f.totalBytes))} bytes">${bytes(f.totalBytes)}</td>
+            <td class="mono" title="${esc(String(f.usedBytes))} bytes">${bytes(f.usedBytes)}</td>
+            <td class="mono" title="${esc(String(f.availBytes))} bytes">${bytes(f.availBytes)}</td>
+            <td style="min-width:110px"><div style="display:flex; align-items:center; gap:6px">
+              <div style="flex:1; height:6px; background:var(--border, #e5e7eb); border-radius:3px; overflow:hidden"><div style="width:${Math.min(100, f.usedPercent)}%; height:100%; background:${pctColor(f.usedPercent)}"></div></div>
+              <span class="mono" style="font-size:0.8rem">${esc(String(f.usedPercent))}%</span></div></td>
+          </tr>`).join('');
+        const usage = fss.length ? `
+          <div style="font-weight:600; font-size:0.85rem; margin:12px 0 6px">Disk usage · ${fss.length} filesystem${fss.length === 1 ? '' : 's'}</div>
+          <div class="sysd-table-wrap" style="overflow-x:auto"><table class="sysd-table" style="width:100%" data-drives-usage>
+            <thead><tr><th>Mount</th><th>Device</th><th>Type</th><th>Total</th><th>Used</th><th>Available</th><th>Used %</th></tr></thead>
+            <tbody>${fsRows}</tbody></table></div>` : '';
+        const body = disks + usage;
+        return `<div class="card" data-widget="drives">${head('hard-drive', w.title || 'Drives')}${body}</div>`;
+      }
+
       case 'rulings': {
         const list = rulings?.rulings || [];
         const rows = list.slice(0, w.limit || 15).map(r => `<p style="margin:6px 0; font-size:0.85rem">
@@ -3472,7 +3640,7 @@ class App {
           ? `<p>This page only shows ${page.categories?.length ? `categories <code>${esc(page.categories.join(', '))}</code>` : ''}${page.categories?.length && page.keys?.length ? ' and ' : ''}${page.keys?.length ? `keys <code>${esc(page.keys.join(', '))}</code>` : ''}
              from <code>${esc(portal.path || 'portal.json')}</code>, and none match. Adjust the filter in <code>${esc(this.layout?.path || 'layout.json')}</code>.</p>`
           : `<p>Add entries to the <code>services</code> block of <code>${esc(portal.path || 'portal.json')}</code> — each entry
-             <code>{ "url": "http://localhost:8081", "label": "Mautic", "icon": "megaphone", "category": "Marketing" }</code>
+             <code>{ "url": "http://localhost:8081", "label": "My App", "icon": "rocket", "category": "Tools" }</code>
              shows up here as a launch card.</p>`}
       </div>`;
       return;
