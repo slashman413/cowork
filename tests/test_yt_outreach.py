@@ -355,4 +355,105 @@ def test_default_output_path_unique_per_run(monkeypatch, tmp_path):
             assert key in rec
 
 
+# ---------------------------------------------------------------- token handling
+#
+# Regression: the token file under ~/.priv can be re-exported by another
+# service in the legacy OAuth format (access token under 'token', ISO
+# 'expiry'), which made every cron run die with KeyError: 'access_token'
+# before the OAuth refresh was ever attempted. load_token() must now
+# normalize that format and refresh when the token is missing or expired.
+
+
+def _write_token(tmp_path, **overrides):
+    base = {
+        "account": "ai_gaowan",
+        "client_id": "cid",
+        "client_secret": "csec",
+        "refresh_token": "rt",
+        "token": "legacy-access",
+    }
+    base.update(overrides)
+    p = tmp_path / "token.json"
+    p.write_text(json.dumps(base), encoding="utf-8")
+    return p
+
+
+def _fake_urlopen(response, expect_oauth_url=True):
+    import io
+
+    def fake(req, *a, **kw):
+        if expect_oauth_url:
+            url = getattr(req, "full_url", None) or str(req)
+            assert "oauth2.googleapis.com" in url, f"unexpected URL {url!r}"
+        return io.BytesIO(json.dumps(response).encode("utf-8"))
+
+    return fake
+
+
+def test_load_token_normalizes_legacy_token_key(tmp_path):
+    """Legacy 'token' key + future expiry → usable without any OAuth call."""
+    _write_token(tmp_path, expiry="2999-01-01T00:00:00Z")
+    tok = yt_outreach.load_token(str(tmp_path / "token.json"))
+    assert tok["access_token"] == "legacy-access"
+
+
+def test_load_token_refreshes_expired_token(tmp_path, monkeypatch):
+    _write_token(tmp_path, expiry="2026-11-01T00:00:00Z")
+    monkeypatch.setattr(yt_outreach.urllib.request, "urlopen",
+                         _fake_urlopen({"access_token": "FRESH", "expires_in": 3599}))
+    tok = yt_outreach.load_token(str(tmp_path / "token.json"))
+    assert tok["access_token"] == "FRESH"
+    on_disk = json.loads((tmp_path / "token.json").read_text(encoding="utf-8"))
+    assert on_disk["access_token"] == "FRESH"
+    assert on_disk.get("expiry"), "refresh must record the new expiry"
+    assert on_disk["expiry"].startswith("2026-11-")
+
+
+def test_load_token_skips_refresh_when_valid(tmp_path, monkeypatch):
+    """A non-expired legacy token must not trigger an OAuth call (the
+    autouse fixture's urlopen raises on any live HTTP, so a refresh here
+    fails the test)."""
+    _write_token(tmp_path, expiry="2999-01-01T00:00:00Z")
+    tok = yt_outreach.load_token(str(tmp_path / "token.json"))
+    assert tok["access_token"] == "legacy-access"
+
+
+def test_load_token_missing_access_key_triggers_refresh(tmp_path, monkeypatch):
+    p = tmp_path / "token.json"
+    p.write_text(json.dumps({
+        "client_id": "cid", "client_secret": "csec",
+        "refresh_token": "rt"}), encoding="utf-8")
+    monkeypatch.setattr(yt_outreach.urllib.request, "urlopen",
+                         _fake_urlopen({"access_token": "FRESH", "expires_in": 3599}))
+    tok = yt_outreach.load_token(str(p))
+    assert tok["access_token"] == "FRESH"
+
+
+def test_load_token_refresh_failure_raises_clear_error(tmp_path, monkeypatch):
+    _write_token(tmp_path, expiry="2026-11-01T00:00:00Z")
+
+    def no_network(req, *a, **kw):
+        raise OSError("network down")
+
+    monkeypatch.setattr(yt_outreach.urllib.request, "urlopen", no_network)
+    with pytest.raises(RuntimeError,
+                       match="could not obtain a fresh YouTube access token"):
+        yt_outreach.load_token(str(tmp_path / "token.json"))
+
+
+def test_refresh_token_rejects_response_without_access_token(tmp_path, monkeypatch):
+    tok = {"client_id": "cid", "client_secret": "csec", "refresh_token": "rt"}
+    monkeypatch.setattr(yt_outreach.urllib.request, "urlopen",
+                         _fake_urlopen({"token_type": "Bearer", "expires_in": 3599}))
+    with pytest.raises(RuntimeError, match="missing access_token"):
+        yt_outreach.refresh_token(tok, str(tmp_path / "token.json"))
+
+
+def test_refresh_token_rejects_missing_creds(tmp_path):
+    with pytest.raises(RuntimeError, match="missing 'client_id'"):
+        yt_outreach.refresh_token(
+            {"client_secret": "csec", "refresh_token": "rt"},
+            str(tmp_path / "token.json"))
+
+
 

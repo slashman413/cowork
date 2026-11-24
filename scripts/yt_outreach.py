@@ -26,7 +26,10 @@ YouTube Data API v3 cannot like videos or subscribe to channels (ratings
 removed in 2020; channels.subscribe never existed in v3) — those stay
 human-only and are listed under manual_actions in stdout.
 
-Stdlib only. OAuth token lives at ~/.priv/ai_gaowan_youtube_token.json.
+Stdlib only. OAuth token lives at ~/.priv/ai_gaowan_youtube_token.json
+(both native 'access_token' and legacy 'token'+'expiry' export formats are
+accepted; load_token() auto-refreshes a missing/expired access token via
+the OAuth token endpoint before any API call).
 """
 
 import argparse
@@ -235,12 +238,56 @@ def make_reply(their_comment_text, rng):
 # ---------------------------------------------------------------------------
 
 
+def _token_expired(tok, now=None):
+    """True when the token's 'expiry'/'expires_at' is within 120s of now.
+
+    No expiry field → assume valid; the 401/403 retry in api() refreshes.
+    """
+    now = now or dt.datetime.now(dt.timezone.utc)
+    for key in ("expiry", "expires_at"):
+        raw = tok.get(key)
+        if not raw:
+            continue
+        try:
+            exp = dt.datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            continue
+        if exp.tzinfo is None:
+            exp = exp.replace(tzinfo=dt.timezone.utc)
+        return exp <= now + dt.timedelta(seconds=120)
+    return False
+
+
 def load_token(path=TOKEN_FILE):
+    """Load the OAuth token file and guarantee a usable access token.
+
+    Handles both file formats:
+      - native: {"access_token", "client_id", "client_secret", "refresh_token"}
+      - legacy OAuth export: {"token", "expiry", "refresh_token", ...}
+    Normalizes the legacy 'token' key onto 'access_token' and refreshes via
+    the OAuth token endpoint when the token is missing or expired (a
+    KeyError on 'access_token' here used to crash every cron run).
+    """
     with open(path) as f:
-        return json.load(f)
+        tok = json.load(f)
+    if not tok.get("access_token"):
+        tok["access_token"] = tok.get("token") or ""
+    if not tok.get("access_token") or _token_expired(tok):
+        try:
+            return refresh_token(tok, path)
+        except Exception as e:  # noqa: BLE001
+            raise RuntimeError(
+                f"could not obtain a fresh YouTube access token from {path}: {e}"
+            ) from e
+    return tok
 
 
 def refresh_token(tok, path=TOKEN_FILE):
+    """Refresh the access token via the OAuth token endpoint and persist it."""
+    for key in ("client_id", "client_secret", "refresh_token"):
+        if not tok.get(key):
+            raise RuntimeError(
+                f"token file missing {key!r}; re-issue the OAuth token at {path}")
     body = urllib.parse.urlencode({
         "grant_type": "refresh_token",
         "client_id": tok["client_id"],
@@ -251,7 +298,13 @@ def refresh_token(tok, path=TOKEN_FILE):
         "https://oauth2.googleapis.com/token",
         data=body, method="POST")
     resp = json.load(urllib.request.urlopen(req))
+    if "access_token" not in resp:
+        raise RuntimeError(
+            f"OAuth refresh response missing access_token: keys={list(resp)}")
     tok["access_token"] = resp["access_token"]
+    if resp.get("expires_in"):
+        tok["expiry"] = (dt.datetime.now(dt.timezone.utc)
+                         + dt.timedelta(seconds=int(resp["expires_in"]))).isoformat()
     with open(path, "w") as f:
         json.dump(tok, f, indent=2)
     return tok
