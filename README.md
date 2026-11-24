@@ -370,8 +370,8 @@ Or add to `~/.claude.json` (user) / `.mcp.json` (project):
 {
   "mcpServers": {
     "cowork": {
-      "url": "http://localhost:6868/mcp",
-      "transport": "streamable-http"
+      "type": "http",
+      "url": "http://localhost:6868/mcp"
     }
   }
 }

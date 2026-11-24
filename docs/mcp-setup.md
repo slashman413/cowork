@@ -74,7 +74,7 @@ curl -sf -H "Authorization: Bearer $COWORK_API_KEY" http://localhost:6868/api/st
 
 | Client | Config File Path | Transport Key |
 |--------|------------------|---------------|
-| **Claude Code** | `~/.claude.json` (user) or `.mcp.json` (project) | `url` + `transport: "streamable-http"` (or `claude mcp add`) |
+| **Claude Code** | `~/.claude.json` (user) or `.mcp.json` (project) | `type: "http"` + `url` (or `claude mcp add`) |
 | **Cursor** | `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (project) | `url` |
 | **Cline** | `cline_mcp_settings.json` (VS Code `globalStorage/saoudrizwan.claude-dev/settings/`) | `url` + `type: "streamableHttp"` |
 | **Windsurf** | `~/.codeium/windsurf/mcp_config.json` | `serverUrl` (`url` on older builds) |
@@ -118,8 +118,8 @@ claude mcp list
 {
   "mcpServers": {
     "cowork": {
-      "url": "http://localhost:6868/mcp",
-      "transport": "streamable-http"
+      "type": "http",
+      "url": "http://localhost:6868/mcp"
     }
   }
 }
@@ -131,8 +131,8 @@ claude mcp list
 {
   "mcpServers": {
     "cowork": {
+      "type": "http",
       "url": "http://localhost:6868/mcp",
-      "transport": "streamable-http",
       "headers": {
         "Authorization": "Bearer YOUR_COWORK_API_KEY"
       }
