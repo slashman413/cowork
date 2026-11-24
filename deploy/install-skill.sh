@@ -110,7 +110,7 @@ wire_claude_mcp() {
     let j = {};
     try { j = JSON.parse(fs.readFileSync(cfg, "utf8")); } catch {}
     j.mcpServers = j.mcpServers || {};
-    j.mcpServers.cowork = { url, transport: "streamable-http",
+    j.mcpServers.cowork = { url, type: "http",
       ...(key ? { headers: { Authorization: "Bearer " + key } } : {}) };
     fs.writeFileSync(cfg, JSON.stringify(j, null, 2) + "\n", { mode: 0o600 });
   ' "$cfg" "$MCP_URL" "$KEY"

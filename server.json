@@ -8,11 +8,11 @@
     "source": "github"
   },
   "websiteUrl": "https://github.com/slashman413/cowork",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "packages": [
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/slashman413/cowork:1.0.2",
+      "identifier": "ghcr.io/slashman413/cowork:1.0.3",
       "transport": {
         "type": "streamable-http",
         "url": "http://localhost:6868/mcp"
