@@ -1,3 +1,4 @@
+import path from 'path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
@@ -8,6 +9,7 @@ import type { Goals } from '../core/goals.js';
 import { LEGACY_REGISTER_KEY, noteLegacyRegister, withLegacyPin } from '../legacy-wire.js';
 import { THINKING_LEVELS } from '../core/thinking.js';
 import { registerAgent, removeAgentCascade, clientTaskView } from '../config.js';
+import { boundTaskArtifacts, listArtifactFiles } from '../core/artifact-list.js';
 import { getObsidianVault } from '../core/obsidian.js';
 import { sharedIntegrations, defaultAuditTargets } from '../core/integrations.js';
 import { auditPath, mergeReports, formatSummary } from '../core/skill-auditor.js';
@@ -400,6 +402,75 @@ function buildServer(config: Config, store: Store, eventBus: EventBus, goals?: G
           limit: args.limit
         });
         return { content: [{ type: 'text', text: JSON.stringify(tasks.map(t => withLegacyPin(clientTaskView(config, t)))) }] };
+      } catch (e: any) {
+        return { content: [{ type: 'text', text: e.message }], isError: true };
+      }
+    }
+  );
+
+  // 8. get_task — direct O(1) single-task lookup by taskId (or task_id alias)
+  //    without scanning the full inbox. Returns full task status, result,
+  //    attempts, bounded artifacts/outputs, and live progress logs.
+  server.tool(
+    'get_task',
+    'Fetch a single task by ID in O(1) without scanning list_inbox. Accepts `taskId` ' +
+    '(or `task_id` alias — full UUID or unambiguous 8-char prefix) and returns ' +
+    'detailed task status, result, attempts, bounded artifacts/outputs lists, and ' +
+    'live progress logs.',
+    {
+      taskId: z.string().optional().describe('Task UUID (or unambiguous short prefix) returned by create_task'),
+      task_id: z.string().optional().describe('Snake-case alias for taskId'),
+      include_logs: z.boolean().default(true).describe('Include the tail of artifacts/<taskId>/progress.log (default: true)'),
+      max_log_bytes: z.number().int().positive().max(256000).default(16000).describe('Max bytes to tail from progress.log (default: 16000)')
+    },
+    async (args) => {
+      try {
+        const rawId = (args.taskId ?? args.task_id ?? '').trim();
+        if (!rawId) {
+          throw new Error('Missing required taskId (or task_id) — pass the UUID returned by create_task.');
+        }
+        const task = store.getTask(rawId);
+        if (!task) {
+          return {
+            content: [{
+              type: 'text',
+              text: JSON.stringify({
+                error: 'Task not found',
+                taskId: rawId,
+                hint: 'Verify the taskId returned by create_task, or call list_inbox to inspect recent tasks.'
+              })
+            }],
+            isError: true
+          };
+        }
+
+        const view = boundTaskArtifacts(withLegacyPin(clientTaskView(config, task)));
+        const artDir = store.artifactsPath(task.id);
+        let artifacts = Array.isArray((view as any).artifacts) ? [...(view as any).artifacts] : [];
+        let artifactsTotal = typeof (view as any).artifactsTotal === 'number' ? (view as any).artifactsTotal : undefined;
+        let outputs = Array.isArray((view as any).outputs) ? [...(view as any).outputs] : [];
+        if (artDir) {
+          if (!artifacts.length) {
+            const artScan = listArtifactFiles(artDir, { skipTop: 'outputs' });
+            artifacts = artScan.files;
+            if (artScan.total > artifacts.length) artifactsTotal = artScan.total;
+          }
+          if (!outputs.length) {
+            const outScan = listArtifactFiles(path.join(artDir, 'outputs'));
+            outputs = outScan.files;
+          }
+        }
+
+        const progress = args.include_logs ? store.readProgressLog(task.id, args.max_log_bytes) : undefined;
+        const payload: Record<string, unknown> = {
+          ...view,
+          artifacts,
+          ...(artifactsTotal !== undefined ? { artifactsTotal } : {}),
+          outputs,
+          ...(progress ? { logs: progress.log, progress } : {})
+        };
+
+        return { content: [{ type: 'text', text: JSON.stringify(payload) }] };
       } catch (e: any) {
         return { content: [{ type: 'text', text: e.message }], isError: true };
       }

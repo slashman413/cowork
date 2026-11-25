@@ -412,9 +412,45 @@ Store `id` (e.g. `796ed176-f14a-4115-bfbd-1d3fba50dea8`) before starting any wai
 
 ### Step 2: Reconnect and Read Back by Task ID
 
-#### Option A — Direct Read-by-ID over HTTP (Recommended for Cline, Claude Code, Scripts, and Older Tasks)
+#### Option A — Direct Read-by-ID via MCP `get_task(taskId)` (Recommended for All MCP Clients)
 
-For guaranteed **O(1) lookup by ID** — even if the task finished hours ago and has rolled past recent inbox pages — query the REST endpoints directly:
+Call the dedicated `get_task` MCP tool with your saved `taskId` (or snake-case alias `task_id` — full UUID or unambiguous 8-character short prefix) for guaranteed **O(1) single-task lookup** without scanning `list_inbox`:
+
+```json
+{
+  "taskId": "796ed176-f14a-4115-bfbd-1d3fba50dea8"
+}
+```
+
+Optional parameters:
+- `include_logs` (boolean, default `true`): include the tail of `artifacts/<taskId>/progress.log`
+- `max_log_bytes` (integer, default `16000`, max `256000`): cap log bytes returned
+
+`get_task` reads `inbox/<taskId>.json` directly (so tasks never age past `list_inbox`'s `limit` window) and returns the full task record plus live progress logs and artifact/output listings:
+
+```json
+{
+  "id": "796ed176-f14a-4115-bfbd-1d3fba50dea8",
+  "status": "done",
+  "title": "Audit dependencies and open PR",
+  "result": "Updated 3 packages, all tests passing.\nSTATUS: DONE",
+  "artifacts": ["progress.log", "result.md"],
+  "outputs": ["audit-report.md"],
+  "logs": "Running npm audit...\nAll 42 tests passed.\n",
+  "progress": {
+    "running": false,
+    "status": "done",
+    "log": "Running npm audit...\nAll 42 tests passed.\n",
+    "updatedAt": "2026-11-25T07:29:14.000Z"
+  }
+}
+```
+
+Use `list_inbox` (e.g. `list_inbox({ status: "in-progress", limit: 20 })`) and `get_dashboard()` (or MCP resource `cowork://status`) when you want queue discovery or worker health across multiple tasks; use `get_task(taskId)` whenever you already have a task ID.
+
+#### Option B — Direct HTTP REST & SSE Streaming (Scripts, Dashboards, and Push Updates)
+
+If your client also has terminal/HTTP access or wants push updates without polling, query the REST endpoints directly:
 
 ```bash
 TASK_ID="796ed176-f14a-4115-bfbd-1d3fba50dea8"
@@ -432,7 +468,7 @@ curl -sf \
 
 *(Omit `-H "Authorization: Bearer $COWORK_API_KEY"` against a loopback `127.0.0.1` Node.js hub with no API key.)*
 
-For push updates without tight polling, subscribe to Server-Sent Events and **reconcile once with `GET /api/inbox/<task-id>` after every reconnect** so transitions that occurred while offline are never missed:
+For push updates without tight polling, subscribe to Server-Sent Events and **reconcile once with `get_task(taskId)` (or `GET /api/inbox/<task-id>`) after every reconnect** so transitions that occurred while offline are never missed:
 
 ```bash
 curl -N \
@@ -442,22 +478,10 @@ curl -N \
 
 `/api/events` sends `retry: 3000` and 30-second keepalive pings (`{"type":"ping"}`).
 
-#### Option B — Pure-MCP Polling (For MCP-Only Clients Such as Claude Desktop)
-
-When a client only has MCP tool calls (no terminal/HTTP fetch):
-
-1. Call `list_inbox` filtered by status (or omit `status` to scan across states) and match your saved `id`:
-   - In-flight check: `list_inbox({ status: "in-progress", limit: 50 })`
-   - Completion check: `list_inbox({ status: "done", limit: 50 })`
-   - Blocked / needs human input check: `list_inbox({ status: "wait-input", limit: 20 })`
-2. Call `get_dashboard()` (or read MCP resource `cowork://status`) for queue totals and active worker health.
-
-> **Current MCP surface note:** Cowork's MCP server currently exposes `create_task`, `list_inbox`, `claim_task`, `complete_task`, and `get_dashboard`, without a dedicated single-task `get_task(task_id)` MCP tool yet. If you are recovering an older task that may have aged past `list_inbox`'s `limit` window, use `GET /api/inbox/<task-id>` directly (or inspect the task card in the web dashboard at `http://localhost:6868`).
-
 ### Client Playbooks
 
-- **Cline (VS Code):** Immediately save the returned `id` from `create_task` into the conversation or a local scratch file before waiting. If VS Code reloads, the MCP transport resets, or a check times out, query `GET /api/inbox/<task-id>` and `GET /api/inbox/<task-id>/progress` from Cline's terminal (or poll `list_inbox` and match `id`) instead of creating a duplicate task.
-- **Claude Desktop:** Because Claude Desktop connects through `npx -y mcp-remote` without local shell access by default, keep the returned `task.id` in your chat thread or Claude Project notes. After restarting Claude Desktop, ask Claude to call `list_inbox` (increasing `limit` if older tasks exist) and match that `id`, or open `http://localhost:6868` in a browser to inspect live logs and download `outputs/`.
+- **Cline (VS Code):** Immediately save the returned `id` from `create_task` into the conversation or a local scratch file before waiting. If VS Code reloads, the MCP transport resets, or a status check times out, call `get_task({ taskId })` directly over MCP (or hit `GET /api/inbox/<task-id>`) instead of creating a duplicate task.
+- **Claude Desktop:** Because Claude Desktop connects through `npx -y mcp-remote` without local shell access by default, keep the returned `task.id` in your chat thread or Claude Project notes. After restarting Claude Desktop, ask Claude to call `get_task({ taskId })` to fetch the exact status, result, live logs, and artifact filenames in O(1) — even if hundreds of newer tasks have run since — or open `http://localhost:6868` in a browser to download `outputs/`.
 
 ### Explicit Lifecycle Control (Disconnect ≠ Cancel)
 
