@@ -14,6 +14,8 @@
 [![MCP Compatible](https://img.shields.io/badge/MCP-Streamable%20HTTP-8A2BE2?style=for-the-badge&logo=anthropic)](https://modelcontextprotocol.io)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge)](https://github.com/slashman413/cowork/pulls)
 
+[![slashman413/cowork MCP server](https://glama.ai/mcp/servers/slashman413/cowork/badges/score.svg)](https://glama.ai/mcp/servers/slashman413/cowork)
+
 <br/>
 
 <a href="#quick-start">
