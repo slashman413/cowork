@@ -12,10 +12,12 @@
   <link rel="stylesheet" href="css/config.css">
   <link rel="stylesheet" href="css/recipes.css">
   <link rel="stylesheet" href="css/goals.css">
+  <link rel="stylesheet" href="css/workspaces.css">
 </head>
 <body>
   <div class="app-container">
-    <aside class="sidebar" id="sidebar">
+    <div id="mobile-nav-backdrop" class="mobile-nav-backdrop" hidden></div>
+    <aside class="sidebar" id="sidebar" aria-label="Navigation">
       <div class="logo-area">
         <i data-lucide="zap"></i>
         <h1 class="logo-text">Cowork</h1>
@@ -28,7 +30,12 @@
 
     <main class="main-content">
       <header class="topbar">
-        <h2 id="view-title"></h2>
+        <div class="topbar-left">
+          <button id="mobile-menu-btn" class="icon-btn mobile-menu-btn" type="button" aria-label="Open navigation" aria-expanded="false" aria-controls="sidebar" title="Menu">
+            <i data-lucide="menu"></i>
+          </button>
+          <h2 id="view-title"></h2>
+        </div>
         <div class="header-actions">
           <div id="connection-status" class="status-indicator">
             <div class="dot connecting"></div>
@@ -65,5 +72,6 @@
   <script src="js/config.js"></script>
   <script src="js/recipes.js"></script>
   <script src="js/goals-view.js"></script>
+  <script src="js/workspaces-view.js"></script>
 </body>
 </html>

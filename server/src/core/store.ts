@@ -679,6 +679,25 @@ export class Store {
     task.context = normalizeContextBrief(task.context);
     assertTier(task.context?.tier);
     if (task.context?.tier) task.context = { ...task.context, tier: String(task.context.tier).trim().toLowerCase() };
+    // Keep top-level workspaceId/sessionId and context.workspaceId/sessionId in lockstep
+    const wsId = (typeof task.workspaceId === 'string' && task.workspaceId.trim())
+      || (typeof task.context?.workspaceId === 'string' && task.context.workspaceId.trim())
+      || undefined;
+    if (wsId) {
+      task.workspaceId = wsId;
+      task.context = { ...(task.context || {}), workspaceId: wsId };
+    } else {
+      delete task.workspaceId;
+    }
+    const sessId = (typeof task.sessionId === 'string' && task.sessionId.trim())
+      || (typeof task.context?.sessionId === 'string' && task.context.sessionId.trim())
+      || undefined;
+    if (sessId) {
+      task.sessionId = sessId;
+      task.context = { ...(task.context || {}), sessionId: sessId };
+    } else {
+      delete task.sessionId;
+    }
     if (task.context === undefined) delete task.context;
     // An orchestrator subtask must say how it will be judged. Not rejected yet —
     // warn and count it in the lesson ledger so the miss rate is measurable.
@@ -1302,6 +1321,8 @@ export class Store {
      *  clear the cadence. Takes precedence over `loopIntervalHours` when both are
      *  supplied. Invalid specs throw. */
     recurrence?: TaskRecurrence | { type?: string } | null;
+    /** Workspace scoping update (null or '' detaches from workspace). */
+    workspaceId?: string | null;
   }): Task | null {
     const task = this.getTask(taskId);
     if (!task) return null;
@@ -1350,6 +1371,18 @@ export class Store {
       } else if (Array.isArray(patch.acceptance)) {
         ctx.acceptance = patch.acceptance.map(s => String(s || '').trim()).filter(Boolean);
         ctx.acceptanceSource = 'human';
+      }
+    }
+    if (patch.workspaceId !== undefined) {
+      if (patch.workspaceId === null || patch.workspaceId === '') {
+        delete task.workspaceId;
+        delete ctx.workspaceId;
+        delete ctx.workspaceName;
+        delete ctx.workspacePath;
+      } else {
+        const wsId = String(patch.workspaceId).trim();
+        task.workspaceId = wsId;
+        ctx.workspaceId = wsId;
       }
     }
     task.context = ctx;
@@ -1521,6 +1554,12 @@ export class Store {
     // the same persona/agent, not a fresh routing decision. ranPersona/ranAgent are
     // what actually ran; fall back to the original assignment when unset.
     const ctx: Record<string, any> = { continuedFrom: prev.id };
+    const wsId = prev.workspaceId || (typeof prevCtx.workspaceId === 'string' ? prevCtx.workspaceId : undefined);
+    const sessId = prev.sessionId || (typeof prevCtx.sessionId === 'string' ? prevCtx.sessionId : undefined);
+    if (wsId) ctx.workspaceId = wsId;
+    if (typeof prevCtx.workspaceName === 'string') ctx.workspaceName = prevCtx.workspaceName;
+    if (typeof prevCtx.workspacePath === 'string') ctx.workspacePath = prevCtx.workspacePath;
+    if (sessId) ctx.sessionId = sessId;
     const persona = prevCtx.ranPersona || prevCtx.persona || prevCtx.role;
     const division = prevCtx.ranDivision || prevCtx.division;
     const sameAgent = prevCtx.ranAgent || prevCtx.agent;
@@ -1553,6 +1592,8 @@ export class Store {
       to: prev.to || {},
       priority: prev.priority || 'normal',
       status: 'pending',
+      ...(wsId ? { workspaceId: wsId } : {}),
+      ...(sessId ? { sessionId: sessId } : {}),
       context: ctx,
       createdAt: new Date().toISOString(),
       ...(prev.skill ? { skill: prev.skill } : {}),
@@ -2093,7 +2134,7 @@ export class Store {
     return shortIdMatches === 1 ? shortIdMatch : null;
   }
 
-  public listTasks(filters?: { status?: string; platform?: string; agent?: string; tag?: string; limit?: number }): Task[] {
+  public listTasks(filters?: { status?: string; platform?: string; agent?: string; tag?: string; workspaceId?: string; sessionId?: string; limit?: number }): Task[] {
     // Flat directory of <id>.json files — a plain readdir is ~5x cheaper than a
     // glob here and yields the same set (dotfiles can't be task ids).
     let taskFiles: string[];
@@ -2143,6 +2184,16 @@ export class Store {
     if (filters?.platform) tasks = tasks.filter(t => t.to?.platform === filters.platform || (!t.to?.platform && t.from?.platform === filters.platform));
     if (filters?.agent) tasks = tasks.filter(t => t.to?.agent === filters.agent || t.claimedBy === filters.agent);
     if (filters?.tag) tasks = tasks.filter(t => Array.isArray(t.tags) && t.tags.includes(filters.tag!));
+    if (filters?.workspaceId) {
+      if (filters.workspaceId === 'unassigned') {
+        tasks = tasks.filter(t => !(t.workspaceId || t.context?.workspaceId));
+      } else {
+        tasks = tasks.filter(t => (t.workspaceId || t.context?.workspaceId) === filters.workspaceId);
+      }
+    }
+    if (filters?.sessionId) {
+      tasks = tasks.filter(t => (t.sessionId || t.context?.sessionId) === filters.sessionId);
+    }
     
     if (filters?.limit && filters.limit > 0) {
       tasks = tasks.slice(0, filters.limit);

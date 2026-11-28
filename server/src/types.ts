@@ -573,6 +573,9 @@ export interface Config {
     /** Dir of Goal aggregates (goals/*.json) — long-lived, phase-tracked
      *  objectives. See core/goals.ts. */
     goals: string;
+    /** Dir of Workspace & Session records (workspaces/*.json). Optional —
+     *  derived beside inbox when omitted. See core/workspaces.ts. */
+    workspaces?: string;
     /** Dir the Integrations page fetches (clones) repos into. Mirrored into
      *  integrations.root at load. Default /data/cowork/integrations. */
     integrations?: string;
@@ -802,6 +805,10 @@ export interface Task {
    *  Like `wait-input` it is held OUT of the pending pool (never claimed, routed,
    *  or dispatched); the dispatcher releases it to `pending` when its time comes. */
   status: 'wait-input' | 'scheduled' | 'pending' | 'claimed' | 'in-progress' | 'paused' | 'done' | 'rejected';
+  /** Optional owning workspace id (dsh-web-style workspace scoping). */
+  workspaceId?: string;
+  /** Optional owning continuous workspace session id. */
+  sessionId?: string;
   skill?: string;
   /** Free-form; carries the brief contract (acceptance/verify/timeboxMin/scope — {@link TaskBrief}). */
   context?: Record<string, any>;
@@ -879,11 +886,76 @@ export interface CoworkEventPayloads {
   taskClaimed: { task: Task; workerId: string };
   taskCompleted: { task: Task };
   goalUpdated: { goalId: string };
+  workspaceUpdated: { workspaceId: string };
+  sessionUpdated: { workspaceId: string; sessionId: string };
   heartbeat: { workerId: string; status: string; currentTask?: string };
   agentExecuted: { agentId: string; exec: string; taskId: string };
   taskDeleted: { taskId: string; status?: string };
   taskPaused: { task: Task; from: string };
   taskResumed: { task: Task };
+}
+
+export type SessionStatus = 'idle' | 'working' | 'wait-input' | 'paused' | 'error' | 'archived';
+
+export interface SessionTurn {
+  id: string;
+  index: number;
+  prompt: string;
+  taskId?: string;
+  status: 'pending' | 'running' | 'wait-input' | 'paused' | 'done' | 'failed';
+  agent?: string;
+  thinking?: string;
+  /** Vendored pstack skills automatically resolved (and/or pinned/explicit) for this turn. */
+  pstackSkills: string[];
+  /** Human-readable rationale per resolved pstack skill. */
+  pstackReasons?: Record<string, string>;
+  response?: string;
+  artifacts?: string[];
+  outputs?: string[];
+  createdAt: string;
+  completedAt?: string;
+}
+
+export interface WorkspaceSession {
+  id: string;
+  workspaceId: string;
+  title: string;
+  status: SessionStatus;
+  pinned?: boolean;
+  archived?: boolean;
+  agent?: string;
+  thinking?: string;
+  /** Automatically resolve and inject vendored pstack skills on each turn (default true). */
+  autoPstackSkills: boolean;
+  /** Extra vendored pstack skills always injected into every turn of this session. */
+  pinnedSkills?: string[];
+  turns: SessionTurn[];
+  activeTaskId?: string | null;
+  lastTaskId?: string | null;
+  forkedFromSessionId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Workspace {
+  id: string;
+  /** Primary display name (kept in sync with `title` for dsh-web parity). */
+  name: string;
+  title: string;
+  /** Optional canonical host directory path associated with this workspace. */
+  path?: string;
+  description?: string;
+  defaultAgent?: string;
+  defaultThinking?: string;
+  /** Automatically resolve & inject vendored pstack skills in workspace sessions (default true). */
+  pstackAutoSkills: boolean;
+  /** Optional workspace-level pinned vendored pstack skills. */
+  pinnedSkills?: string[];
+  /** Ordered session IDs belonging to this workspace (manual order, newest prepended). */
+  sessionIds: string[];
+  archived?: boolean;
+  createdAt: string;
+  updatedAt: string;
 }
 
 

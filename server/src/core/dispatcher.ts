@@ -18,7 +18,8 @@ import { buildPanelReviewerPrompt, buildLeadJudgmentPrompt, parseLeadJudgment } 
 import { describeAutoAnswer, logAutoAnswer } from './rulings.js';
 import { BRIEF_KEYS, parseBrief, renderBriefSections } from './brief.js';
 import { renderMethodPrompt } from './methods.js';
-import { sharpenPending, renderSkillPrompt, reviewMode, panelFallbackAcceptance, parseArena, pickArenaAgents, arenaPlan } from './pstack-gates.js';
+import { sharpenPending, renderSkillPrompt, resolveWorkspaceSessionPstackSkills, renderWorkspaceSessionSkillsPrompt, reviewMode, panelFallbackAcceptance, parseArena, pickArenaAgents, arenaPlan } from './pstack-gates.js';
+import { DEFAULT_COWORK_REPO_ROOT } from './workspaces.js';
 import { extractPrUrls, openedPrUrls, prInScope, prWatchTaskSpec } from './pr-automation.js';
 import { shouldSharpenTask, sharpenTask, mergeSharpenedContext } from './sharpener.js';
 import { resolveWorkRoles, workRolesPromptBlock, guessWorkRole, workRoleContext } from './work-roles.js';
@@ -1753,7 +1754,7 @@ export class Dispatcher {
     // humanInput as a dedicated "answers" section (below), and the brief fields
     // as their own sections — drop them from the raw context dump so they aren't
     // duplicated or lost as noise in the JSON blob.
-    for (const k of ['personaPrompt', 'agentAuto', 'remoteWaitSince', 'dispatched', 'attempts', 'personaName', 'ranPersona', 'ranDivision', 'ranAgent', 'liveAgent', 'liveThinking', 'isRoster', 'inputFiles', 'humanInput', 'awaitingInput', 'inputQuestions', 'backgroundWait', 'specVerdict', 'specFindings', 'gate', 'gateFindings', 'gateReviewFor', 'gateStepKey', 'gateRound', 'gateMaxRounds', 'judgeFamily', 'judgeAgent', 'escalated', 'escalatedAtRound', 'escalatedAgent', 'acceptanceSource', 'outsideCheck', 'deliverable', 'playbook', 'openChoices', 'sharpen', 'usage', 'usageArm', ...BRIEF_KEYS]) delete shownCtx[k];
+    for (const k of ['personaPrompt', 'agentAuto', 'remoteWaitSince', 'dispatched', 'attempts', 'personaName', 'ranPersona', 'ranDivision', 'ranAgent', 'liveAgent', 'liveThinking', 'isRoster', 'inputFiles', 'humanInput', 'awaitingInput', 'inputQuestions', 'backgroundWait', 'specVerdict', 'specFindings', 'gate', 'gateFindings', 'gateReviewFor', 'gateStepKey', 'gateRound', 'gateMaxRounds', 'judgeFamily', 'judgeAgent', 'escalated', 'escalatedAtRound', 'escalatedAgent', 'acceptanceSource', 'outsideCheck', 'deliverable', 'playbook', 'openChoices', 'sharpen', 'usage', 'usageArm', 'workspaceId', 'workspaceName', 'workspacePath', 'sessionId', 'sessionTitle', 'sessionTurnId', 'sessionTurnIndex', 'pstackSkills', 'pstackSkillReasons', 'autoPstackSkills', ...BRIEF_KEYS]) delete shownCtx[k];
     // The brief contract (P0-3 / P1-3) gets its own sections right under the task text.
     // Default timeboxMin = taskTimeoutMs / 60000 - 5 (e.g. 50 min cap → 45 min timebox).
     const timeoutMs = Number(this.config.orchestration?.taskTimeoutMs) || 3_000_000;
@@ -1762,6 +1763,7 @@ export class Dispatcher {
 
     // PS-4: Method injection from context.playbook behind orchestration.methods
     const repoRoot = resolve(this.config.paths?.artifacts || 'artifacts', '..');
+    const skillRepoRoot = existsSync(join(repoRoot, 'vendor', 'pstack', 'skills')) ? repoRoot : DEFAULT_COWORK_REPO_ROOT;
     const methodsDir = join(repoRoot, 'methods');
     const isLocal = !plan.agentId || (this.config.orchestration?.agents?.[plan.agentId]?.location !== 'remote' && !plan.agentId.startsWith('remote-'));
     const methodLines = renderMethodPrompt({
@@ -1772,8 +1774,67 @@ export class Dispatcher {
       methodsCfg: this.config.orchestration?.methods,
     });
     if (methodLines.length) lines.push(...methodLines);
-    // G10: context.skill — any vendored pstack skill, by name.
-    lines.push(...renderSkillPrompt({ repoRoot, skill: task.context?.skill, isLocal }));
+
+    // Workspace context & automatic vendored pstack skill injection for workspace sessions/tasks.
+    const workspaceId = task.workspaceId || (typeof task.context?.workspaceId === 'string' ? task.context.workspaceId : '');
+    const sessionId = task.sessionId || (typeof task.context?.sessionId === 'string' ? task.context.sessionId : '');
+    if (workspaceId || sessionId) {
+      lines.push(`# Workspace Context`);
+      if (workspaceId) {
+        const wsName = typeof task.context?.workspaceName === 'string' ? task.context.workspaceName : workspaceId;
+        lines.push(`- Workspace: ${wsName} (\`${workspaceId}\`)`);
+      }
+      if (typeof task.context?.workspacePath === 'string' && task.context.workspacePath) {
+        lines.push(`- Workspace directory: \`${task.context.workspacePath}\``);
+      }
+      if (sessionId) {
+        const sTitle = typeof task.context?.sessionTitle === 'string' ? task.context.sessionTitle : sessionId;
+        const turnIdx = Number(task.context?.sessionTurnIndex) || 1;
+        lines.push(`- Continuous session: ${sTitle} (\`${sessionId}\`, turn #${turnIdx})`);
+      }
+      lines.push(``);
+
+      if (task.context?.autoPstackSkills !== false) {
+        const preResolved = Array.isArray(task.context?.pstackSkills)
+          ? (task.context!.pstackSkills as unknown[]).filter((s): s is string => typeof s === 'string' && !!s.trim())
+          : [];
+        const preReasons = (task.context?.pstackSkillReasons && typeof task.context.pstackSkillReasons === 'object')
+          ? (task.context.pstackSkillReasons as Record<string, string>)
+          : {};
+        const resolvedSkills = preResolved.length
+          ? preResolved
+            .map(name => ({
+              name,
+              filePath: join(skillRepoRoot, 'vendor', 'pstack', 'skills', name, 'SKILL.md'),
+              source: (name === task.context?.skill ? 'explicit' : 'auto') as 'explicit' | 'pinned' | 'auto',
+              reason: preReasons[name] || 'auto-resolved for workspace session',
+            }))
+            .filter(s => existsSync(s.filePath))
+          : resolveWorkspaceSessionPstackSkills({
+              repoRoot: skillRepoRoot,
+              title: task.title,
+              prompt: task.description,
+              turnIndex: Number(task.context?.sessionTurnIndex) || 1,
+              workspacePath: typeof task.context?.workspacePath === 'string' ? task.context.workspacePath : undefined,
+              explicitSkill: task.context?.skill,
+              autoSkills: true,
+            });
+        // Ensure explicit context.skill is never dropped if preResolved omitted it
+        if (typeof task.context?.skill === 'string' && task.context.skill.trim() && !resolvedSkills.some(s => s.name === task.context!.skill)) {
+          const explicitFile = join(skillRepoRoot, 'vendor', 'pstack', 'skills', task.context.skill.trim(), 'SKILL.md');
+          if (existsSync(explicitFile)) {
+            resolvedSkills.unshift({ name: task.context.skill.trim(), filePath: explicitFile, source: 'explicit', reason: 'explicitly requested via context.skill' });
+          }
+        }
+        lines.push(...renderWorkspaceSessionSkillsPrompt({ repoRoot: skillRepoRoot, skills: resolvedSkills, isLocal }));
+      } else {
+        // Opted out of auto pstack skills: still honor an explicit context.skill
+        lines.push(...renderSkillPrompt({ repoRoot: skillRepoRoot, skill: task.context?.skill, isLocal }));
+      }
+    } else {
+      // G10: context.skill — any vendored pstack skill, by name.
+      lines.push(...renderSkillPrompt({ repoRoot, skill: task.context?.skill, isLocal }));
+    }
     // S1: tasks with a verify list get a pointer to verification-before-completion.
     lines.push(...renderVerificationSkillPrompt({ context: task.context, isLocal, cfg: this.config.orchestration?.verificationSkill }));
 
@@ -2924,6 +2985,9 @@ export class Dispatcher {
             COWORK_API: `http://localhost:${this.config.server.port}/api`,
             COWORK_ARTIFACTS_DIR: artDir,
             COWORK_OUTPUTS_DIR: outDir,
+            ...(task.workspaceId || task.context?.workspaceId ? { COWORK_WORKSPACE_ID: String(task.workspaceId || task.context?.workspaceId) } : {}),
+            ...(task.sessionId || task.context?.sessionId ? { COWORK_SESSION_ID: String(task.sessionId || task.context?.sessionId) } : {}),
+            ...(typeof task.context?.workspacePath === 'string' && task.context.workspacePath ? { COWORK_WORKSPACE_PATH: task.context.workspacePath } : {}),
             ...(memoryOff ? { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' } : {}),
             // When the server runs https with a self-signed cert, node-based child
             // agents (claude CLI, exec:script pipelines) must trust it to reach

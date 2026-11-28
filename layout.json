@@ -3,7 +3,7 @@
   "brand": { "title": "Cowork", "icon": "zap", "footer": "Cowork Server v1.0.0" },
   "defaultPage": "overview",
   "sections": [
-    { "label": "Operations", "pages": ["overview", "portal", "tasks", "recipes", "calendar", "goals"] },
+    { "label": "Operations", "pages": ["overview", "portal", "workspaces", "tasks", "recipes", "calendar", "goals"] },
     { "label": "AI Fleet", "pages": ["routing", "agents"] },
     { "label": "System", "pages": ["workers", "config"] }
   ],
@@ -26,6 +26,7 @@
       "label": "Portal",
       "icon": "layout-grid"
     },
+    "workspaces": { "label": "Workspaces", "icon": "folder-kanban" },
     "tasks": { "label": "Tasks", "icon": "inbox" },
     "recipes": { "label": "Recipes", "icon": "chef-hat" },
     "calendar": { "label": "Calendar", "icon": "calendar-days" },

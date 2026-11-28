@@ -969,10 +969,35 @@ class App {
   }
 
   async init() {
-    window.addEventListener('hashchange', () => this.navigate());
+    this.initMobileNav();
+    window.addEventListener('hashchange', () => {
+      this.closeMobileNav();
+      this.navigate();
+    });
     this.setupSSE();
     await this.loadLayout();
     this.navigate();
+  }
+
+  initMobileNav() {
+    const btn = document.getElementById('mobile-menu-btn');
+    const sidebar = document.getElementById('sidebar');
+    const backdrop = document.getElementById('mobile-nav-backdrop');
+    const setOpen = (open) => {
+      if (!sidebar) return;
+      sidebar.classList.toggle('is-open', open);
+      if (backdrop) backdrop.hidden = !open;
+      if (btn) btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    };
+    this.closeMobileNav = () => setOpen(false);
+    btn?.addEventListener('click', () => setOpen(!sidebar?.classList.contains('is-open')));
+    backdrop?.addEventListener('click', () => setOpen(false));
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && sidebar?.classList.contains('is-open')) setOpen(false);
+    });
+    sidebar?.addEventListener('click', (e) => {
+      if (e.target.closest('.nav-item')) setOpen(false);
+    });
   }
 
   // ── Layout (layout.json → nav sections, pages, dashboard widgets) ─────────
@@ -989,7 +1014,7 @@ class App {
     } catch (e) {
       // Mirrors the repo layout.json, so an older server without /api/layout
       // (or a failed fetch) still gets the familiar nav.
-      const app = { tasks: ['Tasks', 'inbox'], recipes: ['Recipes', 'chef-hat'], calendar: ['Calendar', 'calendar-days'],
+      const app = { workspaces: ['Workspaces', 'folder-kanban'], tasks: ['Tasks', 'inbox'], recipes: ['Recipes', 'chef-hat'], calendar: ['Calendar', 'calendar-days'],
         goals: ['Goals', 'target'], routing: ['Routing', 'bot'], agents: ['Agents', 'cpu'],
         workers: ['Workers', 'plug'], config: ['Configuration', 'settings'] };
       const pages = {
@@ -1000,7 +1025,7 @@ class App {
       };
       for (const [id, [label, icon]] of Object.entries(app)) pages[id] = { id, type: id, label, icon };
       this.layout = { brand: { title: 'Cowork', icon: 'zap', footer: 'Cowork Server' }, defaultPage: 'overview', pages,
-        sections: [{ label: 'Operations', pages: ['overview', 'portal', 'tasks', 'recipes', 'calendar', 'goals'] },
+        sections: [{ label: 'Operations', pages: ['overview', 'portal', 'workspaces', 'tasks', 'recipes', 'calendar', 'goals'] },
                    { label: 'AI Fleet', pages: ['routing', 'agents'] },
                    { label: 'System', pages: ['workers', 'config'] }],
         errors: [], fallback: e.message };
@@ -1065,9 +1090,13 @@ class App {
     // immediately (more reliable than relying solely on EventSource.onopen).
     this.updateConnectionStatus('connected');
     if (!data.type || data.type === 'ping' || data.type === 'connected') return;
-    // goalUpdated is a refresh hint for the Goals page, not activity to show anyone.
+    // goalUpdated / workspaceUpdated / sessionUpdated are targeted refresh hints.
     if (data.type === 'goalUpdated') {
       if (this.currentPage?.type === 'goals') this._goalsSchedule();
+      return;
+    }
+    if (data.type === 'workspaceUpdated' || data.type === 'sessionUpdated') {
+      if (this.currentPage?.type === 'workspaces' && this._wsScheduleRefresh) this._wsScheduleRefresh();
       return;
     }
     this.activity.unshift(data);
@@ -1075,7 +1104,10 @@ class App {
     if (data.type !== 'heartbeat') {
       // Only toast events the operator actually acts on; claim/handover chatter
       // still lands in the Live Activity feed without stealing attention.
-      if (['taskCreated', 'taskCompleted', 'reportFiled', 'workerRegistered'].includes(data.type)) {
+      const suppressWsSessionToast = data.type === 'taskCreated'
+        && this.currentPage?.type === 'workspaces'
+        && !!data.payload?.task?.sessionId;
+      if (!suppressWsSessionToast && ['taskCreated', 'taskCompleted', 'reportFiled', 'workerRegistered'].includes(data.type)) {
         this.toast(data.type, this.describeEvent(data));
       }
       // A full re-render replaces the view's DOM, which would wipe whatever the
@@ -1087,8 +1119,9 @@ class App {
       const taskId = data.payload?.task?.id || data.payload?.taskId;
       if (taskId) (this._inboxDirty ||= new Set()).add(taskId);
       clearTimeout(this._rerenderTimer);
-      // The Goals page patches rows itself. It never rebuilds, so a form or dialog survives.
+      // The Goals and Workspaces pages patch themselves without rebuilding active composers.
       if (this.currentPage?.type === 'goals') { this._goalsSchedule(); return; }
+      if (this.currentPage?.type === 'workspaces' && this._wsScheduleRefresh) { this._wsScheduleRefresh(); return; }
       this._rerenderTimer = setTimeout(() => {
         if (this.currentPage?.type === 'tasks' && this.contentEl.querySelector('#inbox-sticky')) {
           const ids = [...(this._inboxDirty || [])];
@@ -1969,6 +2002,7 @@ class App {
       switch (this.currentPage?.type) {
         case 'dashboard': await this.renderDashboard(this.currentPage); break;
         case 'portal': await this.renderPortal(this.currentPage); break;
+        case 'workspaces': await this.renderWorkspaces(); break;
         case 'workers': await this.renderConnections(); break;
         case 'tasks': await this.renderInbox(); break;
         case 'recipes': await this.renderRecipes(); break;
@@ -2760,6 +2794,7 @@ class App {
 
   _dshWorkspaceSwitcherHTML(active) {
     return `<div class="dsh-ws-switch" role="tablist" aria-label="Workspace switcher">
+      <a class="dsh-ws-tab${active === 'workspaces' ? ' is-active' : ''}" role="tab" aria-selected="${active === 'workspaces'}" href="#workspaces"><i data-lucide="folder-kanban"></i><span>Workspaces</span></a>
       <a class="dsh-ws-tab${active === 'tasks' ? ' is-active' : ''}" role="tab" aria-selected="${active === 'tasks'}" href="#tasks"><i data-lucide="inbox"></i><span>Tasks</span></a>
       <a class="dsh-ws-tab${active === 'goals' ? ' is-active' : ''}" role="tab" aria-selected="${active === 'goals'}" href="#goals"><i data-lucide="target"></i><span>Goals</span></a>
     </div>`;
@@ -2895,7 +2930,9 @@ class App {
       personaLabel ? `<span>${esc(personaLabel)}</span>` : ''
     ].filter(Boolean).join('<span class="dsh-meta-sep">·</span>');
 
+    const wsLabel = c.workspaceName || ((t.workspaceId || c.workspaceId) ? ((this._wsCache || []).find(w => w.id === (t.workspaceId || c.workspaceId))?.name || '') : '');
     const tags = [
+      wsLabel ? `<span class="dsh-tag is-business">${esc(wsLabel)}</span>` : '',
       t.interaction && t.interaction.status !== 'submitted' ? `<span class="dsh-tag is-warn">awaiting input</span>` : '',
       !failed && c.qualityFlag === 'concerns' ? `<span class="dsh-tag is-warn">concerns</span>` : '',
       t.status === 'scheduled' && t.scheduledAt ? `<span class="dsh-tag is-business">${esc(new Date(t.scheduledAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }))}</span>` : '',
@@ -3498,12 +3535,18 @@ class App {
     let agents = {}, usage = {};
     let pstack = { playbooks: ['investigation', 'bug-fix', 'feature', 'research-report', 'content', 'ops-change',
       'technical-writing', 'perf-issue', 'refactoring', 'prototype', 'runtime-forensics', 'eval', 'opening-a-pr', 'babysit'], skills: [] };
+    let workspaces = [];
     await Promise.all([
       this.api.get('/agents').then(r => { agents = r || {}; }).catch(() => {}),
       this.api.get('/connections').then(r => { usage = r?.usage || {}; }).catch(() => {}),
-      this.api.get('/pstack').then(r => { pstack = r || pstack; }).catch(() => {})
+      this.api.get('/pstack').then(r => { pstack = r || pstack; }).catch(() => {}),
+      this.api.get('/workspaces').then(r => { workspaces = Array.isArray(r) ? r : []; this._wsCache = workspaces; }).catch(() => {})
     ]);
     if (!this._taskComposerOpen) return;
+
+    const selectedWs = prefill.workspaceId || this.inboxWorkspaceFilter || '';
+    const wsOpts = [`<option value="">No workspace (global inbox)</option>`]
+      .concat(workspaces.map(w => `<option value="${esc(w.id)}"${w.id === selectedWs ? ' selected' : ''}>${esc(w.name)}</option>`)).join('');
 
     const methodOpts = [`<option value="">none</option>`]
       .concat((pstack.playbooks || []).map(k => `<option value="${esc(k)}">${esc(k)}</option>`)).join('');
@@ -3541,6 +3584,10 @@ class App {
             <textarea id="nt-desc" rows="6" placeholder="What should the agent do? Include acceptance criteria.">${esc(prefill.description || '')}</textarea>
           </div>
           <div class="dsh-inline-drawer-grid">
+            <div class="dsh-inline-field">
+              <label for="nt-workspace">Workspace</label>
+              <select id="nt-workspace">${wsOpts}</select>
+            </div>
             <div class="dsh-inline-field">
               <label for="nt-priority">Priority</label>
               <select id="nt-priority">
@@ -3649,11 +3696,19 @@ class App {
         if (method) context.playbook = method;
         if (review === 'llm' || review === 'panel') context.review = review;
         else if (review === 'arena') context.arena = { runners: 3 };
+        const workspaceId = detailPane.querySelector('#nt-workspace')?.value || '';
+        if (workspaceId) {
+          context.workspaceId = workspaceId;
+          const wsObj = workspaces.find(w => w.id === workspaceId);
+          if (wsObj?.name) context.workspaceName = wsObj.name;
+          if (wsObj?.path) context.workspacePath = wsObj.path;
+        }
         if (skill) context.skill = skill;
         const created = await this.api.post('/inbox', {
           title, description,
           from: { platform: 'dashboard', agent: 'operator' },
           priority: detailPane.querySelector('#nt-priority').value,
+          ...(workspaceId ? { workspaceId } : {}),
           context,
           ...(inputs.length ? { inputs } : {}),
           ...(when ? { scheduledAt: new Date(when).toISOString() } : {}),
@@ -4021,13 +4076,20 @@ class App {
     }
 
     const filter = this.inboxFilter;
+    const wsFilter = this.inboxWorkspaceFilter || '';
     const fetchLimit = this.inboxLimit + 1;
-    const q = filter ? `?status=${filter}&limit=${fetchLimit}` : `?limit=${fetchLimit}`;
-    let [tasks, status] = await Promise.all([
+    const params = new URLSearchParams();
+    if (filter) params.set('status', filter);
+    if (wsFilter) params.set('workspaceId', wsFilter);
+    params.set('limit', String(fetchLimit));
+    const q = `?${params.toString()}`;
+    let [tasks, status, workspacesList] = await Promise.all([
       this.api.get(`/inbox${q}`),
       this.api.get('/status').catch(() => null),
+      this.api.get('/workspaces').catch(() => []),
       this.refreshWorkers()
     ]);
+    this._wsCache = Array.isArray(workspacesList) ? workspacesList : (this._wsCache || []);
 
     let hasMore = false;
     if (tasks.length > this.inboxLimit) {
@@ -4094,6 +4156,11 @@ class App {
                       <input id="inbox-search" class="dsh-search-input" type="search" placeholder="Search tasks… (/)" value="${esc(this.inboxSearch || '')}">
                       <button type="button" class="dsh-search-clear" id="inbox-search-clear" aria-label="Clear search" ${this.inboxSearch ? '' : 'hidden'}><i data-lucide="x"></i></button>
                     </label>
+                    <select id="inbox-workspace" class="dsh-sort-select" aria-label="Filter by workspace">
+                      <option value="">All workspaces</option>
+                      <option value="unassigned"${(this.inboxWorkspaceFilter || '') === 'unassigned' ? ' selected' : ''}>Unassigned</option>
+                      ${(this._wsCache || []).map(w => `<option value="${esc(w.id)}"${(this.inboxWorkspaceFilter || '') === w.id ? ' selected' : ''}>${esc(w.name)}</option>`).join('')}
+                    </select>
                     <select id="inbox-sort" class="dsh-sort-select" aria-label="Sort tasks">
                       <option value="newest"${this.inboxSort === 'newest' ? ' selected' : ''}>Newest</option>
                       <option value="oldest"${this.inboxSort === 'oldest' ? ' selected' : ''}>Oldest</option>
@@ -4128,6 +4195,13 @@ class App {
         this.applyInboxSearch();
       });
 
+      const wsFilterEl = this.contentEl.querySelector('#inbox-workspace');
+      wsFilterEl?.addEventListener('change', () => {
+        this.inboxWorkspaceFilter = wsFilterEl.value;
+        this.inboxLimit = 50;
+        this.renderInbox({ soft: true });
+      });
+
       const sortEl = this.contentEl.querySelector('#inbox-sort');
       sortEl?.addEventListener('change', () => {
         this.inboxSort = sortEl.value;
@@ -4160,9 +4234,14 @@ class App {
         } catch (err) { this.toast('error', err.message); }
       });
     } else {
-      // Patch filter pills in-place without rebuilding the workspace shell
+      // Patch filter pills and workspace dropdown in-place without rebuilding the workspace shell
       const controls = this.contentEl.querySelector('#inbox-controls');
       if (controls) controls.innerHTML = pills;
+      const wsSel = this.contentEl.querySelector('#inbox-workspace');
+      if (wsSel) {
+        wsSel.innerHTML = `<option value="">All workspaces</option><option value="unassigned"${(this.inboxWorkspaceFilter || '') === 'unassigned' ? ' selected' : ''}>Unassigned</option>`
+          + (this._wsCache || []).map(w => `<option value="${esc(w.id)}"${(this.inboxWorkspaceFilter || '') === w.id ? ' selected' : ''}>${esc(w.name)}</option>`).join('');
+      }
     }
 
     this.contentEl.querySelectorAll('#inbox-controls [data-filter]').forEach(b =>

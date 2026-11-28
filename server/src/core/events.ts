@@ -49,4 +49,12 @@ export class EventBus extends EventEmitter {
   public emitAgentExecuted(agentId: string, exec: string, taskId: string): void {
     this.emitEvent('agentExecuted', { agentId, exec, taskId });
   }
+
+  public emitWorkspaceUpdated(workspaceId: string): void {
+    this.emitEvent('workspaceUpdated', { workspaceId });
+  }
+
+  public emitSessionUpdated(workspaceId: string, sessionId: string): void {
+    this.emitEvent('sessionUpdated', { workspaceId, sessionId });
+  }
 }

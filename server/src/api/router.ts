@@ -41,6 +41,8 @@ export function createApiRouter(store: Store, eventBus: EventBus): Router {
       platform: req.query.platform as string,
       agent: req.query.agent as string,
       tag: req.query.tag as string,
+      workspaceId: req.query.workspaceId as string,
+      sessionId: req.query.sessionId as string,
       limit: req.query.limit ? parseInt(req.query.limit as string, 10) : undefined
     }).map(t => boundTaskArtifacts(t)));
   });
@@ -52,6 +54,8 @@ export function createApiRouter(store: Store, eventBus: EventBus): Router {
       platform: req.query.platform as string,
       agent: req.query.agent as string,
       tag: req.query.tag as string,
+      workspaceId: req.query.workspaceId as string,
+      sessionId: req.query.sessionId as string,
       limit: req.query.limit ? parseInt(req.query.limit as string, 10) : undefined
     }).map(t => boundTaskArtifacts(t));
     res.json({ tasks });
@@ -133,6 +137,8 @@ export function createApiRouter(store: Store, eventBus: EventBus): Router {
         from: { platform: body.from.platform, agent: body.from.agent },
         to: { platform: body.to?.platform, agent: body.to?.agent },
         priority: ['low', 'normal', 'high', 'urgent'].includes(body.priority) ? body.priority : 'normal',
+        workspaceId: typeof body.workspaceId === 'string' ? body.workspaceId : undefined,
+        sessionId: typeof body.sessionId === 'string' ? body.sessionId : undefined,
         skill: body.skill,
         // Brief contract (P0-3) rides inside context: context.acceptance /
         // verify / timeboxMin / scope. Validated in the store (bad shape → 400).
@@ -310,6 +316,8 @@ export function createApiRouter(store: Store, eventBus: EventBus): Router {
       if ('thinking' in c) patch.thinking = c.thinking;
       if ('division' in c) patch.division = c.division;
       if ('agent' in c) patch.agent = c.agent;
+      if ('workspaceId' in b) patch.workspaceId = b.workspaceId;
+      else if ('workspaceId' in c) patch.workspaceId = c.workspaceId;
       if ('acceptance' in b) patch.acceptance = b.acceptance;
       else if ('acceptance' in c) patch.acceptance = c.acceptance;
       // Scheduling. Accept scheduledAt/scheduled_at; '' or null clears it.

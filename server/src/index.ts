@@ -19,7 +19,9 @@ import { createMcpServer } from './mcp/server.js';
 import { createApiRouter } from './api/router.js';
 import { createGoalRouter } from './api/goals.js';
 import { createRecipeRouter } from './api/recipes.js';
+import { createWorkspaceRouter } from './api/workspaces.js';
 import { Recipes } from './core/recipes.js';
+import { Workspaces } from './core/workspaces.js';
 import { createSSEHandler } from './api/sse.js';
 import { Goals } from './core/goals.js';
 import { SystemMetrics } from './core/system-metrics.js';
@@ -260,6 +262,13 @@ async function main() {
   // recipes/ next to goals/; a run creates an ordinary task.
   const recipes = new Recipes(path.join(path.dirname(path.resolve(config.paths.goals)), 'recipes'), config.paths.inputs);
   app.use('/api', createRecipeRouter(recipes, store));
+
+  // Workspaces & continuous working sessions (core/workspaces.ts). Layered on top of
+  // tasks with dsh-web-style workspace scoping and automatic vendored pstack skills.
+  const workspacesDir = config.paths.workspaces || path.join(path.dirname(path.resolve(config.paths.inbox)), 'workspaces');
+  const workspaces = new Workspaces(workspacesDir, store, eventBus);
+  workspaces.attachToEventBus();
+  app.use('/api', createWorkspaceRouter(workspaces));
   eventBus.on('taskCompleted', (evt: any) => {
     try { goals.onTaskCompleted(evt.payload.task); }
     catch (e) { console.error('Goals: taskCompleted handler failed:', e); }
