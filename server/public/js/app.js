@@ -207,6 +207,8 @@ function agyGroupedBody(u) {
   }
   return [...groups.entries()].map(([name, { models, note, windows }]) => {
     const weekly = windows.find(w => agyWindowRank(w.label) === 0 && w.resetsAt);
+    const fiveHr = windows.find(w => w.label === '5h');
+    const fiveHrExhausted = !!(fiveHr && fiveHr.disabledNote == null && Number(fiveHr.remainingPct != null ? fiveHr.remainingPct : (100 - fiveHr.usedPct)) <= 0);
     const rows = windows.slice().sort((a, b) => agyWindowRank(a.label) - agyWindowRank(b.label)).map(w => {
       const label = w.title || agyWindowLabel(w.label);
       if (w.disabledNote != null && w.remainingPct == null) {
@@ -223,9 +225,13 @@ function agyGroupedBody(u) {
       }
       const rem = Math.max(0, Math.min(100, Number(w.remainingPct != null ? w.remainingPct : (100 - w.usedPct))));
       const color = rem >= 50 ? '#22C55E' : rem >= 20 ? '#EAB308' : '#EF4444';
-      const status = rem >= 100 ? 'Quota available'
+      let status = rem >= 100 ? 'Quota available'
+        : rem <= 0 ? (w.resetsAt ? `Quota exhausted · Refreshes in ${resetsInHM(w.resetsAt)}` : 'Quota exhausted')
         : w.resetsAt ? `Refreshes in ${resetsInHM(w.resetsAt)}`
-        : rem <= 0 ? 'Quota exhausted' : 'Refresh time unknown';
+        : 'Refresh time unknown';
+      if (fiveHrExhausted && agyWindowRank(w.label) === 0 && rem > 0) {
+        status += ' · paused until 5h refreshes';
+      }
       return `<div class="agy-win" title="${esc(label)} · ${w.resetsAt ? `refreshes ${new Date(w.resetsAt).toLocaleString()}` : 'refresh time unknown'}">
         <div class="agy-win-label">${esc(label)}</div>
         <div class="agy-bar-row">
@@ -575,24 +581,27 @@ function agyWindowMatchesModel(modelOrAgentId, w) {
   const group = (w.group || '').toLowerCase();
   const title = (w.title || '').toLowerCase();
   const note = (w.groupNote || '').toLowerCase();
+  const groupModels = Array.isArray(w.groupModels) ? w.groupModels.map(gm => String(gm).toLowerCase()) : [];
 
   const isArgonModel = target.includes('argon');
   const isArgonWindow = group.includes('argon') || title.includes('argon') || note.includes('argon');
-  if (isArgonModel) return isArgonWindow;
-  if (isArgonWindow) return false;
+  if (isArgonWindow) return isArgonModel;
+  if (isArgonModel) return groupModels.some(gm => gm.includes('argon'));
 
   const isNeonWindow = group.includes('neon') || title.includes('neon');
   if (isNeonWindow) return target.includes('neon');
+  const isCarbonWindow = group.includes('carbon') || title.includes('carbon');
+  if (isCarbonWindow) return target.includes('carbon');
   const isHydrogenWindow = group.includes('hydrogen') || title.includes('hydrogen');
   if (isHydrogenWindow) return target.includes('hydrogen');
 
-  if (target.includes('gemini') || target.includes('neon') || target.includes('hydrogen') || target.includes('flash')) return group.includes('gemini');
+  if (target.includes('gemini') || target.includes('neon') || target.includes('carbon') || target.includes('hydrogen') || target.includes('flash')) return group.includes('gemini');
   if (target.includes('claude') || target.includes('opus') || target.includes('sonnet') || target.includes('haiku')) return group.includes('claude');
   if (target.includes('gpt')) return group.includes('gpt');
 
-  if (w.groupModels && w.groupModels.length > 0) {
-    for (const gm of w.groupModels) {
-      const words = gm.toLowerCase().split(/\s+/).filter(Boolean);
+  if (groupModels.length > 0) {
+    for (const gm of groupModels) {
+      const words = gm.split(/\s+/).filter(Boolean);
       if (words.length > 0 && words.every(word => target.includes(word))) return true;
     }
   }
@@ -791,27 +800,135 @@ class App {
       e.stopPropagation();
       this.openMediaModal(btn.dataset.mediaTask, btn.dataset.mediaFile, btn.dataset.mediaType, btn.dataset.mediaKind || 'artifacts');
     });
-    // Delegated: tapping anywhere on an inbox task card toggles its RESULT /
-    // ARTIFACTS / INPUTS / INTERACTION block, which is hidden by default — long
-    // file lists used to bury the card. Taps on interactive controls (buttons,
-    // links, inputs, copyable chips) are excluded so they keep their own behaviour.
-    // Document-level like the handlers above, so in-place re-renders never lose
-    // the listener.
+    // Delegated: tapping a task row in the DSH list pane selects it and opens
+    // its detail pane on the right (or full-screen detail on narrow viewports).
     document.addEventListener('click', (e) => {
+      // Close any open DSH popover menus when clicking outside them.
+      const insideMenu = e.target.closest?.('details.dsh-menu');
+      document.querySelectorAll('details.dsh-menu[open]').forEach(d => {
+        if (d !== insideMenu) d.removeAttribute('open');
+      });
+      const pinBtn = e.target.closest?.('[data-pin-task]');
+      if (pinBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        this.togglePinTask(pinBtn.dataset.pinTask);
+        return;
+      }
+      const quickAct = e.target.closest?.('[data-quick-task-act]');
+      if (quickAct) {
+        e.preventDefault();
+        e.stopPropagation();
+        this.handleQuickTaskAction(quickAct.dataset.quickTaskId, quickAct.dataset.quickTaskAct);
+        return;
+      }
+      const grpHead = e.target.closest?.('.dsh-group-head[data-ws="tasks"]');
+      if (grpHead) {
+        e.preventDefault();
+        const key = grpHead.dataset.group;
+        this.toggleTaskGroup(key);
+        return;
+      }
       const card = e.target.closest('.task-card');
       if (!card || e.target.closest('button, a, input, label, select, textarea, .copyable, pre[data-progress]')) return;
-      this.toggleTaskFiles(card.dataset.task);
+      this.selectInboxTask(card.dataset.task);
     });
-    // Keyboard access for the same toggle (the files head row carries
-    // role="button" tabindex="0"): Enter / Space expand-collapse the block.
+    // Workspace keyboard shortcuts (DSH Web style):
+    // - Cmd/Ctrl+K or '/' focuses search
+    // - ArrowUp/ArrowDown (or j/k) walks items in the active workspace
+    // - 'n' opens inline New Task / New Goal composer
+    // - 'Escape' closes drawers, popovers, or mobile detail
     document.addEventListener('keydown', (e) => {
-      if (e.key !== 'Enter' && e.key !== ' ') return;
-      const head = e.target.closest ? e.target.closest('.task-files-head') : null;
-      if (!head) return;
-      const card = head.closest('.task-card');
-      if (!card) return;
-      e.preventDefault();
-      this.toggleTaskFiles(card.dataset.task);
+      const inEditable = !!(e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT' || e.target.isContentEditable));
+      const modalOpen = !document.getElementById('modal-container')?.classList.contains('hidden') || !!document.querySelector('dialog[open]');
+
+      if (e.key === 'Escape') {
+        const openMenus = document.querySelectorAll('details.dsh-menu[open]');
+        if (openMenus.length) { openMenus.forEach(d => d.removeAttribute('open')); return; }
+        const drawer = this.contentEl?.querySelector('#task-inline-drawer:not([hidden])');
+        if (drawer) { this.closeTaskInlineDrawer(); return; }
+        const gvDrawer = this.contentEl?.querySelector('#gv-inline-drawer:not([hidden])');
+        if (gvDrawer && this._gvCloseDrawer) { this._gvCloseDrawer(); return; }
+        return;
+      }
+      if (modalOpen) return;
+
+      // Cmd/Ctrl+K focuses workspace search
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        const search = this.contentEl?.querySelector('#inbox-search, #gv-search');
+        if (search) { e.preventDefault(); search.focus(); search.select(); }
+        return;
+      }
+
+      if (e.key === 'Enter' || e.key === ' ') {
+        const card = e.target?.closest?.('.task-card');
+        if (card && e.target === card) {
+          e.preventDefault();
+          this.selectInboxTask(card.dataset.task);
+          return;
+        }
+      }
+
+      if (inEditable || e.metaKey || e.ctrlKey || e.altKey) return;
+
+      // '/' focuses search in Tasks or Goals workspace
+      if (e.key === '/') {
+        const search = this.contentEl?.querySelector('#inbox-search, #gv-search');
+        if (search) { e.preventDefault(); search.focus(); search.select(); }
+        return;
+      }
+
+      // Tasks workspace shortcuts
+      if (this.currentPage?.type === 'tasks' && this.contentEl?.querySelector('#tasks-page')) {
+        if (e.key === 'n') {
+          e.preventDefault();
+          this.openInlineNewTask();
+          return;
+        }
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'j' || e.key === 'k') {
+          const cards = [...this.contentEl.querySelectorAll('#inbox-list .task-card')].filter(c => c.style.display !== 'none' && c.offsetParent !== null);
+          if (!cards.length) return;
+          e.preventDefault();
+          const idx = cards.findIndex(c => c.dataset.task === this.selectedTaskId);
+          const dir = (e.key === 'ArrowDown' || e.key === 'j') ? 1 : -1;
+          const next = idx === -1 ? (dir > 0 ? 0 : cards.length - 1) : Math.max(0, Math.min(cards.length - 1, idx + dir));
+          const target = cards[next];
+          if (target) {
+            target.scrollIntoView({ block: 'nearest' });
+            this.selectInboxTask(target.dataset.task);
+          }
+          return;
+        }
+      }
+
+      // Goals workspace shortcuts
+      if (this.currentPage?.type === 'goals' && this.contentEl?.querySelector('.gv[data-page="list"]')) {
+        if (e.key === 'n' && this._gvOpenCreateInline) {
+          e.preventDefault();
+          this._gvOpenCreateInline();
+          return;
+        }
+        if (e.key >= '1' && e.key <= '5' && this._gvSelectGoal && this._gv?.selected) {
+          const tabs = ['overview', 'phases', 'decisions', 'files', 'settings'];
+          const tab = tabs[Number(e.key) - 1];
+          if (tab) { e.preventDefault(); this._gvSelectGoal(this._gv.selected, tab); }
+          return;
+        }
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'j' || e.key === 'k') {
+          const rows = [...this.contentEl.querySelectorAll('#gv-list .gv-li')].filter(li => li.offsetParent !== null);
+          if (!rows.length) return;
+          e.preventDefault();
+          const curId = this._gv?.selected;
+          const idx = rows.findIndex(li => li.dataset.id === curId);
+          const dir = (e.key === 'ArrowDown' || e.key === 'j') ? 1 : -1;
+          const next = idx === -1 ? (dir > 0 ? 0 : rows.length - 1) : Math.max(0, Math.min(rows.length - 1, idx + dir));
+          const target = rows[next];
+          if (target && this._gvSelectGoal) {
+            target.scrollIntoView({ block: 'nearest' });
+            this._gvSelectGoal(target.dataset.id, this._gv?.tab || 'overview');
+          }
+        }
+      }
     });
   }
 
@@ -1818,6 +1935,7 @@ class App {
     this.pendingTask = (this.currentView === 'tasks' && rest.length)
       ? decodeURIComponent(rest.join('/')) : null;
     if (this.pendingTask) this._focusRetried = false;
+    if (this.currentView !== 'tasks' && this.currentView !== 'goals') this._fromGoalId = null;
     document.querySelectorAll('.nav-item').forEach(item => {
       item.classList.toggle('active', item.dataset.view === this.currentView);
     });
@@ -2623,325 +2741,1087 @@ class App {
     </div>`;
   }
 
-  // One task card's HTML. Shared by renderInbox (whole list) and patchInboxTasks
-  // (SSE: redraw just the card an event names).
+  // One task list row's HTML (DSH Web calm 2-line list row). Shared by
+  // ── Shared DSH Workspace Primitives (used by both Tasks and Goals) ──────
+
+  _dshLoadPrefs(key, defaults = {}) {
+    try {
+      const raw = localStorage.getItem(key);
+      return raw ? { ...defaults, ...JSON.parse(raw) } : { ...defaults };
+    } catch { return { ...defaults }; }
+  }
+
+  _dshSavePrefs(key, patch) {
+    try {
+      const cur = this._dshLoadPrefs(key, {});
+      localStorage.setItem(key, JSON.stringify({ ...cur, ...patch }));
+    } catch { /* ignore storage quota errors */ }
+  }
+
+  _dshWorkspaceSwitcherHTML(active) {
+    return `<div class="dsh-ws-switch" role="tablist" aria-label="Workspace switcher">
+      <a class="dsh-ws-tab${active === 'tasks' ? ' is-active' : ''}" role="tab" aria-selected="${active === 'tasks'}" href="#tasks"><i data-lucide="inbox"></i><span>Tasks</span></a>
+      <a class="dsh-ws-tab${active === 'goals' ? ' is-active' : ''}" role="tab" aria-selected="${active === 'goals'}" href="#goals"><i data-lucide="target"></i><span>Goals</span></a>
+    </div>`;
+  }
+
+  // Pointer-captured resizable split handle (DSH AppFrame DragHandle pattern).
+  _dshAttachSplitHandle(pageEl, storageKey = 'cowork-dsh-list-w') {
+    if (!pageEl) return;
+    const handle = pageEl.querySelector('.dsh-split-handle');
+    const saved = Number(localStorage.getItem(storageKey));
+    if (Number.isFinite(saved) && saved >= 280 && saved <= 620) {
+      pageEl.style.setProperty('--dsh-list-w', `${saved}px`);
+    }
+    if (!handle || handle.dataset.bound) return;
+    handle.dataset.bound = '1';
+
+    let startX = 0;
+    let startW = 420;
+    let pointerId = null;
+
+    const clamp = (w) => Math.max(280, Math.min(Math.min(620, Math.round(pageEl.getBoundingClientRect().width * 0.6)), Math.round(w)));
+
+    const finish = () => {
+      if (pointerId === null) return;
+      if (handle.hasPointerCapture?.(pointerId)) handle.releasePointerCapture(pointerId);
+      pointerId = null;
+      handle.classList.remove('is-dragging');
+      pageEl.classList.remove('is-resizing');
+      const curW = parseInt(getComputedStyle(pageEl).getPropertyValue('--dsh-list-w'), 10);
+      if (Number.isFinite(curW)) localStorage.setItem(storageKey, String(curW));
+    };
+
+    handle.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0 || pointerId !== null) return;
+      e.preventDefault();
+      pointerId = e.pointerId;
+      handle.setPointerCapture?.(pointerId);
+      const listPane = pageEl.querySelector('.dsh-list-pane');
+      startX = e.clientX;
+      startW = listPane ? listPane.getBoundingClientRect().width : 420;
+      handle.classList.add('is-dragging');
+      pageEl.classList.add('is-resizing');
+    });
+    handle.addEventListener('pointermove', (e) => {
+      if (e.pointerId !== pointerId) return;
+      const nextW = clamp(startW + (e.clientX - startX));
+      pageEl.style.setProperty('--dsh-list-w', `${nextW}px`);
+    });
+    handle.addEventListener('pointerup', finish);
+    handle.addEventListener('pointercancel', finish);
+    handle.addEventListener('lostpointercapture', finish);
+    handle.addEventListener('dblclick', () => {
+      pageEl.style.setProperty('--dsh-list-w', '420px');
+      localStorage.setItem(storageKey, '420');
+    });
+  }
+
+  _taskPrefs() {
+    if (!this._taskWsPrefs) {
+      this._taskWsPrefs = this._dshLoadPrefs('cowork-tasks-ws', {
+        filter: '',
+        sort: 'newest',
+        groupBy: 'flat',
+        pinned: [],
+        collapsed: {},
+        lastSelected: null
+      });
+      if (!Array.isArray(this._taskWsPrefs.pinned)) this._taskWsPrefs.pinned = [];
+      if (!this._taskWsPrefs.collapsed || typeof this._taskWsPrefs.collapsed !== 'object') this._taskWsPrefs.collapsed = {};
+    }
+    return this._taskWsPrefs;
+  }
+
+  _saveTaskPrefs(patch) {
+    const p = this._taskPrefs();
+    Object.assign(p, patch);
+    this._dshSavePrefs('cowork-tasks-ws', p);
+  }
+
+  togglePinTask(id) {
+    const p = this._taskPrefs();
+    const set = new Set(p.pinned);
+    if (set.has(id)) set.delete(id); else set.add(id);
+    this._saveTaskPrefs({ pinned: [...set] });
+    this.renderInboxListOnly();
+  }
+
+  toggleTaskGroup(key) {
+    const p = this._taskPrefs();
+    const collapsed = { ...p.collapsed, [key]: !p.collapsed[key] };
+    this._saveTaskPrefs({ collapsed });
+    const grp = this.contentEl?.querySelector(`.dsh-group[data-group="${CSS.escape(key)}"]`);
+    if (grp) grp.dataset.collapsed = collapsed[key] ? 'true' : 'false';
+  }
+
+  async handleQuickTaskAction(id, act) {
+    if (!id) return;
+    if (act === 'resume') {
+      try {
+        const out = await this.api.post(`/inbox/${encodeURIComponent(id)}/resume`, {});
+        this.toast('resumed', out.task?.status === 'scheduled' ? 'Resumed — back on its schedule.' : 'Resumed — dispatched by the next tick.');
+        await this.patchInboxTasks([id]);
+      } catch (err) { this.toast('error', err.message); }
+      return;
+    }
+    // Open the task in the detail workspace and launch the inline drawer directly (no modal dead end)
+    await this.selectInboxTask(id);
+    if (act === 'pause') this.openTaskInlineDrawer('confirm-pause', id);
+    else if (act === 'run-now') this.openTaskInlineDrawer('confirm-run-now', id);
+    else if (act === 'continue') this.openTaskInlineDrawer('continue', id);
+    else if (act === 'rerun') this.openTaskInlineDrawer('rerun', id);
+  }
+
+  // renderInbox (whole list) and patchInboxTasks (SSE in-place update).
   taskCardHTML(t) {
     const c = t.context || {};
-    // Which persona + agent ran it (item 5), or the requested assignment.
     const personaLabel = c.ranPersona ? (c.ranDivision ? `${c.ranDivision} / ${c.ranPersona}` : c.ranPersona)
       : (c.division ? `${c.division} / ${c.persona || '?'}` : (c.persona || c.role || ''));
-    // While a task runs, ranAgent is not written yet (it lands at completion) and an
-    // auto-routed task has no context.agent — so prefer the dispatcher's claim-time
-    // stamp (liveAgent / liveThinking), then the pin, then the claiming worker.
+    const isRunning = t.status === 'in-progress' || t.status === 'claimed';
+    const agentLabel = (isRunning ? (c.liveAgent || c.agent || (t.claimedBy ? this.workerLabel(t.claimedBy) : '')) : '')
+      || c.ranAgent || c.agent || '';
+    const failed = isTaskFailed(t);
+    const closedNoRun = isTaskClosedNoRun(t);
+    const inputsRaw = Array.isArray(c.inputFiles) ? c.inputFiles : [];
+    const stateKey = failed ? 'failed' : t.status;
+    const stateLabel = failed ? 'failed' : (closedNoRun ? 'closed' : t.status);
+    const selected = this.selectedTaskId === t.id && !this._taskComposerOpen;
+    const pinned = this._taskPrefs().pinned.includes(t.id);
+
+    const metaParts = [
+      `<span>${esc(stateLabel)}</span>`,
+      agentLabel ? `<span>${esc(agentLabel)}</span>` : '',
+      personaLabel ? `<span>${esc(personaLabel)}</span>` : ''
+    ].filter(Boolean).join('<span class="dsh-meta-sep">·</span>');
+
+    const tags = [
+      t.interaction && t.interaction.status !== 'submitted' ? `<span class="dsh-tag is-warn">awaiting input</span>` : '',
+      !failed && c.qualityFlag === 'concerns' ? `<span class="dsh-tag is-warn">concerns</span>` : '',
+      t.status === 'scheduled' && t.scheduledAt ? `<span class="dsh-tag is-business">${esc(new Date(t.scheduledAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }))}</span>` : '',
+      t.recurrence ? `<span class="dsh-tag">${esc(describeRecurrence(t.recurrence))}</span>`
+        : (t.loopIntervalHours ? `<span class="dsh-tag">every ${esc(String(t.loopIntervalHours))}h</span>` : ''),
+      inputsRaw.length ? `<span class="dsh-tag">${inputsRaw.length} file${inputsRaw.length === 1 ? '' : 's'}</span>` : '',
+      t.priority && t.priority !== 'normal' ? `<span class="dsh-tag${t.priority === 'urgent' ? ' is-error' : (t.priority === 'high' ? ' is-warn' : '')}">${esc(t.priority)}</span>` : ''
+    ].filter(Boolean).join('');
+
+    // Hover quick action (DSH Rows.js pattern)
+    let quickBtn = '';
+    if (t.status === 'paused') {
+      quickBtn = `<button type="button" class="dsh-row-act-btn" data-quick-task-id="${esc(t.id)}" data-quick-task-act="resume" title="Resume task" aria-label="Resume task"><i data-lucide="play"></i></button>`;
+    } else if (t.status === 'scheduled') {
+      quickBtn = `<button type="button" class="dsh-row-act-btn" data-quick-task-id="${esc(t.id)}" data-quick-task-act="run-now" title="Run now" aria-label="Run now"><i data-lucide="play"></i></button>`;
+    } else if (['pending', 'claimed', 'in-progress', 'wait-input'].includes(t.status)) {
+      quickBtn = `<button type="button" class="dsh-row-act-btn" data-quick-task-id="${esc(t.id)}" data-quick-task-act="pause" title="Pause task" aria-label="Pause task"><i data-lucide="pause"></i></button>`;
+    } else if (failed) {
+      quickBtn = `<button type="button" class="dsh-row-act-btn" data-quick-task-id="${esc(t.id)}" data-quick-task-act="rerun" title="Re-run task" aria-label="Re-run task"><i data-lucide="rotate-ccw"></i></button>`;
+    } else if (t.status === 'done' && !t.context?.continuedInto) {
+      quickBtn = `<button type="button" class="dsh-row-act-btn" data-quick-task-id="${esc(t.id)}" data-quick-task-act="continue" title="Continue task" aria-label="Continue task"><i data-lucide="corner-down-right"></i></button>`;
+    }
+
+    return `
+    <div class="dsh-row task-card${selected ? ' is-selected' : ''}${failed ? ' is-failed' : ''}" role="button" tabindex="0" aria-current="${selected ? 'true' : 'false'}" data-task="${esc(t.id)}" data-created="${esc(t.createdAt || '')}" data-status="${esc(stateKey)}" data-title="${esc((t.title || '').toLowerCase())}">
+      <span class="dsh-row-dot-wrap" aria-hidden="true"><span class="dsh-dot" data-state="${esc(stateKey)}"></span></span>
+      <span class="dsh-row-body">
+        <span class="dsh-row-top">
+          ${pinned ? `<span class="dsh-pin-dot" title="Pinned" aria-label="Pinned"><i data-lucide="pin"></i></span>` : ''}
+          <span class="dsh-row-title">${esc(t.title)}</span>
+          <span class="dsh-row-right">
+            <span class="dsh-row-time" title="${esc(t.createdAt || '')}">${timeAgo(t.createdAt)}</span>
+            <span class="dsh-row-actions">
+              ${quickBtn}
+              <button type="button" class="dsh-row-act-btn${pinned ? ' is-pinned' : ''}" data-pin-task="${esc(t.id)}" title="${pinned ? 'Unpin' : 'Pin to top'}" aria-label="${pinned ? 'Unpin' : 'Pin to top'}"><i data-lucide="pin"></i></button>
+            </span>
+          </span>
+        </span>
+        <span class="dsh-row-meta">${metaParts}${tags}</span>
+      </span>
+    </div>`;
+  }
+
+  // Full DSH Web right-hand detail pane for the selected task. Preserves every
+  // task action, live progress terminal, inline drawers (no modal dead ends),
+  // inline result preview, acceptance criteria, agent fallback chain, recipe bar,
+  // and interaction form.
+  taskDetailHTML(t) {
+    const c = t.context || {};
+    const personaLabel = c.ranPersona ? (c.ranDivision ? `${c.ranDivision} / ${c.ranPersona}` : c.ranPersona)
+      : (c.division ? `${c.division} / ${c.persona || '?'}` : (c.persona || c.role || ''));
     const isRunning = t.status === 'in-progress' || t.status === 'claimed';
     const agentLabel = (isRunning ? (c.liveAgent || c.agent || (t.claimedBy ? this.workerLabel(t.claimedBy) : '')) : '')
       || c.ranAgent || c.agent || '';
     const thinkingLabel = isRunning ? (c.liveThinking || c.thinking || '') : (c.thinking || '');
-    // Running cards ALWAYS show both badges; unknown values get explicit fallbacks.
-    const agentBadge = agentLabel ? badge(agentLabel, '#0EA5E9')
-      : (isRunning ? `<span class="badge" title="No agent recorded for this run yet (routing, or claimed by a client that did not report one)" style="background:#94A3B818; color:#94A3B8; border:1px solid #94A3B840">agent: unassigned</span>` : '');
-    const thinkingBadge = thinkingLabel ? badge(`thinking: ${thinkingLabel}`, '#64748B')
-      : (isRunning ? `<span class="badge" title="No thinking level set on the task — the run uses the agent's default (else medium)" style="background:#64748B18; color:#64748B; border:1px solid #64748B40">thinking: default</span>` : '');
-    // Fallback trail: agents that failed verification and were handed over.
     const failedAgents = Array.isArray(c.failedAgents) ? c.failedAgents : [];
     const failed = isTaskFailed(t);
-    // done, but closed administratively without ever running (superseded copy,
-    // pre-empted cancel) — badged distinctly so its empty artifacts list is not
-    // mistaken for a silent failure.
     const closedNoRun = isTaskClosedNoRun(t);
-    // The card no longer expands to show RESULT / DESCRIPTION inline. Instead the
-    // run's RESULT is a first-class `result.md` chip in its own RESULT section
-    // (first, above ARTIFACTS / INPUTS) and the brief is a `description.md` chip
-    // under INPUTS — both open in the markdown viewer modal. The dispatcher writes
-    // the real result.md for local runs; the server also serves both names
-    // synthetically from task.result / task.description, so the chips work even
-    // when no file is on disk (remote / older tasks).
+    const stateKey = failed ? 'failed' : t.status;
+    const stateLabel = failed ? 'Failed' : (closedNoRun ? 'Closed (never ran)' : t.status);
+    const pinned = this._taskPrefs().pinned.includes(t.id);
+
     const artsRaw = Array.isArray(t.artifacts) ? t.artifacts : [];
-    // result.md gets its own RESULT section — keep it out of the plain
-    // ARTIFACTS list so the run's result is not buried in the artifacts.
     const resultOnDisk = artsRaw.includes('result.md');
     const hasResult = !closedNoRun && (!!t.result || resultOnDisk);
     const arts = artsRaw.filter(f => f !== 'result.md');
-    // OUTPUTS: the final deliverables the run placed in artifacts/<id>/outputs/
-    // ($COWORK_OUTPUTS_DIR) — their own section, right after RESULT.
     const outs = Array.isArray(t.outputs) ? t.outputs : [];
     const inputsRaw = Array.isArray(c.inputFiles) ? c.inputFiles : [];
     const inputs = (t.description && !inputsRaw.includes('description.md'))
       ? ['description.md', ...inputsRaw] : inputsRaw;
-    // A recurring task is a persistent SCHEDULER: it stays `scheduled` and spawns a
-    // one-shot run-child each cycle. Each run-child is its OWN `done` card holding
-    // that cycle's artifacts/result, linked back to the scheduler via
-    // context.scheduledParentId. We surface that ONE stable parent reference (no
-    // run-to-run "previous/next" chain that made the list scroll up and down).
-    const parentLink = c.scheduledParentId
-      ? `<a href="#tasks/${encodeURIComponent(c.scheduledParentId)}" title="This run was produced by a recurring scheduled task — open it" style="display:inline-flex; align-items:center; gap:3px; color:#6366F1; text-decoration:none; font-family:inherit"><i data-lucide="repeat" style="width:11px;height:11px;vertical-align:-1px"></i>scheduled task</a>`
-      : '';
-    // Files can be attached while a task is still schedulable, or to a failed one
-    // (attach context, then re-run).
     const canAttach = ['pending', 'wait-input', 'scheduled'].includes(t.status) || failed;
-    // Vertical agent fallback chain — agents in the order they were tried, the
-    // last one at the bottom. Failed rungs are red with their reason; the final
-    // (running / successful) agent sits at the end.
-    const chain = failedAgents.map(f => ({
-      agent: f.agent, reason: f.reason || 'failed', ok: false
-    }));
-    const lastFailed = failedAgents.length ? failedAgents[failedAgents.length - 1].agent : null;
-    if (agentLabel && agentLabel !== lastFailed) chain.push({ agent: agentLabel, ok: !failed, final: true });
-    const chainHtml = chain.length ? `<div class="task-agent-chain" style="display:flex; flex-direction:column; gap:3px; padding:2px 0 6px">
-      ${chain.map((r, i) => {
-        const col = r.ok ? '#22C55E' : (r.final ? AGENT_COLOR : '#EF4444');
-        const icon = r.ok ? '✓' : (r.final ? '●' : '✗');
-        return `<div style="display:flex; align-items:center; gap:6px; font-size:0.8rem">
-          <span style="width:14px; text-align:right; color:var(--text-muted); font-size:0.7rem">${i + 1}</span>
-          <span class="badge" style="background:${col}18; color:${col}; border:1px solid ${col}40">${icon} ${esc(r.agent)}</span>
-          ${r.reason ? `<span style="color:var(--text-muted); font-size:0.74rem">${esc(r.reason)}</span>` : ''}
-        </div>`;
-      }).join('')}
-    </div>` : '';
-
-    // (2) PENDING — why is this task still waiting? The dispatcher annotates each
-    // pending task with context.pendingReason (free slot / agent at capacity /
-    // routing / remote-unclaimed / deps / held-manual). Shown only while pending.
     const pendingReason = (t.status === 'pending' && c.pendingReason) ? String(c.pendingReason) : '';
-    const pendingHtml = pendingReason ? `<div class="task-pending-why" style="display:flex; align-items:flex-start; gap:6px; margin:2px 0 6px; padding:6px 9px; border-radius:8px; background:#EAB30814; border:1px solid #EAB30833; color:var(--text-secondary); font-size:0.8rem">
-      <i data-lucide="hourglass" style="width:13px;height:13px;margin-top:1px;color:#EAB308;flex-shrink:0"></i>
-      <span>${esc(pendingReason)}${c.pendingReasonAt ? ` <span style="color:var(--text-muted)">· ${esc(timeAgo(c.pendingReasonAt))}</span>` : ''}</span>
-    </div>` : '';
 
-    // (1) IN-PROGRESS — a live progress-log window streaming what the agent is
-    // doing right now. Filled + auto-scrolled by pollInboxProgress() polling
-    // GET /inbox/:id/progress (the tail of artifacts/<id>/progress.log).
-    // It rides INSIDE the collapsible block (hidden by default, tap the card to
-    // show / hide) like RESULT / OUTPUTS; the poller keeps filling it while hidden.
-    const progressHtml = isRunning ? `<div class="task-progress" style="margin:4px 0 8px; border:1px solid var(--border-hover); border-radius:10px; overflow:hidden; background:var(--bg-tertiary)">
-      <div style="display:flex; align-items:center; gap:7px; padding:6px 10px; font-size:0.74rem; text-transform:uppercase; letter-spacing:.03em; color:#0EA5E9; border-bottom:1px solid var(--border-hover)">
-        <span class="progress-pulse" data-progress-pulse="${esc(t.id)}" style="width:8px;height:8px;border-radius:50%;background:#0EA5E9;display:inline-block;animation:progressPulse 1.4s ease-in-out infinite"></span>
-        <span data-progress-label="${esc(t.id)}">Live progress — what it's doing right now</span>
-        <span data-progress-age="${esc(t.id)}" style="margin-left:auto; text-transform:none; letter-spacing:0; color:var(--text-muted)"></span>
+    // Primary bar action(s) + overflow menu items (all trigger inline drawers, zero modal dead ends)
+    const primaryBtns = [];
+    const menuItems = [];
+    if (failed) {
+      primaryBtns.push(`<button type="button" class="dsh-btn-primary" data-rerun-task="${esc(t.id)}" data-agent="${esc(c.agentAuto ? '' : (c.agent || ''))}">↻ Re-run</button>`);
+    }
+    if (t.status === 'paused') {
+      primaryBtns.push(`<button type="button" class="dsh-btn-primary" data-resume-task="${esc(t.id)}">▶ Resume</button>`);
+    }
+    if (t.status === 'scheduled') {
+      primaryBtns.push(`<button type="button" class="dsh-btn-primary" data-run-now-task="${esc(t.id)}">▶ Run now</button>`);
+    }
+    if (t.status === 'done' && !failed) {
+      if (t.context?.continuedInto) {
+        primaryBtns.push(`<a class="dsh-btn-ghost" href="#tasks/${encodeURIComponent(t.context.continuedInto)}" title="Open follow-up task">↗ Follow-up</a>`);
+      } else {
+        primaryBtns.push(`<button type="button" class="dsh-btn-primary" data-continue-task="${esc(t.id)}" data-agent="${esc(agentLabel)}">▸ Continue</button>`);
+      }
+    }
+    if (isTaskEditable(t)) {
+      primaryBtns.push(`<button type="button" class="dsh-btn-ghost" data-edit-task="${esc(t.id)}"><i data-lucide="pencil"></i><span>Edit</span></button>`);
+    }
+    if (['pending', 'claimed', 'in-progress', 'scheduled', 'wait-input'].includes(t.status)) {
+      menuItems.push(`<button type="button" data-pause-task="${esc(t.id)}">⏸ Pause task</button>`);
+    }
+    if (t.status === 'pending' || t.status === 'scheduled') {
+      menuItems.push(`<button type="button" data-reassign-task="${esc(t.id)}" data-agent="${esc(c.agentAuto ? '' : (c.agent || ''))}">⇄ Reassign agent</button>`);
+    }
+    menuItems.push(`<button type="button" data-pin-task="${esc(t.id)}">${pinned ? 'Unpin task' : 'Pin to top'}</button>`);
+    if (t.worktree && !t.worktree.merged && !t.worktree.discarded) {
+      menuItems.push(`<button type="button" data-worktree-merge="${esc(t.id)}">⑂ Merge branch ${esc(t.worktree.branch)}</button>`);
+      menuItems.push(`<button type="button" class="is-danger" data-worktree-discard="${esc(t.id)}">Discard worktree</button>`);
+    }
+    if (menuItems.length) menuItems.push(`<div class="dsh-menu-sep"></div>`);
+    menuItems.push(`<button type="button" class="is-danger" data-del-task="${esc(t.id)}">Delete task…</button>`);
+
+    const subTags = [
+      agentLabel ? `<span class="dsh-tag is-business">${esc(agentLabel)}</span>` : (isRunning ? `<span class="dsh-tag">agent: unassigned</span>` : ''),
+      thinkingLabel ? `<span class="dsh-tag">thinking: ${esc(thinkingLabel)}</span>` : (isRunning ? `<span class="dsh-tag">thinking: default</span>` : ''),
+      personaLabel ? `<span class="dsh-tag">${esc(personaLabel)}</span>` : '',
+      !failed && c.qualityFlag === 'concerns' ? `<span class="dsh-tag is-warn" title="${esc(c.concerns || '')}">⚠ concerns</span>` : '',
+      c.specVerdict && c.specVerdict.verdict ? (() => {
+        const sv = c.specVerdict;
+        const v = String(sv.verdict).toUpperCase();
+        const cls = v === 'APPROVED' ? ' is-success' : v === 'CHANGES_REQUESTED' ? ' is-error' : '';
+        const lbl = v === 'APPROVED' ? '✓ spec: approved' : v === 'CHANGES_REQUESTED' ? '✗ spec: changes' : '? spec: unverifiable';
+        return `<span class="dsh-tag${cls}" title="${esc(sv.summary || v)}">${lbl}</span>`;
+      })() : '',
+      t.status === 'scheduled' && t.scheduledAt ? `<span class="dsh-tag is-business">Scheduled ${esc(new Date(t.scheduledAt).toLocaleString())}</span>` : '',
+      t.recurrence ? `<span class="dsh-tag">${esc(describeRecurrence(t.recurrence))}</span>`
+        : (t.loopIntervalHours ? `<span class="dsh-tag">every ${esc(String(t.loopIntervalHours))}h</span>` : ''),
+      t.priority && t.priority !== 'normal' ? `<span class="dsh-tag${t.priority === 'urgent' ? ' is-error' : ' is-warn'}">${esc(t.priority)}</span>` : '',
+      ...(Array.isArray(t.tags) ? t.tags : []).filter(tag => tag !== 'chat').map(tag => `<span class="dsh-tag">#${esc(tag)}</span>`)
+    ].filter(Boolean).join('');
+
+    const parentLink = c.scheduledParentId
+      ? `<a class="dsh-tag is-business" href="#tasks/${encodeURIComponent(c.scheduledParentId)}" style="text-decoration:none">↻ Parent scheduled task</a>`
+      : '';
+    const goalCrumb = (c.goalId || this._fromGoalId)
+      ? `<a class="dsh-crumb-btn" href="#goals/${encodeURIComponent(c.goalId || this._fromGoalId)}"><i data-lucide="target"></i><span>Back to goal</span></a>`
+      : '';
+
+    const progressHtml = isRunning ? `<div class="dsh-terminal task-progress">
+      <div class="dsh-terminal-head">
+        <span class="dsh-dot" data-state="in-progress" data-progress-pulse="${esc(t.id)}"></span>
+        <span data-progress-label="${esc(t.id)}">Live progress</span>
+        <span data-progress-age="${esc(t.id)}" style="margin-left:auto;color:var(--dsw-label-caption);font-variant-numeric:tabular-nums"></span>
       </div>
-      <pre data-progress="${esc(t.id)}" style="margin:0; padding:9px 11px; max-height:320px; overflow:auto; white-space:pre-wrap; word-break:break-word; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:0.74rem; line-height:1.45; color:var(--text-secondary)">Loading live output…</pre>
+      <pre class="dsh-terminal-body" data-progress="${esc(t.id)}">Loading live output…</pre>
     </div>` : '';
 
-    // (3) FAILED on a RATE LIMIT — a toggle to auto re-run once the window resets.
-    // Shown only when the server classified the failure as rate-limited.
+    const pendingHtml = pendingReason ? `<div class="dsh-callout is-warn task-pending-why">
+      <div style="display:flex;align-items:flex-start;gap:7px">
+        <i data-lucide="hourglass" style="width:14px;height:14px;margin-top:2px;flex:none;color:var(--dsw-warn)"></i>
+        <span>${esc(pendingReason)}${c.pendingReasonAt ? ` <span style="color:var(--dsw-label-caption)">· ${esc(timeAgo(c.pendingReasonAt))}</span>` : ''}</span>
+      </div>
+    </div>` : '';
+
     const rlReset = c.rateLimitResetsAt ? new Date(c.rateLimitResetsAt) : null;
     const rlResetOk = rlReset && !isNaN(rlReset.getTime());
-    const autoRerunHtml = (failed && c.rateLimited) ? `<div class="task-autorerun" style="margin:6px 0 2px; padding:8px 10px; border-radius:9px; background:#F9731614; border:1px solid #F9731633">
-      <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:0.82rem; color:var(--text-primary)">
-        <input type="checkbox" data-autorerun="${esc(t.id)}" ${c.autoRerunOnReset !== false ? 'checked' : ''} style="width:15px;height:15px;cursor:pointer;accent-color:#F97316">
-        <span><i data-lucide="refresh-cw" style="width:12px;height:12px;vertical-align:-1px;margin-right:3px"></i>Auto re-run when the rate limit resets${rlResetOk ? ` <span style="color:var(--text-muted)">(≈ ${esc(rlReset.toLocaleString())})</span>` : ''}</span>
+    const autoRerunHtml = (failed && c.rateLimited) ? `<div class="dsh-callout is-warn task-autorerun">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;color:var(--dsw-label-primary)">
+        <input type="checkbox" data-autorerun="${esc(t.id)}" ${c.autoRerunOnReset !== false ? 'checked' : ''} style="width:15px;height:15px;cursor:pointer;accent-color:var(--dsw-warn)">
+        <span>Auto re-run when the rate limit resets${rlResetOk ? ` <span style="color:var(--dsw-label-tertiary)">(≈ ${esc(rlReset.toLocaleString())})</span>` : ''}</span>
       </label>
-      <button class="btn" data-rerun-task="${esc(t.id)}" data-agent="" title="Don't wait for the cooldown — re-run now on another agent"
-        style="font-size:0.72rem;margin:6px 0 0 23px;padding:2px 7px;color:#F97316;border-color:#F9731666">⇄ Assign to another agent now</button>
-      <div style="font-size:0.72rem; color:var(--text-muted); margin-top:3px; padding-left:23px">Failed on a rate limit. On by default — Cowork re-queues this task automatically once the usage window resets${rlResetOk ? '' : ' (re-checked hourly until a reset time is known)'}. Untick to leave it failed.${c.autoRerunCount ? ` Auto re-runs so far: ${esc(String(c.autoRerunCount))}.` : ''}</div>
+      <div><button type="button" class="dsh-btn-ghost" data-rerun-task="${esc(t.id)}" data-agent="">⇄ Assign to another agent now</button></div>
+      <div style="font-size:12px;color:var(--dsw-label-tertiary)">Failed on a rate limit. Cowork re-queues automatically once the window resets.${c.autoRerunCount ? ` Auto re-runs so far: ${esc(String(c.autoRerunCount))}.` : ''}</div>
     </div>` : '';
 
-    return `
-    <div class="card task-card" style="margin-bottom: var(--space-md)${failed ? ';border-left:3px solid #EF4444' : ''}" data-task="${esc(t.id)}" data-created="${esc(t.createdAt || '')}" data-title="${esc((t.title || '').toLowerCase())}">
-      <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap">
-        ${failed ? badge('failed', '#EF4444')
-          : closedNoRun ? `<span class="badge" title="Done, but closed administratively without ever running an agent — so it has no artifacts and no result.md. The full explanation is in this task's result field below." style="background:#94A3B818; color:#94A3B8; border:1px solid #94A3B840">done · closed (never ran)</span>`
-          : badge(t.status, STATUS_COLORS[t.status] || '#94A3B8')}
-        ${!failed && c.qualityFlag === 'concerns' ? `<span class="badge" title="${esc('Done with concerns: ' + (c.concerns || '(no CONCERNS text)'))}" style="background:#F59E0B18; color:#F59E0B; border:1px solid #F59E0B40">⚠ concerns</span>` : ''}
-        ${c.specVerdict && c.specVerdict.verdict ? (() => {
-          const sv = c.specVerdict;
-          const v = String(sv.verdict).toUpperCase();
-          const col = v === 'APPROVED' ? '#22C55E' : v === 'CHANGES_REQUESTED' ? '#EF4444' : '#94A3B8';
-          const icon = v === 'APPROVED' ? '✓' : v === 'CHANGES_REQUESTED' ? '✗' : '?';
-          const lbl = v === 'APPROVED' ? 'spec: approved' : v === 'CHANGES_REQUESTED' ? 'spec: changes' : 'spec: unverifiable';
-          const tip = `Spec verifier (${sv.mode || 'shadow'}, judge: ${sv.judgeAgent || 'none'}): ${sv.summary || v}`;
-          return `<span class="badge" title="${esc(tip)}" style="background:${col}18; color:${col}; border:1px solid ${col}40">${icon} ${lbl}</span>`;
-        })() : ''}
-        ${t.status === 'scheduled' && t.scheduledAt ? badge(`⏰ ${new Date(t.scheduledAt).toLocaleString()}`, '#6366F1') : ''}
-        ${t.recurrence ? badge(`🔁 ${describeRecurrence(t.recurrence)}`, '#3B82F6')
-          : t.loopIntervalHours ? badge(`🔁 every ${t.loopIntervalHours}h`, '#3B82F6') : ''}
-        ${personaLabel ? badge(personaLabel, '#7C3AED') : ''}${agentBadge}${thinkingBadge}
-        ${t.interaction && t.interaction.status !== 'submitted' ? badge('⌛ awaiting input', '#EAB308') : ''}
-        ${t.interaction && t.interaction.status === 'submitted' ? badge('✓ input received', '#22C55E') : ''}
-        ${inputsRaw.length ? badge(`📎 ${inputsRaw.length}`, '#0EA5E9') : ''}
-        ${t.priority && t.priority !== 'normal' ? badge(t.priority, t.priority === 'urgent' ? '#EF4444' : (t.priority === 'high' ? '#EAB308' : '#94A3B8')) : ''}
-        ${(Array.isArray(t.tags) ? t.tags : []).filter(tag => tag !== 'chat').map(tag => badge('#' + tag, '#64748B')).join('')}
-        <button class="btn-icon task-del" data-del-task="${esc(t.id)}" title="Delete this task, its reports and artifacts"
-          style="margin-left:auto; padding:4px; background:none; border:none; cursor:pointer; line-height:0"><i data-lucide="trash-2" style="width:14px;height:14px;color:var(--text-muted)"></i></button>
+    const interactionHtml = this.interactionBlock(t);
+
+    const chain = failedAgents.map(f => ({ agent: f.agent, reason: f.reason || 'failed', ok: false }));
+    const lastFailed = failedAgents.length ? failedAgents[failedAgents.length - 1].agent : null;
+    if (agentLabel && agentLabel !== lastFailed) chain.push({ agent: agentLabel, ok: !failed, final: true });
+    const chainHtml = chain.length > 1 || (chain.length === 1 && !chain[0].ok) ? `<div class="dsh-section">
+      <div class="dsh-section-label">Agent chain</div>
+      <div style="display:flex;flex-direction:column;gap:5px">
+        ${chain.map((r, i) => `<div style="display:flex;align-items:center;gap:8px;font-size:12.5px">
+          <span style="width:14px;text-align:right;color:var(--dsw-label-caption);font-variant-numeric:tabular-nums">${i + 1}</span>
+          <span class="dsh-tag${r.ok ? ' is-success' : (r.final ? ' is-business' : ' is-error')}">${r.ok ? '✓' : (r.final ? '●' : '✗')} ${esc(r.agent)}</span>
+          ${r.reason ? `<span style="color:var(--dsw-label-tertiary)">${esc(r.reason)}</span>` : ''}
+        </div>`).join('')}
       </div>
-      <div style="margin:7px 0 3px"><strong style="font-size:1.02rem">${esc(t.title)}</strong></div>
-      ${chainHtml}
-      ${pendingHtml}
-      ${autoRerunHtml}
-      <div class="task-meta" style="display:block; margin:2px 0 4px">${esc(t.from?.platform || '?')}/${esc(t.from?.agent || '?')} · <span title="${esc(t.createdAt || '')}">${timeAgo(t.createdAt)}</span>
-        ${failed ? `<button class="btn" data-rerun-task="${esc(t.id)}" data-agent="${esc(c.agentAuto ? '' : (c.agent || ''))}" title="Re-run this task — pick which agent claims it"
-          style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#EF4444;border-color:#EF444466">↻ Re-run</button>` : ''}
-        ${t.status === 'pending' || t.status === 'scheduled' ? (() => {
-          const cooling = /^Rate-limited\b/.test(pendingReason);
-          const col = cooling ? '#F97316' : '#64748B';
-          return `<button class="btn" data-reassign-task="${esc(t.id)}" data-agent="${esc(c.agentAuto ? '' : (c.agent || ''))}" title="Reassign — move this not-yet-started task to another agent"
-          style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:${col};border-color:${col}66">⇄ Reassign${cooling ? ' agent' : ''}</button>`;
-        })() : ''}
-        ${['pending', 'claimed', 'in-progress', 'scheduled', 'wait-input'].includes(t.status) ? `<button class="btn" data-pause-task="${esc(t.id)}" title="Pause — move this task to the Paused queue (a running agent is stopped; brief, context and artifacts are kept). Resume it any time."
-          style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#F59E0B;border-color:#F59E0B66">⏸ Pause</button>` : ''}
-        ${t.status === 'paused' ? `<button class="btn" data-resume-task="${esc(t.id)}" title="Resume — put this task back where it was (${esc(c.pausedFrom || 'pending')}) so it runs again"
-          style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#22C55E;border-color:#22C55E66">▶ Resume</button>` : ''}
-        ${t.status === 'scheduled' ? `<button class="btn" data-run-now-task="${esc(t.id)}" title="Run now — release this scheduled task immediately instead of waiting for its run time"
-          style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#6366F1;border-color:#6366F166">▶ Run now</button>` : ''}
-        ${t.status === 'done' && !failed ? (t.context?.continuedInto
-          ? `<button class="btn" disabled title="Already continued — a follow-up task was spawned from this run"
-          style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#22C55E99;border-color:#22C55E33;opacity:.6;cursor:default">✓ Continued</button>`
-          : `<button class="btn" data-continue-task="${esc(t.id)}" data-agent="${esc(agentLabel)}" title="Continue this task — spawn a follow-up seeded with this run's outputs; pick which agent claims it"
-          style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#22C55E;border-color:#22C55E66">▸ Continue</button>`) : ''}
-        ${(t.worktree && !t.worktree.merged && !t.worktree.discarded) ? `<button class="btn" data-worktree-merge="${esc(t.id)}" title="Merge branch ${esc(t.worktree.branch)} into the main checkout's current branch (refused on conflicts or a dirty main checkout)"
-          style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#22C55E;border-color:#22C55E66">⑂ Merge</button>
-        <button class="btn" data-worktree-discard="${esc(t.id)}" title="Discard this task's worktree and delete branch ${esc(t.worktree.branch)}"
-          style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#EF4444;border-color:#EF444466">🗑 Discard</button>` : ''}
-        ${isTaskEditable(t) ? `<button class="btn" data-edit-task="${esc(t.id)}" title="Edit this task — change its title, brief, agent, thinking, schedule and loop interval, then save"
-          style="font-size:0.72rem;margin-left:8px;padding:2px 7px;color:#0EA5E9;border-color:#0EA5E966">✎ Edit</button>` : ''}</div>
-      ${this.recipeTaskCardHTML ? this.recipeTaskCardHTML(t, failed) : ''}
-      ${parentLink ? `<div style="padding:4px 0 2px; font-size:0.72rem">${parentLink}</div>` : ''}
-      ${(() => {
-        // RESULT / OUTPUTS / ARTIFACTS / INPUTS live in one collapsible block, HIDDEN by
-        // default — long file lists used to bury the card. Tapping anywhere on
-        // the card toggles it (delegated .task-card handler in the constructor);
-        // per-card open state is kept in this.taskFilesOpen so in-place
-        // re-renders restore the user's choice instead of collapsing everything.
-        // The human-in-the-loop interaction form rides in the SAME block, in the
-        // LAST position (after INPUTS), so it is hidden by default with the same
-        // tap-to-toggle behaviour; the card's "⌛ awaiting input" / "✓ input
-        // received" badge above keeps it discoverable while collapsed.
-        // The task ID / artifacts-folder row and the acceptance criteria ride at
-        // the TOP of the same block — hidden by default, revealed on tap.
-        const idsHtml = `<div class="task-ids" style="display:flex; flex-wrap:wrap; align-items:center; gap:12px; padding:4px 0 2px; font-size:0.72rem; color:var(--text-muted)">
-          <span class="copyable" data-copy="${esc(t.id)}" title="Task ID — click to copy" style="cursor:pointer; font-family:ui-monospace,SFMono-Regular,Menlo,monospace">
-            <i data-lucide="hash" style="width:11px;height:11px;vertical-align:-1px"></i>${esc(t.id)}</span>
-          <span class="copyable" data-copy="artifacts/${esc(t.id)}/" title="Artifacts directory — click to copy" style="cursor:pointer; font-family:ui-monospace,SFMono-Regular,Menlo,monospace">
-            <i data-lucide="folder" style="width:11px;height:11px;vertical-align:-1px"></i>artifacts/${esc(t.id)}/</span>
-        </div>`;
-        const hasAcceptance = Array.isArray(c.acceptance) && c.acceptance.length > 0;
-        const acceptanceHtml = hasAcceptance ? `<div class="task-acceptance" style="margin:6px 0; padding:6px 10px; background:var(--bg-tertiary); border:1px solid var(--border-color); border-radius:8px; font-size:0.8rem">
-          <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px">
-            <span style="font-weight:600; text-transform:uppercase; letter-spacing:.03em; color:var(--text-muted); font-size:0.72rem">Acceptance criteria</span>
-            ${c.acceptanceSource === 'sharpened' ? `<span class="badge" title="Generated by brief sharpener" style="background:#0EA5E918; color:#0EA5E9; border:1px solid #0EA5E940; font-size:0.68rem">sharpened</span>` : ''}
+    </div>` : '';
+
+    const hasAcceptance = Array.isArray(c.acceptance) && c.acceptance.length > 0;
+    const acceptanceHtml = hasAcceptance ? `<div class="dsh-section">
+      <div class="dsh-section-label">Acceptance criteria ${c.acceptanceSource === 'sharpened' ? `<span class="dsh-tag is-business">sharpened</span>` : ''}</div>
+      <ul style="margin:0;padding-left:18px;font-size:13px;line-height:1.55;color:var(--dsw-label-secondary)">
+        ${c.acceptance.map(a => `<li>${esc(a)}</li>`).join('')}
+      </ul>
+    </div>` : '';
+
+    const resultHtml = hasResult ? `<div class="dsh-section">
+      <div class="dsh-section-label">Result <span style="margin-left:auto">${artifactChip(t.id, 'result.md', '0.78rem')}</span></div>
+      ${t.result ? `<div class="dsh-result-preview">${md(String(t.result).slice(0, 4000))}</div>`
+        : `<div class="dsh-result-preview" data-inline-result="${esc(t.id)}">Loading result preview…</div>`}
+    </div>` : '';
+
+    const outsHtml = outs.length ? `<div class="dsh-section">
+      <div class="dsh-section-label">Outputs (${outs.length})</div>
+      <div class="dsh-chips">${artifactChips(t.id, outs, '0.85rem', 'outputs')}</div>
+    </div>` : '';
+
+    const artsHtml = arts.length ? `<div class="dsh-section">
+      <div class="dsh-section-label">Artifacts (${Math.max(arts.length, t.artifactsTotal || 0)})</div>
+      <div class="dsh-chips">${artifactChips(t.id, arts, '0.83rem', 'artifacts', t.artifactsTotal)}</div>
+    </div>` : '';
+
+    const inputsHtml = (inputs.length || canAttach) ? `<div class="dsh-section">
+      <div class="dsh-section-label">Inputs</div>
+      <div class="dsh-chips">
+        ${inputs.map(f => artifactChip(t.id, f, '0.82rem', 'inputs')).join('')}
+        ${canAttach ? `<input type="file" data-attach-files="${esc(t.id)}" multiple style="display:none">
+          <button type="button" class="dsh-btn-ghost" data-attach-input="${esc(t.id)}" title="Attach files for the agent to read">＋ Attach files</button>` : ''}
+      </div>
+    </div>` : '';
+
+    const recipeBar = this.recipeTaskCardHTML ? this.recipeTaskCardHTML(t, failed) : '';
+
+    return `
+      <div class="dsh-detail-bar" data-detail-task="${esc(t.id)}">
+        <div class="dsh-detail-bar-left">
+          <button type="button" class="dsh-back-btn" id="task-detail-back"><i data-lucide="arrow-left"></i><span>Tasks</span></button>
+          <span class="dsh-dot" data-state="${esc(stateKey)}"></span>
+          <span style="font-size:13px;font-weight:500;color:var(--dsw-label-secondary);white-space:nowrap">${esc(stateLabel)}</span>
+          ${goalCrumb}
+        </div>
+        <div class="dsh-detail-bar-actions">
+          ${primaryBtns.join('')}
+          <details class="dsh-menu">
+            <summary aria-label="More task actions"><i data-lucide="ellipsis"></i></summary>
+            <div class="dsh-menu-body">${menuItems.join('')}</div>
+          </details>
+          <button type="button" class="dsh-icon-btn" id="task-detail-close" aria-label="Close detail" title="Close"><i data-lucide="x"></i></button>
+        </div>
+      </div>
+      <div id="task-inline-drawer" class="dsh-inline-drawer" hidden></div>
+      <div class="dsh-detail-scroll">
+        <div class="dsh-title-row" id="task-title-row">
+          <h2 class="dsh-detail-title">${esc(t.title)}</h2>
+          ${isTaskEditable(t) ? `<button type="button" class="dsh-icon-btn" id="task-inline-rename-btn" title="Rename task inline" aria-label="Rename task inline"><i data-lucide="pencil-line"></i></button>` : ''}
+        </div>
+        <div class="dsh-detail-sub">
+          <span>${esc(t.from?.platform || '?')}/${esc(t.from?.agent || '?')}</span>
+          <span class="dsh-meta-sep">·</span>
+          <span title="${esc(t.createdAt || '')}">Created ${timeAgo(t.createdAt)}</span>
+          ${t.completedAt ? `<span class="dsh-meta-sep">·</span><span title="${esc(t.completedAt)}">Done ${timeAgo(t.completedAt)}</span>` : ''}
+        </div>
+        ${(subTags || parentLink) ? `<div class="dsh-chips" style="margin-bottom:14px">${subTags}${parentLink}</div>` : ''}
+        ${progressHtml}
+        ${pendingHtml}
+        ${autoRerunHtml}
+        ${interactionHtml}
+        ${resultHtml}
+        ${outsHtml}
+        ${artsHtml}
+        ${inputsHtml}
+        ${acceptanceHtml}
+        ${chainHtml}
+        ${recipeBar ? `<div class="dsh-section">${recipeBar}</div>` : ''}
+        <div class="dsh-section">
+          <div class="dsh-section-label">Details</div>
+          <div class="dsh-kv">
+            <div class="dsh-kv-row"><span class="dsh-kv-k">Task ID</span><span class="dsh-kv-v copyable" data-copy="${esc(t.id)}" title="Click to copy" style="cursor:pointer">${esc(t.id)}</span></div>
+            <div class="dsh-kv-row"><span class="dsh-kv-k">Artifacts</span><span class="dsh-kv-v copyable" data-copy="artifacts/${esc(t.id)}/" title="Click to copy" style="cursor:pointer">artifacts/${esc(t.id)}/</span></div>
+            ${t.claimedBy ? `<div class="dsh-kv-row"><span class="dsh-kv-k">Claimed by</span><span class="dsh-kv-v">${esc(this.workerLabel(t.claimedBy))}</span></div>` : ''}
           </div>
-          <ul style="margin:0; padding-left:16px; color:var(--text-secondary); line-height:1.4">
-            ${c.acceptance.map(a => `<li>${esc(a)}</li>`).join('')}
-          </ul>
-        </div>` : '';
-        const sectionStyle = 'display:flex; flex-wrap:wrap; align-items:center; gap:4px; padding:4px 0 2px';
-        const sectionLabel = (text, size) => `<span style="font-size:${size}; color:var(--text-muted); margin-right:2px; text-transform:uppercase; letter-spacing:.03em">${text}</span>`;
-        const resultHtml = hasResult ? `<div class="task-result" style="${sectionStyle}">${sectionLabel('Result', '0.85rem')}${artifactChip(t.id, 'result.md', '0.9rem')}</div>` : '';
-        const outsHtml = outs.length ? `<div class="task-outputs" style="${sectionStyle}">${sectionLabel('Outputs', '0.85rem')}${artifactChips(t.id, outs, '0.9rem', 'outputs')}</div>` : '';
-        const artsHtml = arts.length ? `<div class="task-artifacts" style="${sectionStyle}">${sectionLabel('Artifacts', '0.85rem')}${artifactChips(t.id, arts, '0.9rem', 'artifacts', t.artifactsTotal)}</div>` : '';
-        const inputsHtml = (inputs.length || canAttach) ? `<div class="task-inputs" style="${sectionStyle}">${sectionLabel('Inputs', '0.72rem')}${inputs.map(f => artifactChip(t.id, f, '0.78rem', 'inputs')).join('')}${canAttach ? `<input type="file" data-attach-files="${esc(t.id)}" multiple style="display:none">
-        <button class="btn" data-attach-input="${esc(t.id)}" title="Attach files for the agent to read" style="font-size:0.75rem;margin:0">＋ Attach files</button>` : ''}</div>` : '';
-        // The interaction form (if any) is the LAST section inside the block.
-        const interactionHtml = this.interactionBlock(t);
-        const filesOpen = this.taskFilesOpen ? this.taskFilesOpen.has(t.id) : false;
-        const nFiles = (hasResult ? 1 : 0) + outs.length + Math.max(arts.length, t.artifactsTotal || 0) + inputs.length;
-        const headParts = [];
-        if (progressHtml) headParts.push('live progress');
-        if (nFiles) headParts.push(`${nFiles} file${nFiles === 1 ? '' : 's'}`);
-        else if (!interactionHtml && !progressHtml) headParts.push('Details');
-        if (hasAcceptance) headParts.push('acceptance');
-        if (canAttach) headParts.push('＋ attach');
-        if (interactionHtml) headParts.push('input');
-        return `<div class="task-files" data-task-files="${esc(t.id)}"${filesOpen ? '' : ' hidden'} style="margin-top:2px">
-          <div class="task-files-head" role="button" tabindex="0" aria-expanded="${filesOpen}" title="Tap the card to show / hide the live progress, task ID, acceptance criteria, files & input form" style="display:flex; align-items:center; gap:5px; padding:4px 0; cursor:pointer; user-select:none">
-            <span class="task-files-caret" style="font-size:0.72rem; color:var(--text-muted)">${filesOpen ? '▾' : '▸'}</span>
-            <span style="font-size:0.72rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:.03em">${headParts.join(' · ')}</span>
-          </div>
-          ${progressHtml}
-          ${idsHtml}
-          ${acceptanceHtml}
-          ${resultHtml}
-          ${outsHtml}
-          ${artsHtml}
-          ${inputsHtml}
-          ${interactionHtml}
+        </div>
+      </div>`;
+  }
+
+  closeTaskInlineDrawer() {
+    const drawer = this.contentEl?.querySelector('#task-inline-drawer');
+    if (!drawer) return;
+    drawer.hidden = true;
+    drawer.classList.remove('is-danger');
+    drawer.innerHTML = '';
+  }
+
+  // Inline action drawers inside #task-detail-pane — replaces blocking modals & window.confirm()
+  async openTaskInlineDrawer(kind, taskId, opts = {}) {
+    const drawer = this.contentEl?.querySelector('#task-inline-drawer');
+    if (!drawer) return;
+    const t = this._inboxTasksById?.get(taskId) || await this.api.get(`/inbox/${encodeURIComponent(taskId)}`).catch(() => null);
+    if (!t) { this.toast('error', 'Task not found'); return; }
+
+    drawer.hidden = false;
+    drawer.classList.toggle('is-danger', kind === 'confirm-delete' || kind === 'confirm-worktree-discard');
+
+    const closeBtn = `<button type="button" class="dsh-icon-btn" data-drawer-close aria-label="Close"><i data-lucide="x"></i></button>`;
+    const bindClose = () => {
+      drawer.querySelectorAll('[data-drawer-close]').forEach(b => b.addEventListener('click', () => this.closeTaskInlineDrawer()));
+      createIcons(drawer);
+    };
+
+    // 1) Inline confirmation bars (Pause, Run now, Delete, Worktree merge/discard)
+    if (kind === 'confirm-pause' || kind === 'confirm-run-now' || kind === 'confirm-delete' || kind === 'confirm-worktree-merge' || kind === 'confirm-worktree-discard') {
+      const cfg = {
+        'confirm-pause': {
+          title: 'Pause this task?',
+          desc: 'A running agent is stopped; the task keeps its brief, context and artifacts until you resume it.',
+          btnLabel: '⏸ Pause task',
+          btnCls: 'dsh-btn-primary',
+          run: async () => {
+            const out = await this.api.post(`/inbox/${encodeURIComponent(taskId)}/pause`, {});
+            this.toast('paused', `Paused (was ${out.from}).`);
+            this.closeTaskInlineDrawer();
+            await this.patchInboxTasks([taskId]);
+          }
+        },
+        'confirm-run-now': {
+          title: 'Run scheduled task now?',
+          desc: 'Releases this task immediately to pending instead of waiting for its scheduled time.',
+          btnLabel: '▶ Run now',
+          btnCls: 'dsh-btn-primary',
+          run: async () => {
+            const res = await this.api.post(`/inbox/${encodeURIComponent(taskId)}/run-now`, {});
+            this.toast('running now', res.status === 'wait-input' ? 'Released — waiting for input.' : 'Released to pending.');
+            this.closeTaskInlineDrawer();
+            await this.patchInboxTasks([taskId]);
+          }
+        },
+        'confirm-delete': {
+          title: 'Delete this task?',
+          desc: `Permanently removes "${t.title}" along with its reports and artifacts. This cannot be undone.`,
+          btnLabel: 'Delete task',
+          btnCls: 'dsh-btn-ghost is-danger',
+          run: async () => {
+            const r = await this.api.del(`/inbox/${encodeURIComponent(taskId)}`);
+            this.toast('task deleted', `${r.reports} report(s)${r.artifacts ? ' + artifacts' : ''} removed`);
+            this._inboxTasksById?.delete(taskId);
+            this.closeTaskInlineDrawer();
+            if (this.selectedTaskId === taskId) this.selectInboxTask(null);
+            await this.renderInbox({ soft: true });
+          }
+        },
+        'confirm-worktree-merge': {
+          title: `Merge branch ${t.worktree?.branch || ''}?`,
+          desc: 'Merges this task\'s branch into the main checkout\'s current branch.',
+          btnLabel: '⑂ Merge branch',
+          btnCls: 'dsh-btn-primary',
+          run: async () => {
+            const out = await this.api.post(`/inbox/${encodeURIComponent(taskId)}/worktree/merge`, {});
+            this.toast('merged', out?.message || 'done');
+            this.closeTaskInlineDrawer();
+            await this.patchInboxTasks([taskId]);
+          }
+        },
+        'confirm-worktree-discard': {
+          title: `Discard worktree ${t.worktree?.branch || ''}?`,
+          desc: 'Deletes the worktree and its branch. Any unmerged work will be lost.',
+          btnLabel: 'Discard worktree',
+          btnCls: 'dsh-btn-ghost is-danger',
+          run: async () => {
+            const out = await this.api.post(`/inbox/${encodeURIComponent(taskId)}/worktree/discard`, {});
+            this.toast('discarded', out?.message || 'done');
+            this.closeTaskInlineDrawer();
+            await this.patchInboxTasks([taskId]);
+          }
+        }
+      }[kind];
+
+      drawer.innerHTML = `
+        <div class="dsh-inline-drawer-head">
+          <h4 class="dsh-inline-drawer-title">${esc(cfg.title)}</h4>
+          ${closeBtn}
+        </div>
+        <div style="font-size:13px;color:var(--dsw-label-secondary)">${esc(cfg.desc)}</div>
+        <div class="dsh-inline-drawer-foot">
+          <span class="dsh-inline-err" id="tid-err"></span>
+          <button type="button" class="dsh-btn-ghost" data-drawer-close>Cancel</button>
+          <button type="button" class="${cfg.btnCls}" id="tid-ok">${esc(cfg.btnLabel)}</button>
         </div>`;
-      })()}
-      ${t.claimedBy ? `<p style="font-size:0.8rem; color:var(--text-muted); margin-top:8px">Claimed by ${esc(this.workerLabel(t.claimedBy))}${t.completedAt ? ` · completed <span title="${esc(t.completedAt)}">${timeAgo(t.completedAt)}</span>` : ''}</p>` : ''}
-    </div>`;
+      bindClose();
+      drawer.querySelector('#tid-ok')?.addEventListener('click', async (ev) => {
+        const btn = ev.currentTarget;
+        btn.disabled = true;
+        try { await cfg.run(); }
+        catch (err) {
+          btn.disabled = false;
+          const e = drawer.querySelector('#tid-err');
+          if (e) e.textContent = err.message;
+        }
+      });
+      return;
+    }
+
+    // Load agent & usage feeds for agent-picking / edit drawers
+    let agents = {}, usage = {};
+    await Promise.all([
+      this.api.get('/agents').then(r => { agents = r || {}; }).catch(() => {}),
+      this.api.get('/connections').then(r => { usage = r?.usage || {}; }).catch(() => {})
+    ]);
+    const ctx = t.context || {};
+    const curAgent = opts.defaultAgent !== undefined ? opts.defaultAgent : (ctx.agentAuto ? '' : (ctx.agent || ''));
+    const curSelectable = curAgent && !agents[curAgent]?.disabled;
+    const agentOpts = [`<option value=""${curSelectable ? '' : ' selected'}>Auto — route via agent chain</option>`]
+      .concat(selectableAgentIds(agents).map(b => {
+        const until = agentCooldownUntil(usage[b], agents[b]?.model || b);
+        const note = until ? ` (rate-limited until ${until.toLocaleString()})` : '';
+        return `<option value="${esc(b)}"${b === curAgent ? ' selected' : ''}>${esc(b + note)}</option>`;
+      })).join('');
+
+    // 2) Continue / Re-run / Reassign inline drawer
+    if (kind === 'continue' || kind === 'rerun' || kind === 'reassign') {
+      const isContinue = kind === 'continue';
+      const isReassign = kind === 'reassign';
+      const heading = isContinue ? 'Continue task' : (isReassign ? 'Reassign agent' : 'Re-run failed task');
+      const submitLabel = isContinue ? '▸ Queue follow-up' : (isReassign ? '⇄ Reassign' : '↻ Re-run');
+      drawer.innerHTML = `
+        <div class="dsh-inline-drawer-head">
+          <h4 class="dsh-inline-drawer-title">${esc(heading)}</h4>
+          ${closeBtn}
+        </div>
+        ${isContinue ? `<div class="dsh-inline-field">
+          <label for="tid-prompt">Follow-up instructions (optional)</label>
+          <textarea id="tid-prompt" rows="3" placeholder="Steer the follow-up task…"></textarea>
+        </div>` : ''}
+        <div class="dsh-inline-drawer-grid">
+          <div class="dsh-inline-field">
+            <label for="tid-agent">Agent</label>
+            <select id="tid-agent">${agentOpts}</select>
+          </div>
+          <div class="dsh-inline-field">
+            <label for="tid-thinking">Thinking</label>
+            <select id="tid-thinking">${thinkingOptions(ctx.thinking || '')}</select>
+          </div>
+          ${!isReassign ? `<div class="dsh-inline-field">
+            <label for="tid-when">Run at (empty = now)</label>
+            <input id="tid-when" type="datetime-local">
+          </div>` : ''}
+        </div>
+        ${isContinue ? `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <input type="file" id="tid-files" multiple style="display:none">
+          <button type="button" class="dsh-btn-ghost" id="tid-attach"><i data-lucide="paperclip"></i><span>Attach files</span></button>
+          <span id="tid-file-list" style="font-size:12px;color:var(--dsw-label-tertiary)"></span>
+        </div>` : ''}
+        <div class="dsh-inline-drawer-foot">
+          <span class="dsh-inline-err" id="tid-err"></span>
+          <button type="button" class="dsh-btn-ghost" data-drawer-close>Cancel</button>
+          <button type="button" class="dsh-btn-primary" id="tid-ok">${esc(submitLabel)}</button>
+        </div>`;
+      bindClose();
+      const staged = [];
+      if (isContinue) {
+        const fi = drawer.querySelector('#tid-files');
+        const fl = drawer.querySelector('#tid-file-list');
+        drawer.querySelector('#tid-attach')?.addEventListener('click', () => fi.click());
+        fi?.addEventListener('change', () => {
+          staged.push(...Array.from(fi.files || []));
+          fi.value = '';
+          if (fl) fl.textContent = staged.length ? staged.map(f => f.name).join(', ') : '';
+        });
+        drawer.querySelector('#tid-prompt')?.focus();
+      }
+      drawer.querySelector('#tid-ok')?.addEventListener('click', async (ev) => {
+        const btn = ev.currentTarget;
+        const errEl = drawer.querySelector('#tid-err');
+        btn.disabled = true;
+        errEl.textContent = '';
+        try {
+          const agent = drawer.querySelector('#tid-agent').value;
+          const thinking = drawer.querySelector('#tid-thinking').value;
+          const when = drawer.querySelector('#tid-when')?.value || '';
+          const body = { agent };
+          if (thinking) body.thinking = thinking;
+          if (when) body.scheduledAt = new Date(when).toISOString();
+          if (isContinue) {
+            const prompt = drawer.querySelector('#tid-prompt')?.value.trim() || '';
+            if (prompt) body.prompt = prompt;
+            if (staged.length) body.inputs = await this.uploadInputFiles(staged);
+            const created = await this.api.post(`/inbox/${encodeURIComponent(taskId)}/continue`, body);
+            this.toast('continuing', 'Follow-up queued.');
+            this.closeTaskInlineDrawer();
+            const newId = created?.id || created?.task?.id;
+            await this.renderInbox({ soft: true });
+            if (newId) await this.selectInboxTask(newId);
+          } else if (isReassign) {
+            await this.api.post(`/inbox/${encodeURIComponent(taskId)}/reassign`, body);
+            this.toast('reassigned', agent ? `Pinned to ${agent}.` : 'Auto-routed via agent chain.');
+            this.closeTaskInlineDrawer();
+            await this.patchInboxTasks([taskId]);
+          } else {
+            await this.api.post(`/inbox/${encodeURIComponent(taskId)}/rerun`, body);
+            this.toast('re-running', 'Reset to pending.');
+            this.closeTaskInlineDrawer();
+            await this.patchInboxTasks([taskId]);
+          }
+        } catch (err) {
+          btn.disabled = false;
+          errEl.textContent = err.message;
+        }
+      });
+      return;
+    }
+
+    // 3) Inline Edit Drawer (replaces editTaskModal dead end)
+    if (kind === 'edit') {
+      if (!isTaskEditable(t)) {
+        this.closeTaskInlineDrawer();
+        this.toast('cannot edit', `Task is ${t.status} — only tasks that are not running or pending can be edited.`);
+        return;
+      }
+      const prioOpts = ['normal', 'low', 'high', 'urgent']
+        .map(p => `<option value="${p}"${(t.priority || 'normal') === p ? ' selected' : ''}>${p}</option>`).join('');
+      const fieldStyle = 'width:100%;min-height:34px;padding:6px 10px;border:1px solid var(--dsw-border-l3);border-radius:var(--dsw-radius-md);background:var(--dsw-bg-base);color:var(--dsw-label-primary);font:inherit;font-size:13px';
+      const labelStyle = 'display:block;font-size:11.5px;font-weight:500;color:var(--dsw-label-tertiary);margin:0 0 4px';
+      drawer.innerHTML = `
+        <div class="dsh-inline-drawer-head">
+          <h4 class="dsh-inline-drawer-title">Edit task</h4>
+          ${closeBtn}
+        </div>
+        <div class="dsh-inline-field">
+          <label for="ie-title">Title</label>
+          <input id="ie-title" value="${esc(t.title || '')}">
+        </div>
+        <div class="dsh-inline-field">
+          <label for="ie-desc">Brief (markdown)</label>
+          <textarea id="ie-desc" rows="5">${esc(t.description || '')}</textarea>
+        </div>
+        ${(ctx.acceptance && Array.isArray(ctx.acceptance)) ? `<div class="dsh-inline-field">
+          <label for="ie-acceptance">Acceptance criteria (one per line)</label>
+          <textarea id="ie-acceptance" rows="3">${esc(ctx.acceptance.join('\n'))}</textarea>
+        </div>` : ''}
+        <div class="dsh-inline-drawer-grid">
+          <div class="dsh-inline-field">
+            <label for="ie-priority">Priority</label>
+            <select id="ie-priority">${prioOpts}</select>
+          </div>
+          <div class="dsh-inline-field">
+            <label for="ie-when">Run at (empty = now)</label>
+            <input id="ie-when" type="datetime-local" value="${esc(isoToLocalInput(t.scheduledAt))}">
+          </div>
+          <div class="dsh-inline-field">
+            <label for="ie-agent">Agent</label>
+            <select id="ie-agent">${agentOpts}</select>
+          </div>
+          <div class="dsh-inline-field">
+            <label for="ie-thinking">Thinking</label>
+            <select id="ie-thinking">${thinkingOptions(ctx.thinking || '')}</select>
+          </div>
+        </div>
+        ${recurrenceEditorHTML('ie-rec', fieldStyle, labelStyle, t.recurrence || (t.loopIntervalHours ? { type: 'hours', interval: t.loopIntervalHours } : null))}
+        <div class="dsh-inline-drawer-foot">
+          <span class="dsh-inline-err" id="tid-err"></span>
+          <button type="button" class="dsh-btn-ghost" data-drawer-close>Cancel</button>
+          <button type="button" class="dsh-btn-primary" id="tid-ok">Save changes</button>
+        </div>`;
+      bindClose();
+      recurrenceEditorBind(drawer, 'ie-rec');
+      drawer.querySelector('#ie-title')?.focus();
+      drawer.querySelector('#tid-ok')?.addEventListener('click', async (ev) => {
+        const btn = ev.currentTarget;
+        const errEl = drawer.querySelector('#tid-err');
+        const title = drawer.querySelector('#ie-title').value.trim();
+        const description = drawer.querySelector('#ie-desc').value.trim();
+        if (!title) { errEl.textContent = 'Title is required.'; drawer.querySelector('#ie-title').focus(); return; }
+        if (!description) { errEl.textContent = 'Brief is required.'; drawer.querySelector('#ie-desc').focus(); return; }
+        btn.disabled = true;
+        errEl.textContent = '';
+        const agent = drawer.querySelector('#ie-agent').value;
+        const thinking = drawer.querySelector('#ie-thinking').value;
+        const when = drawer.querySelector('#ie-when').value;
+        const recurrence = readRecurrence(drawer, 'ie-rec');
+        const accEl = drawer.querySelector('#ie-acceptance');
+        const acceptance = accEl ? accEl.value.split('\n').map(s => s.trim()).filter(Boolean) : undefined;
+        const context = { agent, thinking };
+        if (title !== (t.title || '') || description !== (t.description || '').trim()) {
+          context.persona = '';
+          context.division = '';
+        }
+        try {
+          const updated = await this.api.post(`/inbox/${encodeURIComponent(taskId)}/edit`, {
+            title, description,
+            priority: drawer.querySelector('#ie-priority').value,
+            context,
+            ...(acceptance !== undefined ? { acceptance } : {}),
+            scheduledAt: when ? new Date(when).toISOString() : '',
+            recurrence: recurrence || null
+          });
+          this.toast('task updated', `Saved — now ${updated.status}.`);
+          this.closeTaskInlineDrawer();
+          await this.patchInboxTasks([taskId]);
+        } catch (err) {
+          btn.disabled = false;
+          errEl.textContent = err.message;
+        }
+      });
+    }
+  }
+
+  // Inline New Task Composer right inside #task-detail-pane (keeps task list visible on left!)
+  async openInlineNewTask(prefill = {}) {
+    const page = this.contentEl?.querySelector('#tasks-page');
+    const detailPane = this.contentEl?.querySelector('#task-detail-pane');
+    if (!page || !detailPane) return this.createTaskModal(prefill);
+
+    this._taskComposerOpen = true;
+    page.dataset.mode = 'detail';
+    detailPane.classList.remove('is-empty');
+    this.contentEl.querySelectorAll('.task-card.is-selected').forEach(el => {
+      el.classList.remove('is-selected');
+      el.setAttribute('aria-current', 'false');
+    });
+
+    let agents = {}, usage = {};
+    let pstack = { playbooks: ['investigation', 'bug-fix', 'feature', 'research-report', 'content', 'ops-change',
+      'technical-writing', 'perf-issue', 'refactoring', 'prototype', 'runtime-forensics', 'eval', 'opening-a-pr', 'babysit'], skills: [] };
+    await Promise.all([
+      this.api.get('/agents').then(r => { agents = r || {}; }).catch(() => {}),
+      this.api.get('/connections').then(r => { usage = r?.usage || {}; }).catch(() => {}),
+      this.api.get('/pstack').then(r => { pstack = r || pstack; }).catch(() => {})
+    ]);
+    if (!this._taskComposerOpen) return;
+
+    const methodOpts = [`<option value="">none</option>`]
+      .concat((pstack.playbooks || []).map(k => `<option value="${esc(k)}">${esc(k)}</option>`)).join('');
+    const skillOpts = [`<option value="">${(pstack.skills || []).length ? 'none' : 'none'}</option>`]
+      .concat((pstack.skills || []).map(k => `<option value="${esc(k)}">${esc(k)}</option>`)).join('');
+    const agentOpts = [`<option value="">Auto — route via agent chain</option>`]
+      .concat(selectableAgentIds(agents).map(b => {
+        const until = agentCooldownUntil(usage[b], agents[b]?.model || b);
+        const note = until ? ` (rate-limited until ${until.toLocaleString()})` : '';
+        return `<option value="${esc(b)}">${esc(b + note)}</option>`;
+      })).join('');
+
+    const fieldStyle = 'width:100%;min-height:34px;padding:6px 10px;border:1px solid var(--dsw-border-l3);border-radius:var(--dsw-radius-md);background:var(--dsw-bg-layer-1);color:var(--dsw-label-primary);font:inherit;font-size:13px';
+    const labelStyle = 'display:block;font-size:12px;font-weight:500;color:var(--dsw-label-secondary);margin:0 0 4px';
+
+    detailPane.innerHTML = `
+      <div class="dsh-detail-bar">
+        <div class="dsh-detail-bar-left">
+          <button type="button" class="dsh-back-btn" id="nt-inline-back"><i data-lucide="arrow-left"></i><span>Tasks</span></button>
+          <span style="font-size:13.5px;font-weight:600;color:var(--dsw-label-primary)">New task</span>
+        </div>
+        <div class="dsh-detail-bar-actions">
+          <button type="button" class="dsh-btn-ghost" id="nt-inline-cancel">Cancel</button>
+          <button type="button" class="dsh-btn-primary" id="nt-inline-ok"><i data-lucide="plus"></i><span>Create task</span></button>
+        </div>
+      </div>
+      <div class="dsh-detail-scroll">
+        <form id="nt-inline-form" class="gv-form" novalidate style="max-width:680px">
+          <div class="dsh-inline-field">
+            <label for="nt-title">Title *</label>
+            <input id="nt-title" placeholder="Short imperative title…" autocomplete="off" value="${esc(prefill.title || '')}">
+          </div>
+          <div class="dsh-inline-field">
+            <label for="nt-desc">Brief (markdown) *</label>
+            <textarea id="nt-desc" rows="6" placeholder="What should the agent do? Include acceptance criteria.">${esc(prefill.description || '')}</textarea>
+          </div>
+          <div class="dsh-inline-drawer-grid">
+            <div class="dsh-inline-field">
+              <label for="nt-priority">Priority</label>
+              <select id="nt-priority">
+                <option value="normal" selected>normal</option><option value="low">low</option>
+                <option value="high">high</option><option value="urgent">urgent</option>
+              </select>
+            </div>
+            <div class="dsh-inline-field">
+              <label for="nt-when">Run at (empty = now)</label>
+              <input id="nt-when" type="datetime-local" value="${esc(prefill.scheduledAt ? isoToLocalInput(prefill.scheduledAt) : '')}">
+            </div>
+            <div class="dsh-inline-field">
+              <label for="nt-agent">Agent</label>
+              <select id="nt-agent">${agentOpts}</select>
+            </div>
+            <div class="dsh-inline-field">
+              <label for="nt-thinking">Thinking</label>
+              <select id="nt-thinking">${thinkingOptions()}</select>
+            </div>
+          </div>
+          <details class="gv-more">
+            <summary>Schedule, method & attachments</summary>
+            <div style="display:flex;flex-direction:column;gap:10px;padding-top:6px">
+              ${recurrenceEditorHTML('nt-rec', fieldStyle, labelStyle, null)}
+              <div class="dsh-inline-drawer-grid">
+                <div class="dsh-inline-field">
+                  <label for="nt-method">Method (pstack playbook)</label>
+                  <select id="nt-method">${methodOpts}</select>
+                </div>
+                <div class="dsh-inline-field">
+                  <label for="nt-review">Review</label>
+                  <select id="nt-review">
+                    <option value="" selected>none (default verifier)</option>
+                    <option value="llm">LLM reviewer</option>
+                    <option value="panel">panel</option>
+                    <option value="arena">arena</option>
+                  </select>
+                </div>
+                <div class="dsh-inline-field">
+                  <label for="nt-skill">pstack skill</label>
+                  <select id="nt-skill"${(pstack.skills || []).length ? '' : ' disabled'}>${skillOpts}</select>
+                </div>
+              </div>
+              <div>
+                <div id="nt-attachments" style="display:none;flex-wrap:wrap;gap:6px;margin-bottom:8px"></div>
+                <input type="file" id="nt-files" multiple style="display:none">
+                <button class="dsh-btn-ghost" id="nt-attach" type="button"><i data-lucide="paperclip"></i><span>Attach input files</span></button>
+              </div>
+            </div>
+          </details>
+          <div class="dsh-inline-drawer-foot" style="justify-content:flex-start">
+            <span class="dsh-inline-err" id="nt-error" role="alert"></span>
+          </div>
+        </form>
+      </div>`;
+    createIcons(detailPane);
+    recurrenceEditorBind(detailPane, 'nt-rec');
+    detailPane.querySelector('#nt-title')?.focus();
+
+    const cancelComposer = () => {
+      this._taskComposerOpen = false;
+      if (this.selectedTaskId && this._inboxTasksById?.has(this.selectedTaskId)) {
+        this.selectInboxTask(this.selectedTaskId, { quiet: true });
+      } else {
+        this.selectInboxTask(null);
+      }
+    };
+    detailPane.querySelector('#nt-inline-back')?.addEventListener('click', cancelComposer);
+    detailPane.querySelector('#nt-inline-cancel')?.addEventListener('click', cancelComposer);
+
+    const staged = [];
+    const attBox = detailPane.querySelector('#nt-attachments');
+    const fileEl = detailPane.querySelector('#nt-files');
+    const renderStaged = () => {
+      if (!staged.length) { attBox.style.display = 'none'; attBox.innerHTML = ''; return; }
+      attBox.style.display = 'flex';
+      attBox.innerHTML = staged.map((f, i) => `<span class="dsh-tag">${esc(f.name)} (${fmtBytes(f.size)}) <button type="button" data-nt-rm="${i}" style="border:0;background:none;color:inherit;cursor:pointer;padding:0 2px">×</button></span>`).join('');
+      attBox.querySelectorAll('[data-nt-rm]').forEach(el => el.addEventListener('click', () => { staged.splice(Number(el.dataset.ntRm), 1); renderStaged(); }));
+    };
+    detailPane.querySelector('#nt-attach')?.addEventListener('click', () => fileEl.click());
+    fileEl?.addEventListener('change', () => { staged.push(...Array.from(fileEl.files || [])); fileEl.value = ''; renderStaged(); });
+
+    const submit = async () => {
+      const titleEl = detailPane.querySelector('#nt-title');
+      const descEl = detailPane.querySelector('#nt-desc');
+      const errEl = detailPane.querySelector('#nt-error');
+      const okBtn = detailPane.querySelector('#nt-inline-ok');
+      const title = titleEl.value.trim();
+      const description = descEl.value.trim();
+      if (!title) { errEl.textContent = 'Title is required.'; titleEl.focus(); return; }
+      if (!description) { errEl.textContent = 'Brief is required — tell the agent what to do.'; descEl.focus(); return; }
+      okBtn.disabled = true;
+      errEl.textContent = '';
+      try {
+        const inputs = staged.length ? await this.uploadInputFiles(staged) : [];
+        const agent = detailPane.querySelector('#nt-agent').value;
+        const thinking = detailPane.querySelector('#nt-thinking').value;
+        const when = detailPane.querySelector('#nt-when').value;
+        const recurrence = readRecurrence(detailPane, 'nt-rec');
+        const method = detailPane.querySelector('#nt-method').value;
+        const review = detailPane.querySelector('#nt-review').value;
+        const skill = detailPane.querySelector('#nt-skill').value;
+        const context = {};
+        if (agent) context.agent = agent;
+        if (thinking) context.thinking = thinking;
+        if (method) context.playbook = method;
+        if (review === 'llm' || review === 'panel') context.review = review;
+        else if (review === 'arena') context.arena = { runners: 3 };
+        if (skill) context.skill = skill;
+        const created = await this.api.post('/inbox', {
+          title, description,
+          from: { platform: 'dashboard', agent: 'operator' },
+          priority: detailPane.querySelector('#nt-priority').value,
+          context,
+          ...(inputs.length ? { inputs } : {}),
+          ...(when ? { scheduledAt: new Date(when).toISOString() } : {}),
+          ...(recurrence ? { recurrence } : {})
+        });
+        this._taskComposerOpen = false;
+        this.toast('task created', when ? `Scheduled for ${new Date(when).toLocaleString()}.` : 'Queued.');
+        const newId = created?.id || created?.task?.id || null;
+        await this.renderInbox({ soft: true });
+        if (newId) await this.selectInboxTask(newId);
+      } catch (err) {
+        okBtn.disabled = false;
+        errEl.textContent = `Could not create the task: ${err.message}`;
+      }
+    };
+    detailPane.querySelector('#nt-inline-ok')?.addEventListener('click', submit);
+    detailPane.querySelector('#nt-inline-form')?.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); submit(); }
+    });
+  }
+
+  // Open a task in the right-hand DSH detail pane (or full-screen detail on mobile).
+  async selectInboxTask(id, { quiet = false } = {}) {
+    const page = this.contentEl.querySelector('#tasks-page');
+    const detailPane = this.contentEl.querySelector('#task-detail-pane');
+    if (!page || !detailPane) return;
+    this._taskComposerOpen = false;
+    if (!id) {
+      this.selectedTaskId = null;
+      this._saveTaskPrefs({ lastSelected: null });
+      if (window.location.hash.startsWith('#tasks/')) history.replaceState(null, '', '#tasks');
+      page.dataset.mode = 'list';
+      detailPane.classList.add('is-empty');
+      detailPane.innerHTML = `<div class="dsh-empty-detail"><i data-lucide="inbox"></i><p>Select a task to inspect its progress, outputs and actions.</p><button type="button" class="dsh-btn-primary" id="empty-new-task-btn"><i data-lucide="plus"></i><span>New task</span></button></div>`;
+      detailPane.querySelector('#empty-new-task-btn')?.addEventListener('click', () => this.openInlineNewTask());
+      this.contentEl.querySelectorAll('.task-card.is-selected').forEach(el => {
+        el.classList.remove('is-selected');
+        el.setAttribute('aria-current', 'false');
+      });
+      createIcons(detailPane);
+      return;
+    }
+    this.selectedTaskId = id;
+    this._saveTaskPrefs({ lastSelected: id });
+    const targetHash = `#tasks/${encodeURIComponent(id)}`;
+    if (window.location.hash !== targetHash && this.currentPage?.type === 'tasks') {
+      history.replaceState(null, '', targetHash);
+    }
+    page.dataset.mode = 'detail';
+    this.contentEl.querySelectorAll('.task-card[data-task]').forEach(el => {
+      const sel = el.dataset.task === id;
+      el.classList.toggle('is-selected', sel);
+      el.setAttribute('aria-current', sel ? 'true' : 'false');
+    });
+    let t = this._inboxTasksById?.get(id);
+    if (!t) {
+      try {
+        t = await this.api.get(`/inbox/${encodeURIComponent(id)}`);
+        if (t) (this._inboxTasksById ||= new Map()).set(id, t);
+      } catch (err) {
+        if (!quiet) {
+          detailPane.classList.add('is-empty');
+          detailPane.innerHTML = `<div class="dsh-empty-detail"><p>Could not load task: ${esc(err.message)}</p></div>`;
+        }
+        return;
+      }
+    }
+    if (this.selectedTaskId !== id) return;
+    // Preserve live progress terminal text & scroll when refreshing in place
+    const oldPre = detailPane.querySelector(`[data-progress="${CSS.escape(id)}"]`);
+    const savedProgressText = oldPre ? oldPre.textContent : null;
+    const savedProgressTop = oldPre ? oldPre.scrollTop : 0;
+
+    detailPane.classList.remove('is-empty');
+    detailPane.innerHTML = this.taskDetailHTML(t);
+    if (savedProgressText !== null) {
+      const newPre = detailPane.querySelector(`[data-progress="${CSS.escape(id)}"]`);
+      if (newPre) {
+        newPre.textContent = savedProgressText;
+        newPre.scrollTop = savedProgressTop;
+      }
+    }
+    detailPane.querySelector('#task-detail-back')?.addEventListener('click', () => this.selectInboxTask(null));
+    detailPane.querySelector('#task-detail-close')?.addEventListener('click', () => this.selectInboxTask(null));
+
+    // Inline Title Rename (DSH RenameSession / GoalBar pattern)
+    detailPane.querySelector('#task-inline-rename-btn')?.addEventListener('click', () => {
+      const row = detailPane.querySelector('#task-title-row');
+      if (!row) return;
+      row.outerHTML = `<form class="dsh-inline-title-form" id="task-inline-title-form">
+        <input type="text" id="task-inline-title-input" value="${esc(t.title || '')}" aria-label="Task title">
+        <button type="submit" class="dsh-btn-primary">Save</button>
+        <button type="button" class="dsh-btn-ghost" id="task-inline-title-cancel">Cancel</button>
+      </form>`;
+      const form = detailPane.querySelector('#task-inline-title-form');
+      const inp = detailPane.querySelector('#task-inline-title-input');
+      inp?.focus();
+      inp?.select();
+      const restore = () => this.selectInboxTask(id, { quiet: true });
+      detailPane.querySelector('#task-inline-title-cancel')?.addEventListener('click', restore);
+      inp?.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') { ev.preventDefault(); restore(); } });
+      form?.addEventListener('submit', async (ev) => {
+        ev.preventDefault();
+        const nextTitle = inp.value.trim();
+        if (!nextTitle || nextTitle === t.title) { restore(); return; }
+        try {
+          await this.api.post(`/inbox/${encodeURIComponent(id)}/edit`, {
+            title: nextTitle,
+            description: t.description || nextTitle
+          });
+          this.toast('renamed', nextTitle);
+          await this.patchInboxTasks([id]);
+        } catch (err) {
+          this.toast('error', err.message);
+          restore();
+        }
+      });
+    });
+
+    // Lazily fetch inline result.md preview when result is only on disk
+    const resEl = detailPane.querySelector(`[data-inline-result="${CSS.escape(id)}"]`);
+    if (resEl) {
+      fetch(`/api/artifacts/${encodeURIComponent(id)}/result.md`)
+        .then(r => (r.ok ? r.text() : Promise.reject(new Error('not found'))))
+        .then(txt => {
+          if (this.selectedTaskId !== id) return;
+          resEl.innerHTML = md(txt.slice(0, 4000));
+        })
+        .catch(() => { resEl.remove(); });
+    }
+
+    this.bindTaskCards(detailPane);
+    createIcons(detailPane);
+    this.ensureInboxProgressPoll();
   }
 
   // Wire one task card's buttons (or every card, with root = the list). Called
-  // on the full list by renderInbox and on a single fresh card by patchInboxTasks.
+  // on the detail pane by selectInboxTask. All destructive/multi-step actions open
+  // inline drawers inside the detail pane instead of blocking modals or window.confirm().
   bindTaskCards(root) {
-    // Delete one task (+ its reports and artifacts).
     root.querySelectorAll('[data-del-task]').forEach(b =>
-      b.addEventListener('click', async (e) => {
+      b.addEventListener('click', (e) => {
         e.stopPropagation();
-        const id = b.dataset.delTask;
-        const title = b.closest('[data-task]')?.dataset.title || id.slice(0, 8);
-        if (!confirm(`Delete this task and its reports/artifacts?\n\n${title}`)) return;
-        try {
-          const r = await this.api.del(`/inbox/${encodeURIComponent(id)}`);
-          this.toast('task deleted', `${r.reports} report(s)${r.artifacts ? ' + artifacts' : ''} removed`);
-          this.renderInbox();
-        } catch (err) { this.toast('error', err.message); }
+        b.closest('details.dsh-menu')?.removeAttribute('open');
+        this.openTaskInlineDrawer('confirm-delete', b.dataset.delTask);
       }));
 
-    // Re-run a failed task — pick which agent claims it, then reset to pending.
     root.querySelectorAll('[data-rerun-task]').forEach(b =>
-      b.addEventListener('click', async (e) => {
+      b.addEventListener('click', (e) => {
         e.stopPropagation();
-        const id = b.dataset.rerunTask;
-        const title = b.closest('[data-task]')?.dataset.title || id.slice(0, 8);
-        const choice = await this.pickAgent({
-          title: 'Re-run this failed task',
-          body: `<strong>${esc(title)}</strong> is reset to pending and dispatched again. Choose which agent should claim it — pick <em>Auto</em> to route from the top of the role's agent chain.`,
-          defaultAgent: b.dataset.agent || '',
-          confirmLabel: '↻ Re-run',
-          confirmColor: '#EF4444'
-        });
-        if (!choice) return;
-        b.disabled = true;
-        try {
-          const body = { agent: choice.agent };
-          if (choice.thinking) body.thinking = choice.thinking;
-          if (choice.scheduledAt) body.scheduledAt = choice.scheduledAt;
-          await this.api.post(`/inbox/${encodeURIComponent(id)}/rerun`, body);
-          const routeNote = choice.agent ? `pinned to ${choice.agent}` : 'auto-routed via the agent chain';
-          this.toast('re-running', choice.scheduledAt ? `Scheduled for ${new Date(choice.scheduledAt).toLocaleString()} — ${routeNote}.` : `Reset to pending — ${routeNote}.`);
-          this.renderInbox();
-        } catch (err) { this.toast('error', err.message); b.disabled = false; }
+        b.closest('details.dsh-menu')?.removeAttribute('open');
+        this.openTaskInlineDrawer('rerun', b.dataset.rerunTask, { defaultAgent: b.dataset.agent || '' });
       }));
 
-    // Reassign a pending/scheduled task (e.g. held on a rate-limited agent) to another agent.
     root.querySelectorAll('[data-reassign-task]').forEach(b =>
-      b.addEventListener('click', async (e) => {
+      b.addEventListener('click', (e) => {
         e.stopPropagation();
-        const id = b.dataset.reassignTask;
-        const title = b.closest('[data-task]')?.dataset.title || id.slice(0, 8);
-        const choice = await this.pickAgent({
-          title: 'Reassign to another agent',
-          body: `<strong>${esc(title)}</strong> hasn't started yet. Choose which agent should claim it instead — pick <em>Auto</em> to route from the top of the role's agent chain. Agents cooling down on a rate limit are marked ⏳.`,
-          defaultAgent: '',
-          confirmLabel: '⇄ Reassign',
-          confirmColor: '#F97316',
-          withSchedule: false
-        });
-        if (!choice) return;
-        b.disabled = true;
-        try {
-          await this.api.post(`/inbox/${encodeURIComponent(id)}/reassign`, { agent: choice.agent, ...(choice.thinking ? { thinking: choice.thinking } : {}) });
-          this.toast('reassigned', choice.agent ? `Pinned to ${choice.agent} — dispatched by the next tick.` : 'Auto-routed via the agent chain — dispatched by the next tick.');
-          this.renderInbox();
-        } catch (err) { this.toast('error', err.message); b.disabled = false; }
+        b.closest('details.dsh-menu')?.removeAttribute('open');
+        this.openTaskInlineDrawer('reassign', b.dataset.reassignTask, { defaultAgent: '' });
       }));
 
-    // Pause / resume — move a task into the Paused queue and back.
     root.querySelectorAll('[data-pause-task]').forEach(b =>
-      b.addEventListener('click', async (e) => {
+      b.addEventListener('click', (e) => {
         e.stopPropagation();
-        const id = b.dataset.pauseTask;
-        const card = b.closest('[data-task]');
-        const title = card?.dataset.title || id.slice(0, 8);
-        if (!confirm(`Pause this task?\n\n${title}\n\nA running agent is stopped; the task keeps its brief, context and artifacts and waits in the Paused queue until you resume it.`)) return;
-        b.disabled = true;
-        try {
-          const out = await this.api.post(`/inbox/${encodeURIComponent(id)}/pause`, {});
-          this.toast('paused', `Paused (was ${out.from}). Resume it from the Paused filter.`);
-          this.renderInbox();
-        } catch (err) { this.toast('error', err.message); b.disabled = false; }
+        b.closest('details.dsh-menu')?.removeAttribute('open');
+        this.openTaskInlineDrawer('confirm-pause', b.dataset.pauseTask);
       }));
+
     root.querySelectorAll('[data-resume-task]').forEach(b =>
       b.addEventListener('click', async (e) => {
         e.stopPropagation();
@@ -2952,89 +3832,43 @@ class App {
           this.toast('resumed', out.task?.status === 'scheduled' ? 'Resumed — back on its schedule.'
             : out.task?.status === 'wait-input' ? 'Resumed — waiting for its questions to be answered.'
             : 'Resumed — dispatched by the next tick.');
-          this.renderInbox();
+          await this.patchInboxTasks([id]);
         } catch (err) { this.toast('error', err.message); b.disabled = false; }
       }));
 
-    // Run now — release a scheduled task immediately instead of at its run time.
     root.querySelectorAll('[data-run-now-task]').forEach(b =>
-      b.addEventListener('click', async (e) => {
+      b.addEventListener('click', (e) => {
         e.stopPropagation();
-        const id = b.dataset.runNowTask;
-        const title = b.closest('[data-task]')?.dataset.title || id.slice(0, 8);
-        if (!confirm(`Run this scheduled task now?\n\n${title}`)) return;
-        b.disabled = true;
-        try {
-          const t = await this.api.post(`/inbox/${encodeURIComponent(id)}/run-now`, {});
-          this.toast('running now', t.status === 'wait-input'
-            ? 'Released — parked for input; it dispatches once its questions are answered.'
-            : 'Released to pending — dispatched by the next tick.');
-          this.renderInbox();
-        } catch (err) { this.toast('error', err.message); b.disabled = false; }
+        this.openTaskInlineDrawer('confirm-run-now', b.dataset.runNowTask);
       }));
 
-    // Edit a task (not running / not pending) — load its params into a modal and save.
     root.querySelectorAll('[data-edit-task]').forEach(b =>
       b.addEventListener('click', (e) => {
         e.stopPropagation();
-        this.editTaskModal(b.dataset.editTask);
+        this.openTaskInlineDrawer('edit', b.dataset.editTask);
       }));
 
-    // Recipes: "★ Save as recipe" + 👍/👎 on recipe-made tasks (public/js/recipes.js).
     this.bindRecipeTaskCards?.(root);
 
-    // Continue a done task — pick which agent claims the follow-up.
     root.querySelectorAll('[data-continue-task]').forEach(b =>
-      b.addEventListener('click', async (e) => {
+      b.addEventListener('click', (e) => {
         e.stopPropagation();
-        const id = b.dataset.continueTask;
-        const title = b.closest('[data-task]')?.dataset.title || id.slice(0, 8);
-        const choice = await this.pickAgent({
-          title: 'Continue this task',
-          body: `A follow-up to <strong>${esc(title)}</strong> is created with this run's output files and result attached as inputs. Add an optional prompt or extra files to steer it, then choose which agent claims it — <em>Auto</em> routes via the role's agent chain.`,
-          defaultAgent: b.dataset.agent || '',
-          confirmLabel: '▸ Continue',
-          confirmColor: '#22C55E',
-          withInputs: true
-        });
-        if (!choice) return;
-        b.disabled = true;
-        try {
-          // Upload the staged extras first so the follow-up carries them as inputs.
-          const inputs = choice.files?.length ? await this.uploadInputFiles(choice.files) : [];
-          const body = { agent: choice.agent };
-          if (choice.thinking) body.thinking = choice.thinking;
-          if (choice.prompt) body.prompt = choice.prompt;
-          if (inputs.length) body.inputs = inputs;
-          if (choice.scheduledAt) body.scheduledAt = choice.scheduledAt;
-          await this.api.post(`/inbox/${encodeURIComponent(id)}/continue`, body);
-          const extras = [choice.prompt ? 'prompt' : null, inputs.length ? `${inputs.length} file(s)` : null].filter(Boolean).join(' + ');
-          const routeNote = choice.agent ? `pinned to ${choice.agent}` : 'auto-routed via the agent chain';
-          const timingNote = choice.scheduledAt ? `Scheduled for ${new Date(choice.scheduledAt).toLocaleString()}` : 'Follow-up queued';
-          this.toast('continuing', `${timingNote} — ${routeNote}${extras ? ` · added ${extras}` : ''}.`);
-          this.renderInbox();
-        } catch (err) { this.toast('error', err.message); b.disabled = false; }
+        this.openTaskInlineDrawer('continue', b.dataset.continueTask, { defaultAgent: b.dataset.agent || '' });
       }));
 
-    // Code-task worktree: merge its branch into main, or discard it.
-    for (const [attr, key, verb, confirmMsg] of [
-      ['[data-worktree-merge]', 'worktreeMerge', 'merge', 'Merge this task\'s branch into the main checkout\'s current branch?'],
-      ['[data-worktree-discard]', 'worktreeDiscard', 'discard', 'Discard this task\'s worktree and DELETE its branch? Unmerged work is lost.']
-    ]) {
-      root.querySelectorAll(attr).forEach(b =>
-        b.addEventListener('click', async (e) => {
-          e.stopPropagation();
-          if (!confirm(confirmMsg)) return;
-          b.disabled = true;
-          try {
-            const out = await this.api.post(`/inbox/${encodeURIComponent(b.dataset[key])}/worktree/${verb}`, {});
-            this.toast(verb === 'merge' ? 'merged' : 'discarded', out?.message || 'done');
-            this.renderInbox();
-          } catch (err) { this.toast('error', err.message); b.disabled = false; }
-        }));
-    }
+    root.querySelectorAll('[data-worktree-merge]').forEach(b =>
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        b.closest('details.dsh-menu')?.removeAttribute('open');
+        this.openTaskInlineDrawer('confirm-worktree-merge', b.dataset.worktreeMerge);
+      }));
+    root.querySelectorAll('[data-worktree-discard]').forEach(b =>
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        b.closest('details.dsh-menu')?.removeAttribute('open');
+        this.openTaskInlineDrawer('confirm-worktree-discard', b.dataset.worktreeDiscard);
+      }));
 
-    // Attach input files to an existing task (upload → append to context.inputFiles).
     root.querySelectorAll('[data-attach-input]').forEach(b =>
       b.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -3051,11 +3885,10 @@ class App {
           const attached = await this.uploadInputFiles(files);
           await this.api.post(`/inbox/${encodeURIComponent(id)}/inputs`, { inputs: attached });
           this.toast('files attached', `${attached.length} file(s) added — the agent will read them.`);
-          this.renderInbox();
+          await this.patchInboxTasks([id]);
         } catch (err) { this.toast('error', err.message); }
       }));
 
-    // Submit human interaction (questions/checklist) from a task card.
     root.querySelectorAll('.interaction-submit').forEach(btn =>
       btn.addEventListener('click', async (e) => {
         e.stopPropagation();
@@ -3066,9 +3899,6 @@ class App {
         box.querySelectorAll('[data-field]').forEach(el => {
           responses[el.dataset.field] = el.dataset.ftype === 'checkbox' ? el.checked : el.value;
         });
-        // Catch blank required answers here so the user gets an inline pointer at
-        // the offending field instead of an opaque server 400. Checkboxes are
-        // never "required-empty" (mirrors the rule in store.submitInteraction).
         const missing = [...box.querySelectorAll('[data-field][data-required="1"]:not([data-ftype="checkbox"])')]
           .find(el => !String(el.value ?? '').trim());
         if (missing) {
@@ -3082,20 +3912,18 @@ class App {
         try {
           await this.api.post(`/inbox/${encodeURIComponent(id)}/interaction`, { responses, submittedBy });
           this.toast('input submitted', 'The task now has your answers.');
-          this.renderInbox();
+          await this.patchInboxTasks([id]);
         } catch (err) { this.toast('error', err.message); btn.disabled = false; }
       }));
 
-    // Click a task ID or artifacts path to copy it to the clipboard.
     root.querySelectorAll('[data-copy]').forEach(el =>
       el.addEventListener('click', async (e) => {
-        e.stopPropagation();   // don't toggle the card
+        e.stopPropagation();
         const text = el.dataset.copy;
         if (await this.copyText(text)) this.toast('copied', text);
         else this.toast('copy failed', text);
       }));
 
-    // Auto-rerun-on-reset toggle on a rate-limited failed task: persist the choice.
     root.querySelectorAll('[data-autorerun]').forEach(cb =>
       cb.addEventListener('change', async (e) => {
         e.stopPropagation();
@@ -3112,13 +3940,86 @@ class App {
       }));
   }
 
-  async renderInbox() {
+  _sortedTasks(list) {
+    const prefs = this._taskPrefs();
+    const pinnedSet = new Set(prefs.pinned);
+    const sort = this.inboxSort || prefs.sort || 'newest';
+    const arr = [...list];
+    const cmp = (a, b) => {
+      if (sort === 'oldest') return (Date.parse(a.createdAt || '') || 0) - (Date.parse(b.createdAt || '') || 0);
+      if (sort === 'title') return String(a.title || '').localeCompare(String(b.title || ''));
+      if (sort === 'status') {
+        const rank = { 'wait-input': 0, 'in-progress': 1, claimed: 2, pending: 3, scheduled: 4, paused: 5, failed: 6, done: 7 };
+        return (rank[isTaskFailed(a) ? 'failed' : a.status] ?? 9) - (rank[isTaskFailed(b) ? 'failed' : b.status] ?? 9);
+      }
+      return (Date.parse(b.createdAt || '') || 0) - (Date.parse(a.createdAt || '') || 0);
+    };
+    arr.sort((a, b) => {
+      const pa = pinnedSet.has(a.id) ? 0 : 1;
+      const pb = pinnedSet.has(b.id) ? 0 : 1;
+      return pa !== pb ? pa - pb : cmp(a, b);
+    });
+    return arr;
+  }
+
+  renderInboxListOnly() {
+    const listEl = this.contentEl?.querySelector('#inbox-list');
+    if (!listEl) return;
+    const tasks = this._sortedTasks(this._inboxTasksList || []);
+    const prefs = this._taskPrefs();
+    const groupBy = prefs.groupBy || 'flat';
+
+    if (!tasks.length) {
+      listEl.innerHTML = `<div class="dsh-empty-detail"><i data-lucide="inbox"></i><p>No tasks${this.inboxFilter ? ` with status "${esc(this.inboxFilter)}"` : ''}.</p></div>`;
+      createIcons(listEl);
+      return;
+    }
+
+    if (groupBy === 'flat') {
+      listEl.innerHTML = tasks.map(t => this.taskCardHTML(t)).join('');
+    } else {
+      const pinnedSet = new Set(prefs.pinned);
+      const groups = new Map();
+      const addTo = (key, label, t) => {
+        if (!groups.has(key)) groups.set(key, { key, label, items: [] });
+        groups.get(key).items.push(t);
+      };
+      for (const t of tasks) {
+        if (pinnedSet.has(t.id)) {
+          addTo('pinned', 'Pinned', t);
+        } else if (groupBy === 'status') {
+          const st = isTaskFailed(t) ? 'failed' : (t.status || 'other');
+          addTo(`st:${st}`, st, t);
+        } else {
+          const src = t.context?.goalId ? `Goal: ${t.context.goalId.slice(0, 12)}` : (t.from?.platform || 'direct');
+          addTo(`src:${src}`, src, t);
+        }
+      }
+      listEl.innerHTML = [...groups.values()].map(g => {
+        const isCollapsed = !!prefs.collapsed[g.key];
+        return `<div class="dsh-group" data-group="${esc(g.key)}" data-collapsed="${isCollapsed}">
+          <button type="button" class="dsh-group-head" data-ws="tasks" data-group="${esc(g.key)}" aria-expanded="${!isCollapsed}">
+            <span class="dsh-group-chevron"><i data-lucide="chevron-down"></i></span>
+            <span class="dsh-group-title">${esc(g.label)}</span>
+            <span class="dsh-group-count">${g.items.length}</span>
+          </button>
+          <div class="dsh-group-items">${g.items.map(t => this.taskCardHTML(t)).join('')}</div>
+        </div>`;
+      }).join('');
+    }
+    this.applyInboxSearch();
+    createIcons(listEl);
+  }
+
+  async renderInbox({ soft = false } = {}) {
+    const prefs = this._taskPrefs();
     this.inboxLimit = this.inboxLimit || 50;
-    // Filters + Purge collapse into a single toggle (the "+" New-task button
-    // sits beside it, always visible) so the task list
-    // stays reachable on small viewports. Default open on wide screens, collapsed
-    // on narrow ones; the toggle then persists the choice for the session.
-    if (this.inboxControlsOpen === undefined) this.inboxControlsOpen = window.innerWidth >= 640;
+    if (this.inboxFilter === undefined) this.inboxFilter = prefs.filter || '';
+    if (!this.inboxSort) this.inboxSort = prefs.sort || 'newest';
+    if (!this.selectedTaskId && !this.pendingTask && prefs.lastSelected) {
+      this.selectedTaskId = prefs.lastSelected;
+    }
+
     const filter = this.inboxFilter;
     const fetchLimit = this.inboxLimit + 1;
     const q = filter ? `?status=${filter}&limit=${fetchLimit}` : `?limit=${fetchLimit}`;
@@ -3134,135 +4035,176 @@ class App {
       tasks = tasks.slice(0, this.inboxLimit);
     }
 
-    // Per-status counts on the filter pills (from the dashboard summary; the
-    // "done" pill excludes failed tasks, mirroring the server's done filter).
-    const pills = ['', 'done', 'in-progress', 'pending', 'scheduled', 'wait-input', 'paused', 'failed'].map(f => {
-      const label = inboxPillLabel(f, status);
-      const active = this.inboxFilter === f;
-      const color = f === 'failed' ? '#EF4444' : (STATUS_COLORS[f] || '#94A3B8');
-      let style = '';
-      if (f === '') {
-        style = active
-          ? 'background:var(--bg-tertiary); border-color:var(--border-hover); color:var(--text-primary)'
-          : '';
-      } else {
-        style = active
-          ? `background:${color}18; border-color:${color}40; color:${color}`
-          : `color:${color}`;
-      }
-      return `<button class="btn pill" data-filter="${f}" style="${style}">${esc(label)}</button>`;
-    }).join(' ');
-
-    const rows = tasks.length ? tasks.map(t => this.taskCardHTML(t)).join('')
-      : `<div class="empty-state"><p>No tasks${this.inboxFilter ? ` with status "${esc(this.inboxFilter)}"` : ''}.</p></div>`;
-
-    // #content is the scroll container — preserve the reading position across
-    // SSE-driven re-renders instead of snapping back to the top.
-    const scrollY = this.contentEl.scrollTop;
-    const open = this.inboxControlsOpen;
-    // Compact chip echoing the active status filter while controls are collapsed,
-    // so the current view is still legible without expanding the panel.
-    const activeChip = (!open && this.inboxFilter)
-      ? `<span class="badge" style="background:var(--bg-tertiary); color:var(--text-muted); border:1px solid var(--border-hover)">${esc(this.inboxFilter)}</span>`
-      : '';
-    this.contentEl.innerHTML = `
-      <div id="inbox-sticky">
-      <div style="display:flex; gap:8px; margin-bottom:10px; align-items:center; flex-wrap:wrap">
-        <button class="btn" id="inbox-controls-toggle" title="Show or hide the status filters and Purge controls"
-          style="font-size:0.78rem; display:inline-flex; align-items:center; gap:6px">
-          <i data-lucide="sliders-horizontal" style="width:14px;height:14px"></i>
-          <span>Filters &amp; actions</span>
-          <span class="ctrl-caret" style="color:var(--text-muted)">${open ? '▾' : '▸'}</span>
-        </button>
-        <button class="btn" id="new-task-btn" title="New task — create and dispatch a task" aria-label="New task"
-          style="font-size:1rem; font-weight:600; line-height:1; padding:4px 10px; color:#22C55E; border-color:#22C55E66">+</button>
-        ${activeChip}
-      </div>
-      <div id="inbox-controls" style="display:flex; gap:8px; margin-bottom:10px; align-items:center; flex-wrap:wrap;${open ? '' : ' display:none;'}">${pills}
-        <span style="margin-left:auto; display:flex; gap:6px; align-items:center; flex-wrap:wrap">
-          <span style="font-size:0.75rem;color:var(--text-muted)">purge done &gt;</span>
-          <input id="purge-days" type="number" min="0" value="30" style="width:58px;padding:4px 6px;background:var(--bg-tertiary);border:1px solid var(--bg-tertiary);border-radius:8px;color:inherit;font-size:0.78rem">
-          <span style="font-size:0.75rem;color:var(--text-muted)">days</span>
-          <button class="btn" id="purge-btn" title="Delete finished tasks older than N days — including ones with artifacts. Only keep/important/pinned-tagged tasks are spared. You'll be asked to confirm." style="font-size:0.75rem">Purge…</button>
-        </span>
-      </div>
-      <input id="inbox-search" type="search" placeholder="Search titles…" value="${esc(this.inboxSearch || '')}"
-        style="width:100%; margin-bottom:0; padding:8px 12px; background:var(--bg-tertiary); border:1px solid var(--bg-tertiary); border-radius:10px; color:inherit; font:inherit; font-size:0.85rem">
-      </div>
-      <div id="inbox-nomatch" style="display:none; color:var(--text-muted); font-size:0.85rem; padding:8px 0">No task titles match your search.</div>
-      ${rows}
-      ${hasMore ? `<div id="inbox-load-more" style="text-align:center; margin-top:20px; margin-bottom:20px; color:var(--text-muted); font-size:0.85rem;">Loading more tasks...</div>` : ''}`;
-    this.contentEl.scrollTop = scrollY;
-
-    this.contentEl.querySelectorAll('[data-filter]').forEach(b =>
-      b.addEventListener('click', () => { this.inboxLimit = 50; this.inboxFilter = b.dataset.filter; this.renderInbox(); }));
-
-    // Collapse/expand the filters + actions panel (toggled in place, no refetch).
-    const ctrlToggle = this.contentEl.querySelector('#inbox-controls-toggle');
-    ctrlToggle?.addEventListener('click', () => {
-      this.inboxControlsOpen = !this.inboxControlsOpen;
-      const panel = this.contentEl.querySelector('#inbox-controls');
-      if (panel) panel.style.display = this.inboxControlsOpen ? 'flex' : 'none';
-      const caret = ctrlToggle.querySelector('.ctrl-caret');
-      if (caret) caret.textContent = this.inboxControlsOpen ? '▾' : '▸';
-    });
-      
-    const loadMoreEl = this.contentEl.querySelector('#inbox-load-more');
-    if (loadMoreEl) {
-      const observer = new IntersectionObserver((entries) => {
-        if (entries[0].isIntersecting) {
-          observer.disconnect();
-          this.inboxLimit += 50;
-          this.renderInbox();
-        }
-      });
-      observer.observe(loadMoreEl);
+    this._inboxTasksList = tasks;
+    this._inboxTasksById = new Map(tasks.map(t => [t.id, t]));
+    if (this.selectedTaskId && !this._inboxTasksById.has(this.selectedTaskId) && !this.pendingTask) {
+      this.selectedTaskId = null;
+    }
+    // Auto-select first visible task on desktop when returning to workspace with no selection
+    if (!this.selectedTaskId && !this.pendingTask && !this._taskComposerOpen && tasks.length && window.innerWidth > 960) {
+      this.selectedTaskId = this._sortedTasks(tasks)[0]?.id || null;
     }
 
-    // Live client-side title filter, layered on top of the status filter.
-    const searchEl = this.contentEl.querySelector('#inbox-search');
-    searchEl.addEventListener('input', () => { this.inboxSearch = searchEl.value; this.applyInboxSearch(); });
+    const pills = ['', 'in-progress', 'pending', 'wait-input', 'scheduled', 'paused', 'failed', 'done'].map(f => {
+      const label = inboxPillLabel(f, status);
+      const active = this.inboxFilter === f;
+      return `<button type="button" class="dsh-filter-tab${active ? ' is-active' : ''}" data-filter="${f}" aria-pressed="${active}">${esc(label)}</button>`;
+    }).join('');
 
-    this.bindTaskCards(this.contentEl);
+    const existingPage = this.contentEl.querySelector('#tasks-page');
+    if (!existingPage) {
+      const mode = (this.selectedTaskId || this._taskComposerOpen) ? 'detail' : 'list';
+      this.contentEl.innerHTML = `
+        <div class="dsh-page" id="tasks-page" data-mode="${mode}">
+          <div class="dsh-list-pane">
+            <div class="dsh-list-scroll" id="inbox-list-scroll">
+              <div class="dsh-list-inner">
+                <div class="dsh-list-sticky" id="inbox-sticky">
+                  <div class="dsh-page-heading">
+                    ${this._dshWorkspaceSwitcherHTML('tasks')}
+                    <div class="dsh-heading-actions">
+                      <details class="dsh-menu" id="tasks-view-opts">
+                        <summary aria-label="View options" title="Grouping & display options"><i data-lucide="sliders-horizontal"></i></summary>
+                        <div class="dsh-menu-body">
+                          <div class="dsh-menu-label">Group by</div>
+                          <button type="button" data-task-group="flat" class="${prefs.groupBy === 'flat' ? 'is-selected-opt' : ''}">Flat list</button>
+                          <button type="button" data-task-group="status" class="${prefs.groupBy === 'status' ? 'is-selected-opt' : ''}">Status</button>
+                          <button type="button" data-task-group="source" class="${prefs.groupBy === 'source' ? 'is-selected-opt' : ''}">Source / Goal</button>
+                          <div class="dsh-menu-sep"></div>
+                          <div class="dsh-purge-pop">
+                            <div style="font-weight:500;color:var(--dsw-label-primary)">Purge finished tasks</div>
+                            <div class="dsh-purge-row">
+                              <span>Older than</span>
+                              <input id="purge-days" type="number" min="0" value="30" aria-label="Days">
+                              <span>days</span>
+                            </div>
+                            <button type="button" class="dsh-btn-ghost is-danger" id="purge-btn" title="Delete finished tasks older than N days">Purge…</button>
+                          </div>
+                        </div>
+                      </details>
+                      <button type="button" class="dsh-btn-primary" id="new-task-btn" title="New task (n)" aria-label="New task">
+                        <i data-lucide="plus"></i><span>New task</span>
+                      </button>
+                    </div>
+                  </div>
+                  <div class="dsh-filters" id="inbox-controls" role="group" aria-label="Filter tasks">${pills}</div>
+                  <div class="dsh-toolbar">
+                    <label class="dsh-search-wrap" aria-label="Search task titles">
+                      <i data-lucide="search"></i>
+                      <input id="inbox-search" class="dsh-search-input" type="search" placeholder="Search tasks… (/)" value="${esc(this.inboxSearch || '')}">
+                      <button type="button" class="dsh-search-clear" id="inbox-search-clear" aria-label="Clear search" ${this.inboxSearch ? '' : 'hidden'}><i data-lucide="x"></i></button>
+                    </label>
+                    <select id="inbox-sort" class="dsh-sort-select" aria-label="Sort tasks">
+                      <option value="newest"${this.inboxSort === 'newest' ? ' selected' : ''}>Newest</option>
+                      <option value="oldest"${this.inboxSort === 'oldest' ? ' selected' : ''}>Oldest</option>
+                      <option value="status"${this.inboxSort === 'status' ? ' selected' : ''}>Status</option>
+                      <option value="title"${this.inboxSort === 'title' ? ' selected' : ''}>Title A–Z</option>
+                    </select>
+                  </div>
+                </div>
+                <div id="inbox-nomatch" style="display:none;color:var(--dsw-label-tertiary);font-size:13px;padding:16px 4px">No task titles match your search.</div>
+                <div class="dsh-rows" id="inbox-list"></div>
+                <div id="inbox-load-more-slot"></div>
+              </div>
+            </div>
+          </div>
+          <div class="dsh-split-handle" role="separator" aria-orientation="vertical" aria-label="Resize task list" title="Drag to resize · Double-click to reset"></div>
+          <section class="dsh-detail-pane${this.selectedTaskId ? '' : ' is-empty'}" id="task-detail-pane" aria-label="Task detail"></section>
+        </div>`;
 
-    // Create + dispatch a new task straight from the Inbox (no Chat detour).
-    this.contentEl.querySelector('#new-task-btn')?.addEventListener('click', () => this.createTaskModal());
+      this._dshAttachSplitHandle(this.contentEl.querySelector('#tasks-page'));
 
-    // Purge: always preview with a dry run, then ask before deleting.
-    this.contentEl.querySelector('#purge-btn')?.addEventListener('click', async () => {
-      const days = Number(this.contentEl.querySelector('#purge-days').value || 30);
-      try {
-        const preview = await this.api.post('/inbox/purge', { olderThanDays: days, dryRun: true });
-        if (!preview.purged.length) { this.toast('nothing to purge', `no finished tasks older than ${days} days (kept ${preview.keptCount})`); return; }
-        const sample = preview.purged.slice(0, 8).map(p => `• ${p.title}`).join('\n');
-        const more = preview.purged.length > 8 ? `\n…and ${preview.purged.length - 8} more` : '';
-        if (!confirm(`⚠ Purge ${preview.purged.length} finished task(s) older than ${days} days?\n\nEvery finished task past ${days} days is removed — INCLUDING ones that produced artifacts. Only ${preview.keptCount} kept (unfinished, recent, or tagged keep/important/pinned).\n\n${sample}${more}\n\nTheir reports and artifacts are permanently deleted. This cannot be undone.`)) return;
-        const done = await this.api.post('/inbox/purge', { olderThanDays: days });
-        this.toast('purged', `${done.purged.length} task(s), ${done.reportsDeleted} report(s) removed`);
-        this.renderInbox();
-      } catch (err) { this.toast('error', err.message); }
-    });
+      const searchEl = this.contentEl.querySelector('#inbox-search');
+      const clearBtn = this.contentEl.querySelector('#inbox-search-clear');
+      searchEl?.addEventListener('input', () => {
+        this.inboxSearch = searchEl.value;
+        if (clearBtn) clearBtn.hidden = !searchEl.value;
+        this.applyInboxSearch();
+      });
+      clearBtn?.addEventListener('click', () => {
+        this.inboxSearch = '';
+        if (searchEl) { searchEl.value = ''; searchEl.focus(); }
+        clearBtn.hidden = true;
+        this.applyInboxSearch();
+      });
 
-    // Live progress log for in-progress cards: poll GET /inbox/:id/progress and
-    // stream the tail into each card's <pre data-progress>. One shared interval,
-    // cleared on re-render and on leaving the view (clearViewTimers).
+      const sortEl = this.contentEl.querySelector('#inbox-sort');
+      sortEl?.addEventListener('change', () => {
+        this.inboxSort = sortEl.value;
+        this._saveTaskPrefs({ sort: this.inboxSort });
+        this.renderInboxListOnly();
+      });
+
+      this.contentEl.querySelectorAll('[data-task-group]').forEach(btn =>
+        btn.addEventListener('click', () => {
+          const g = btn.dataset.taskGroup;
+          this._saveTaskPrefs({ groupBy: g });
+          this.contentEl.querySelectorAll('[data-task-group]').forEach(x => x.classList.toggle('is-selected-opt', x.dataset.taskGroup === g));
+          btn.closest('details.dsh-menu')?.removeAttribute('open');
+          this.renderInboxListOnly();
+        }));
+
+      this.contentEl.querySelector('#new-task-btn')?.addEventListener('click', () => this.openInlineNewTask());
+
+      this.contentEl.querySelector('#purge-btn')?.addEventListener('click', async () => {
+        const days = Number(this.contentEl.querySelector('#purge-days').value || 30);
+        try {
+          const preview = await this.api.post('/inbox/purge', { olderThanDays: days, dryRun: true });
+          if (!preview.purged.length) { this.toast('nothing to purge', `no finished tasks older than ${days} days (kept ${preview.keptCount})`); return; }
+          const sample = preview.purged.slice(0, 8).map(p => `• ${p.title}`).join('\n');
+          const more = preview.purged.length > 8 ? `\n…and ${preview.purged.length - 8} more` : '';
+          if (!confirm(`⚠ Purge ${preview.purged.length} finished task(s) older than ${days} days?\n\nEvery finished task past ${days} days is removed — INCLUDING ones that produced artifacts. Only ${preview.keptCount} kept (unfinished, recent, or tagged keep/important/pinned).\n\n${sample}${more}\n\nTheir reports and artifacts are permanently deleted. This cannot be undone.`)) return;
+          const done = await this.api.post('/inbox/purge', { olderThanDays: days });
+          this.toast('purged', `${done.purged.length} task(s), ${done.reportsDeleted} report(s) removed`);
+          this.renderInbox({ soft: true });
+        } catch (err) { this.toast('error', err.message); }
+      });
+    } else {
+      // Patch filter pills in-place without rebuilding the workspace shell
+      const controls = this.contentEl.querySelector('#inbox-controls');
+      if (controls) controls.innerHTML = pills;
+    }
+
+    this.contentEl.querySelectorAll('#inbox-controls [data-filter]').forEach(b =>
+      b.addEventListener('click', () => {
+        this.inboxLimit = 50;
+        this.inboxFilter = b.dataset.filter;
+        this._saveTaskPrefs({ filter: this.inboxFilter });
+        this.renderInbox({ soft: true });
+      }));
+
+    this.renderInboxListOnly();
+
+    const loadMoreSlot = this.contentEl.querySelector('#inbox-load-more-slot');
+    if (loadMoreSlot) {
+      loadMoreSlot.innerHTML = hasMore ? `<div id="inbox-load-more" style="text-align:center;margin:20px 0;color:var(--dsw-label-tertiary);font-size:13px">Loading more tasks…</div>` : '';
+      const loadMoreEl = loadMoreSlot.querySelector('#inbox-load-more');
+      if (loadMoreEl) {
+        const observer = new IntersectionObserver((entries) => {
+          if (entries[0].isIntersecting) {
+            observer.disconnect();
+            this.inboxLimit += 50;
+            this.renderInbox({ soft: true });
+          }
+        });
+        observer.observe(loadMoreEl);
+      }
+    }
+
     clearInterval(this._progressPoll);
     this._progressPoll = null;
-    this.ensureInboxProgressPoll();
 
-    // Task cards no longer expand on click — RESULT and DESCRIPTION now live as
-    // result.md / description.md chips (opened in the markdown viewer), so there is
-    // no detail panel to toggle.
+    if (this.pendingTask) {
+      this.focusInboxTask();
+    } else if (!this._taskComposerOpen) {
+      if (this.selectedTaskId) {
+        await this.selectInboxTask(this.selectedTaskId, { quiet: true });
+      } else {
+        await this.selectInboxTask(null);
+      }
+    }
 
-    this.applyInboxSearch();
-    if (this.pendingTask) this.focusInboxTask();
-
-    // renderInbox() is called directly by the filter pills, delete/purge/search
-    // and load-more handlers — NOT only through renderCurrentView() (which has its
-    // own trailing createIcons()). Each of those re-renders innerHTML with fresh
-    // `<i data-lucide>` placeholders, so we must re-hydrate the Lucide glyphs here
-    // or every icon vanishes on filter click until a full page refresh.
-    createIcons();
+    if (!soft) createIcons();
   }
 
   ensureInboxProgressPoll() {
@@ -3273,10 +4215,7 @@ class App {
 
   /**
    * SSE path for the Tasks view: redraw only the cards whose tasks changed
-   * instead of re-fetching /inbox and rebuilding all ~50 cards (each with its
-   * listeners and icons) on every event. Per id: GET /inbox/:id, then replace the
-   * card in place, drop it (deleted / no longer matches the filter) or slot a new
-   * one in by createdAt. Anything it can't place falls back to a full render.
+   * instead of re-fetching /inbox and rebuilding all ~50 cards.
    */
   async patchInboxTasks(ids) {
     const onInbox = () => this.currentPage?.type === 'tasks' && !!this.contentEl.querySelector('#inbox-sticky');
@@ -3284,41 +4223,53 @@ class App {
     const fetched = await Promise.all(ids.map(id => this.api.get(`/inbox/${encodeURIComponent(id)}`)
       .then(t => ({ id, t }), err => ({ id, t: null, gone: /not found|404/i.test(err.message || '') }))));
     if (fetched.some(f => f.t?.claimedBy && !this.workers.has(f.t.claimedBy))) await this.refreshWorkers();
-    if (!onInbox()) return;   // navigated away while fetching
+    if (!onInbox()) return;
     let full = false;
+    const detailPane = this.contentEl.querySelector('#task-detail-pane');
+    const listArr = this._inboxTasksList || [];
     for (const { id, t, gone } of fetched) {
       const card = this.contentEl.querySelector(`.task-card[data-task="${CSS.escape(id)}"]`);
-      if (!t && !gone) { full = true; continue; }           // fetch error — let a full render sort it out
-      if (!t || !inboxFilterMatches(t, this.inboxFilter)) { card?.remove(); continue; }
-      // Don't wipe a half-typed answer in this card's input form; retry on the next event.
-      const el = document.activeElement;
-      if (card && card.contains(el) && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || el.isContentEditable)) {
-        (this._inboxDirty ||= new Set()).add(id);
+      if (!t && !gone) { full = true; continue; }
+      if (!t || !inboxFilterMatches(t, this.inboxFilter)) {
+        card?.remove();
+        this._inboxTasksById?.delete(id);
+        const idx = listArr.findIndex(x => x.id === id);
+        if (idx !== -1) listArr.splice(idx, 1);
+        if (this.selectedTaskId === id) this.selectInboxTask(null);
         continue;
       }
-      const tpl = document.createElement('template');
-      tpl.innerHTML = this.taskCardHTML(t).trim();
-      const fresh = tpl.content.firstElementChild;
-      this.bindTaskCards(fresh);
-      createIcons(fresh);
-      if (card) {
-        // Carry the live log over so it doesn't blink back to "Loading live output…".
-        const oldPre = card.querySelector('[data-progress]'), newPre = fresh.querySelector('[data-progress]');
-        if (oldPre && newPre) newPre.textContent = oldPre.textContent;
-        card.replaceWith(fresh);
-        if (oldPre && newPre) newPre.scrollTop = oldPre.scrollTop;
-        continue;
+      (this._inboxTasksById ||= new Map()).set(id, t);
+      const idx = listArr.findIndex(x => x.id === id);
+      if (idx !== -1) listArr[idx] = t; else listArr.unshift(t);
+      if ((this._taskPrefs().groupBy || 'flat') !== 'flat') {
+        this.renderInboxListOnly();
+      } else {
+        const tpl = document.createElement('template');
+        tpl.innerHTML = this.taskCardHTML(t).trim();
+        const fresh = tpl.content.firstElementChild;
+        createIcons(fresh);
+        if (card) {
+          card.replaceWith(fresh);
+        } else {
+          const ms = Date.parse(t.createdAt);
+          const cards = [...this.contentEl.querySelectorAll('.task-card[data-task]')];
+          if (!cards.length || Number.isNaN(ms)) { full = true; continue; }
+          const next = cards.find(c => !(Date.parse(c.dataset.created) >= ms));
+          if (next) next.before(fresh);
+          else if (!this.contentEl.querySelector('#inbox-load-more')) cards[cards.length - 1].after(fresh);
+        }
       }
-      // New to this list: slot it in newest-first. Older than every card on the
-      // page while more pages exist → it belongs to a later page, skip it.
-      const ms = Date.parse(t.createdAt);
-      const cards = [...this.contentEl.querySelectorAll('.task-card[data-task]')];
-      if (!cards.length || Number.isNaN(ms)) { full = true; continue; }
-      const next = cards.find(c => !(Date.parse(c.dataset.created) >= ms));
-      if (next) next.before(fresh);
-      else if (!this.contentEl.querySelector('#inbox-load-more')) cards[cards.length - 1].after(fresh);
+      if (this.selectedTaskId === id && detailPane && !this._taskComposerOpen) {
+        const el = document.activeElement;
+        const drawerOpen = !detailPane.querySelector('#task-inline-drawer')?.hidden;
+        if (drawerOpen || (detailPane.contains(el) && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || el.isContentEditable))) {
+          (this._inboxDirty ||= new Set()).add(id);
+        } else {
+          await this.selectInboxTask(id, { quiet: true });
+        }
+      }
     }
-    if (full || !this.contentEl.querySelector('.task-card')) { await this.renderInbox(); return; }
+    if (full || !this.contentEl.querySelector('.task-card')) { await this.renderInbox({ soft: true }); return; }
     const status = await statusP;
     if (status && onInbox()) {
       this.contentEl.querySelectorAll('#inbox-controls [data-filter]').forEach(b => { b.textContent = inboxPillLabel(b.dataset.filter, status); });
@@ -3414,10 +4365,11 @@ class App {
     if (card) {
       this.pendingTask = null;
       this._focusRetried = false;
-      card.style.display = '';                 // in case a stale search hid it
+      card.style.display = '';
       card.scrollIntoView({ behavior: 'smooth', block: 'center' });
       card.classList.add('task-flash');
       setTimeout(() => card.classList.remove('task-flash'), 2200);
+      this.selectInboxTask(id);
       createIcons();
     } else if (!this._focusRetried) {
       this._focusRetried = true;
